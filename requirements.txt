@@ -1,0 +1,14 @@
+# Backend
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.0
+psutil>=5.9
+paramiko>=3.4
+python-multipart>=0.0.9
+
+# Agent
+requests>=2.31
+
+# Desktop client
+PySide6>=6.6
+qtawesome>=1.3

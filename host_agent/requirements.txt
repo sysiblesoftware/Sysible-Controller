@@ -1,0 +1,8 @@
+# Runtime dependencies for host_agent/agent.py - kept as its own file
+# (rather than just the "# Agent" section of the project root
+# requirements.txt) so backend/agent_bundle.py can ship this exact list
+# inside the downloadable agent bundle and have run_agent.sh /
+# disenroll_agent.sh install everything the agent needs in one step,
+# instead of one hardcoded `pip3 install requests` line that silently
+# falls behind if agent.py ever picks up another dependency.
+requests>=2.31

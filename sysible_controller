@@ -1,0 +1,218 @@
+#!/bin/bash
+# Sysible Controller control CLI - installed to /usr/local/bin/sysible_controller
+# by install_sysible.sh. The backend API runs as a real systemd service (sysible-backend) so
+# it survives reboots and isn't tied to a terminal session or a
+# script's own lifetime. This wraps `systemctl` for that service and
+# separately manages the desktop GUI client, which still has no
+# business being a systemd service - it's one human's desktop app,
+# not a daemon.
+#
+# Usage: sysible_controller {start|stop|restart|status|logs|gui|destroy}
+
+BASE="/opt/sysible"
+VENV="$BASE/venv"
+RUN_DIR="$BASE/run"
+CLIENT_PID_FILE="$RUN_DIR/client.pid"
+PORTAL_PID_FILE="$RUN_DIR/portal.pid"
+SERVICE="sysible-backend"
+PORT=9000
+CERT_FILE="$BASE/certs/server.crt"
+
+mkdir -p "$RUN_DIR" 2>/dev/null
+
+_require_root() {
+  if [[ $EUID -ne 0 ]]; then
+    echo "Run as root: sudo sysible_controller $1"
+    exit 1
+  fi
+}
+
+_client_running() {
+  [[ -f "$CLIENT_PID_FILE" ]] && kill -0 "$(cat "$CLIENT_PID_FILE")" 2>/dev/null
+}
+
+_start_gui() {
+  if _client_running; then
+    echo "GUI client already running (PID $(cat "$CLIENT_PID_FILE"))"
+    return
+  fi
+
+  echo "Starting GUI client..."
+  cd "$BASE" || exit 1
+  source "$VENV/bin/activate"
+  export PYTHONPATH="$BASE"
+  python3 client/main.py &
+  echo $! > "$CLIENT_PID_FILE"
+  echo "GUI client PID: $(cat "$CLIENT_PID_FILE")"
+}
+
+_stop_gui() {
+  if _client_running; then
+    pid="$(cat "$CLIENT_PID_FILE")"
+    echo "Stopping GUI client (PID $pid)..."
+    kill "$pid" 2>/dev/null
+  fi
+  rm -f "$CLIENT_PID_FILE"
+}
+
+# =========================================================
+# Readiness wait + "is this actually current code" self-check -
+# needed since systemd reporting the unit as "active" only means the
+# process launched, not that uvicorn finished binding and serving
+# current routes yet.
+# =========================================================
+_wait_for_backend() {
+  echo "Waiting for API..."
+
+  until curl -s --cacert "$CERT_FILE" "https://127.0.0.1:$PORT/" >/dev/null 2>&1; do
+    if ! systemctl is-active --quiet "$SERVICE"; then
+      echo "ERROR: $SERVICE failed to start. Check: journalctl -u $SERVICE -n 50"
+      exit 1
+    fi
+    sleep 1
+  done
+
+  if ! curl -s --cacert "$CERT_FILE" "https://127.0.0.1:$PORT/openapi.json" | grep -q '"/agents/heartbeat"'; then
+    echo "ERROR: API is responding but doesn't expose the expected routes (or the TLS cert doesn't match) - likely stale code or a bad cert."
+    echo "Run 'sudo lsof -i :$PORT' to see what's actually serving this port."
+    exit 1
+  fi
+
+  echo "API ready (current code confirmed, HTTPS verified)"
+}
+
+cmd_start() {
+  _require_root start
+
+  if [[ ! -f "$CERT_FILE" ]]; then
+    echo "ERROR: TLS certificate not found at $CERT_FILE"
+    echo "Run 'sudo $BASE/install_sysible.sh' first."
+    exit 1
+  fi
+
+  echo "Starting $SERVICE..."
+  systemctl start "$SERVICE"
+  _wait_for_backend
+  _start_gui
+
+  echo ""
+  echo "Sysible Controller is running. 'sysible_controller status' to check, 'sysible_controller logs' to tail the backend."
+}
+
+cmd_stop() {
+  _require_root stop
+
+  _stop_gui
+
+  echo "Stopping $SERVICE..."
+  systemctl stop "$SERVICE" 2>/dev/null
+
+  # Safety net for a portal subprocess left outside the unit's cgroup
+  # (or anything else squatting on $PORT) - a backend process doesn't
+  # always clean up everything it spawned on its own.
+  if [[ -f "$PORTAL_PID_FILE" ]]; then
+    pid="$(cat "$PORTAL_PID_FILE")"
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "Stopping portal (PID $pid)..."
+      kill "$pid" 2>/dev/null
+    fi
+    rm -f "$PORTAL_PID_FILE"
+  fi
+
+  if command -v lsof >/dev/null 2>&1; then
+    STRAY_PIDS="$(lsof -ti tcp:"$PORT" 2>/dev/null)"
+    if [[ -n "$STRAY_PIDS" ]]; then
+      echo "Port $PORT still held by PID(s) $STRAY_PIDS (untracked) - killing..."
+      kill $STRAY_PIDS 2>/dev/null
+      sleep 1
+      STRAY_PIDS="$(lsof -ti tcp:"$PORT" 2>/dev/null)"
+      [[ -n "$STRAY_PIDS" ]] && kill -9 $STRAY_PIDS 2>/dev/null
+    fi
+  fi
+
+  echo "Done."
+}
+
+cmd_restart() {
+  _require_root restart
+  cmd_stop
+  cmd_start
+}
+
+cmd_status() {
+  systemctl status "$SERVICE" --no-pager
+  echo ""
+  if _client_running; then
+    echo "GUI client: running (PID $(cat "$CLIENT_PID_FILE"))"
+  else
+    echo "GUI client: not running"
+  fi
+}
+
+cmd_logs() {
+  journalctl -u "$SERVICE" -f
+}
+
+cmd_gui() {
+  _require_root gui
+  _start_gui
+}
+
+cmd_destroy() {
+  _require_root destroy
+
+  echo "==================================================================="
+  echo " THIS WILL PERMANENTLY REMOVE SYSIBLE FROM THIS MACHINE:"
+  echo "   - stop and disable the $SERVICE systemd service"
+  echo "   - delete $BASE (database, TLS certificate, admin API key -"
+  echo "     everything)"
+  echo "   - remove this 'sysible_controller' command"
+  echo ""
+  echo " Enrolled hosts' agents are NOT touched by this - their own"
+  echo " sysible-agent systemd services keep running and will just start"
+  echo " failing to reach this controller. Disenroll hosts first (or run"
+  echo " disenroll_agent.sh on each one) if you want them cleaned up too."
+  echo "==================================================================="
+  echo ""
+
+  read -rp "Type 'destroy' to confirm: " confirm
+  if [[ "$confirm" != "destroy" ]]; then
+    echo "Aborted - nothing was changed."
+    exit 1
+  fi
+
+  echo "Stopping everything..."
+  cmd_stop
+
+  echo "Disabling and removing $SERVICE..."
+  systemctl disable --now "$SERVICE" 2>/dev/null
+  rm -f "/etc/systemd/system/$SERVICE.service"
+  systemctl daemon-reload
+
+  DB_FILE="$BASE/backend/sysible.db"
+  if [[ -f "$DB_FILE" ]]; then
+    BACKUP="/tmp/sysible-backup-$(date +%Y%m%d%H%M%S).db"
+    cp -f "$DB_FILE" "$BACKUP" 2>/dev/null && echo "Database backed up to $BACKUP (this copy is left behind on purpose - delete it yourself once you're sure you don't need it)."
+  fi
+
+  echo "Removing $BASE..."
+  rm -rf "$BASE"
+
+  echo "Sysible Controller has been removed from this machine."
+  echo "Removing this command..."
+  rm -f "$0"
+}
+
+case "$1" in
+  start)   cmd_start ;;
+  stop)    cmd_stop ;;
+  restart) cmd_restart ;;
+  status)  cmd_status ;;
+  logs)    cmd_logs ;;
+  gui)     cmd_gui ;;
+  destroy) cmd_destroy ;;
+  *)
+    echo "Usage: sysible_controller {start|stop|restart|status|logs|gui|destroy}"
+    exit 1
+    ;;
+esac

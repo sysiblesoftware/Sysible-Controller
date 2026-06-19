@@ -1,0 +1,885 @@
+from typing import Optional
+
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, Response
+import secrets
+import time
+
+from backend.agent_bundle import build_agent_bundle, detect_local_ips, resolve_controller_addresses
+from backend.auth import require_api_key
+from backend.db import (
+    create_enroll_token,
+    validate_enroll_token,
+    resolve_enroll_token_host,
+    consume_enroll_token,
+    create_or_update_agent,
+    update_agent_heartbeat,
+    list_agents,
+    delete_agent,
+    get_agent_secret,
+    agent_exists,
+    queue_task,
+    fetch_pending_tasks,
+    submit_task_result,
+    list_results,
+    list_environments,
+    create_environment,
+    delete_environment,
+    set_agent_environment,
+    get_controller_config,
+    set_controller_config,
+    get_license_config,
+    set_license_config,
+    get_portal_config,
+    set_portal_port,
+    get_portal_credentials,
+    set_portal_credentials,
+    delete_portal_credentials,
+    get_portal_login_history,
+    get_last_portal_login,
+    list_portal_sessions,
+    delete_portal_session,
+    delete_all_portal_sessions,
+    log_portal_event,
+    list_administrators,
+    count_administrators,
+    get_administrator,
+    add_administrator,
+    remove_administrator,
+    update_administrator_password,
+    update_administrator_username,
+    record_administrator_login,
+    log_admin_audit,
+    get_admin_audit_log,
+    get_environmental_policy,
+    set_environmental_policy,
+    get_admin_password_policy,
+    set_admin_password_policy,
+)
+from backend import portal_auth, portal_files, portal_manager
+from backend.policy import validate_password_against_policy
+from backend.models.agent_models import (
+    EnrollRequest,
+    HeartbeatRequest,
+    SelfDisenrollRequest,
+    TaskCreateRequest,
+    TaskResultRequest,
+)
+from backend.models.environment_models import (
+    CreateEnvironmentRequest,
+    SetEnvironmentRequest,
+)
+from backend.models.portal_models import (
+    SetControllerConfigRequest,
+    SetLicenseKeyRequest,
+    SetPortalCredentialsRequest,
+    RemovePortalCredentialsRequest,
+    SetPortalPortRequest,
+    AdminLoginRequest,
+    ChangeAdminCredentialsRequest,
+    AddAdministratorRequest,
+    ForcePasswordChangeRequest,
+)
+from backend.models.policy_models import (
+    SetEnvironmentalPolicyRequest,
+    SetAdminPasswordPolicyRequest,
+)
+from backend.routes.groups import router as groups_router
+from backend.routes.users import router as users_router
+from backend.remote_routes import router as remote_router
+
+app = FastAPI(title="Sysible Controller")
+
+app.include_router(users_router, dependencies=[Depends(require_api_key)])
+app.include_router(groups_router, dependencies=[Depends(require_api_key)])
+app.include_router(remote_router, dependencies=[Depends(require_api_key)])
+
+
+def verify_agent(host_id: str, agent_secret: str):
+    """Authenticate a request as coming from a previously-enrolled agent."""
+
+    if not agent_exists(host_id):
+        raise HTTPException(status_code=404, detail="Unknown host_id")
+
+    expected = get_agent_secret(host_id)
+
+    if not expected or not secrets.compare_digest(agent_secret, expected):
+        raise HTTPException(status_code=401, detail="Invalid agent secret")
+
+
+# =========================================================
+# SERVER TOKEN GENERATION (admin-only: localhost + API key)
+# =========================================================
+@app.post("/admin/enroll-token/generate", dependencies=[Depends(require_api_key)])
+async def generate_token(request: Request):
+
+    client_ip = request.client.host
+
+    if client_ip not in [
+        "127.0.0.1",
+        "::1",
+        "localhost"
+    ]:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden"
+        )
+
+    token = secrets.token_hex(16)
+
+    create_enroll_token(token)
+
+    return {
+        "token": token,
+        "valid_days": 365
+    }
+
+
+# =========================================================
+# AGENT ENROLLMENT (agent-facing: authenticated by one-time token)
+#
+# A token may be reused by the SAME host within
+# ENROLL_TOKEN_REUSE_WINDOW of its last use (see backend/db.py) - this
+# covers disenroll-then-reenroll with the same bundle, where the
+# host's local agent_state.json was wiped and it has no way to report
+# its old host_id. resolve_enroll_token_host() swaps in the token's
+# originally-bound host_id on that within-window reuse, so the host
+# lands back on its existing inventory entry instead of silently
+# failing to appear under a new, orphaned host_id.
+# =========================================================
+@app.post("/agents/enroll")
+async def enroll(req: EnrollRequest):
+
+    if not validate_enroll_token(req.token):
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid or expired token"
+        )
+
+    host_id = resolve_enroll_token_host(req.token, req.host_id)
+
+    agent_secret = secrets.token_hex(24)
+
+    create_or_update_agent(
+        host_id,
+        req.hostname,
+        req.platform,
+        req.kernel,
+        "online",
+        time.time(),
+        agent_secret,
+        req.ip
+    )
+
+    consume_enroll_token(req.token, host_id)
+
+    return {
+        "host_id": host_id,
+        "agent_secret": agent_secret,
+        "status": "enrolled"
+    }
+
+
+# =========================================================
+# HEARTBEAT (agent-facing: authenticated by per-host secret)
+# =========================================================
+@app.post("/agents/heartbeat")
+async def heartbeat(req: HeartbeatRequest):
+
+    verify_agent(req.host_id, req.agent_secret)
+
+    update_agent_heartbeat(req.host_id, req.ip)
+
+    return {
+        "status": "ok"
+    }
+
+
+# =========================================================
+# TASK QUEUE
+# =========================================================
+@app.post("/agents/{host_id}/tasks", dependencies=[Depends(require_api_key)])
+def queue_agent_task(host_id: str, body: TaskCreateRequest):
+
+    if not agent_exists(host_id):
+        raise HTTPException(status_code=404, detail="Unknown host_id")
+
+    task_id = queue_task(host_id, body.command, body.kind)
+
+    return {
+        "task_id": task_id,
+        "status": "queued"
+    }
+
+
+@app.get("/agents/{host_id}/tasks")
+def poll_agent_tasks(host_id: str, agent_secret: str):
+
+    verify_agent(host_id, agent_secret)
+
+    return {
+        "tasks": fetch_pending_tasks(host_id)
+    }
+
+
+@app.post("/agents/{host_id}/tasks/result")
+def post_task_result(host_id: str, body: TaskResultRequest):
+
+    if host_id != body.host_id:
+        raise HTTPException(status_code=400, detail="host_id mismatch")
+
+    verify_agent(body.host_id, body.agent_secret)
+
+    submit_task_result(body.task_id, body.host_id, body.result)
+
+    return {
+        "status": "recorded"
+    }
+
+
+@app.get("/agents/{host_id}/results", dependencies=[Depends(require_api_key)])
+def get_agent_results(
+    host_id: str,
+    kind: Optional[str] = None,
+    task_id: Optional[int] = None
+):
+
+    if not agent_exists(host_id):
+        raise HTTPException(status_code=404, detail="Unknown host_id")
+
+    return {
+        "results": list_results(host_id, kind=kind, task_id=task_id)
+    }
+
+
+# =========================================================
+# INVENTORY
+# =========================================================
+@app.get("/agents", dependencies=[Depends(require_api_key)])
+def get_agents():
+
+    return {
+        "agents": list_agents()
+    }
+
+
+# =========================================================
+# DISENROLL
+# =========================================================
+@app.delete("/agents/{host_id}", dependencies=[Depends(require_api_key)])
+def remove_agent(host_id: str):
+
+    delete_agent(host_id)
+
+    return {
+        "status": "removed",
+        "host_id": host_id
+    }
+
+
+# =========================================================
+# SELF-DISENROLL (agent-facing: authenticated by per-host secret, not
+# the controller API key - this is what the agent bundle's
+# disenroll_agent.sh calls so a host can clean itself up without
+# needing admin credentials, mirroring how heartbeat/fetch_tasks
+# already authenticate with host_id+agent_secret)
+# =========================================================
+@app.post("/agents/{host_id}/disenroll")
+def self_disenroll(host_id: str, req: SelfDisenrollRequest):
+
+    if host_id != req.host_id:
+        raise HTTPException(status_code=400, detail="host_id mismatch")
+
+    verify_agent(req.host_id, req.agent_secret)
+
+    delete_agent(req.host_id)
+
+    return {
+        "status": "disenrolled",
+        "host_id": req.host_id
+    }
+
+
+# =========================================================
+# AGENT ENVIRONMENT TAGGING (admin-only - the agent itself never
+# reports this, it's an operator-assigned label used to group hosts
+# in the GUI across Host Enrollment / User Administration / Remote
+# Administration)
+# =========================================================
+@app.post("/agents/{host_id}/environment", dependencies=[Depends(require_api_key)])
+def set_agent_environment_route(host_id: str, body: SetEnvironmentRequest):
+
+    if not agent_exists(host_id):
+        raise HTTPException(status_code=404, detail="Unknown host_id")
+
+    set_agent_environment(host_id, body.environment)
+
+    return {
+        "host_id": host_id,
+        "environment": body.environment
+    }
+
+
+# =========================================================
+# ENVIRONMENTS (dev/stage/prod, etc. - editable registry shared by
+# agent hosts and SSH hosts; admin-only)
+# =========================================================
+@app.get("/environments", dependencies=[Depends(require_api_key)])
+def get_environments():
+
+    return {
+        "environments": list_environments()
+    }
+
+
+@app.post("/environments", dependencies=[Depends(require_api_key)])
+def add_environment(body: CreateEnvironmentRequest):
+
+    name = body.name.strip()
+
+    if not name:
+        raise HTTPException(status_code=400, detail="Environment name cannot be empty")
+
+    create_environment(name)
+
+    return {
+        "environments": list_environments()
+    }
+
+
+@app.delete("/environments/{name}", dependencies=[Depends(require_api_key)])
+def remove_environment(name: str):
+
+    delete_environment(name)
+
+    return {
+        "environments": list_environments()
+    }
+
+
+# =========================================================
+# CONTROLLER CONFIGURATION (admin-only)
+# The hostname/port baked into agent bundles the Webserver Portal
+# hands out - see backend/agent_bundle.py.
+# =========================================================
+@app.get("/controller-config", dependencies=[Depends(require_api_key)])
+def get_controller_config_route():
+
+    return get_controller_config()
+
+
+@app.post("/controller-config", dependencies=[Depends(require_api_key)])
+def set_controller_config_route(body: SetControllerConfigRequest):
+
+    hostname = body.hostname.strip()
+    ip = body.ip.strip()
+    address_mode = body.address_mode if body.address_mode in ("hostname", "ip", "all") else "hostname"
+
+    # "all" mode needs neither field - every detected local IP is what
+    # ships in the bundle, computed fresh at download time (see
+    # resolve_controller_addresses), not typed in here.
+    if address_mode != "all" and not hostname and not ip:
+        raise HTTPException(status_code=400, detail="Hostname and IP cannot both be empty")
+
+    if address_mode == "hostname" and not hostname:
+        raise HTTPException(status_code=400, detail="Hostname is selected but empty")
+
+    if address_mode == "ip" and not ip:
+        raise HTTPException(status_code=400, detail="IP Address is selected but empty")
+
+    if address_mode == "all" and not detect_local_ips():
+        raise HTTPException(
+            status_code=400,
+            detail="No local IP addresses were detected on this controller - check its network interfaces.",
+        )
+
+    if not (1 <= body.port <= 65535):
+        raise HTTPException(status_code=400, detail="Port must be between 1 and 65535")
+
+    set_controller_config(hostname, ip, address_mode, body.port)
+
+    return get_controller_config()
+
+
+@app.get("/license-config", dependencies=[Depends(require_api_key)])
+def get_license_config_route():
+
+    return get_license_config()
+
+
+@app.post("/license-config", dependencies=[Depends(require_api_key)])
+def set_license_config_route(body: SetLicenseKeyRequest):
+
+    return set_license_config(body.license_key.strip())
+
+
+@app.get("/controller-config/local-ips", dependencies=[Depends(require_api_key)])
+def get_local_ips_route():
+    """Every non-loopback IPv4 address found on this controller right
+    now - powers the IP picker/"All Detected IPs" option in Controller
+    Configuration so the admin never has to run `ip addr`/`ifconfig` by
+    hand."""
+
+    return {"ips": detect_local_ips()}
+
+
+@app.get("/controller-config/agent-bundle", dependencies=[Depends(require_api_key)])
+def download_agent_bundle_route():
+    """Build and hand back a ready-to-run agent bundle straight from the
+    admin GUI - the same zip the Webserver Portal hands a remote host
+    operator (see backend/portal_app.py's /files/bundle), generated here
+    so one's available even when the portal isn't running, or isn't
+    reachable from wherever this GUI happens to be."""
+
+    config = get_controller_config()
+    addresses = resolve_controller_addresses(config)
+
+    if not addresses:
+        detail = (
+            "No local IP addresses were detected on this controller - check its network interfaces."
+            if config.get("address_mode") == "all"
+            else "Set a Hostname or IP Address above and save before downloading a bundle."
+        )
+        raise HTTPException(status_code=400, detail=detail)
+
+    enroll_token = secrets.token_hex(16)
+    create_enroll_token(enroll_token)
+
+    filename, zip_bytes = build_agent_bundle(
+        addresses, config["port"], enroll_token
+    )
+
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# =========================================================
+# ENVIRONMENTAL POLICIES (admin-only)
+# Baseline settings for accounts/sudo/umask on managed target hosts -
+# System Administration > Environmental Policies pushes these to
+# checked hosts, and User & Group Administration uses the password
+# sub-object as the baseline for its own Generate Password / Set
+# Password validation (see client/api.py's check_password_strength).
+# Not to be confused with admin-password-policy below, which only
+# governs this controller's own GUI-login administrator accounts.
+# =========================================================
+@app.get("/environmental-policy", dependencies=[Depends(require_api_key)])
+def get_environmental_policy_route():
+
+    return get_environmental_policy()
+
+
+@app.post("/environmental-policy", dependencies=[Depends(require_api_key)])
+def set_environmental_policy_route(body: SetEnvironmentalPolicyRequest):
+
+    policy = body.model_dump()
+    set_environmental_policy(policy)
+
+    return policy
+
+
+# =========================================================
+# WEBSERVER PORTAL (admin-only)
+# Start/stop the separate portal process and manage its login
+# credentials - see backend/portal_manager.py and backend/portal_app.py
+# for why this is a standalone process rather than routes on this app.
+# =========================================================
+@app.get("/portal/status", dependencies=[Depends(require_api_key)])
+def get_portal_status_route():
+
+    creds = get_portal_credentials()
+    last_login = get_last_portal_login()
+
+    status = portal_manager.status()
+    status["credentials_configured"] = bool(creds and creds.get("username"))
+    status["username"] = creds.get("username") if creds else None
+    status["last_changed"] = creds.get("last_changed") if creds else None
+    status["last_login"] = last_login
+
+    return status
+
+
+@app.post("/portal/start", dependencies=[Depends(require_api_key)])
+def start_portal_route():
+
+    return portal_manager.start()
+
+
+@app.post("/portal/stop", dependencies=[Depends(require_api_key)])
+def stop_portal_route():
+
+    return portal_manager.stop()
+
+
+@app.post("/portal/credentials", dependencies=[Depends(require_api_key)])
+def set_portal_credentials_route(body: SetPortalCredentialsRequest):
+
+    username = body.username.strip()
+
+    if not username:
+        raise HTTPException(status_code=400, detail="Username cannot be empty")
+
+    if not body.password:
+        raise HTTPException(status_code=400, detail="Password cannot be empty")
+
+    existing = get_portal_credentials()
+
+    # Only enforced once credentials actually exist - the very first
+    # time they're set (fresh install) there's nothing yet to confirm
+    # against.
+    if existing and existing.get("username"):
+        if not body.current_password:
+            raise HTTPException(status_code=400, detail="Current password is required to reset credentials")
+
+        if not portal_auth.verify_password(
+            body.current_password, existing.get("password_salt"), existing.get("password_hash")
+        ):
+            raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    salt, password_hash = portal_auth.hash_password(body.password)
+    set_portal_credentials(username, password_hash, salt)
+
+    # Every session issued under the old password is invalidated -
+    # otherwise a host operator logged in under credentials that were
+    # just reset (e.g. because they were thought to be compromised)
+    # could keep using the portal until their cookie's TTL ran out.
+    delete_all_portal_sessions()
+
+    log_portal_event("credentials_changed", username)
+
+    return {"username": username, "status": "updated"}
+
+
+@app.delete("/portal/credentials", dependencies=[Depends(require_api_key)])
+def remove_portal_credentials_route(body: RemovePortalCredentialsRequest):
+
+    existing = get_portal_credentials()
+
+    if not existing or not existing.get("username"):
+        raise HTTPException(status_code=400, detail="No login credentials are configured")
+
+    if not portal_auth.verify_password(
+        body.current_password, existing.get("password_salt"), existing.get("password_hash")
+    ):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    removed_username = existing.get("username")
+
+    delete_portal_credentials()
+
+    # No account left to hold a session against - end every session
+    # issued under it, same as a credentials reset.
+    delete_all_portal_sessions()
+
+    log_portal_event("credentials_removed", removed_username)
+
+    return {"status": "removed"}
+
+
+@app.get("/portal/login-history", dependencies=[Depends(require_api_key)])
+def get_portal_login_history_route(limit: int = 200):
+    return {"history": get_portal_login_history(limit)}
+
+
+@app.get("/portal/sessions", dependencies=[Depends(require_api_key)])
+def list_portal_sessions_route():
+    return {"sessions": list_portal_sessions()}
+
+
+@app.post("/portal/sessions/{session_id}/revoke", dependencies=[Depends(require_api_key)])
+def revoke_portal_session_route(session_id: int):
+    delete_portal_session(session_id)
+    return {"status": "revoked"}
+
+
+# =========================================================
+# ADMINISTRATORS (gates the desktop GUI itself - the "Sysible
+# Administrator Configuration" page. Separate from portal_credentials
+# above, which is what a remote host *operator* logs into in a
+# browser, not what a Sysible admin uses. All routes still require
+# the admin API key, same as every other route in this section -
+# this isn't instead of that trust boundary, it's an additional
+# human-facing gate on top of it, since the API key alone just
+# proves "this is a legitimate Sysible GUI install", not "the person
+# currently sitting at it is allowed to use it".
+#
+# Multiple named administrator accounts, each with their own
+# password - replaces the old single shared admin/admin login.
+# Account changes and logins are recorded to admin_audit_log; see
+# GET /admin/audit-log below.
+# =========================================================
+@app.post("/admin/login", dependencies=[Depends(require_api_key)])
+def admin_login(body: AdminLoginRequest):
+
+    username = body.username.strip()
+    admin = get_administrator(username)
+
+    valid = admin is not None and portal_auth.verify_password(
+        body.password, admin["password_salt"], admin["password_hash"]
+    )
+
+    if not valid:
+        log_admin_audit("login_failed", username, "Invalid username or password")
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    record_administrator_login(username)
+    log_admin_audit("login_success", username, "")
+
+    return {
+        "status": "ok",
+        "username": username,
+        "must_change_password": bool(admin["must_change_password"]),
+    }
+
+
+@app.get("/admin/administrators", dependencies=[Depends(require_api_key)])
+def list_administrators_route():
+    """Username, account metadata only - never password hash/salt."""
+
+    return {"administrators": list_administrators()}
+
+
+@app.post("/admin/administrators", dependencies=[Depends(require_api_key)])
+def add_administrator_route(body: AddAdministratorRequest):
+
+    username = body.username.strip()
+
+    if not username:
+        raise HTTPException(status_code=400, detail="Username cannot be empty")
+
+    if not body.password:
+        raise HTTPException(status_code=400, detail="Password cannot be empty")
+
+    ok, message = validate_password_against_policy(body.password, get_admin_password_policy())
+    if not ok:
+        raise HTTPException(status_code=400, detail=message)
+
+    salt, password_hash = portal_auth.hash_password(body.password)
+    created = add_administrator(
+        username, password_hash, salt, must_change_password=1, created_by=body.actor or None
+    )
+
+    if not created:
+        raise HTTPException(status_code=409, detail="An administrator with that username already exists")
+
+    log_admin_audit("administrator_added", username, f"added by {body.actor}" if body.actor else "")
+
+    return {"username": username, "status": "added"}
+
+
+@app.delete("/admin/administrators/{username}", dependencies=[Depends(require_api_key)])
+def remove_administrator_route(username: str, actor: str = ""):
+
+    if get_administrator(username) is None:
+        raise HTTPException(status_code=404, detail="No such administrator")
+
+    if count_administrators() <= 1:
+        raise HTTPException(status_code=400, detail="Cannot remove the last remaining administrator")
+
+    remove_administrator(username)
+    log_admin_audit("administrator_removed", username, f"removed by {actor}" if actor else "")
+
+    return {"username": username, "status": "removed"}
+
+
+@app.post("/admin/credentials", dependencies=[Depends(require_api_key)])
+def change_admin_credentials(body: ChangeAdminCredentialsRequest):
+    """Self-service username/password change for the currently
+    logged-in administrator named in body.username."""
+
+    admin = get_administrator(body.username)
+
+    if admin is None:
+        raise HTTPException(status_code=404, detail="No such administrator")
+
+    if not portal_auth.verify_password(
+        body.current_password, admin["password_salt"], admin["password_hash"]
+    ):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+
+    new_username = body.new_username.strip()
+
+    if not new_username:
+        raise HTTPException(status_code=400, detail="Username cannot be empty")
+
+    if not body.new_password:
+        raise HTTPException(status_code=400, detail="Password cannot be empty")
+
+    ok, message = validate_password_against_policy(body.new_password, get_admin_password_policy())
+    if not ok:
+        raise HTTPException(status_code=400, detail=message)
+
+    if new_username != body.username:
+        renamed = update_administrator_username(body.username, new_username)
+        if not renamed:
+            raise HTTPException(status_code=409, detail="An administrator with that username already exists")
+
+    salt, password_hash = portal_auth.hash_password(body.new_password)
+    update_administrator_password(new_username, password_hash, salt, must_change_password=0)
+
+    log_admin_audit("password_changed", new_username, "")
+
+    return {"username": new_username, "status": "updated"}
+
+
+@app.post("/admin/force-password-change", dependencies=[Depends(require_api_key)])
+def force_admin_password_change(body: ForcePasswordChangeRequest):
+    """Used right after login when must_change_password is set -
+    same verification as change_admin_credentials but no username
+    change, and clears the forced-change flag."""
+
+    admin = get_administrator(body.username)
+
+    if admin is None:
+        raise HTTPException(status_code=404, detail="No such administrator")
+
+    if not portal_auth.verify_password(
+        body.current_password, admin["password_salt"], admin["password_hash"]
+    ):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+
+    if not body.new_password:
+        raise HTTPException(status_code=400, detail="Password cannot be empty")
+
+    ok, message = validate_password_against_policy(body.new_password, get_admin_password_policy())
+    if not ok:
+        raise HTTPException(status_code=400, detail=message)
+
+    salt, password_hash = portal_auth.hash_password(body.new_password)
+    update_administrator_password(body.username, password_hash, salt, must_change_password=0)
+
+    log_admin_audit("forced_password_change_completed", body.username, "")
+
+    return {"username": body.username, "status": "updated"}
+
+
+@app.get("/admin/audit-log", dependencies=[Depends(require_api_key)])
+def get_admin_audit_log_route(limit: int = 200):
+
+    return {"entries": get_admin_audit_log(limit)}
+
+
+# =========================================================
+# ADMINISTRATOR PASSWORD POLICY (admin-only)
+# Governs the Sysible Controller's own GUI-login administrator
+# accounts only - completely separate from environmental-policy
+# above, which governs target Linux accounts on managed hosts.
+# Configured from Sysible Controller Settings; enforced above in
+# add_administrator_route / change_admin_credentials /
+# force_admin_password_change.
+# =========================================================
+@app.get("/admin/password-policy", dependencies=[Depends(require_api_key)])
+def get_admin_password_policy_route():
+
+    return get_admin_password_policy()
+
+
+@app.post("/admin/password-policy", dependencies=[Depends(require_api_key)])
+def set_admin_password_policy_route(body: SetAdminPasswordPolicyRequest):
+
+    policy = body.model_dump()
+    set_admin_password_policy(policy)
+
+    return policy
+
+
+@app.get("/portal/config", dependencies=[Depends(require_api_key)])
+def get_portal_config_route():
+
+    return get_portal_config()
+
+
+@app.post("/portal/config", dependencies=[Depends(require_api_key)])
+def set_portal_config_route(body: SetPortalPortRequest):
+
+    if not (1 <= body.port <= 65535):
+        raise HTTPException(status_code=400, detail="Port must be between 1 and 65535")
+
+    set_portal_port(body.port)
+
+    return get_portal_config()
+
+
+# =========================================================
+# WEBSERVER PORTAL FILE POOL (admin-only)
+# Shared pool, not per-host: "uploads" are files a host operator sent
+# in through the portal, "downloads" are files the admin staged there
+# for a host operator to grab. See backend/portal_files.py.
+# =========================================================
+@app.get("/portal/files/uploads", dependencies=[Depends(require_api_key)])
+def list_portal_uploads_route():
+
+    return {"files": portal_files.list_uploads()}
+
+
+@app.get("/portal/files/uploads/{filename}", dependencies=[Depends(require_api_key)])
+def fetch_portal_upload_route(filename: str):
+
+    try:
+        path = portal_files.upload_path(filename)
+    except (portal_files.InvalidFilename, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(path, filename=path.name)
+
+
+@app.delete("/portal/files/uploads/{filename}", dependencies=[Depends(require_api_key)])
+def delete_portal_upload_route(filename: str):
+
+    try:
+        deleted = portal_files.delete_upload(filename)
+    except portal_files.InvalidFilename:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return {"status": "deleted", "filename": filename}
+
+
+@app.get("/portal/files/downloads", dependencies=[Depends(require_api_key)])
+def list_portal_downloads_route():
+
+    return {"files": portal_files.list_downloads()}
+
+
+@app.post("/portal/files/downloads", dependencies=[Depends(require_api_key)])
+async def stage_portal_download_route(file: UploadFile = File(...)):
+
+    data = await file.read()
+
+    try:
+        saved_as = portal_files.save_download(file.filename, data)
+    except portal_files.InvalidFilename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    return {"status": "staged", "filename": saved_as}
+
+
+@app.delete("/portal/files/downloads/{filename}", dependencies=[Depends(require_api_key)])
+def delete_portal_download_route(filename: str):
+
+    try:
+        deleted = portal_files.delete_download(filename)
+    except portal_files.InvalidFilename:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return {"status": "deleted", "filename": filename}
+
+
+# =========================================================
+# ROOT
+# =========================================================
+@app.get("/")
+def root():
+
+    return {
+        "application": "Sysible Controller",
+        "status": "running"
+    }

@@ -36,7 +36,13 @@ class AdminLoginDialog(QDialog):
         super().__init__()
 
         self.setWindowTitle("Sysible Controller Administrator Login")
-        self.setFixedWidth(360)
+        # 360 was too narrow: most window managers center the title in the
+        # title bar, and "Sysible Controller Administrator Login" rendered
+        # wider than that at normal title-bar font sizes, so a couple of
+        # characters off each end got clipped instead of the title
+        # shrinking or wrapping. Widened rather than shortening the title,
+        # since the full name should actually be readable.
+        self.setFixedWidth(460)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
 
         layout = QVBoxLayout()

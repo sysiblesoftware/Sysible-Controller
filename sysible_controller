@@ -277,6 +277,51 @@ cmd_destroy() {
       update-desktop-database "$(dirname "$DESKTOP_FILE")" >/dev/null 2>&1
   fi
 
+  # =========================================================
+  # UNPIN FROM GNOME-FAMILY DOCKS/TASKBARS (best-effort)
+  # Deleting $DESKTOP_FILE above removes the entry from the
+  # applications menu/grid, but a dock/taskbar *pin* ("Add to
+  # Favorites") is stored separately, per-user, in dconf - it
+  # references the launcher by filename and survives the file being
+  # deleted (showing up as a broken/generic icon instead of just
+  # disappearing). This only covers desktops that use the GNOME
+  # favorite-apps key (GNOME, Ubuntu's default, Cinnamon) via
+  # gsettings, run as the actual desktop user (not root) since it's
+  # their per-user setting, not root's. KDE Plasma and XFCE store
+  # panel/taskbar pins in their own config files instead and aren't
+  # covered here - unpin the icon manually on those (right-click it
+  # -> Unpin/Remove from panel) if it's pinned.
+  # =========================================================
+  REAL_USER="${SUDO_USER:-$(logname 2>/dev/null)}"
+  if [[ -n "$REAL_USER" ]] && command -v gsettings >/dev/null 2>&1; then
+    REAL_UID="$(id -u "$REAL_USER" 2>/dev/null)"
+    if [[ -n "$REAL_UID" ]]; then
+      for SCHEMA in org.gnome.shell org.cinnamon; do
+        CURRENT="$(sudo -u "$REAL_USER" \
+          DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$REAL_UID/bus" \
+          gsettings get "$SCHEMA" favorite-apps 2>/dev/null)"
+
+        if [[ "$CURRENT" == *"sysible-controller.desktop"* ]]; then
+          echo "Unpinning from $SCHEMA dock/favorites..."
+          UPDATED="$(python3 -c "
+import ast, sys
+try:
+    apps = ast.literal_eval(sys.argv[1])
+except Exception:
+    sys.exit(1)
+print([a for a in apps if a != 'sysible-controller.desktop'])
+" "$CURRENT" 2>/dev/null)"
+
+          if [[ -n "$UPDATED" ]]; then
+            sudo -u "$REAL_USER" \
+              DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$REAL_UID/bus" \
+              gsettings set "$SCHEMA" favorite-apps "$UPDATED" 2>/dev/null
+          fi
+        fi
+      done
+    fi
+  fi
+
   echo "Sysible Controller has been removed from this machine."
   echo "Removing this command..."
   rm -f "$0"

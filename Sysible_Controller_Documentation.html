@@ -1,194 +1,450 @@
-    <text x="448" y="194" font-family="-apple-system,Arial" font-size="13" font-weight="700" fill="#EAEAEA">db-01</text>
-    <text x="448" y="222" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Host ID:</text><text x="540" y="222" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">a13f-09c2</text>
-    <text x="448" y="244" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Platform:</text><text x="540" y="244" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">Ubuntu 22.04</text>
-    <text x="448" y="266" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Kernel:</text><text x="540" y="266" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">5.15.0-112</text>
-    <text x="448" y="288" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Status:</text><text x="540" y="288" font-family="-apple-system,Arial" font-size="11" fill="#3ac95a">online</text>
-    <text x="448" y="310" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Environment:</text><text x="540" y="310" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">Production</text>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sysible Controller — Administrator &amp; User Guide</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --navy:#1a2744;
+    --blue:#2f6fed;
+    --accent:#3C4B64;
+    --accent-border:#506080;
+    --accent-hover:#4C6285;
+    --accent-pressed:#23395D;
+    --green:#3ac95a;
+    --red:#ff5c5c;
+    --amber:#e0a93c;
+    --ink:#202733;
+    --ink-dim:#5b6573;
+    --hair:#dfe3ea;
+    --paper:#ffffff;
+    --bg:#eef1f6;
+    --app-bg:#1E1E1E;
+    --app-card:#262626;
+    --app-card-border:#3A3A3A;
+    --app-input:#2B2B2B;
+    --app-input-border:#505050;
+    --app-text:#EAEAEA;
+    --app-text-dim:#9aa5b1;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.6; font-size:15px;
+  }
+  .page{
+    max-width:880px; margin:0 auto; background:var(--paper);
+    padding:56px 64px; box-shadow:0 0 40px rgba(0,0,0,0.08);
+  }
+  .page + .page{ margin-top:28px; }
 
-    <rect x="448" y="334" width="220" height="28" rx="5" fill="#2B2B2B" stroke="#505050"/>
-    <text x="458" y="352" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">Production ▾</text>
-    <rect x="678" y="334" width="140" height="28" rx="5" fill="#3C4B64" stroke="#506080"/>
-    <text x="748" y="352" font-family="-apple-system,Arial" font-size="11" fill="#fff" text-anchor="middle">Set Environment</text>
+  /* ---------- Cover ---------- */
+  .cover{
+    text-align:center; padding:90px 64px 70px; position:relative;
+  }
+  .cover .stripe{
+    height:10px; background:linear-gradient(90deg,var(--navy),var(--blue));
+    margin:-56px -64px 56px;
+  }
+  .cover img.logo{ width:190px; margin-bottom:18px; }
+  .cover h1{
+    font-size:34px; margin:18px 0 6px; color:var(--navy); letter-spacing:0.3px;
+  }
+  .cover .sub{ font-size:17px; color:var(--ink-dim); margin-bottom:50px; }
+  .cover .meta{
+    display:inline-block; text-align:left; border-top:1px solid var(--hair);
+    padding-top:22px; margin-top:30px; font-size:13px; color:var(--ink-dim);
+  }
+  .cover .meta div{ margin:3px 0; }
+  .cover .meta b{ color:var(--ink); }
+  .cover .footer-tag{
+    position:absolute; bottom:36px; left:0; right:0; text-align:center;
+    font-size:11px; letter-spacing:1.2px; text-transform:uppercase; color:var(--ink-dim);
+  }
 
-    <rect x="448" y="480" width="160" height="30" rx="5" fill="#5a2323" stroke="#7a3030"/>
-    <text x="528" y="500" font-family="-apple-system,Arial" font-size="11" fill="#ffb3b3" text-anchor="middle">Disenroll Host</text>
-    <rect x="618" y="480" width="100" height="30" rx="5" fill="#2f2f2f" stroke="#505050"/>
-    <text x="668" y="500" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1" text-anchor="middle">Refresh</text>
-  </svg>
-</figure>
-<figcaption>Host Enrollment — enrolled hosts grouped by environment, with a details and disenrollment panel.</figcaption>
+  /* ---------- TOC ---------- */
+  .toc h2{ border-bottom:none; }
+  .toc ol{ counter-reset:toc; list-style:none; padding-left:0; }
+  .toc li{ margin:9px 0; font-size:15px; }
+  .toc a{ color:var(--ink); text-decoration:none; }
+  .toc a:hover{ color:var(--blue); text-decoration:underline; }
+  .toc .num{ color:var(--blue); font-weight:600; display:inline-block; width:34px; }
+  .toc ul.sub{ list-style:none; padding-left:34px; margin:4px 0 10px; }
+  .toc ul.sub li{ font-size:13.5px; color:var(--ink-dim); margin:3px 0; }
+  .toc ul.sub a{ color:var(--ink-dim); }
 
-<h2>Downloading and running the agent bundle</h2>
-<p>Clicking <strong>Download Agent Bundle</strong> prompts you to choose where to save <code>sysible-agent-bundle.zip</code> — the same ready-to-run bundle the Webserver Portal hands to end users, built here on demand. Each download bakes in a <strong>fresh, one-time enrollment token</strong> plus the controller's configured address and port. The zip contains:</p>
+  /* ---------- Section typography ---------- */
+  h1.sec{
+    font-size:26px; color:var(--navy); margin:0 0 6px; padding-bottom:14px;
+    border-bottom:3px solid var(--blue);
+  }
+  h1.sec .tag{ font-size:13px; color:var(--blue); font-weight:600; text-transform:uppercase; letter-spacing:1px; display:block; margin-bottom:6px;}
+  h2{ font-size:19px; color:var(--navy); margin:34px 0 10px; }
+  h3{ font-size:15.5px; color:var(--accent); margin:22px 0 8px; }
+  p{ margin:0 0 13px; }
+  ul,ol{ margin:0 0 13px; padding-left:24px; }
+  li{ margin:0 0 7px; }
+  strong{ color:var(--ink); }
+  code, .code{
+    font-family:"SF Mono",Menlo,Consolas,monospace; font-size:13px;
+    background:#eef0f4; border:1px solid var(--hair); border-radius:4px; padding:1px 6px;
+  }
+  pre.cli{
+    background:#1c2230; color:#d7e0ee; border-radius:8px; padding:16px 18px;
+    font-family:"SF Mono",Menlo,Consolas,monospace; font-size:13px; overflow-x:auto;
+    margin:14px 0 18px; line-height:1.55;
+  }
+  pre.cli .c{ color:#7fd9a4; }
+  pre.cli .cm{ color:#7b8aa3; }
+
+  table.ref{ width:100%; border-collapse:collapse; margin:14px 0 22px; font-size:13.5px; }
+  table.ref th{
+    text-align:left; background:var(--navy); color:#fff; padding:9px 12px; font-weight:600;
+  }
+  table.ref td{ padding:9px 12px; border-bottom:1px solid var(--hair); vertical-align:top; }
+  table.ref tr:nth-child(even) td{ background:#f7f9fc; }
+
+  .note, .warn{
+    border-radius:8px; padding:14px 18px; margin:16px 0 20px; font-size:13.8px;
+  }
+  .note{ background:#eaf1ff; border-left:4px solid var(--blue); color:#1d3a66; }
+  .warn{ background:#fff3e7; border-left:4px solid var(--amber); color:#7a4d12; }
+  .note b, .warn b{ display:block; font-size:11px; text-transform:uppercase; letter-spacing:0.8px; margin-bottom:4px; }
+
+  /* ---------- Mockup screenshot frames ---------- */
+  figure.mock{
+    margin:22px 0 26px; border-radius:12px; overflow:hidden;
+    box-shadow:0 8px 26px rgba(20,30,50,0.18); border:1px solid #14181f;
+  }
+  figure.mock .titlebar{
+    background:#15171c; height:30px; display:flex; align-items:center; gap:7px; padding:0 12px;
+  }
+  figure.mock .titlebar span{ width:10px; height:10px; border-radius:50%; display:inline-block; }
+  figure.mock .titlebar .r{ background:#ff5f57; } .figure.mock .titlebar .y{ background:#febc2e; }
+  figure.mock .titlebar .y{ background:#febc2e; } figure.mock .titlebar .g{ background:#28c840; }
+  figure.mock .titlebar .label{ color:#8a8f98; font-size:11px; margin-left:8px; font-family:-apple-system,sans-serif; }
+  figure.mock svg{ display:block; width:100%; background:var(--app-bg); }
+  figcaption{ text-align:center; font-size:12px; color:var(--ink-dim); margin-top:8px; font-style:italic; }
+
+  .pillrow{ display:flex; gap:10px; flex-wrap:wrap; margin:6px 0 18px; }
+  .pill{ background:#f1f4f9; border:1px solid var(--hair); border-radius:20px; padding:5px 13px; font-size:12.5px; color:var(--accent); font-weight:600; }
+
+  @media print{
+    body{ background:#fff; }
+    .page{ box-shadow:none; max-width:100%; padding:30px 8px; }
+    .page + .page{ margin-top:0; page-break-before:always; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ===================== COVER ===================== -->
+<div class="page cover">
+  <div class="stripe"></div>
+  <img class="logo" src="sysible_logo.png" alt="Sysible Controller">
+  <h1>Sysible Controller</h1>
+  <div class="sub">Administrator &amp; User Guide</div>
+  <div class="meta">
+    <div><b>Product:</b> Sysible Controller — IT Infrastructure Management Software</div>
+    <div><b>Document version:</b> matches installed software v2.0.0</div>
+    <div><b>Audience:</b> system administrators installing, configuring, and operating Sysible Controller</div>
+    <div><b>Last updated:</b> June 18, 2026</div>
+  </div>
+  <div class="footer-tag">Sysible Enterprise Software</div>
+</div>
+
+<!-- ===================== TOC ===================== -->
+<div class="page toc">
+<h2 style="margin-top:0;font-size:22px;">Contents</h2>
+<ol>
+  <li><span class="num">1</span><a href="#intro">Introduction to Sysible Controller</a></li>
+  <li><span class="num">2</span><a href="#requirements">System Requirements</a></li>
+  <li><span class="num">3</span><a href="#install">Installation</a></li>
+  <li><span class="num">4</span><a href="#first-login">First Login &amp; Administrator Accounts</a></li>
+  <li><span class="num">5</span><a href="#cli">The sysible_controller Command Line</a></li>
+  <li><span class="num">6</span><a href="#dashboard">The Dashboard</a></li>
+  <li><span class="num">7</span><a href="#enrollment">Host Enrollment</a></li>
+  <li><span class="num">8</span><a href="#remote">Remote Host Administration</a></li>
+  <li><span class="num">9</span><a href="#settings">Sysible Controller Settings</a>
+    <ul class="sub">
+      <li><a href="#settings-controller">Controller Configuration</a></li>
+      <li><a href="#settings-admins">Administrators</a></li>
+      <li><a href="#settings-policy">Administrator Password Policy</a></li>
+      <li><a href="#settings-audit">Audit Log</a></li>
+      <li><a href="#settings-license">License &amp; Version</a></li>
+    </ul>
+  </li>
+  <li><span class="num">10</span><a href="#sysadmin">System Administration</a>
+    <ul class="sub">
+      <li><a href="#uga">User &amp; Group Administration</a></li>
+      <li><a href="#health">System Health &amp; Logs</a></li>
+      <li><a href="#services">Service Management</a></li>
+      <li><a href="#envpolicy">Environmental Policies</a></li>
+      <li><a href="#cron">Cron &amp; Systemd Timers</a></li>
+      <li><a href="#softwaremgmt">Host Software Management</a></li>
+      <li><a href="#repomgmt">Repository Management</a></li>
+    </ul>
+  </li>
+  <li><span class="num">11</span><a href="#portal">Webserver Portal</a>
+    <ul class="sub">
+      <li><a href="#portal-admin">Administrator side</a></li>
+      <li><a href="#portal-host">Host-facing side</a></li>
+    </ul>
+  </li>
+  <li><span class="num">12</span><a href="#tasks">Common Tasks</a>
+    <ul class="sub">
+      <li><a href="#tasks-login">Logging in</a></li>
+      <li><a href="#tasks-enrollment">Host Enrollment</a></li>
+      <li><a href="#tasks-remote">Remote Host Administration</a></li>
+      <li><a href="#tasks-settings">Sysible Controller Settings</a></li>
+      <li><a href="#tasks-uga">User &amp; Group Administration</a></li>
+      <li><a href="#tasks-health">System Health &amp; Logs</a></li>
+      <li><a href="#tasks-services">Service Management</a></li>
+      <li><a href="#tasks-envpolicy">Environmental Policies</a></li>
+      <li><a href="#tasks-cron">Cron &amp; Systemd Timers</a></li>
+      <li><a href="#tasks-softwaremgmt">Host Software Management</a></li>
+      <li><a href="#tasks-repomgmt">Repository Management</a></li>
+      <li><a href="#tasks-portal-admin">Webserver Portal — administrator side</a></li>
+      <li><a href="#tasks-portal-host">Webserver Portal — host-facing side</a></li>
+    </ul>
+  </li>
+  <li><span class="num">13</span><a href="#appendix">Appendix: CLI Quick Reference</a></li>
+</ol>
+<div class="note"><b>A note on the screens shown in this guide</b>The illustrations throughout this guide are styled mockups built to match Sysible Controller's real color palette, layout, and labels — not live photographic screenshots of a running instance. They're accurate to the described behavior and intended purely to orient you visually; minor spacing or wording may differ from the exact build you're running.</div>
+</div>
+
+<!-- ===================== 1. INTRODUCTION ===================== -->
+<div class="page" id="intro">
+<h1 class="sec"><span class="tag">Section 1</span>Introduction to Sysible Controller</h1>
+
+<p>Sysible Controller is the central management console of Sysible Enterprise Software. It is installed on a single Linux machine — the <strong>controller</strong> — and from there gives a system administrator one place to see, configure, and act on an entire fleet of Linux hosts. The controller is made up of two cooperating pieces: a FastAPI backend service that holds the fleet's inventory, credentials, and task queue in a local SQLite database, and a PySide6 desktop GUI client that the administrator runs to interact with that backend. Both pieces are installed together and run on the same machine by default, with the desktop client talking to the backend over HTTPS exactly as any other client of the API would.</p>
+
+<p>Sysible Controller manages target hosts through two independent mechanisms, and an administrator can mix both across a fleet:</p>
 <ul>
-<li><code>agent.py</code> — the Sysible host agent program itself</li>
-<li><code>requirements.txt</code> — the Python packages the agent needs (installed automatically)</li>
-<li><code>sysible_agent.env</code> — the controller's address and this download's one-time enrollment token</li>
-<li><code>server.crt</code> (when applicable) — the controller's TLS certificate, so the agent can verify it's talking to the real controller</li>
-<li>a systemd service unit file for the agent</li>
-<li><code>run_agent.sh</code> — the installer script (run as root on the target host)</li>
-<li><code>disenroll_agent.sh</code> — a companion script that cleanly removes the agent from that host</li>
+<li><strong>The Sysible agent</strong> — a small Python daemon installed on each managed host as its own systemd service, where it heartbeats back to the controller, polls for queued tasks, and reports results.</li>
+<li><strong>Direct SSH</strong> — hosts that cannot or should not run a persistent agent are instead "enrolled" by handing the controller SSH credentials once. The controller then pushes its own auto-generated SSH key to the host and drives it directly over SSH, including a live interactive terminal session from the GUI.</li>
 </ul>
-<p>To enroll a host: copy the unzipped bundle onto the target machine, make <code>run_agent.sh</code> executable, and run it as root:</p>
-<pre class="cli"><span class="cm"># on the target host</span>
-chmod +x run_agent.sh
-sudo ./run_agent.sh</pre>
-<p>The agent installs and starts as a background systemd service that restarts itself on crash or reboot. The host then appears in the Enrolled Hosts list (allow a few moments for the first heartbeat).</p>
-<div class="warn"><b>One bundle, one host</b>Each bundle's enrollment token is single-use — download a fresh bundle per host rather than reusing one zip on a second machine.</div>
+<p>Both mechanisms feed the same fleet-wide views in the GUI — User &amp; Group Administration, Service Management, System Health &amp; Logs, Cron &amp; Systemd Timers, and so on — so an administrator generally does not need to think about which transport a given host uses once it is enrolled.</p>
 
-<h2>Environment tagging</h2>
-<p>Hosts can be organized into <strong>environments</strong> — labels such as "Production," "Staging," or "Development." Environments are entirely optional; an unassigned host is listed under an "Unassigned" heading. Select a host, use the <strong>Environment</strong> dropdown (choose <strong>"+ New environment..."</strong> to create one on the fly), and click <strong>Set Environment</strong> to apply it. The same environment list is shared elsewhere in the application, including Remote Host Administration's SSH-enrollment flow.</p>
+<p>Beyond the admin-facing GUI, the controller also runs an optional, separate host-facing <strong>Webserver Portal</strong> as its own process. This is what an end user or host operator — not the Sysible administrator — visits in a browser to self-service: downloading a ready-to-run agent bundle for their machine, or grabbing files the administrator has staged for them, without ever needing admin credentials or shell access to the controller itself.</p>
 
-<h2>The managed hosts list</h2>
-<p>The Enrolled Hosts list groups hosts under collapsible environment headers, with <strong>Collapse All</strong> / <strong>Expand All</strong> buttons for tidying a large fleet. Selecting a host populates a details panel with its Hostname, Host ID, Platform, Kernel, Status, and Environment. <strong>Refresh</strong> reloads the list and details from the controller.</p>
+<h2>Security model</h2>
+<div class="pillrow">
+  <span class="pill">HTTPS everywhere</span>
+  <span class="pill">Admin API key</span>
+  <span class="pill">Per-host SSH keys</span>
+  <span class="pill">One-time enroll tokens</span>
+</div>
+<p>Security is layered throughout the product:</p>
+<ul>
+<li>Every network-facing service — the backend API, the Webserver Portal, and the agent's calls home — is <strong>HTTPS-only</strong>, using a self-signed TLS certificate the installer generates specifically for that machine.</li>
+<li>Every call the desktop GUI makes to the backend is gated by a single <strong>admin API key</strong> issued at install time and sent as an <code>X-API-Key</code> header.</li>
+<li>Every host managed over SSH is authenticated with a <strong>dedicated SSH key pair</strong> the controller generates and manages itself, rather than relying on shared or stored passwords.</li>
+<li>Every agent enrollment uses a <strong>single-use enrollment token</strong> baked into its downloadable bundle, so a bundle cannot be silently reused to enroll a second, unintended host.</li>
+</ul>
+</div>
 
-<h2>Disenrolling a host</h2>
-<p>Select a host and click <strong>Disenroll Host</strong>. If the host is online, Sysible first asks it to stop and remove its own systemd service. If it doesn't respond in time (typically because it's offline), the enrollment is removed from the controller's records regardless, but the agent software remains on that machine until someone runs <code>disenroll_agent.sh</code> on it directly.</p>
+<!-- ===================== 2. REQUIREMENTS ===================== -->
+<div class="page" id="requirements">
+<h1 class="sec"><span class="tag">Section 2</span>System Requirements</h1>
+
+<p>Sysible Controller's installer (<code>install_sysible.sh</code>) supports <strong>Debian/Ubuntu</strong>, <strong>RHEL/CentOS/Fedora</strong>, and <strong>openSUSE/SLES</strong> families of Linux distribution. It detects which one it's running on by checking, in order, for <code>dnf</code>, then <code>yum</code>, then <code>zypper</code>, then <code>apt-get</code>, and installs the equivalent package list for whichever it finds first — it will not run on a system with none of these four available. This is the same detection order Host Software Management (Section 10) uses at runtime against managed hosts, so "which package manager does this machine use" is answered consistently whether the machine in question is the controller itself or a host it manages. The installer must be run as <strong>root</strong>; it checks this at the very start and exits immediately if it is not.</p>
+
+<h2>System packages installed</h2>
 <table class="ref">
-<tr><th>What disenrolling does</th><th>What it doesn't do</th></tr>
-<tr><td>Stops and removes the agent's systemd service; removes the host's enrollment record so it disappears from Host Enrollment and Remote Host Administration.</td><td>Leaves the installed agent files, pinned certificate, and local state directory on disk when torn down remotely — for full cleanup, run <code>disenroll_agent.sh</code> from the original bundle directly on the host.</td></tr>
+<tr><th>Package</th><th>Purpose</th></tr>
+<tr><td><code>python3</code>, <code>python3-pip</code>, <code>python3-venv</code>* , <code>python3-dev</code> / <code>python3-devel</code>*</td><td>Python runtime, package manager, virtual environments, and headers for native builds</td></tr>
+<tr><td><code>gcc</code>, <code>libffi-dev</code> / <code>libffi-devel</code>*</td><td>Compiler and FFI headers some Python packages need at install time</td></tr>
+<tr><td><code>passwd</code>, <code>util-linux</code></td><td>Account/user-management utilities used on managed hosts</td></tr>
+<tr><td><code>systemd</code></td><td>Runs the backend and every host agent as a service</td></tr>
+<tr><td><code>procps</code> / <code>procps-ng</code>*</td><td>Process-inspection tools (<code>ps</code> and friends)</td></tr>
+<tr><td><code>curl</code></td><td>Used by the installer and CLI to probe the backend's HTTPS endpoint</td></tr>
+<tr><td><code>sqlite3</code> / <code>sqlite</code>*</td><td>The controller's local database engine</td></tr>
+<tr><td><code>rsync</code></td><td>Deploys project files into <code>/opt/sysible</code></td></tr>
+<tr><td><code>lsof</code></td><td>Detects and cleans up anything still holding the backend's port</td></tr>
+<tr><td><code>openssl</code></td><td>Generates the self-signed TLS certificate</td></tr>
+</table>
+<div class="note"><b>* Package names vary by distribution family</b>The installer uses whichever name applies for the package manager it detected — see <code>install_sysible.sh</code> for the exact list per family. Two differences are worth calling out: <code>python3-venv</code> is only installed as its own package on Debian/Ubuntu, since Fedora/RHEL and openSUSE/SLES already bundle the venv module into <code>python3</code> itself; and the <code>-dev</code> / <code>-devel</code> header packages follow each distribution's own naming convention rather than a shared one.</div>
+
+<h2>Python dependencies</h2>
+<p>Inside its own virtual environment, the controller installs <strong>FastAPI</strong> and <strong>Uvicorn</strong> (backend web framework and ASGI server), <strong>Pydantic</strong> (request/response validation), <strong>psutil</strong> (system/process metrics), <strong>paramiko</strong> (SSH client library for SSH-managed hosts), <strong>python-multipart</strong> (portal upload/login form handling), <strong>requests</strong>, and <strong>PySide6</strong> (the desktop GUI's Qt6 bindings).</p>
+<p>The host agent itself has a much smaller footprint — just <strong>requests</strong> — kept in its own separate requirements file so it can ship inside the downloadable agent bundle and run on a target host with no other Sysible code present.</p>
+</div>
+
+<!-- ===================== 3. INSTALLATION ===================== -->
+<div class="page" id="install">
+<h1 class="sec"><span class="tag">Section 3</span>Installation</h1>
+
+<p>Installation is a single script, <code>install_sysible.sh</code>, run with root privileges from wherever the project files currently live — it does not need to be run from its final installed location.</p>
+<pre class="cli"><span class="cm"># from the folder containing the Sysible Controller project files</span>
+sudo ./install_sysible.sh</pre>
+
+<p>The script proceeds through the following stages, in order:</p>
+
+<h2>1. Package installation</h2>
+<p>Detects the package manager (<code>dnf</code> &gt; <code>yum</code> &gt; <code>zypper</code> &gt; <code>apt-get</code>, in that order) and runs the matching install command for the full package list in Section 2 — <code>dnf</code>/<code>yum install -y</code>, <code>zypper --non-interactive install -y</code> (after a <code>zypper --non-interactive refresh</code>), or <code>apt update</code> followed by <code>apt install -y</code>.</p>
+
+<h2>2. Deploying project files to /opt/sysible</h2>
+<p>Sysible Controller always runs out of a single fixed location, <code>/opt/sysible</code>, because the CLI tooling hardcodes that path. The installer mirrors the source directory there with <code>rsync -a --delete</code>. A deliberate set of excludes protects live, running state from ever being wiped by a re-install: the virtual environment, the runtime <code>run</code> directory, <code>logs</code>, any <code>*.db</code> file, <code>api_key.txt</code>, <code>hosts.json</code>, the <code>remote_keys</code> directory, <code>agent_state.json</code>, the <code>certs</code> directory, and Python bytecode/cache artifacts. Re-running the installer to push a code update is therefore safe — it will not regenerate secrets, rotate the TLS certificate, or touch the database.</p>
+
+<h2>3. Python environment setup</h2>
+<p>Creates a virtual environment at <code>/opt/sysible/venv</code>, upgrades pip, and installs <code>requirements.txt</code> into it.</p>
+
+<h2>4. Making the CLI executable</h2>
+<p><code>chmod +x</code> is applied to <code>sysible_controller</code>.</p>
+
+<h2>5. Generating the self-signed TLS certificate</h2>
+<p>If <code>/opt/sysible/certs/server.crt</code> and <code>server.key</code> do not already exist, the installer generates a new 2048-bit RSA key pair and a 10-year self-signed certificate. Because there is no public DNS domain to obtain a CA-signed certificate for on a LAN deployment, this self-signed cert is the controller's only option — and it is built to cover every address the controller might be reached at: <code>DNS:localhost</code>, <code>IP:127.0.0.1</code>, the machine's own hostname, and every IP address <code>hostname -I</code> reports, each added as its own Subject Alternative Name. This matters because Controller Configuration's "All Detected IPs (failover)" mode can hand an agent bundle any one of the controller's network interfaces, and the certificate has to cover all of them for that to verify correctly.</p>
+<div class="note"><b>Note</b>This step is skipped entirely if a cert/key pair already exists — so re-running the installer for a code update never rotates, and thereby breaks, a certificate already copied out to GUI machines and agents.</div>
+
+<h2>6. Generating the admin API key</h2>
+<p>Every admin/GUI-facing endpoint requires this key. The installer pre-generates it so the file exists with correct permissions before the service is first started; the backend will also auto-generate it on first run if it's somehow missing.</p>
+
+<h2>7. Installing the backend as a systemd service</h2>
+<p>Writes <code>/etc/systemd/system/sysible-backend.service</code>, running <code>uvicorn backend.app:app</code> out of <code>/opt/sysible</code>, bound to <code>0.0.0.0:9000</code>, using the certificate just generated, restarting automatically on failure. The service is enabled (starts on boot) but deliberately <em>not</em> started by the installer — that happens via <code>sysible_controller start</code> afterward.</p>
+
+<h2>8. Installing the CLI</h2>
+<p>Copies <code>sysible_controller</code> to <code>/usr/local/bin/sysible_controller</code>, <code>chmod +x</code>'d and on the system <code>PATH</code>.</p>
+
+<div class="warn"><b>Finishing up</b>The installer's final output tells you exactly where the admin API key lives (<code>/opt/sysible/api_key.txt</code>, mode 600, root-only) and where the TLS certificate is (<code>/opt/sysible/certs/server.crt</code>). Copy that certificate file — never the <code>.key</code> file — to any machine that will run the GUI client (if not this same machine) and to every host that will run the agent, pointing each at it via <code>SYSIBLE_CA_CERT</code> so they can verify the controller instead of blindly trusting it. The very last line of installer output is the next step:</div>
+<pre class="cli">Run: <span class="c">sudo sysible_controller start</span></pre>
+</div>
+
+<!-- ===================== 4. FIRST LOGIN ===================== -->
+<div class="page" id="first-login">
+<h1 class="sec"><span class="tag">Section 4</span>First Login &amp; Administrator Accounts</h1>
+
+<p>Before the Dashboard or any of its tools become accessible, Sysible Controller requires every user to authenticate through an <strong>Administrator Login</strong> screen. This appears automatically each time the desktop application starts, and the Dashboard will not appear until it is satisfied.</p>
+
+<h2>Logging in</h2>
+<p>The login screen displays the Sysible logo and asks for a <strong>Username</strong> and <strong>Password</strong>. On a brand-new installation, a single default account is provided automatically so there is something to log in with immediately: <code>admin</code> / <code>admin</code> — the login screen itself displays this hint. If credentials are incorrect, an error message indicates an invalid username or password and the password field is cleared. If the backend cannot be reached at all, a different error reports that connection problem instead.</p>
+
+<h2>Forced password change on first login</h2>
+<p>Because <code>admin</code>/<code>admin</code> (and any new administrator account created with a temporary password) is a known, shared credential, Sysible Controller will not let you proceed into the Dashboard on such an account without first setting a real password. Immediately after a successful login with an account flagged this way, a <strong>Change Your Password</strong> dialog appears automatically, asking for a new password twice. There is no way to cancel out of this step — by design, an administrator cannot continue into the application while still using a known or temporary password.</p>
+<p>The new password must satisfy whatever Administrator Password Policy is currently configured (see Section 9). Once set, the Dashboard opens. Future logins on that account use the new password directly with no forced-change step, unless a fellow administrator later resets it back to a temporary one, in which case the same flow runs again.</p>
+<div class="note"><b>Note</b>This is a one-shot login check, not a session/token scheme — the GUI is a single long-lived desktop process used by one person at a time. The Webserver Portal (Section 11), used by potentially many concurrent host operators in a browser, does use real session tokens. Additional administrator accounts are managed from Sysible Controller Settings once logged in, and every login attempt and account change is recorded to the audit log.</div>
+</div>
+
+<!-- ===================== 5. CLI ===================== -->
+<div class="page" id="cli">
+<h1 class="sec"><span class="tag">Section 5</span>The sysible_controller Command Line</h1>
+
+<p><code>sysible_controller</code> is the single command-line entry point for operating the controller once installed. It wraps <code>systemctl</code> for the backend's systemd service (<code>sysible-backend</code>) and separately manages the desktop GUI client as an ordinary background process — the GUI is one administrator's desktop application, not a daemon, so it is deliberately not made into a systemd service itself.</p>
+<pre class="cli">sysible_controller {start|stop|restart|status|logs|gui|destroy}</pre>
+
+<table class="ref">
+<tr><th>Command</th><th>Root?</th><th>What it does</th></tr>
+<tr><td><code>start</code></td><td>Yes</td><td>Starts <code>sysible-backend</code>, then polls <code>https://127.0.0.1:9000/</code> until the API is actually reachable (not just "systemd says active") and confirms <code>/openapi.json</code> advertises current routes. Refuses to proceed if the TLS certificate is missing. Then launches the desktop GUI as a background process.</td></tr>
+<tr><td><code>stop</code></td><td>Yes</td><td>Stops the GUI process (if tracked), stops <code>sysible-backend</code>, kills any leftover Webserver Portal subprocess, and as a last resort uses <code>lsof</code> to kill anything still bound to port 9000.</td></tr>
+<tr><td><code>restart</code></td><td>Yes</td><td>Exactly <code>stop</code> followed by <code>start</code>.</td></tr>
+<tr><td><code>status</code></td><td>No</td><td>Prints <code>systemctl status sysible-backend</code> plus whether a GUI process is currently running (and its PID).</td></tr>
+<tr><td><code>logs</code></td><td>No</td><td>Runs <code>journalctl -u sysible-backend -f</code> to tail the backend's live log stream.</td></tr>
+<tr><td><code>gui</code></td><td>Yes</td><td>Starts only the desktop GUI, without touching the backend. Use this to reopen the dashboard after it's been closed.</td></tr>
+<tr><td><code>destroy</code></td><td>Yes</td><td>Irreversible uninstaller — see warning below.</td></tr>
+</table>
+
+<div class="note"><b>The dashboard window doesn't quit on close</b>Closing the dashboard's window minimizes it to a system tray icon rather than quitting the application (falling back to an actual close only on desktops without tray support). The normal way to bring it back is the tray icon's "Open" action; <code>sysible_controller gui</code> is the command-line equivalent, useful if the tray icon was dismissed or the GUI process was killed outright.</div>
+
+<div class="warn"><b>destroy is irreversible</b>It prints an explicit warning and requires typing the literal word <code>destroy</code> to confirm — anything else aborts with no changes made. Once confirmed it: stops everything, disables and deletes the <code>sysible-backend</code> systemd unit, takes a timestamped backup of the SQLite database to <code>/tmp/sysible-backup-&lt;timestamp&gt;.db</code> (left behind for you to delete once no longer needed), deletes the entire <code>/opt/sysible</code> directory — database, TLS certificate/key, and admin API key all gone — and removes its own <code>/usr/local/bin/sysible_controller</code> binary. <code>destroy</code> never reaches out to already-enrolled hosts: their agent services keep running locally and will simply start failing to reach a controller that no longer exists. Disenroll hosts first (Section 7), or run <code>disenroll_agent.sh</code> on each one, if you want them cleaned up too.</div>
+
+</div>
+
+<!-- ===================== 6. DASHBOARD ===================== -->
+<div class="page" id="dashboard">
+<h1 class="sec"><span class="tag">Section 6</span>The Dashboard</h1>
+
+<p>After logging in, you land on the main Dashboard — the home screen for the whole application. It is a single window with the Sysible logo and product name at the top, a search bar, and a grid of five clickable tiles below it. Each tile opens that tool in its own window ("popout"), which can be left open alongside the Dashboard and other tool windows — closing a tool window does not close the Dashboard or any other open tool.</p>
+
+<h2>Feature search</h2>
+<p>Typing into the search bar at the top of the Dashboard matches against a curated list of common tasks — things like <strong>create a user</strong>, <strong>add a repository</strong>, <strong>restart a service</strong>, or <strong>reset password</strong> — and lists the matching task(s) below it as you type. Pressing Return, or clicking a result, opens the right tile directly; for tasks that live under System Administration's sub-tiles, it opens straight through to that sub-tile, and for User &amp; Group Administration tasks it lands on the specific tab (Create User, Account, Password, Groups, or Reports) rather than leaving you to find it. This saves having to already know which of the Dashboard's tiles — or, for anything under System Administration, which of its seven sub-tiles — a given task lives under.</p>
+
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Sysible Controller</span></div>
+  <svg viewBox="0 0 900 600" xmlns="http://www.w3.org/2000/svg">
+    <rect width="900" height="600" fill="#1E1E1E"/>
+    <rect x="30" y="26" width="34" height="34" rx="8" fill="#2f6fed"/>
+    <text x="47" y="48" font-family="-apple-system,Arial" font-size="16" font-weight="700" fill="#fff" text-anchor="middle">S</text>
+    <text x="76" y="44" font-family="-apple-system,Arial" font-size="20" font-weight="700" fill="#EAEAEA">Sysible Controller</text>
+    <text x="76" y="62" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Select a tool below to get started.</text>
+
+    <!-- Row 1 -->
+    <g><rect x="40" y="100" width="400" height="140" rx="10" fill="#262626" stroke="#3A3A3A"/>
+      <text x="58" y="134" font-family="-apple-system,Arial" font-size="14" font-weight="700" fill="#EAEAEA">Sysible Controller Host Enrollment</text>
+      <text x="58" y="158" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Download the agent bundle and manage</text>
+      <text x="58" y="174" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">the enrolled host fleet.</text></g>
+
+    <g><rect x="460" y="100" width="400" height="140" rx="10" fill="#262626" stroke="#3A3A3A"/>
+      <text x="478" y="134" font-family="-apple-system,Arial" font-size="14" font-weight="700" fill="#EAEAEA">Sysible Controller Settings</text>
+      <text x="478" y="158" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Manage administrators, password</text>
+      <text x="478" y="174" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">policy, address/port, and audit log.</text></g>
+
+    <!-- Row 2 -->
+    <g><rect x="40" y="260" width="400" height="140" rx="10" fill="#262626" stroke="#3A3A3A"/>
+      <text x="58" y="294" font-family="-apple-system,Arial" font-size="14" font-weight="700" fill="#EAEAEA">Remote Host Administration</text>
+      <text x="58" y="318" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">SSH and agent terminal access, plus</text>
+      <text x="58" y="334" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">environment tagging for managed hosts.</text></g>
+
+    <g><rect x="460" y="260" width="400" height="140" rx="10" fill="#262626" stroke="#3A3A3A"/>
+      <text x="478" y="294" font-family="-apple-system,Arial" font-size="14" font-weight="700" fill="#EAEAEA">Webserver Portal Configuration</text>
+      <text x="478" y="318" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Run the host-facing portal for agent</text>
+      <text x="478" y="334" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">downloads and file transfers.</text></g>
+
+    <!-- Row 3 -->
+    <g><rect x="40" y="420" width="400" height="140" rx="10" fill="#262626" stroke="#3A3A3A"/>
+      <text x="58" y="454" font-family="-apple-system,Arial" font-size="14" font-weight="700" fill="#EAEAEA">System Administration</text>
+      <text x="58" y="478" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">User/group admin and system health</text>
+      <text x="58" y="494" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">checks across agent and SSH hosts.</text></g>
+  </svg>
+</figure>
+<figcaption>The Dashboard — five tiles, each opening its own popout window.</figcaption>
+
+<h2>The five tiles</h2>
+<table class="ref">
+<tr><th>Tile</th><th>What it's for</th></tr>
+<tr><td><strong>Sysible Controller Host Enrollment</strong></td><td>Bring new hosts under management using the lightweight agent; view and manage hosts already enrolled.</td></tr>
+<tr><td><strong>Sysible Controller Settings</strong></td><td>Configure the controller itself: the address/port baked into agent bundles, administrator accounts, their password policy, the audit log, and the License &amp; Version section.</td></tr>
+<tr><td><strong>Remote Host Administration</strong></td><td>Unified console for direct, hands-on work on individual hosts — live terminal, one-off commands, file transfer, and one-click SSH enrollment.</td></tr>
+<tr><td><strong>Webserver Portal Configuration</strong></td><td>Start/stop the optional host-facing portal, set its credentials and port, and manage the shared file pool.</td></tr>
+<tr><td><strong>System Administration</strong></td><td>Sub-menu of seven fleet-wide operational tools — user/group accounts, health checks, services, environmental policies, scheduled tasks, package management, and repositories.</td></tr>
 </table>
 </div>
 
-<!-- ===================== 8. REMOTE ADMINISTRATION ===================== -->
-<div class="page" id="remote">
-<h1 class="sec"><span class="tag">Section 8</span>Remote Host Administration</h1>
+<!-- ===================== 7. HOST ENROLLMENT ===================== -->
+<div class="page" id="enrollment">
+<h1 class="sec"><span class="tag">Section 7</span>Host Enrollment</h1>
 
-<p>Remote Host Administration is the hands-on console for working directly on individual managed hosts — whether enrolled via the Sysible agent or connected directly over SSH. It is reached from the "Remote Host Administration" tile on the Dashboard.</p>
-
-<figure class="mock">
-  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Remote Host Administration</span></div>
-  <svg viewBox="0 0 900 660" xmlns="http://www.w3.org/2000/svg">
-    <rect width="900" height="660" fill="#1E1E1E"/>
-    <rect x="30" y="22" width="26" height="26" rx="6" fill="#2f6fed"/>
-    <text x="70" y="40" font-family="-apple-system,Arial" font-size="17" font-weight="700" fill="#EAEAEA">Remote Host Administration</text>
-
-    <text x="40" y="80" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">MANAGED HOSTS</text>
-    <rect x="40" y="88" width="820" height="100" rx="6" fill="#2B2B2B" stroke="#505050"/>
-    <rect x="40" y="88" width="820" height="22" fill="#252525"/>
-    <text x="54" y="103" font-family="-apple-system,Arial" font-size="10" font-weight="700" fill="#9aa5b1">HOST</text>
-    <text x="300" y="103" font-family="-apple-system,Arial" font-size="10" font-weight="700" fill="#9aa5b1">TYPE</text>
-    <text x="480" y="103" font-family="-apple-system,Arial" font-size="10" font-weight="700" fill="#9aa5b1">ADDRESS</text>
-    <rect x="40" y="110" width="820" height="24" fill="#3C4B64" opacity="0.45"/>
-    <text x="54" y="127" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">db-01</text>
-    <text x="300" y="127" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">Agent + SSH</text>
-    <text x="480" y="127" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">10.0.1.21</text>
-    <text x="54" y="151" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">web-01</text>
-    <text x="300" y="151" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">Agent</text>
-    <text x="480" y="151" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">10.0.1.14</text>
-    <text x="54" y="175" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">legacy-app</text>
-    <text x="300" y="175" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">SSH (root)</text>
-    <text x="480" y="175" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">10.0.2.5</text>
-
-    <text x="40" y="212" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">SSH TO A NEW HOST (NOT YET JOINED)</text>
-    <rect x="40" y="220" width="820" height="56" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <rect x="54" y="236" width="150" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="62" y="252" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Host name</text>
-    <rect x="216" y="236" width="150" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="224" y="252" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">IP address</text>
-    <rect x="378" y="236" width="130" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="386" y="252" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Username</text>
-    <rect x="520" y="236" width="130" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="528" y="252" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">SSH password</text>
-    <rect x="662" y="236" width="180" height="24" rx="4" fill="#3C4B64" stroke="#506080"/><text x="752" y="252" font-size="11" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Connect Host</text>
-
-    <text x="40" y="308" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">TERMINAL — db-01 (SSH session active)</text>
-    <rect x="40" y="316" width="820" height="220" rx="6" fill="#0d0d0d" stroke="#3A3A3A"/>
-    <text x="54" y="338" font-family="Menlo,monospace" font-size="11" fill="#6fcf6f">root@db-01:~# systemctl status postgresql</text>
-    <text x="54" y="356" font-family="Menlo,monospace" font-size="11" fill="#c9d1d9">● postgresql.service - PostgreSQL RDBMS</text>
-    <text x="54" y="374" font-family="Menlo,monospace" font-size="11" fill="#c9d1d9">   Active: active (running) since Tue 09:14:02 UTC</text>
-    <text x="54" y="392" font-family="Menlo,monospace" font-size="11" fill="#6fcf6f">root@db-01:~# █</text>
-    <rect x="690" y="500" width="150" height="24" rx="4" fill="#5a2323" stroke="#7a3030"/>
-    <text x="765" y="516" font-family="-apple-system,Arial" font-size="11" fill="#ffb3b3" text-anchor="middle">Send Ctrl+C</text>
-
-    <text x="40" y="572" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">FILE TRANSFER</text>
-    <rect x="40" y="580" width="395" height="60" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <text x="52" y="600" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Local path → Remote path</text>
-    <rect x="52" y="608" width="280" height="22" rx="4" fill="#2B2B2B" stroke="#505050"/>
-    <rect x="342" y="608" width="80" height="22" rx="4" fill="#3C4B64" stroke="#506080"/><text x="382" y="623" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Upload</text>
-    <rect x="465" y="580" width="395" height="60" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <text x="477" y="600" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Remote path</text>
-    <rect x="477" y="608" width="280" height="22" rx="4" fill="#2B2B2B" stroke="#505050"/>
-    <rect x="767" y="608" width="80" height="22" rx="4" fill="#3C4B64" stroke="#506080"/><text x="807" y="623" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Download…</text>
-  </svg>
-</figure>
-<figcaption>Remote Host Administration — managed hosts, one-click SSH enrollment, live terminal, and file transfer.</figcaption>
-
-<h2>The merged hosts view</h2>
-<p>The <strong>Managed Hosts</strong> table lists every host the controller knows about — agent-enrolled and SSH-connected alike — grouped by environment. Three columns: <strong>Host</strong>, <strong>Type</strong> (Agent, SSH, or a combined row when both apply to the same machine), and <strong>Address</strong>. Clicking any host connects to it immediately — no separate "connect" step, and no password required again, since credentials are already on file. Buttons below the table let you <strong>Refresh</strong>, <strong>Remove Host</strong>, and <strong>Show Sysible Controller Public Key</strong> (for installing the controller's key manually where the one-click flow isn't suitable).</p>
-
-<h2>One-click enroll via SSH</h2>
-<p>The <strong>SSH to a New Host</strong> section connects a host that isn't enrolled by any method yet — no token, no pre-installed software. Provide Host name, IP address, Username (defaults to <code>root</code>), SSH password, and optionally an Environment. Clicking <strong>Connect Host</strong> does the entire handoff in one step: the controller uses the password once to install its own auto-generated SSH key on the target, then discards the password — all future connections use that key, no password required again.</p>
-
-<h2>The live interactive terminal</h2>
-<p>For <strong>SSH-connected hosts</strong>, the terminal is a genuine PTY-backed interactive session — programs like <code>vim</code>, <code>top</code>, or an interactive <code>sudo</code> prompt behave correctly, arrow keys/Tab/Backspace all work, and pasting sends text directly into the session. A dedicated <strong>Send Ctrl+C</strong> button sends a real interrupt signal, useful for stopping a hung command or as a fallback if the keyboard shortcut is intercepted by a text selection instead.</p>
-<p>For <strong>agent-enrolled hosts</strong>, there's no persistent connection, so true interactive sessions aren't possible. Instead, type a command in the bottom box and press Enter — it's queued for the agent to execute, with output, errors, and exit code returned once it reports back (typically a few seconds; a timeout is reported after about 30 seconds of silence). Command history is recalled with the Up/Down arrow keys.</p>
-
-<h2>File upload and download</h2>
-<p>The File Transfer section acts on whichever host is currently active in the Terminal section. <strong>SSH hosts</strong> transfer over SFTP with no enforced size limit, completing synchronously. <strong>Agent-enrolled hosts</strong> transfer through the same queued-task channel used for commands, capped at a modest size (the page states the current limit) since that channel isn't designed for bulk data movement.</p>
-</div>
-
-<!-- ===================== 9. SETTINGS ===================== -->
-<div class="page" id="settings">
-<h1 class="sec"><span class="tag">Section 9</span>Sysible Controller Settings</h1>
-<p>This page consolidates everything related to configuring and securing the controller installation itself, as distinct from the hosts it manages. It is reached from the "Sysible Controller Settings" tile and is organized into five sections on one scrollable page.</p>
+<p>The Host Enrollment page is where hosts are brought under management using the Sysible agent, and where the resulting fleet of enrolled hosts is organized and maintained. It is reached from the "Sysible Controller Host Enrollment" tile on the Dashboard.</p>
 
 <figure class="mock">
-  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Sysible Controller Settings</span></div>
-  <svg viewBox="0 0 900 520" xmlns="http://www.w3.org/2000/svg">
-    <rect width="900" height="520" fill="#1E1E1E"/>
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Sysible Controller Host Enrollment</span></div>
+  <svg viewBox="0 0 900 580" xmlns="http://www.w3.org/2000/svg">
+    <rect width="900" height="580" fill="#1E1E1E"/>
     <rect x="30" y="22" width="26" height="26" rx="6" fill="#2f6fed"/>
-    <text x="70" y="40" font-family="-apple-system,Arial" font-size="17" font-weight="700" fill="#EAEAEA">Sysible Controller Settings</text>
+    <text x="70" y="40" font-family="-apple-system,Arial" font-size="17" font-weight="700" fill="#EAEAEA">Sysible Controller Host Enrollment</text>
 
-    <text x="40" y="80" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">CONTROLLER CONFIGURATION</text>
-    <rect x="40" y="88" width="820" height="60" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <rect x="54" y="104" width="180" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="62" y="120" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Hostname</text>
-    <rect x="246" y="104" width="180" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="254" y="120" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">10.0.1.5</text>
-    <rect x="438" y="104" width="220" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="446" y="120" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">All Detected IPs (failover) ▾</text>
-    <rect x="670" y="104" width="80" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="678" y="120" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">9000</text>
-    <rect x="762" y="104" width="84" height="24" rx="4" fill="#3C4B64" stroke="#506080"/><text x="804" y="120" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Save</text>
+    <!-- Agent bundle row -->
+    <text x="40" y="84" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">AGENT BUNDLE</text>
+    <rect x="40" y="92" width="190" height="34" rx="6" fill="#3C4B64" stroke="#506080"/>
+    <text x="135" y="114" font-family="-apple-system,Arial" font-size="12" fill="#fff" text-anchor="middle">Download Agent Bundle</text>
 
-    <text x="40" y="180" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">ADMINISTRATORS</text>
-    <rect x="40" y="188" width="820" height="120" rx="6" fill="#2B2B2B" stroke="#505050"/>
-    <rect x="40" y="188" width="820" height="22" fill="#252525"/>
-    <text x="54" y="203" font-size="10" font-weight="700" fill="#9aa5b1" font-family="-apple-system,Arial">USERNAME</text>
-    <text x="260" y="203" font-size="10" font-weight="700" fill="#9aa5b1" font-family="-apple-system,Arial">CREATED BY</text>
-    <text x="460" y="203" font-size="10" font-weight="700" fill="#9aa5b1" font-family="-apple-system,Arial">LAST LOGIN</text>
-    <text x="660" y="203" font-size="10" font-weight="700" fill="#9aa5b1" font-family="-apple-system,Arial">MUST CHANGE PW</text>
-    <text x="54" y="228" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">admin</text>
-    <text x="260" y="228" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">system</text>
-    <text x="460" y="228" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">Jun 18, 2026 09:02</text>
-    <text x="660" y="228" font-size="11" fill="#9aa5b1" font-family="-apple-system,Arial">No</text>
-    <text x="54" y="252" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">cdovbish</text>
-    <text x="260" y="252" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">admin</text>
-    <text x="460" y="252" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">Never</text>
-    <text x="660" y="252" font-size="11" fill="#e0a93c" font-family="-apple-system,Arial">Yes</text>
-    <rect x="54" y="276" width="170" height="22" rx="4" fill="#3C4B64" stroke="#506080"/><text x="139" y="291" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Add Administrator</text>
+    <!-- Enrolled hosts list panel -->
+    <text x="40" y="158" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">ENROLLED HOSTS</text>
+    <rect x="40" y="168" width="370" height="360" rx="6" fill="#2B2B2B" stroke="#505050"/>
+    <text x="54" y="192" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#6fa8ff">▾ Production (3)</text>
+    <text x="70" y="214" font-family="-apple-system,Arial" font-size="12" fill="#EAEAEA">web-01</text>
+    <text x="70" y="236" font-family="-apple-system,Arial" font-size="12" fill="#EAEAEA">web-02</text>
+    <rect x="60" y="244" width="338" height="22" fill="#3C4B64" opacity="0.5"/>
+    <text x="70" y="260" font-family="-apple-system,Arial" font-size="12" fill="#EAEAEA">db-01</text>
+    <text x="54" y="290" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#6fa8ff">▾ Staging (1)</text>
+    <text x="70" y="312" font-family="-apple-system,Arial" font-size="12" fill="#EAEAEA">stage-app</text>
+    <text x="54" y="342" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#6fa8ff">▾ Unassigned (1)</text>
+    <text x="70" y="364" font-family="-apple-system,Arial" font-size="12" fill="#EAEAEA">test-host</text>
+    <rect x="54" y="496" width="160" height="24" rx="5" fill="#2f2f2f" stroke="#505050"/>
+    <text x="134" y="512" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1" text-anchor="middle">Collapse All</text>
+    <rect x="222" y="496" width="150" height="24" rx="5" fill="#2f2f2f" stroke="#505050"/>
+    <text x="297" y="512" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1" text-anchor="middle">Expand All</text>
 
-    <text x="40" y="340" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">AUDIT LOG</text>
-    <rect x="40" y="348" width="820" height="130" rx="6" fill="#2B2B2B" stroke="#505050"/>
-    <text x="54" y="372" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">2026-06-18 09:02:11 — login_success — admin</text>
-    <text x="54" y="394" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">2026-06-17 17:40:55 — admin_added — cdovbish (by admin)</text>
-    <text x="54" y="416" font-size="11" fill="#ff8080" font-family="-apple-system,Arial">2026-06-17 08:11:02 — login_failed — admin</text>
-  </svg>
-</figure>
-<figcaption>Sysible Controller Settings — controller configuration, administrators, and audit log.</figcaption>
-
-<h2 id="settings-controller">Controller Configuration</h2>
-<p>Controls the network address baked into every agent bundle — where enrolled agents are told to connect. Set a <strong>Hostname</strong>, an <strong>IP Address</strong>, or both; a <strong>Detect Local IPs</strong> button populates real candidates. The <strong>"Use for agent bundles"</strong> dropdown decides what's actually used:</p>
-<table class="ref">
-<tr><th>Mode</th><th>Behavior</th></tr>
-<tr><td>Hostname</td><td>Bundles connect using the configured hostname.</td></tr>
-<tr><td>IP Address</td><td>Bundles connect using the configured IP address.</td></tr>
-<tr><td>All Detected IPs (failover)</td><td>Every detected address is baked in; the agent tries each in turn until one connects — useful when the controller is reachable over more than one network path.</td></tr>
-</table>
-<div class="warn"><b>Port must match</b>The <strong>Port</strong> field must match what the backend is actually listening on (9000 by default) — it's independent of the Webserver Portal's own port. A mismatch here breaks any newly built agent bundle even if the portal works fine.</div>
-
-<h2 id="settings-admins">Administrators</h2>
-<p>Manages who can log into the Dashboard — separate from any accounts on managed hosts. Shows Username, Created By, Last Login, and Must Change Password for each account. <strong>Add Administrator</strong> creates a new account with a temporary password (forced to change on first login). <strong>Remove Selected Administrator</strong> deletes one. "Change My Own Credentials" lets the logged-in administrator update their own username/password, authorized by entering the current password.</p>
-
-<h2 id="settings-policy">Administrator Password Policy</h2>
-<p>Defines complexity rules for Dashboard administrator passwords specifically — minimum length, and toggles for requiring uppercase, lowercase, a digit, and a symbol. Enforced on new administrator accounts, self-service credential changes, and the forced first-login change. Existing passwords predating a policy change are not retroactively invalidated. This governs Dashboard logins only — operating-system accounts on managed hosts are governed separately by Environmental Policies (Section 10).</p>
-
-<h2 id="settings-audit">Audit Log</h2>
-<p>An append-only history of login attempts (successful and failed) and administrator account changes (additions, removals, credential changes) — Time, Event, Username, and Detail for each entry. <strong>Refresh Audit Log</strong> brings it current. This does not cover general fleet command/activity history, which lives under System Administration's health, log, and service tools.</p>
-
-<h2 id="settings-license">License &amp; Version</h2>
-<p>A short reference section, folded into this page rather than kept as its own dashboard tile. It shows the installed version as <code>v2.0.0</code> at the time of writing, read from a single project-root <code>version.py</code> file that both the GUI and backend import — so this number is always accurate, never a hardcoded label that could drift out of sync with the actual install. A <strong>License Key</strong> field lets an administrator type in and save a license key; <strong>Save License Key</strong> persists it. Licensing is not yet enforced against this build — there's no entitlement check tied to the key today — so this is simply somewhere to record one ahead of a licensing model being introduced.</p>
-</div>
+    <!-- Details panel -->
+    <rect x="430" y="168" width="430" height="360" rx="6" fill="#262626" stroke="#3A3A3A"/>

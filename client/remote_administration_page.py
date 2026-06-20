@@ -303,6 +303,17 @@ class RemoteAdministrationPage(QWidget):
         self.active_id = None     # host_id (agent) or name (ssh)
         self.active_label = None
 
+        # When the selected row is a merged (Agent + SSH) host, this
+        # holds that merged entry so the connection-type picker below
+        # can re-derive the agent/ssh sub-entry on demand; None for a
+        # plain (non-merged) row. connection_type_host_label tracks
+        # which merged host the picker's current selection belongs to,
+        # so re-clicking the same merged row keeps whatever connection
+        # type you last explicitly picked for it instead of silently
+        # resetting back to SSH every time.
+        self.merged_entry_for_selection = None
+        self.connection_type_host_label = None
+
         self.pending_agent_task = None  # {"host_id", "task_id", "deadline"}
         self.pending_file_task = None   # {"direction", "host_id", "task_id", "label", "deadline", ...}
 
@@ -420,6 +431,24 @@ class RemoteAdministrationPage(QWidget):
         self.terminal_label = QLabel("Terminal — (no host selected)")
         self.terminal_label.setStyleSheet("font-weight: bold;")
         layout.addWidget(self.terminal_label)
+
+        # Shown only when the selected row is a host enrolled BOTH ways
+        # (merged Agent + SSH). Previously this case silently always
+        # used SSH for the terminal with no way to tell, and no way to
+        # fall back to the agent connection on a host where SSH itself
+        # doesn't work - this makes the choice explicit and switchable
+        # instead of an invisible, fixed decision the program made for
+        # you.
+        connection_type_row = QHBoxLayout()
+        self.connection_type_label = QLabel("Connection:")
+        self.connection_type_combo = QComboBox()
+        self.connection_type_combo.addItem("SSH (interactive terminal)", "ssh")
+        self.connection_type_combo.addItem("Agent (queued commands)", "agent")
+        self.connection_type_combo.currentIndexChanged.connect(self._on_connection_type_changed)
+        connection_type_row.addWidget(self.connection_type_label)
+        connection_type_row.addWidget(self.connection_type_combo)
+        connection_type_row.addStretch()
+        layout.addLayout(connection_type_row)
 
         self.output = _LiveTerminalOutput()
         self.output.setReadOnly(True)
@@ -558,6 +587,8 @@ class RemoteAdministrationPage(QWidget):
 
         bus.host_removed.connect(self.load_hosts)
 
+        self._set_connection_type_visible(False)
+
         self.load_hosts()
 
     @staticmethod
@@ -653,6 +684,9 @@ class RemoteAdministrationPage(QWidget):
             self.active_kind = None
             self.active_id = None
             self.active_label = None
+            self.merged_entry_for_selection = None
+            self.connection_type_host_label = None
+            self._set_connection_type_visible(False)
             self.terminal_label.setText("Terminal — (no host selected)")
             self.cmd_input.setEnabled(False)
             self.cmd_input.setPlaceholderText("Select a host above, then type a command and press Enter...")
@@ -696,40 +730,76 @@ class RemoteAdministrationPage(QWidget):
             return  # environment header row, not a host
 
         # A merged row has both an agent and an SSH connection for the
-        # same host - prefer SSH for the terminal (full interactive PTY)
-        # over the agent's queued-command model, and say so, since the
-        # other connection is still there but not what's driving this
-        # session.
-        underlying = entry
-        note = ""
+        # same host. Rather than silently always picking SSH (the old
+        # behavior - confusing when SSH is the side that's broken),
+        # show the connection-type picker and let the user choose. The
+        # picker defaults to SSH only the first time a given merged
+        # host is selected; re-clicking the same merged row keeps
+        # whatever connection type was last explicitly picked for it.
         if entry["kind"] == "merged":
-            underlying = entry["ssh_entry"] or entry["agent_entry"]
-            note = (" — agent connection also available" if underlying["kind"] == "ssh"
-                    else " — SSH connection also available")
+            self.merged_entry_for_selection = entry
+            self._set_connection_type_visible(True)
+            if self.connection_type_host_label != entry["label"]:
+                self.connection_type_host_label = entry["label"]
+                self.connection_type_combo.blockSignals(True)
+                self.connection_type_combo.setCurrentIndex(0)
+                self.connection_type_combo.blockSignals(False)
+            underlying = self._merged_underlying_for_combo()
+        else:
+            self.merged_entry_for_selection = None
+            self.connection_type_host_label = None
+            self._set_connection_type_visible(False)
+            underlying = entry
+
+        self._switch_active_connection(underlying, entry["label"])
+
+    def _set_connection_type_visible(self, visible):
+        self.connection_type_label.setVisible(visible)
+        self.connection_type_combo.setVisible(visible)
+
+    def _merged_underlying_for_combo(self):
+        entry = self.merged_entry_for_selection
+        if entry is None:
+            return None
+        choice = self.connection_type_combo.currentData()
+        if choice == "agent":
+            return entry["agent_entry"]
+        return entry["ssh_entry"]
+
+    def _on_connection_type_changed(self, index):
+        if self.merged_entry_for_selection is None:
+            return
+        self.connection_type_host_label = self.merged_entry_for_selection["label"]
+        underlying = self._merged_underlying_for_combo()
+        self._switch_active_connection(underlying, self.merged_entry_for_selection["label"])
+
+    def _switch_active_connection(self, underlying, label):
+        if underlying is None:
+            return
 
         if underlying["kind"] == self.active_kind and underlying["id"] == self.active_id:
-            return  # re-selecting the already-active host - leave its session alone
+            return  # re-selecting the already-active connection - leave its session alone
 
         self._end_ssh_session()
 
         self.active_kind = underlying["kind"]
         self.active_id = underlying["id"]
-        self.active_label = entry["label"]
+        self.active_label = label
 
         if underlying["kind"] == "ssh":
-            self._start_ssh_session(underlying, note=note)
+            self._start_ssh_session(underlying)
         else:
-            self.terminal_label.setText(f"Terminal — {self.active_label} [agent]{note}")
+            self.terminal_label.setText(f"Terminal — {label} [agent]")
             self.cmd_input.setEnabled(True)
-            self.cmd_input.setPlaceholderText(f"{self.active_label} $ ")
+            self.cmd_input.setPlaceholderText(f"{label} $ ")
             self.cmd_input.setFocus()
 
     # =====================================================
     # SSH LIVE TERMINAL SESSION (persistent PTY - see
     # backend/remote_routes.py's /terminal/* endpoints)
     # =====================================================
-    def _start_ssh_session(self, entry, note=""):
-        self.terminal_label.setText(f"Terminal — {self.active_label} [SSH] (connecting...){note}")
+    def _start_ssh_session(self, entry):
+        self.terminal_label.setText(f"Terminal — {self.active_label} [SSH] (connecting...)")
         self.cmd_input.setEnabled(False)
         self.run_btn.setEnabled(False)
         QApplication.processEvents()
@@ -743,13 +813,13 @@ class RemoteAdministrationPage(QWidget):
             self.run_btn.setEnabled(True)
             # Clear active_* so reselecting this same row retries the
             # connection instead of being treated as a no-op by the
-            # "already active" early return in on_host_selected().
+            # "already active" early return in _switch_active_connection().
             self.active_kind = None
             self.active_id = None
             self.active_label = None
             return
 
-        self.terminal_label.setText(f"Terminal — {self.active_label} [SSH] (live){note}")
+        self.terminal_label.setText(f"Terminal — {self.active_label} [SSH] (live)")
         self.cmd_input.hide()
         self.run_btn.hide()
         self.interrupt_btn.setVisible(True)

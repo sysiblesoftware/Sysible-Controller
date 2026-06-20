@@ -309,3 +309,21 @@ def stage_portal_download(local_path):
 
 def delete_portal_download(filename: str):
     return _request("DELETE", f"/portal/files/downloads/{quote(filename, safe='')}")
+
+
+# ---------------------------------------------------------------------------
+# The rest of this module's public surface (users/groups/remote hosts/file
+# transfer/fleet user mgmt/password helpers, system-administration dual-host
+# dispatch + health&logs, process & service management, cron & timers, host
+# software & repository management, and network management) lives in
+# sibling _api_*.py modules and is re-exported here via wildcard import so
+# every existing call site (api.list_merged_hosts(), api.cmd_ping(), etc.)
+# keeps working unmodified. Split out purely to keep individual file sizes
+# manageable - this is still one logical module.
+# ---------------------------------------------------------------------------
+from client._api_users import *  # noqa: E402,F401,F403
+from client._api_dispatch import *  # noqa: E402,F401,F403
+from client._api_process_service import *  # noqa: E402,F401,F403
+from client._api_automation import *  # noqa: E402,F401,F403
+from client._api_repo import *  # noqa: E402,F401,F403
+from client._api_network import *  # noqa: E402,F401,F403

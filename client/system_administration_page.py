@@ -12,6 +12,7 @@ from client.cron_systemd_timers_page import CronSystemdTimersPage
 from client.host_software_management_page import HostSoftwareManagementPage
 from client.repository_management_page import RepositoryManagementPage
 from client.network_management_page import NetworkManagementPage
+from client.file_system_management_page import FileSystemManagementPage
 
 
 class SystemAdministrationPage(QWidget):
@@ -41,6 +42,7 @@ class SystemAdministrationPage(QWidget):
         self.software_mgmt_window = None
         self.repo_mgmt_window = None
         self.network_mgmt_window = None
+        self.filesystem_mgmt_window = None
 
         main = QVBoxLayout()
         self.setLayout(main)
@@ -89,6 +91,11 @@ class SystemAdministrationPage(QWidget):
              "Diagnose connectivity and DNS, inspect ports and capture packets, and configure IP/DHCP/DNS/gateway/"
              "routing/hostname/bonding/teaming/VLANs/bridges/MTU across managed hosts.",
              self.open_network_mgmt, "fa5s.network-wired", "sky"),
+            ("File System Management",
+             "Create/remove directories, copy/move/rename files, manage ownership/permissions/ACLs and "
+             "links, mount/unmount/resize/repair filesystems, configure /etc/fstab and quotas, and "
+             "archive/compress files across managed hosts.",
+             self.open_filesystem_mgmt, "fa5s.hdd", "indigo"),
         ]
 
         for index, (card_title, description, handler, icon, color) in enumerate(cards):
@@ -160,3 +167,10 @@ class SystemAdministrationPage(QWidget):
         self.network_mgmt_window.show()
         self.network_mgmt_window.raise_()
         return self.network_mgmt_window
+
+    def open_filesystem_mgmt(self):
+        if self.filesystem_mgmt_window is None:
+            self.filesystem_mgmt_window = FileSystemManagementPage()
+        self.filesystem_mgmt_window.show()
+        self.filesystem_mgmt_window.raise_()
+        return self.filesystem_mgmt_window

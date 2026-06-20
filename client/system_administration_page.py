@@ -11,6 +11,7 @@ from client.environmental_policies_page import EnvironmentalPoliciesPage
 from client.cron_systemd_timers_page import CronSystemdTimersPage
 from client.host_software_management_page import HostSoftwareManagementPage
 from client.repository_management_page import RepositoryManagementPage
+from client.network_management_page import NetworkManagementPage
 
 
 class SystemAdministrationPage(QWidget):
@@ -39,6 +40,7 @@ class SystemAdministrationPage(QWidget):
         self.cron_timers_window = None
         self.software_mgmt_window = None
         self.repo_mgmt_window = None
+        self.network_mgmt_window = None
 
         main = QVBoxLayout()
         self.setLayout(main)
@@ -83,6 +85,10 @@ class SystemAdministrationPage(QWidget):
             ("Repository Management",
              "List, add, enable, disable, and remove software repositories across dnf/yum, zypper, and apt hosts.",
              self.open_repo_mgmt, "fa5s.code-branch", "rose"),
+            ("Network Management",
+             "Diagnose connectivity and DNS, inspect ports and capture packets, and configure IP/DHCP/DNS/gateway/"
+             "routing/hostname/bonding/teaming/VLANs/bridges/MTU across managed hosts.",
+             self.open_network_mgmt, "fa5s.network-wired", "sky"),
         ]
 
         for index, (card_title, description, handler, icon, color) in enumerate(cards):
@@ -147,3 +153,10 @@ class SystemAdministrationPage(QWidget):
         self.repo_mgmt_window.show()
         self.repo_mgmt_window.raise_()
         return self.repo_mgmt_window
+
+    def open_network_mgmt(self):
+        if self.network_mgmt_window is None:
+            self.network_mgmt_window = NetworkManagementPage()
+        self.network_mgmt_window.show()
+        self.network_mgmt_window.raise_()
+        return self.network_mgmt_window

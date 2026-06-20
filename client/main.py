@@ -1,3 +1,4 @@
+import signal
 import sys
 
 from PySide6.QtWidgets import (
@@ -79,16 +80,34 @@ class MainWindow(QMainWindow):
             QApplication.instance().aboutToQuit.connect(self.tray_icon.hide)
         else:
             # No system tray on this desktop (some bare Linux window
-            # managers) - closing to a tray icon the user can't see
-            # would just look like the app vanished with no way back,
-            # which is the exact bug being fixed here. Fall back to
-            # the old close-quits-the-app behavior instead, so [x]
-            # always does *something* reachable.
+            # managers/GNOME without an extension) - there's no icon
+            # to click to get the window back. SIGUSR1 below (not
+            # quitting on close) is what makes "back" reachable here.
             print(
-                "[main] warning: no system tray detected - closing the "
-                "dashboard window will quit Sysible Controller (run "
-                "'sysible_controller gui' to get back in)."
+                "[main] no system tray detected on this desktop - closing "
+                "the dashboard window hides it instead of quitting; run "
+                "'sysible_controller gui' again, or click the application "
+                "menu icon, to bring it back."
             )
+
+        # =====================================================
+        # SIGUSR1 (bring the window back, tray or not)
+        # `sysible_controller gui` - also what the application menu
+        # launcher's icon runs - sends this signal instead of just
+        # printing "already running" and doing nothing whenever it
+        # finds the GUI process already alive. Without this, a
+        # closed/hidden window was a dead end any time the tray icon
+        # wasn't available, *or* was available per Qt's
+        # isSystemTrayAvailable() check but its host (a panel or
+        # extension) wasn't actually rendering it - both leave the
+        # process running with no UI and no way back short of
+        # `sysible_controller stop` + `start`. A plain Python signal
+        # handler only fires once control returns to the interpreter;
+        # the backend watchdog timer just below already guarantees
+        # that happens at least every BACKEND_CHECK_INTERVAL_MS, so
+        # delivery here is bounded by that, not indefinite.
+        # =====================================================
+        signal.signal(signal.SIGUSR1, self._on_sigusr1)
 
         # =====================================================
         # BACKEND WATCHDOG
@@ -121,19 +140,28 @@ class MainWindow(QMainWindow):
             self._restore_window()
 
     def closeEvent(self, event):
-        if not self._tray_available:
-            event.accept()
-            return
-
+        # Always ignore + hide, tray or not - app.setQuitOnLastWindowClosed(False)
+        # (see main()) means accepting this wouldn't quit the process either,
+        # just hide the window with no tray icon and no way back. SIGUSR1
+        # (registered in __init__) is what actually makes "back" reachable in
+        # every case; the tray, when one happens to be available and actually
+        # rendered by the desktop, is just a faster/more discoverable shortcut
+        # to the same _restore_window() call.
         event.ignore()
         self.hide()
-        self.tray_icon.showMessage(
-            "Sysible",
-            "Still running in the background. Click the tray icon to "
-            "reopen the dashboard.",
-            QSystemTrayIcon.Information,
-            3000,
-        )
+
+        if self._tray_available:
+            self.tray_icon.showMessage(
+                "Sysible",
+                "Still running in the background. Click the tray icon, or "
+                "run 'sysible_controller gui' again, to reopen the "
+                "dashboard.",
+                QSystemTrayIcon.Information,
+                3000,
+            )
+
+    def _on_sigusr1(self, signum, frame):
+        self._restore_window()
 
     def _check_backend(self):
         if api.ping():

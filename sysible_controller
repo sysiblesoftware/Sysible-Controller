@@ -81,7 +81,17 @@ _fetch_api_key() {
 
 _start_gui() {
   if _client_running; then
-    echo "GUI client already running (PID $(cat "$CLIENT_PID_FILE"))"
+    pid="$(cat "$CLIENT_PID_FILE")"
+    echo "GUI client already running (PID $pid) - signaling it to bring its window to the front..."
+    # A closed/hidden GUI process used to be a dead end here - this just
+    # printed "already running" and returned, leaving no way back short of
+    # `sysible_controller stop` + `start` any time the tray icon wasn't
+    # available, or was available per Qt but not actually rendered by the
+    # desktop (common on several Linux desktop environments). SIGUSR1 tells
+    # the already-running process to show/raise/activate its window instead
+    # - see client/main.py's MainWindow._on_sigusr1 - regardless of tray
+    # state.
+    kill -USR1 "$pid" 2>/dev/null
     return
   fi
 

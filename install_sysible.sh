@@ -253,6 +253,60 @@ echo "Installing sysible_controller CLI to /usr/local/bin/sysible_controller..."
 cp -f "$BASE/sysible_controller" /usr/local/bin/sysible_controller
 chmod +x /usr/local/bin/sysible_controller
 
+# =========================================================
+# INSTALL THE APPLICATION MENU LAUNCHER
+# Closing the dashboard window (or choosing "Quit Sysible
+# Controller" from its tray icon - see client/main.py) can leave
+# the backend running as its systemd service with no GUI attached
+# to it at all. Until now the only way back in was a terminal
+# ('sudo sysible_controller gui'). This installs a standard
+# freedesktop .desktop entry so "Sysible Controller" shows up
+# in the host's application menu like any other installed
+# program, using the same logo the GUI itself displays
+# (sysible_logo.png, also $BASE/sysible_logo.png post-install -
+# see client/branding.py's LOGO_PATH).
+#
+# `gui` is still root-only (_require_root in sysible_controller,
+# unchanged) since it shares the GUI client's existing permission
+# model. Launching it from a menu icon as a regular desktop user
+# still needs to cross that boundary, so the launcher runs it
+# through pkexec rather than weakening that requirement - this
+# pops the desktop's normal graphical authentication prompt
+# instead of requiring a terminal. Only attempted if both pkexec
+# and a system applications menu actually exist, so this is a
+# silent no-op on a minimal/headless box with no desktop at all.
+# =========================================================
+DESKTOP_DIR="/usr/share/applications"
+
+if command -v pkexec >/dev/null 2>&1 && [[ -d "$DESKTOP_DIR" ]]; then
+  echo "Installing application menu launcher..."
+
+  DESKTOP_FILE="$DESKTOP_DIR/sysible-controller.desktop"
+
+  cat > "$DESKTOP_FILE" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Sysible Controller
+Comment=Reopen the Sysible Controller dashboard
+Exec=pkexec /usr/local/bin/sysible_controller gui
+Icon=$BASE/sysible_logo.png
+Terminal=false
+StartupWMClass=Sysible Controller
+Categories=System;Settings;
+EOF
+
+  chmod 644 "$DESKTOP_FILE"
+
+  # Best-effort menu refresh - not every desktop environment ships
+  # this command, and none of them require it to pick up a new
+  # .desktop file eventually, so a missing binary here is not an
+  # install failure.
+  command -v update-desktop-database >/dev/null 2>&1 && \
+    update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1
+else
+  echo "No desktop menu environment detected (pkexec or $DESKTOP_DIR missing) - skipping application menu launcher."
+fi
+
 echo ""
 echo "Installation complete"
 echo "Installed to: $BASE"
@@ -265,4 +319,10 @@ echo "  - every host you run host_agent/agent.py on"
 echo "and point them at it with the SYSIBLE_CA_CERT env var so they can"
 echo "verify this controller instead of trusting it blindly."
 echo ""
+if [[ -f "$DESKTOP_DIR/sysible-controller.desktop" ]]; then
+  echo "A 'Sysible Controller' icon has been added to this machine's application"
+  echo "menu - use it any time to reopen the dashboard if it's been closed,"
+  echo "without needing a terminal (it will prompt for the admin/root password)."
+  echo ""
+fi
 echo "Run: sudo sysible_controller start"

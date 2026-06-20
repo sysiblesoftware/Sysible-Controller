@@ -20,6 +20,10 @@ PORT=9000
 CERT_FILE="$BASE/certs/server.crt"
 DESKTOP_FILE="/usr/share/applications/sysible-controller.desktop"
 
+# Best-effort fallback only - install_sysible.sh already creates this
+# with permissive (1777) mode so both root and the desktop user can
+# write client.pid/gui.log into it; this mkdir mostly matters for an
+# install predating that change.
 mkdir -p "$RUN_DIR" 2>/dev/null
 
 _require_root() {
@@ -33,30 +37,79 @@ _client_running() {
   [[ -f "$CLIENT_PID_FILE" ]] && kill -0 "$(cat "$CLIENT_PID_FILE")" 2>/dev/null
 }
 
+# =========================================================
+# The GUI process itself doesn't actually need to run as root - the
+# only thing under /opt/sysible it reads locally is the admin API key
+# (client/api.py's _API_KEY_FILE, mode 600 root-only by design - see
+# install_sysible.sh's "PROVISION THE ADMIN API KEY"), and that same
+# api.py checks the SYSIBLE_API_KEY env var *before* ever touching the
+# file. So elevate just this one instant, display-free `cat` instead
+# of the whole long-running Qt process.
+#
+# Running the entire GUI under pkexec (the previous approach) is what
+# was actually breaking the application-menu launcher: a pkexec'd
+# process's environment is reset, so it loses the very things Qt needs
+# to draw a window on the desktop's existing session (DISPLAY/
+# XAUTHORITY, and pkexec never forwards Wayland's WAYLAND_DISPLAY/
+# XDG_RUNTIME_DIR at all) - the auth prompt itself comes from polkit's
+# own always-running agent, not from the elevated process, so it pops
+# up fine right up until the *actual app* fails to ever connect to the
+# display. `cat` has no display to connect to, so none of that applies
+# here.
+# =========================================================
+_fetch_api_key() {
+  if [[ -n "$SYSIBLE_API_KEY" ]]; then
+    return
+  fi
+
+  if [[ $EUID -eq 0 ]]; then
+    SYSIBLE_API_KEY="$(cat "$BASE/api_key.txt" 2>/dev/null)"
+  elif command -v pkexec >/dev/null 2>&1; then
+    SYSIBLE_API_KEY="$(pkexec cat "$BASE/api_key.txt" 2>/dev/null)"
+  else
+    echo "Run as root, or install pkexec, to read $BASE/api_key.txt: sudo sysible_controller gui"
+    exit 1
+  fi
+
+  if [[ -z "$SYSIBLE_API_KEY" ]]; then
+    echo "ERROR: could not read the admin API key ($BASE/api_key.txt) - was the password prompt cancelled?" | tee -a "$GUI_LOG_FILE" >&2
+    exit 1
+  fi
+
+  export SYSIBLE_API_KEY
+}
+
 _start_gui() {
   if _client_running; then
     echo "GUI client already running (PID $(cat "$CLIENT_PID_FILE"))"
     return
   fi
 
+  _fetch_api_key
+
   echo "Starting GUI client..."
   cd "$BASE" || exit 1
   source "$VENV/bin/activate"
   export PYTHONPATH="$BASE"
 
-  # setsid + redirected stdio fully detaches the GUI from this script's
-  # own session before it returns. Without this, launching via the
-  # application menu's pkexec-backed launcher (see install_sysible.sh)
-  # could pop the password prompt successfully and then show nothing -
-  # some polkit/systemd setups tear down the whole process tree the
-  # instant the command pkexec ran (this script) exits, which is
-  # exactly what happens right after a plain backgrounded `&` here. A
-  # plain `sudo sysible_controller start` from a terminal never hit
-  # this, since the terminal session backing it stays open regardless.
+  # setsid + redirected stdio detaches the GUI from this script's own
+  # session before it returns, so it isn't tied to this process's
+  # lifetime regardless of how it was launched.
   setsid python3 client/main.py </dev/null >"$GUI_LOG_FILE" 2>&1 &
   disown
-  echo $! > "$CLIENT_PID_FILE"
-  echo "GUI client PID: $(cat "$CLIENT_PID_FILE")"
+  GUI_PID=$!
+  echo "$GUI_PID" > "$CLIENT_PID_FILE"
+
+  # $RUN_DIR is shared between however this got invoked - root via
+  # `sudo sysible_controller start`, or the desktop user directly via
+  # the application menu icon - so a later run by a *different* user
+  # needs to be able to overwrite these, not just whoever wrote them
+  # first. Loosening their own mode (not the directory) is enough;
+  # install_sysible.sh already makes $RUN_DIR itself 1777 so anyone can
+  # create a file there in the first place.
+  chmod 666 "$CLIENT_PID_FILE" "$GUI_LOG_FILE" 2>/dev/null
+
+  echo "GUI client PID: $GUI_PID"
 }
 
 _stop_gui() {
@@ -167,7 +220,8 @@ cmd_logs() {
 }
 
 cmd_gui() {
-  _require_root gui
+  # No _require_root here anymore - see _fetch_api_key for why the GUI
+  # itself doesn't need to run as root, just a one-shot privileged read.
   _start_gui
 }
 
@@ -211,11 +265,11 @@ cmd_destroy() {
   echo "Removing $BASE..."
   rm -rf "$BASE"
 
-  # $BASE covers everything installed under it (including the
-  # launch_gui.sh wrapper) but the application menu launcher lives
-  # outside $BASE in the system-wide applications directory, so it
-  # needs its own cleanup - otherwise the icon tile stays in the
-  # applications menu/dock pointing at a launcher that no longer works.
+  # $BASE covers everything installed under it, but the application
+  # menu launcher lives outside $BASE in the system-wide applications
+  # directory, so it needs its own cleanup - otherwise the icon tile
+  # stays in the applications menu/dock pointing at a launcher that no
+  # longer works.
   if [[ -f "$DESKTOP_FILE" ]]; then
     echo "Removing application menu launcher..."
     rm -f "$DESKTOP_FILE"

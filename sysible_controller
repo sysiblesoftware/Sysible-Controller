@@ -14,9 +14,11 @@ VENV="$BASE/venv"
 RUN_DIR="$BASE/run"
 CLIENT_PID_FILE="$RUN_DIR/client.pid"
 PORTAL_PID_FILE="$RUN_DIR/portal.pid"
+GUI_LOG_FILE="$RUN_DIR/gui.log"
 SERVICE="sysible-backend"
 PORT=9000
 CERT_FILE="$BASE/certs/server.crt"
+DESKTOP_FILE="/usr/share/applications/sysible-controller.desktop"
 
 mkdir -p "$RUN_DIR" 2>/dev/null
 
@@ -41,7 +43,18 @@ _start_gui() {
   cd "$BASE" || exit 1
   source "$VENV/bin/activate"
   export PYTHONPATH="$BASE"
-  python3 client/main.py &
+
+  # setsid + redirected stdio fully detaches the GUI from this script's
+  # own session before it returns. Without this, launching via the
+  # application menu's pkexec-backed launcher (see install_sysible.sh)
+  # could pop the password prompt successfully and then show nothing -
+  # some polkit/systemd setups tear down the whole process tree the
+  # instant the command pkexec ran (this script) exits, which is
+  # exactly what happens right after a plain backgrounded `&` here. A
+  # plain `sudo sysible_controller start` from a terminal never hit
+  # this, since the terminal session backing it stays open regardless.
+  setsid python3 client/main.py </dev/null >"$GUI_LOG_FILE" 2>&1 &
+  disown
   echo $! > "$CLIENT_PID_FILE"
   echo "GUI client PID: $(cat "$CLIENT_PID_FILE")"
 }
@@ -145,7 +158,7 @@ cmd_status() {
   if _client_running; then
     echo "GUI client: running (PID $(cat "$CLIENT_PID_FILE"))"
   else
-    echo "GUI client: not running"
+    echo "GUI client: not running (see $GUI_LOG_FILE for the last launch attempt's output, if any)"
   fi
 }
 
@@ -197,6 +210,18 @@ cmd_destroy() {
 
   echo "Removing $BASE..."
   rm -rf "$BASE"
+
+  # $BASE covers everything installed under it (including the
+  # launch_gui.sh wrapper) but the application menu launcher lives
+  # outside $BASE in the system-wide applications directory, so it
+  # needs its own cleanup - otherwise the icon tile stays in the
+  # applications menu/dock pointing at a launcher that no longer works.
+  if [[ -f "$DESKTOP_FILE" ]]; then
+    echo "Removing application menu launcher..."
+    rm -f "$DESKTOP_FILE"
+    command -v update-desktop-database >/dev/null 2>&1 && \
+      update-desktop-database "$(dirname "$DESKTOP_FILE")" >/dev/null 2>&1
+  fi
 
   echo "Sysible Controller has been removed from this machine."
   echo "Removing this command..."

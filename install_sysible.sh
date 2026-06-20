@@ -291,7 +291,7 @@ Comment=Reopen the Sysible Controller dashboard
 Exec=pkexec /usr/local/bin/sysible_controller gui
 Icon=$BASE/sysible_logo.png
 Terminal=false
-StartupWMClass=Sysible Controller
+StartupWMClass=sysible-controller
 Categories=System;Settings;
 EOF
 

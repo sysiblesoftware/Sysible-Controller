@@ -166,7 +166,12 @@ def main():
     # inherits it by default) covers the icon.
     app.setApplicationName("Sysible Controller")
     app.setApplicationDisplayName("Sysible Controller")
-    app.setDesktopFileName("Sysible Controller")
+    # Must match the installed launcher's filename (sysible-controller.desktop,
+    # see install_sysible.sh), not just the display name - this is what lets
+    # the windowing system tie this running app's window back to that
+    # launcher's icon (sysible_logo.png) on the application menu tile, the
+    # dock/taskbar, and alt-tab, instead of falling back to a generic icon.
+    app.setDesktopFileName("sysible-controller")
     app.setWindowIcon(QIcon(str(LOGO_PATH)))
 
     # Closing the dashboard (or any popout) should not by itself end

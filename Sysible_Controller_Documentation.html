@@ -1,450 +1,414 @@
-    <text x="448" y="194" font-family="-apple-system,Arial" font-size="13" font-weight="700" fill="#EAEAEA">db-01</text>
-    <text x="448" y="222" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Host ID:</text><text x="540" y="222" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">a13f-09c2</text>
-    <text x="448" y="244" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Platform:</text><text x="540" y="244" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">Ubuntu 22.04</text>
-    <text x="448" y="266" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Kernel:</text><text x="540" y="266" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">5.15.0-112</text>
-    <text x="448" y="288" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Status:</text><text x="540" y="288" font-family="-apple-system,Arial" font-size="11" fill="#3ac95a">online</text>
-    <text x="448" y="310" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Environment:</text><text x="540" y="310" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">Production</text>
-
-    <rect x="448" y="334" width="220" height="28" rx="5" fill="#2B2B2B" stroke="#505050"/>
-    <text x="458" y="352" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">Production ▾</text>
-    <rect x="678" y="334" width="140" height="28" rx="5" fill="#3C4B64" stroke="#506080"/>
-    <text x="748" y="352" font-family="-apple-system,Arial" font-size="11" fill="#fff" text-anchor="middle">Set Environment</text>
-
-    <rect x="448" y="480" width="160" height="30" rx="5" fill="#5a2323" stroke="#7a3030"/>
-    <text x="528" y="500" font-family="-apple-system,Arial" font-size="11" fill="#ffb3b3" text-anchor="middle">Disenroll Host</text>
-    <rect x="618" y="480" width="100" height="30" rx="5" fill="#2f2f2f" stroke="#505050"/>
-    <text x="668" y="500" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1" text-anchor="middle">Refresh</text>
-  </svg>
-</figure>
-<figcaption>Host Enrollment — enrolled hosts grouped by environment, with a details and disenrollment panel.</figcaption>
-
-<h2>Downloading and running the agent bundle</h2>
-<p>Clicking <strong>Download Agent Bundle</strong> prompts you to choose where to save <code>sysible-agent-bundle.zip</code> — the same ready-to-run bundle the Webserver Portal hands to end users, built here on demand. Each download bakes in a <strong>fresh, one-time enrollment token</strong> plus the controller's configured address and port. The zip contains:</p>
-<ul>
-<li><code>agent.py</code> — the Sysible host agent program itself</li>
-<li><code>requirements.txt</code> — the Python packages the agent needs (installed automatically)</li>
-<li><code>sysible_agent.env</code> — the controller's address and this download's one-time enrollment token</li>
-<li><code>server.crt</code> (when applicable) — the controller's TLS certificate, so the agent can verify it's talking to the real controller</li>
-<li>a systemd service unit file for the agent</li>
-<li><code>run_agent.sh</code> — the installer script (run as root on the target host)</li>
-<li><code>disenroll_agent.sh</code> — a companion script that cleanly removes the agent from that host</li>
-</ul>
-<p>To enroll a host: copy the unzipped bundle onto the target machine, make <code>run_agent.sh</code> executable, and run it as root:</p>
-<pre class="cli"><span class="cm"># on the target host</span>
-chmod +x run_agent.sh
-sudo ./run_agent.sh</pre>
-<p>The agent installs and starts as a background systemd service that restarts itself on crash or reboot. The host then appears in the Enrolled Hosts list (allow a few moments for the first heartbeat).</p>
-<div class="warn"><b>One bundle, one host</b>Each bundle's enrollment token is single-use — download a fresh bundle per host rather than reusing one zip on a second machine.</div>
-
-<h2>Environment tagging</h2>
-<p>Hosts can be organized into <strong>environments</strong> — labels such as "Production," "Staging," or "Development." Environments are entirely optional; an unassigned host is listed under an "Unassigned" heading. Select a host, use the <strong>Environment</strong> dropdown (choose <strong>"+ New environment..."</strong> to create one on the fly), and click <strong>Set Environment</strong> to apply it. The same environment list is shared elsewhere in the application, including Remote Host Administration's SSH-enrollment flow.</p>
-
-<h2>The managed hosts list</h2>
-<p>The Enrolled Hosts list groups hosts under collapsible environment headers, with <strong>Collapse All</strong> / <strong>Expand All</strong> buttons for tidying a large fleet. Selecting a host populates a details panel with its Hostname, Host ID, Platform, Kernel, Status, and Environment. <strong>Refresh</strong> reloads the list and details from the controller.</p>
-
-<h2>Disenrolling a host</h2>
-<p>Select a host and click <strong>Disenroll Host</strong>. If the host is online, Sysible first asks it to stop and remove its own systemd service. If it doesn't respond in time (typically because it's offline), the enrollment is removed from the controller's records regardless, but the agent software remains on that machine until someone runs <code>disenroll_agent.sh</code> on it directly.</p>
-<table class="ref">
-<tr><th>What disenrolling does</th><th>What it doesn't do</th></tr>
-<tr><td>Stops and removes the agent's systemd service; removes the host's enrollment record so it disappears from Host Enrollment and Remote Host Administration.</td><td>Leaves the installed agent files, pinned certificate, and local state directory on disk when torn down remotely — for full cleanup, run <code>disenroll_agent.sh</code> from the original bundle directly on the host.</td></tr>
-</table>
-</div>
-
-<!-- ===================== 8. REMOTE ADMINISTRATION ===================== -->
-<div class="page" id="remote">
-<h1 class="sec"><span class="tag">Section 8</span>Remote Host Administration</h1>
-
-<p>Remote Host Administration is the hands-on console for working directly on individual managed hosts — whether enrolled via the Sysible agent or connected directly over SSH. It is reached from the "Remote Host Administration" tile on the Dashboard.</p>
-
-<figure class="mock">
-  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Remote Host Administration</span></div>
-  <svg viewBox="0 0 900 660" xmlns="http://www.w3.org/2000/svg">
-    <rect width="900" height="660" fill="#1E1E1E"/>
-    <rect x="30" y="22" width="26" height="26" rx="6" fill="#2f6fed"/>
-    <text x="70" y="40" font-family="-apple-system,Arial" font-size="17" font-weight="700" fill="#EAEAEA">Remote Host Administration</text>
-
-    <text x="40" y="80" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">MANAGED HOSTS</text>
-    <rect x="40" y="88" width="820" height="100" rx="6" fill="#2B2B2B" stroke="#505050"/>
-    <rect x="40" y="88" width="820" height="22" fill="#252525"/>
-    <text x="54" y="103" font-family="-apple-system,Arial" font-size="10" font-weight="700" fill="#9aa5b1">HOST</text>
-    <text x="300" y="103" font-family="-apple-system,Arial" font-size="10" font-weight="700" fill="#9aa5b1">TYPE</text>
-    <text x="480" y="103" font-family="-apple-system,Arial" font-size="10" font-weight="700" fill="#9aa5b1">ADDRESS</text>
-    <rect x="40" y="110" width="820" height="24" fill="#3C4B64" opacity="0.45"/>
-    <text x="54" y="127" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">db-01</text>
-    <text x="300" y="127" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">Agent + SSH</text>
-    <text x="480" y="127" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">10.0.1.21</text>
-    <text x="54" y="151" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">web-01</text>
-    <text x="300" y="151" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">Agent</text>
-    <text x="480" y="151" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">10.0.1.14</text>
-    <text x="54" y="175" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">legacy-app</text>
-    <text x="300" y="175" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">SSH (root)</text>
-    <text x="480" y="175" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">10.0.2.5</text>
-
-    <text x="40" y="212" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">SSH TO A NEW HOST (NOT YET JOINED)</text>
-    <rect x="40" y="220" width="820" height="56" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <rect x="54" y="236" width="150" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="62" y="252" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Host name</text>
-    <rect x="216" y="236" width="150" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="224" y="252" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">IP address</text>
-    <rect x="378" y="236" width="130" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="386" y="252" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Username</text>
-    <rect x="520" y="236" width="130" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="528" y="252" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">SSH password</text>
-    <rect x="662" y="236" width="180" height="24" rx="4" fill="#3C4B64" stroke="#506080"/><text x="752" y="252" font-size="11" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Connect Host</text>
-
-    <text x="40" y="308" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">TERMINAL — db-01 (SSH session active)</text>
-    <rect x="40" y="316" width="820" height="220" rx="6" fill="#0d0d0d" stroke="#3A3A3A"/>
-    <text x="54" y="338" font-family="Menlo,monospace" font-size="11" fill="#6fcf6f">root@db-01:~# systemctl status postgresql</text>
-    <text x="54" y="356" font-family="Menlo,monospace" font-size="11" fill="#c9d1d9">● postgresql.service - PostgreSQL RDBMS</text>
-    <text x="54" y="374" font-family="Menlo,monospace" font-size="11" fill="#c9d1d9">   Active: active (running) since Tue 09:14:02 UTC</text>
-    <text x="54" y="392" font-family="Menlo,monospace" font-size="11" fill="#6fcf6f">root@db-01:~# █</text>
-    <rect x="690" y="500" width="150" height="24" rx="4" fill="#5a2323" stroke="#7a3030"/>
-    <text x="765" y="516" font-family="-apple-system,Arial" font-size="11" fill="#ffb3b3" text-anchor="middle">Send Ctrl+C</text>
-
-    <text x="40" y="572" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">FILE TRANSFER</text>
-    <rect x="40" y="580" width="395" height="60" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <text x="52" y="600" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Local path → Remote path</text>
-    <rect x="52" y="608" width="280" height="22" rx="4" fill="#2B2B2B" stroke="#505050"/>
-    <rect x="342" y="608" width="80" height="22" rx="4" fill="#3C4B64" stroke="#506080"/><text x="382" y="623" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Upload</text>
-    <rect x="465" y="580" width="395" height="60" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <text x="477" y="600" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Remote path</text>
-    <rect x="477" y="608" width="280" height="22" rx="4" fill="#2B2B2B" stroke="#505050"/>
-    <rect x="767" y="608" width="80" height="22" rx="4" fill="#3C4B64" stroke="#506080"/><text x="807" y="623" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Download…</text>
-  </svg>
-</figure>
-<figcaption>Remote Host Administration — managed hosts, one-click SSH enrollment, live terminal, and file transfer.</figcaption>
-
-<h2>The merged hosts view</h2>
-<p>The <strong>Managed Hosts</strong> table lists every host the controller knows about — agent-enrolled and SSH-connected alike — grouped by environment. Three columns: <strong>Host</strong>, <strong>Type</strong> (Agent, SSH, or a combined row when both apply to the same machine), and <strong>Address</strong>. Clicking any host connects to it immediately — no separate "connect" step, and no password required again, since credentials are already on file. Buttons below the table let you <strong>Refresh</strong>, <strong>Remove Host</strong>, and <strong>Show Sysible Controller Public Key</strong> (for installing the controller's key manually where the one-click flow isn't suitable).</p>
-
-<h2>One-click enroll via SSH</h2>
-<p>The <strong>SSH to a New Host</strong> section connects a host that isn't enrolled by any method yet — no token, no pre-installed software. Provide Host name, IP address, Username (defaults to <code>root</code>), SSH password, and optionally an Environment. Clicking <strong>Connect Host</strong> does the entire handoff in one step: the controller uses the password once to install its own auto-generated SSH key on the target, then discards the password — all future connections use that key, no password required again.</p>
-
-<h2>The live interactive terminal</h2>
-<p>For <strong>SSH-connected hosts</strong>, the terminal is a genuine PTY-backed interactive session — programs like <code>vim</code>, <code>top</code>, or an interactive <code>sudo</code> prompt behave correctly, arrow keys/Tab/Backspace all work, and pasting sends text directly into the session. A dedicated <strong>Send Ctrl+C</strong> button sends a real interrupt signal, useful for stopping a hung command or as a fallback if the keyboard shortcut is intercepted by a text selection instead.</p>
-<p>For <strong>agent-enrolled hosts</strong>, there's no persistent connection, so true interactive sessions aren't possible. Instead, type a command in the bottom box and press Enter — it's queued for the agent to execute, with output, errors, and exit code returned once it reports back (typically a few seconds; a timeout is reported after about 30 seconds of silence). Command history is recalled with the Up/Down arrow keys.</p>
-
-<h2>File upload and download</h2>
-<p>The File Transfer section acts on whichever host is currently active in the Terminal section. <strong>SSH hosts</strong> transfer over SFTP with no enforced size limit, completing synchronously. <strong>Agent-enrolled hosts</strong> transfer through the same queued-task channel used for commands, capped at a modest size (the page states the current limit) since that channel isn't designed for bulk data movement.</p>
-</div>
-
-<!-- ===================== 9. SETTINGS ===================== -->
-<div class="page" id="settings">
-<h1 class="sec"><span class="tag">Section 9</span>Sysible Controller Settings</h1>
-<p>This page consolidates everything related to configuring and securing the controller installation itself, as distinct from the hosts it manages. It is reached from the "Sysible Controller Settings" tile and is organized into five sections on one scrollable page.</p>
-
-<figure class="mock">
-  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Sysible Controller Settings</span></div>
-  <svg viewBox="0 0 900 520" xmlns="http://www.w3.org/2000/svg">
-    <rect width="900" height="520" fill="#1E1E1E"/>
-    <rect x="30" y="22" width="26" height="26" rx="6" fill="#2f6fed"/>
-    <text x="70" y="40" font-family="-apple-system,Arial" font-size="17" font-weight="700" fill="#EAEAEA">Sysible Controller Settings</text>
-
-    <text x="40" y="80" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">CONTROLLER CONFIGURATION</text>
-    <rect x="40" y="88" width="820" height="60" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <rect x="54" y="104" width="180" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="62" y="120" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Hostname</text>
-    <rect x="246" y="104" width="180" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="254" y="120" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">10.0.1.5</text>
-    <rect x="438" y="104" width="220" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="446" y="120" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">All Detected IPs (failover) ▾</text>
-    <rect x="670" y="104" width="80" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="678" y="120" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">9000</text>
-    <rect x="762" y="104" width="84" height="24" rx="4" fill="#3C4B64" stroke="#506080"/><text x="804" y="120" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Save</text>
-
-    <text x="40" y="180" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">ADMINISTRATORS</text>
-    <rect x="40" y="188" width="820" height="120" rx="6" fill="#2B2B2B" stroke="#505050"/>
-    <rect x="40" y="188" width="820" height="22" fill="#252525"/>
-    <text x="54" y="203" font-size="10" font-weight="700" fill="#9aa5b1" font-family="-apple-system,Arial">USERNAME</text>
-    <text x="260" y="203" font-size="10" font-weight="700" fill="#9aa5b1" font-family="-apple-system,Arial">CREATED BY</text>
-    <text x="460" y="203" font-size="10" font-weight="700" fill="#9aa5b1" font-family="-apple-system,Arial">LAST LOGIN</text>
-    <text x="660" y="203" font-size="10" font-weight="700" fill="#9aa5b1" font-family="-apple-system,Arial">MUST CHANGE PW</text>
-    <text x="54" y="228" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">admin</text>
-    <text x="260" y="228" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">system</text>
-    <text x="460" y="228" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">Jun 18, 2026 09:02</text>
-    <text x="660" y="228" font-size="11" fill="#9aa5b1" font-family="-apple-system,Arial">No</text>
-    <text x="54" y="252" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">cdovbish</text>
-    <text x="260" y="252" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">admin</text>
-    <text x="460" y="252" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">Never</text>
-    <text x="660" y="252" font-size="11" fill="#e0a93c" font-family="-apple-system,Arial">Yes</text>
-    <rect x="54" y="276" width="170" height="22" rx="4" fill="#3C4B64" stroke="#506080"/><text x="139" y="291" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Add Administrator</text>
-
-    <text x="40" y="340" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">AUDIT LOG</text>
-    <rect x="40" y="348" width="820" height="130" rx="6" fill="#2B2B2B" stroke="#505050"/>
-    <text x="54" y="372" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">2026-06-18 09:02:11 — login_success — admin</text>
-    <text x="54" y="394" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">2026-06-17 17:40:55 — admin_added — cdovbish (by admin)</text>
-    <text x="54" y="416" font-size="11" fill="#ff8080" font-family="-apple-system,Arial">2026-06-17 08:11:02 — login_failed — admin</text>
-  </svg>
-</figure>
-<figcaption>Sysible Controller Settings — controller configuration, administrators, and audit log.</figcaption>
-
-<h2 id="settings-controller">Controller Configuration</h2>
-<p>Controls the network address baked into every agent bundle — where enrolled agents are told to connect. Set a <strong>Hostname</strong>, an <strong>IP Address</strong>, or both; a <strong>Detect Local IPs</strong> button populates real candidates. The <strong>"Use for agent bundles"</strong> dropdown decides what's actually used:</p>
-<table class="ref">
-<tr><th>Mode</th><th>Behavior</th></tr>
-<tr><td>Hostname</td><td>Bundles connect using the configured hostname.</td></tr>
-<tr><td>IP Address</td><td>Bundles connect using the configured IP address.</td></tr>
-<tr><td>All Detected IPs (failover)</td><td>Every detected address is baked in; the agent tries each in turn until one connects — useful when the controller is reachable over more than one network path.</td></tr>
-</table>
-<div class="warn"><b>Port must match</b>The <strong>Port</strong> field must match what the backend is actually listening on (9000 by default) — it's independent of the Webserver Portal's own port. A mismatch here breaks any newly built agent bundle even if the portal works fine.</div>
-
-<h2 id="settings-admins">Administrators</h2>
-<p>Manages who can log into the Dashboard — separate from any accounts on managed hosts. Shows Username, Created By, Last Login, and Must Change Password for each account. <strong>Add Administrator</strong> creates a new account with a temporary password (forced to change on first login). <strong>Remove Selected Administrator</strong> deletes one. "Change My Own Credentials" lets the logged-in administrator update their own username/password, authorized by entering the current password.</p>
-
-<h2 id="settings-policy">Administrator Password Policy</h2>
-<p>Defines complexity rules for Dashboard administrator passwords specifically — minimum length, and toggles for requiring uppercase, lowercase, a digit, and a symbol. Enforced on new administrator accounts, self-service credential changes, and the forced first-login change. Existing passwords predating a policy change are not retroactively invalidated. This governs Dashboard logins only — operating-system accounts on managed hosts are governed separately by Environmental Policies (Section 10).</p>
-
-<h2 id="settings-audit">Audit Log</h2>
-<p>An append-only history of login attempts (successful and failed) and administrator account changes (additions, removals, credential changes) — Time, Event, Username, and Detail for each entry. <strong>Refresh Audit Log</strong> brings it current. This does not cover general fleet command/activity history, which lives under System Administration's health, log, and service tools.</p>
-
-<h2 id="settings-license">License &amp; Version</h2>
-<p>A short reference section, folded into this page rather than kept as its own dashboard tile. It shows the installed version as <code>v2.0.0</code> at the time of writing, read from a single project-root <code>version.py</code> file that both the GUI and backend import — so this number is always accurate, never a hardcoded label that could drift out of sync with the actual install. A <strong>License Key</strong> field lets an administrator type in and save a license key; <strong>Save License Key</strong> persists it. Licensing is not yet enforced against this build — there's no entitlement check tied to the key today — so this is simply somewhere to record one ahead of a licensing model being introduced.</p>
-</div>
-
-<!-- ===================== 10. SYSTEM ADMINISTRATION ===================== -->
-<div class="page" id="sysadmin">
-<h1 class="sec"><span class="tag">Section 10</span>System Administration</h1>
-
-<p>The System Administration menu is the hub for day-to-day fleet management. Rather than one sprawling window, it opens a compact launcher with seven tiles, each opening its own dedicated window: <strong>User &amp; Group Administration</strong>, <strong>System Health &amp; Logs</strong>, <strong>Service Management</strong>, <strong>Environmental Policies</strong>, <strong>Cron &amp; Systemd Timers</strong>, <strong>Host Software Management</strong>, and <strong>Repository Management</strong>.</p>
-
-<h2>What ties the seven tools together</h2>
-<ul>
-<li><strong>A unified, merged host list.</strong> Every tool works against the same pool of hosts regardless of connection method (agent or SSH) — you never have to think about which transport a host uses.</li>
-<li><strong>Grouping by environment.</strong> Hosts are organized under collapsible environment headers, with Collapse All / Expand All for tidying a large fleet.</li>
-<li><strong>Checkbox-driven targeting.</strong> Hosts are selected via checkboxes, not single clicks. Select All / Deselect All target the whole fleet or clear the selection quickly. Most actions run against whichever hosts are checked.</li>
-<li><strong>Per-host tabbed results.</strong> Each host's outcome gets its own closable tab, so results from multiple hosts never overwrite each other. Re-running the same report on the same host updates its existing tab in place.</li>
-<li><strong>Asynchronous dispatch with live status.</strong> Agent hosts may take a few seconds (queued task, polled for completion); SSH hosts typically respond immediately. A status line always shows progress.</li>
-<li><strong>Live host refresh.</strong> Each tool periodically refreshes its host list (roughly every ten seconds) in the background.</li>
-</ul>
-
-<h2 id="uga">User &amp; Group Administration</h2>
-<p>The most detailed of the five tools — accounts, passwords, sudo rights, group memberships, and account metadata across the fleet.</p>
-
-<figure class="mock">
-  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">User &amp; Group Administration</span></div>
-  <svg viewBox="0 0 900 520" xmlns="http://www.w3.org/2000/svg">
-    <rect width="900" height="520" fill="#1E1E1E"/>
-    <text x="40" y="40" font-family="-apple-system,Arial" font-size="16" font-weight="700" fill="#EAEAEA">User &amp; Group Administration — Viewing: db-01</text>
-    <rect x="40" y="60" width="200" height="430" rx="6" fill="#2B2B2B" stroke="#505050"/>
-    <rect x="52" y="72" width="176" height="22" rx="4" fill="#1E1E1E" stroke="#505050"/><text x="60" y="87" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Search users…</text>
-    <text x="60" y="116" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">root</text>
-    <rect x="52" y="126" width="176" height="20" fill="#3C4B64" opacity="0.5"/><text x="60" y="140" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">jsmith</text>
-    <text x="60" y="166" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">deploy</text>
-    <text x="60" y="192" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">www-data</text>
-
-    <rect x="250" y="60" width="610" height="32" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <text x="262" y="80" font-size="11" fill="#6fa8ff" font-family="-apple-system,Arial">Create User</text>
-    <text x="350" y="80" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">Account</text>
-    <text x="430" y="80" font-size="11" fill="#9aa5b1" font-family="-apple-system,Arial">Password</text>
-    <text x="520" y="80" font-size="11" fill="#9aa5b1" font-family="-apple-system,Arial">Groups</text>
-    <text x="600" y="80" font-size="11" fill="#9aa5b1" font-family="-apple-system,Arial">Reports</text>
-
-    <rect x="250" y="100" width="610" height="390" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <text x="266" y="128" font-size="12" fill="#9aa5b1" font-family="-apple-system,Arial">Account Status:</text>
-    <text x="400" y="128" font-size="12" font-weight="700" fill="#3ac95a" font-family="-apple-system,Arial">ACTIVE</text>
-    <text x="266" y="156" font-size="11" fill="#9aa5b1" font-family="-apple-system,Arial">Shell: /bin/bash</text>
-    <text x="266" y="178" font-size="11" fill="#9aa5b1" font-family="-apple-system,Arial">Sudo: enabled</text>
-    <text x="266" y="200" font-size="11" fill="#9aa5b1" font-family="-apple-system,Arial">Groups: sudo, deploy, docker</text>
-    <text x="266" y="222" font-size="11" fill="#9aa5b1" font-family="-apple-system,Arial">Active Sessions: pts/0 (10.0.4.2)</text>
-    <rect x="266" y="250" width="80" height="26" rx="4" fill="#3C4B64" stroke="#506080"/><text x="306" y="267" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Lock</text>
-    <rect x="356" y="250" width="80" height="26" rx="4" fill="#3C4B64" stroke="#506080"/><text x="396" y="267" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Unlock</text>
-    <rect x="446" y="250" width="100" height="26" rx="4" fill="#3C4B64" stroke="#506080"/><text x="496" y="267" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Toggle Sudo</text>
-    <rect x="556" y="250" width="110" height="26" rx="4" fill="#3C4B64" stroke="#506080"/><text x="611" y="267" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Kill Sessions</text>
-    <rect x="676" y="250" width="100" height="26" rx="4" fill="#5a2323" stroke="#7a3030"/><text x="726" y="267" font-size="10" fill="#ffb3b3" text-anchor="middle" font-family="-apple-system,Arial">Delete User</text>
-    <rect x="266" y="300" width="280" height="30" rx="5" fill="#7a1f1f" stroke="#9a2a2a"/>
-    <text x="406" y="320" font-size="11" fill="#ffd0d0" text-anchor="middle" font-family="-apple-system,Arial">Terminate User (Remove From ALL Hosts)</text>
-  </svg>
-</figure>
-<figcaption>User &amp; Group Administration — host checklist, user list, and the tabbed account-management panel.</figcaption>
-
-<h3>Host checklist and syncing</h3>
-<p>Before showing anything useful, the tool needs a live snapshot of each host's actual users, groups, and sessions. Check one or more hosts and click <strong>Sync Checked Hosts</strong>; SSH hosts respond immediately, agent hosts are polled until they report back. Clicking a host makes it "active," and every account-changing action automatically triggers a quiet re-sync of the affected host shortly after it completes.</p>
-
-<h3>Five tabs</h3>
-<table class="ref">
-<tr><th>Tab</th><th>Covers</th></tr>
-<tr><td><strong>Create User</strong></td><td>Username, optional Password (with Generate), Shell (default <code>/bin/bash</code>). Creates the account on every <em>checked</em> host.</td></tr>
-<tr><td><strong>Account</strong></td><td>Account Status (ACTIVE/LOCKED, or MIXED across checked hosts with a per-host breakdown popup); shell &amp; GECOS edit; sudo status; groups; active sessions; Lock / Unlock / Toggle Sudo / Kill Sessions / Delete User (checked hosts); a separately styled <strong>Terminate User</strong> button that ignores the checklist and removes the account from <em>every</em> host in the fleet, with an explicit confirmation listing every affected host.</td></tr>
-<tr><td><strong>Password</strong></td><td>Set Password (validated against the active policy) with a Generate button and a copy-to-clipboard popup; Force Reset Next Login; Password Aging (Max/Min/Warn days); Account Expiration (30/60/90/180 days, Never, or a custom date).</td></tr>
-<tr><td><strong>Groups</strong></td><td>Add/remove the selected user from a group; create or delete groups.</td></tr>
-<tr><td><strong>Reports</strong></td><td>Audit Privileged Users (who has sudo, fleet-wide); View All Groups &amp; Members.</td></tr>
-</table>
-<div class="note"><b>Password policy</b>Any password set here — typed or generated — is checked against the policy defined in Environmental Policies. If the controller can't be reached to check it, a sensible built-in baseline is used instead.</div>
-
-<h2 id="health">System Health &amp; Logs</h2>
-<p>A diagnostics tool: read-only checks across checked hosts, plus process-management actions for intervening when something is misbehaving.</p>
-<table class="ref">
-<tr><th>Check / Action</th><th>What it reports</th></tr>
-<tr><td>Check Host Health</td><td>The flagship combined verdict — see below.</td></tr>
-<tr><td>Disk Usage</td><td><code>df</code>-style report with filesystem type included.</td></tr>
-<tr><td>Memory &amp; CPU Snapshot</td><td>Memory % with an OK/WARNING/CRITICAL judgment, full memory table, load average, top CPU consumers.</td></tr>
-<tr><td>Uptime</td><td>Uptime and load average.</td></tr>
-<tr><td>Failed Services</td><td>Systemd units in a failed state, or an explicit "No failed services."</td></tr>
-<tr><td>Find Large Files</td><td>Top N largest files under a given path, largest first, in MB.</td></tr>
-<tr><td>Search / Tail Logs</td><td>Pattern search or a plain tail of the last N lines.</td></tr>
-<tr><td>View Processes (CPU / Memory)</td><td>Top processes sorted by each resource.</td></tr>
-<tr><td>Investigate High Load</td><td>Load average plus process detail aimed at explaining elevated load.</td></tr>
-<tr><td>Zombie Processes</td><td>Any defunct processes, or a clean-host message.</td></tr>
-<tr><td>Kill / Set Priority / Restart Process</td><td>Acts on a Target PID — kill with a chosen signal, renice (-20 to 19), or capture-and-relaunch the same command line (Linux only).</td></tr>
-</table>
-
-<figure class="mock">
-  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">System Health &amp; Logs</span></div>
-  <svg viewBox="0 0 900 280" xmlns="http://www.w3.org/2000/svg">
-    <rect width="900" height="280" fill="#1E1E1E"/>
-    <rect x="40" y="30" width="260" height="34" rx="6" fill="#1f4a2a" stroke="#3ac95a"/><text x="170" y="52" font-size="12" fill="#7fe79a" text-anchor="middle" font-family="-apple-system,Arial">web-01 — HEALTH: OK</text>
-    <rect x="320" y="30" width="260" height="34" rx="6" fill="#4a3c1f" stroke="#e0a93c"/><text x="450" y="52" font-size="12" fill="#f5cf7a" text-anchor="middle" font-family="-apple-system,Arial">db-01 — HEALTH: WARNING</text>
-    <rect x="600" y="30" width="260" height="34" rx="6" fill="#4a1f1f" stroke="#ff5c5c"/><text x="730" y="52" font-size="12" fill="#ff9a9a" text-anchor="middle" font-family="-apple-system,Arial">cache-01 — HEALTH: CRITICAL</text>
-    <rect x="320" y="84" width="260" height="170" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <text x="334" y="108" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">HEALTH: WARNING</text>
-    <text x="334" y="130" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Reasons:</text>
-    <text x="334" y="150" font-size="10" fill="#f5cf7a" font-family="-apple-system,Arial">/var: 82% used (WARNING)</text>
-    <text x="334" y="170" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Failed services: 0 (OK)</text>
-    <text x="334" y="190" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Load ratio: 0.6 (OK)</text>
-    <text x="334" y="218" font-size="9" fill="#6b7382" font-family="-apple-system,Arial">excluded — install media / removable / image mounts</text>
-  </svg>
-</figure>
-<figcaption>Per-host result tabs and verdicts are color-coded green / amber / red.</figcaption>
-
-<h3>Removable media exclusion</h3>
-<p>Disk-usage scoring deliberately excludes removable and install media — squashfs, iso9660, udf, overlay filesystem types, and mount points under <code>/media</code>, <code>/run/media</code>, <code>/cdrom</code>, or <code>/snap</code> — before checking against thresholds. These mounts are typically read-only and expected to report 100% full permanently (an installer ISO, or the squashfs images snapd mounts per package), so without this exclusion an otherwise healthy host could be wrongly flagged CRITICAL. Excluded mounts are still listed for transparency, and the unfiltered raw output always follows further down.</p>
-
-<h3>The health verdict thresholds</h3>
-<table class="ref">
-<tr><th>Signal</th><th>WARNING</th><th>CRITICAL</th></tr>
-<tr><td>Disk usage (excluding removable/install media)</td><td>≥ 75%</td><td>≥ 90%</td></tr>
-<tr><td>Failed systemd units</td><td>1–2</td><td>3+</td></tr>
-<tr><td>Load ratio (1-min load ÷ CPU cores)</td><td>≥ 1.0</td><td>≥ 2.0</td></tr>
-</table>
-<p>The worst of the three becomes the overall verdict. Raw, hard-to-skim output (a <code>df</code> table, <code>free -h</code>, a failed-units listing) is rewritten into plain sentences wherever the tool recognizes the exact shape of that output — for example, a disk row becomes "<code>/var</code>: 87% used (12G of 14G total, 2G available; ext4)" — and left completely untouched otherwise, rather than risk a wrong guess.</p>
-
-<h2 id="services">Service Management</h2>
-<p>Controls, inspects, and creates systemd services across the fleet. <strong>List Installed Services</strong> populates a searchable list; clicking an entry fills the Service name field. With a name in place: <strong>Start / Stop / Restart / Reload</strong>, <strong>Enable At Boot / Disable At Boot</strong>, <strong>Check Status</strong>, <strong>View Logs</strong>, <strong>Troubleshoot This Service</strong>, <strong>Troubleshoot All Failed Services</strong>, and <strong>View Dependencies</strong>.</p>
-<p>A collapsible <strong>Create / Configure Service</strong> panel (collapsed by default) lets you define a new systemd unit — name, description, ExecStart command, working directory, run-as user (default <code>root</code>), restart policy (default <code>on-failure</code>), and After-ordering (default <code>network.target</code>) — with an "enable + start immediately" checkbox checked by default. <strong>Configure Dependencies</strong> adds <code>After=</code>/<code>Requires=</code>/<code>Wants=</code> relationships via a non-destructive systemd override drop-in, rather than editing the original unit file.</p>
-
-<h2 id="envpolicy">Environmental Policies</h2>
-<p>Defines the baseline password, lockout, sudo, and umask policy for <em>operating-system</em> accounts on managed hosts — distinct from the Administrator Password Policy, which governs only logins to the Sysible Controller GUI itself.</p>
-<table class="ref">
-<tr><th>Group</th><th>Settings</th></tr>
-<tr><td>Password</td><td>Minimum length, retry attempts, and require-uppercase / lowercase / digit / symbol checkboxes.</td></tr>
-<tr><td>Lockout</td><td>Failed attempts before auto-lock; unlock time in seconds (0 = manual unlock only).</td></tr>
-<tr><td>Sudo</td><td>Sudo session timeout in minutes; whether sudo requires a password.</td></tr>
-<tr><td>Umask</td><td>Default umask in octal (e.g. <code>027</code>).</td></tr>
-</table>
-<p><strong>Save Policy Defaults</strong> persists the baseline — and takes effect immediately, with no host interaction, for one purpose: User &amp; Group Administration's password Generate/Set/Create actions read this same saved policy everywhere in the application. <strong>Push Selected Policies to Checked Hosts</strong> writes the chosen categories into each host's real configuration: Password Quality into its <code>pwquality.conf</code>-style file, Lockout into <code>faillock.conf</code>-style config, Sudo into a <code>sudoers.d</code> drop-in, and Umask into its <code>login.defs</code>-style default.</p>
-
-<h2 id="cron">Cron &amp; Systemd Timers</h2>
-<p>Manages two parallel scheduling mechanisms, both against the same merged host checklist.</p>
-<p><strong>Cron Jobs</strong> operates on the connecting account's own crontab; <strong>List Cron Jobs</strong> also includes <code>/etc/crontab</code> and <code>/etc/cron.d</code> so system-wide jobs are visible too. Add a job with the schedule builder (below), a command, and an optional comment; remove one by pasting the exact line, snippet, or comment to match.</p>
-<p><strong>Systemd Timers</strong> mirror ordinary service lifecycle controls (Start, Stop, Enable/Disable At Boot, Check Status) plus <strong>Delete Timer</strong>, which by default also deletes the paired oneshot service the timer triggers (a checkbox controls this). A collapsible <strong>Create Systemd Timer</strong> panel defines a name, description, ExecStart command, a calendar schedule and/or <code>OnBootSec</code>/<code>OnUnitActiveSec</code> triggers, a run-as user, and the same "enable + start immediately" default.</p>
-<p>Both cron and timer schedules use the same <strong>human-readable schedule builder</strong> — plain-English frequency/time choices translated into the correct cron or <code>OnCalendar</code> syntax behind the scenes, with an advanced option to type the raw expression directly.</p>
-
-<h2 id="softwaremgmt">Host Software Management</h2>
-<p>Installs, removes, updates, and inspects packages across the fleet — working unmodified against RHEL/CentOS/Fedora (<code>dnf</code>, falling back to <code>yum</code>), openSUSE/SLES (<code>zypper</code>), and Debian/Ubuntu (<code>apt</code>) hosts. Every command this tool sends detects the target host's package manager fresh, at the moment it runs, rather than assuming or caching one — so a single action against a checklist of mixed-distro hosts is dispatched correctly to each one without any extra setup.</p>
-<table class="ref">
-<tr><th>Action</th><th>What it does</th></tr>
-<tr><td>Detect Package Manager / OS</td><td>Reports the host's OS name plus which package manager was detected (<code>dnf</code>, <code>yum</code>, <code>zypper</code>, or <code>apt-get</code>) — the literal answer to "which package manager and environment is this host running."</td></tr>
-<tr><td>List Installed Packages</td><td>Every installed package name, sourced from <code>rpm -qa</code> or <code>dpkg-query</code> depending on the host. Filterable; clicking an entry fills the Package name(s) field.</td></tr>
-<tr><td>Install</td><td>Installs one or more space-separated package names (<code>dnf</code>/<code>yum</code>/<code>zypper install -y</code>, or <code>apt-get install -y</code>).</td></tr>
-<tr><td>Remove</td><td>Removes one or more space-separated package names from the host.</td></tr>
-<tr><td>Update / Upgrade</td><td>With package names entered, updates just those; left blank, upgrades every package on the host — covering both RHEL's "Update packages" and Debian's "Upgrade systems" as one action.</td></tr>
-<tr><td>Query Package Info</td><td>Metadata for a single named package (version, source repository, summary, install state).</td></tr>
-<tr><td>Verify Package Integrity</td><td>Checks a single named package's installed files against what it should look like — <code>rpm -V</code> on <code>dnf</code>/<code>yum</code>/<code>zypper</code> hosts (all three are RPM-based underneath), <code>debsums</code> on <code>apt</code> hosts.</td></tr>
-<tr><td>Clean Package Cache</td><td>Clears downloaded package metadata/cache (<code>dnf</code>/<code>yum clean all</code>, <code>zypper clean</code>, or <code>apt-get clean</code>), reclaiming disk space.</td></tr>
-</table>
-<div class="note"><b>Package name(s) field</b>Install, Remove, and Query/Verify (which take exactly one name) all read from the same Package name(s) field — space-separated for Install/Remove, a single name for Query and Verify.</div>
-
-<h2 id="repomgmt">Repository Management</h2>
-<p>Configures where packages come from — separate from Host Software Management on purpose, since adding or toggling a repository source is a distinct, less frequent action from installing or removing the packages that come from it.</p>
-<table class="ref">
-<tr><th>Action</th><th>What it does</th></tr>
-<tr><td>List Repositories</td><td>Every configured repository on the host, enabled or not, with its source.</td></tr>
-<tr><td>Add Repository</td><td>Adds a repository from a URL (RHEL/SUSE) or a full source line (Debian/Ubuntu, e.g. <code>deb https://example.com/ubuntu focal main</code>). On <code>dnf</code>/<code>yum</code> this calls the native <code>config-manager --add-repo</code>, which assigns its own repository ID — run List Repositories afterward to see it. On <code>zypper</code> and <code>apt</code>, the Alias / Repository ID field is required and becomes that repository's identifier for every action below. Runs against whichever hosts are checked in Target Hosts.</td></tr>
-<tr><td>Add Repository to All Hosts</td><td>Same validation and command as Add Repository, but after a confirmation prompt it targets every enrolled host (agent + SSH) regardless of which boxes are checked, and checks them all to match. The one-click way to roll a repository out fleet-wide once it's been proven out on one host.</td></tr>
-<tr><td>Enable Repository</td><td>Re-enables a previously disabled repository by its Alias / Repository ID.</td></tr>
-<tr><td>Disable Repository</td><td>Disables a repository without removing its configuration, by Alias / Repository ID.</td></tr>
-<tr><td>Remove Repository</td><td>Deletes a repository's configuration entirely, by Alias / Repository ID.</td></tr>
-</table>
-<div class="note"><b>Alias / Repository ID</b>Required to Add on <code>zypper</code> and Debian/Ubuntu, and required for Enable / Disable / Remove on every platform. Letters, numbers, dots, dashes, and underscores only.</div>
-</div>
-
-<!-- ===================== 11. WEBSERVER PORTAL ===================== -->
-<div class="page" id="portal">
-<h1 class="sec"><span class="tag">Section 11</span>Webserver Portal</h1>
-
-<p>The Webserver Portal is a small, separate HTTPS web application — independent of the main controller API — that gives managed hosts a self-service way to download the agent bundle and exchange files with the controller, without needing GUI or SSH access. It runs as its own subprocess, started and stopped from the <strong>Webserver Portal Configuration</strong> tile.</p>
-
-<figure class="mock">
-  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">portal — sign in</span></div>
-  <svg viewBox="0 0 900 360" xmlns="http://www.w3.org/2000/svg">
-    <rect width="900" height="360" fill="#1E1E1E"/>
-    <rect x="320" y="50" width="260" height="260" rx="10" fill="#262626" stroke="#3A3A3A"/>
-    <text x="450" y="90" font-size="15" font-weight="700" fill="#EAEAEA" text-anchor="middle" font-family="-apple-system,Arial">Sysible Controller Portal</text>
-    <text x="450" y="110" font-size="10" fill="#9aa5b1" text-anchor="middle" font-family="-apple-system,Arial">Sign in to continue</text>
-    <text x="340" y="140" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Username</text>
-    <rect x="340" y="146" width="220" height="26" rx="4" fill="#2B2B2B" stroke="#505050"/>
-    <text x="340" y="190" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Password</text>
-    <rect x="340" y="196" width="220" height="26" rx="4" fill="#2B2B2B" stroke="#505050"/>
-    <rect x="340" y="240" width="220" height="32" rx="5" fill="#3C4B64" stroke="#506080"/>
-    <text x="450" y="260" font-size="11" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Sign In</text>
-  </svg>
-</figure>
-<figcaption>The portal's host-facing sign-in page.</figcaption>
-
-<h2 id="portal-admin">Administering the portal</h2>
-<p>Everything below lives on the <strong>Webserver Portal Configuration</strong> tile inside the dashboard — it is admin-only and never exposed to the portal itself.</p>
-<table class="ref">
-<tr><th>Control</th><th>Purpose</th></tr>
-<tr><td>Start / Stop</td><td>Launches or kills the portal subprocess; status (running/stopped, with port) is shown live.</td></tr>
-<tr><td>Port</td><td>The HTTPS port the portal listens on — configurable independently of the controller API's own port.</td></tr>
-<tr><td>Current Credentials</td><td>Shows the active portal username (the password itself is never redisplayed).</td></tr>
-<tr><td>Reset Credentials</td><td>Sets a new portal username/password. Requires re-entering the <em>current</em> portal password as confirmation before a reset is accepted, even for an admin already logged into the dashboard — preventing a logged-in dashboard session alone from silently locking out whoever currently uses the portal.</td></tr>
-<tr><td>Login History</td><td>A timeline of portal sign-ins, each with timestamp and source address, plus when the credentials were last changed.</td></tr>
-<tr><td>Active Sessions</td><td>Currently valid portal sessions, each revocable individually — forces that session to sign in again immediately.</td></tr>
-</table>
-
-<h3>File pool</h3>
-<p>The portal mediates file transfer between hosts and the controller through a shared staging pool — there is no direct host-to-host or peer-to-peer transfer. Two independent lists make up the pool:</p>
-<table class="ref">
-<tr><th>List</th><th>Direction</th></tr>
-<tr><td>Files Uploaded By Hosts</td><td>Anything a host has sent in via the portal's Files Hub, available here for an admin to download, inspect, or delete.</td></tr>
-<tr><td>Files Staged For Download</td><td>Files an admin has placed into the pool for hosts to retrieve — uploaded from the admin's own machine via this panel, then listed (and downloadable) on every host's Files Hub until removed.</td></tr>
-</table>
-
-<h2 id="portal-host">Using the portal as a host</h2>
-<p>From any managed host's browser, the portal presents a sign-in page using the shared portal credentials (one set of credentials for the whole fleet, not per-host). After signing in, the <strong>Files Hub</strong> offers three things:</p>
-<table class="ref">
-<tr><th>Section</th><th>What it does</th></tr>
-<tr><td>Agent Bundle</td><td>Download the same installable agent zip the dashboard's "Download Agent Bundle" button produces — pre-baked with the controller's address(es) and certificate, ready to enroll a new host.</td></tr>
-<tr><td>Files Staged For You</td><td>Whatever the admin has placed into "Files Staged For Download," ready to fetch from this host.</td></tr>
-<tr><td>Send A File To The Controller</td><td>Upload a file from this host into the pool, where it appears under "Files Uploaded By Hosts" for an admin to retrieve.</td></tr>
-</table>
-<p>A <strong>Logout</strong> link ends the session. A legacy <code>/download</code> link from older agent bundles still resolves correctly, redirected transparently to the current bundle route.</p>
-</div>
-
-<!-- ===================== 12. COMMON TASKS ===================== -->
-<div class="page" id="tasks">
-<h1 class="sec"><span class="tag">Section 12</span>Common Tasks</h1>
-
-<p>The sections above explain what each tool is and why it works the way it does. This section is the opposite: short, numbered recipes for every button, field, and dialog in Sysible Controller, organized by the tool you'd find them in. If you already know which action you want and just need the exact clicks, start here — for the reasoning behind a behavior, follow the cross-reference back to its section above.</p>
-
-<h2 id="tasks-login">Logging in</h2>
-
-<h3>Log in as an administrator</h3>
-<ol>
-<li>Start Sysible Controller (<code>sysible_controller start</code>, or <code>sysible_controller gui</code> if the backend is already running) — see Section 5.</li>
-<li>In the <strong>Sysible Controller Administrator Login</strong> dialog, enter your Username and Password. The default seeded account is <code>admin</code> / <code>admin</code> until changed or another administrator is added.</li>
-<li>Click <strong>Log In</strong>, or press Enter from the Password field.</li>
-<li>An invalid combination shows "Invalid username or password," clears the Password field, and refocuses it. An unreachable backend shows a connection error instead.</li>
-<li>Click <strong>Quit</strong> at any time to exit without logging in.</li>
+    <li>Read the follow-up dialog: if you're reusing this bundle on a host that has run an older Sysible agent before, delete any leftover <code>agent_state.json</code> on that host first, or the agent may try to resume an identity the controller no longer recognizes.</li>
 </ol>
 
-<h3>Set a new password when prompted</h3>
-<p>Shown immediately after a login whose account has "must change password" set — a freshly seeded <code>admin</code>/<code>admin</code> account, or one another administrator just (re)created with a temporary password. There is no Cancel; the dashboard does not appear until a new password is set.</p>
+<h3>Tag a host with an environment</h3>
 <ol>
-<li>Enter <strong>New Password</strong> and <strong>Confirm Password</strong>.</li>
-<li>Click <strong>Set Password</strong>, or press Enter from the Confirm field.</li>
-<li>An empty password or a mismatch between the two fields is rejected in place (the Confirm field is cleared and refocused on a mismatch).</li>
-<li>On success the dialog closes and the dashboard appears.</li>
+<li>In the Enrolled Hosts list (grouped by environment; use <strong>Collapse All</strong> / <strong>Expand All</strong> to navigate a large fleet), select a host.</li>
+<li>Check its Details box (Hostname, Host ID, Platform, Kernel, Status, Environment).</li>
+<li>In the Environment combo, pick an existing environment, or choose <strong>+ New environment...</strong> and type a new name when prompted.</li>
+<li>Click <strong>Set Environment</strong>.</li>
 </ol>
 
-<h2 id="tasks-enrollment">Host Enrollment</h2>
-<p>Dashboard tile: <strong>Sysible Controller Host Enrollment</strong>. See Section 7 for background on agent vs. SSH enrollment.</p>
+<h3>Refresh the enrolled hosts list</h3>
+<ol><li>Click <strong>Refresh</strong>.</li></ol>
 
-<h3>Download an agent bundle</h3>
+<h3>Disenroll a host</h3>
 <ol>
-<li>Click <strong>Download Agent Bundle</strong>.</li>
-<li>Choose a save location in the file dialog.</li>
-<li>Read the follow-up dialog: if you're reusing this bundle on a host that has run an older Sysible agent before, delete any leftover <code>agent_state.json</code> on that host first, or the agent may try to resume an identity the controller no longer recognizes.</li>
+<li>Select the host, click <strong>Disenroll Host</strong>.</li>
+<li>Confirm in the dialog that appears.</li>
+<li>The controller queues an uninstall task on that host's agent and waits (polling roughly every two seconds, for up to about twelve seconds) for it to acknowledge.</li>
+<li>If the host acknowledges, its agent service is removed and the host drops out of the list.</li>
+<li>If the host is offline or doesn't respond in time, it is removed from the controller's records anyway, with a note that you should run <code>disenroll_agent.sh</code> on that host yourself later if you also want its local agent service cleaned up.</li>
+</ol>
+
+<h2 id="tasks-remote">Remote Host Administration</h2>
+<p>Dashboard tile: <strong>Remote Host Administration</strong>. See Section 8 for the terminal and file-transfer model.</p>
+
+<h3>Connect to a new host over SSH</h3>
+<ol>
+<li>In the <strong>SSH to a New Host (Not Yet Joined)</strong> section, fill in Host name, IP address, Username (defaults to <code>root</code>), and the host's current SSH password.</li>
+<li>Choose an Environment, or <strong>+ New environment...</strong> to create one.</li>
+<li>Click <strong>Connect Host</strong>. The controller installs its own SSH key on the host using the password you gave it once, then discards that password — every connection afterward is passwordless.</li>
+<li>The host now appears in Managed Hosts.</li>
+</ol>
+
+<h3>Open a terminal session on a managed host</h3>
+<ol>
+<li>Select a host in Managed Hosts.</li>
+<li><strong>SSH hosts</strong> open a live, fully interactive terminal — sudo prompts, <code>vim</code>, arrow keys, and Ctrl+C (via the dedicated <strong>Send Ctrl+C</strong> button, which only appears during a live SSH session) all work as they would in a normal terminal.</li>
+<li><strong>Agent hosts</strong> use a type-and-submit model instead: type a command and send it, wait while it's queued and polled (up to 30 seconds), then read the result once it returns. There's no partial output and no way to interrupt a running command.</li>
+<li>Click <strong>Clear</strong> to clear the terminal pane's contents.</li>
+</ol>
+
+<h3>Upload a file to a host</h3>
+<ol>
+<li>Click <strong>Browse...</strong> and choose a local file.</li>
+<li>Enter the destination path on the remote host.</li>
+<li>Click <strong>Upload</strong>.</li>
+<li>SSH hosts transfer synchronously over SFTP with no size limit. Agent hosts queue the transfer through the same task channel as commands, capped at the agent file-transfer size limit, and it's polled until done.</li>
+</ol>
+
+<h3>Download a file from a host</h3>
+<ol>
+<li>Enter the source path on the remote host.</li>
+<li>Click <strong>Download...</strong> and choose where to save it locally.</li>
+<li>Same SSH-vs-agent behavior as uploading: immediate SFTP for SSH, capped and polled for agent hosts.</li>
+</ol>
+
+<h3>Remove a host</h3>
+<ol>
+<li>Select it in Managed Hosts, click <strong>Remove Host</strong>.</li>
+<li>Confirm. If the row represents a merged agent+SSH entry, both connections are removed in this one action; if only one side fails, that error is reported but the other side's removal still goes through.</li>
+</ol>
+
+<h3>View the controller's SSH public key</h3>
+<ol>
+<li>Click <strong>Show Sysible Controller Public Key</strong>.</li>
+<li>Copy it if you'd rather pre-authorize a host yourself — baked into a golden image, for instance — instead of using Connect Host's one-time password handoff.</li>
+</ol>
+
+<h2 id="tasks-settings">Sysible Controller Settings</h2>
+<p>Dashboard tile: <strong>Sysible Controller Settings</strong>. See Section 9 for how this differs from Environmental Policies.</p>
+
+<h3>Set the controller's address (required before agent bundles will work)</h3>
+<ol>
+<li>Open the Controller Configuration section.</li>
+<li>Enter a Hostname, or click <strong>Detect Local IPs</strong> to populate the IP Address combo with this machine's actual addresses.</li>
+<li>In <strong>Use for agent bundles</strong>, choose Hostname, IP Address, or All Detected IPs (failover).</li>
+<li>Set the Port — this must match the port <code>sysible-backend</code> actually binds to (default 9000), and is a different setting from the Webserver Portal's own port below.</li>
+<li>Click <strong>Save Controller Configuration</strong>.</li>
+</ol>
+
+<h3>Add an administrator</h3>
+<ol>
+<li>Under Administrators, fill in Username and a Temporary Password.</li>
+<li>Click <strong>Add Administrator</strong>. The new account is forced to change that password on its first login.</li>
+</ol>
+
+<h3>Remove an administrator</h3>
+<ol>
+<li>Select the row in the Administrators table.</li>
+<li>Click <strong>Remove Selected Administrator</strong> and confirm.</li>
+</ol>
+
+<h3>Change your own login credentials</h3>
+<ol>
+<li>Under Change My Own Credentials, enter your Current Password.</li>
+<li>Optionally set a New Username, and a New Password + Confirm New Password.</li>
+<li>Click <strong>Save My Credentials</strong>.</li>
+</ol>
+
+<h3>Set the administrator password policy</h3>
+<ol>
+<li>Set Minimum length and whichever of require-uppercase / lowercase / digit / symbol you want enforced.</li>
+<li>Click <strong>Save Administrator Password Policy</strong>. This governs only logins to this dashboard — it has no effect on operating-system accounts on managed hosts, which Environmental Policies governs instead.</li>
+</ol>
+
+<h3>Review the audit log</h3>
+<ol><li>Click <strong>Refresh Audit Log</strong> — lists dashboard logins and administrator-account changes only, by time, event, username, and detail. It is not a general infrastructure-command history.</li></ol>
+
+<h3>Record a license key</h3>
+<ol><li>Under License &amp; Version, enter a key into the License Key field and click <strong>Save License Key</strong>. The installed version is shown alongside it for reference; licensing is not yet enforced against the key.</li></ol>
+
+<h2 id="tasks-uga">User &amp; Group Administration</h2>
+<p>Open from System Administration. See Section 10 for the host-checklist conventions shared by all five System Administration tools.</p>
+
+<h3>Sync hosts before working</h3>
+<ol><li>Check one or more hosts in the host checklist, then click <strong>Sync Checked Hosts</strong> to pull a live snapshot of users, groups, and sessions.</li></ol>
+
+<h3>Create a user</h3>
+<ol>
+<li>Open the <strong>Create User</strong> tab.</li>
+<li>Enter a Username; optionally a Password (or click <strong>Generate</strong>, which follows the policy saved in Environmental Policies); a Shell (defaults to <code>/bin/bash</code>).</li>
+<li>Click <strong>Create User</strong> — creates the account on every currently checked host.</li>
+</ol>
+
+<h3>Lock or unlock a user</h3>
+<ol><li>Select the user, open the <strong>Account</strong> tab, click <strong>Lock</strong> or <strong>Unlock</strong>.</li></ol>
+
+<h3>Toggle sudo access</h3>
+<ol><li>Account tab, click <strong>Toggle Sudo</strong>.</li></ol>
+
+<h3>Kill a user's active sessions</h3>
+<ol><li>Account tab, click <strong>Kill Sessions</strong>.</li></ol>
+
+<h3>Delete a user from the checked hosts</h3>
+<ol><li>Account tab, click <strong>Delete User</strong>, confirm.</li></ol>
+
+<h3>Terminate a user fleet-wide</h3>
+<ol>
+<li>Account tab, click the separately styled <strong>Terminate User (Remove From ALL Hosts)</strong> button. This ignores the host checklist entirely.</li>
+<li>Confirm in the dialog, which explicitly lists every host the account will be removed from.</li>
+</ol>
+
+<h3>Edit a user's shell or GECOS info</h3>
+<ol><li>Account tab, edit the Shell / GECOS fields and save.</li></ol>
+
+<h3>See per-host status when an account is in a mixed state</h3>
+<ol><li>If Account Status reads <strong>MIXED</strong> across the checked hosts, open <strong>View Status by Host...</strong> for a per-host breakdown.</li></ol>
+
+<h3>Set or generate a password</h3>
+<ol>
+<li>Password tab: type a password (checked against the active Environmental Policy as you type) or click <strong>Generate</strong>.</li>
+<li>A generated password is shown in a copyable popup.</li>
+<li>Click <strong>Set Password</strong>.</li>
+</ol>
+
+<h3>Force a password reset at next login</h3>
+<ol><li>Password tab, click <strong>Force Reset Next Login</strong>.</li></ol>
+
+<h3>Set password aging</h3>
+<ol><li>Password tab, set Max / Min / Warn days, then save.</li></ol>
+
+<h3>Set account expiration</h3>
+<ol><li>Password tab, choose 30 / 60 / 90 / 180 days, Never, or pick a custom date.</li></ol>
+
+<h3>Manage group membership</h3>
+<ol><li>Groups tab: add or remove the selected user from a group, or create or delete a group outright.</li></ol>
+
+<h3>Run a fleet-wide report</h3>
+<ol><li>Reports tab, click <strong>Audit Privileged Users</strong> (everyone with sudo, fleet-wide) or <strong>View All Groups &amp; Members</strong>.</li></ol>
+
+<h2 id="tasks-health">System Health &amp; Logs</h2>
+<p>Open from System Administration. See Section 10 for the health-verdict thresholds and removable-media exclusion logic.</p>
+
+<h3>Check overall host health</h3>
+<ol><li>Check hosts, click <strong>Check Host Health</strong> — returns a color-coded OK / WARNING / CRITICAL verdict with the specific reasons behind it.</li></ol>
+
+<h3>Run a specific diagnostic</h3>
+<ol><li>Check hosts, click <strong>Disk Usage</strong>, <strong>Memory &amp; CPU Snapshot</strong>, <strong>Uptime</strong>, or <strong>Failed Services</strong> — each result lands in that host's own tab.</li></ol>
+
+<h3>Find large files</h3>
+<ol><li>Enter a starting path and how many results you want, click <strong>Find Large Files</strong>.</li></ol>
+
+<h3>Search or tail logs</h3>
+<ol><li>Enter a search pattern (or leave it blank to just tail) and a line count, click <strong>Search / Tail Logs</strong>.</li></ol>
+
+<h3>Inspect processes and load</h3>
+<ol><li>Click <strong>View Processes (CPU)</strong>, <strong>View Processes (Memory)</strong>, <strong>Investigate High Load</strong>, or <strong>Zombie Processes</strong>.</li></ol>
+
+<h3>Kill, reprioritize, or restart a process</h3>
+<ol>
+<li>Enter the Target PID.</li>
+<li>Click <strong>Kill</strong> (choose a signal), <strong>Set Priority</strong> (renice, -20 to 19), or <strong>Restart Process</strong> (captures the running command line and relaunches it — Linux hosts only).</li>
+</ol>
+
+<h2 id="tasks-services">Service Management</h2>
+<p>Open from System Administration.</p>
+
+<h3>Find a service</h3>
+<ol><li>Click <strong>List Installed Services</strong>, optionally filter with the search box, then click an entry to fill in the Service name field.</li></ol>
+
+<h3>Start, stop, restart, or reload a service</h3>
+<ol><li>With a Service name in place, click <strong>Start</strong>, <strong>Stop</strong>, <strong>Restart</strong>, or <strong>Reload</strong>.</li></ol>
+
+<h3>Enable, disable, check status, or view logs</h3>
+<ol><li>Click <strong>Enable At Boot</strong>, <strong>Disable At Boot</strong>, <strong>Check Status</strong>, or <strong>View Logs</strong>.</li></ol>
+
+<h3>Troubleshoot a service</h3>
+<ol><li>Click <strong>Troubleshoot This Service</strong> for the named service, or <strong>Troubleshoot All Failed Services</strong> for a fleet-wide sweep that needs no service name entered first.</li></ol>
+
+<h3>View a service's dependencies</h3>
+<ol><li>Click <strong>View Dependencies</strong>.</li></ol>
+
+<h3>Create a new systemd service</h3>
+<ol>
+<li>Expand the <strong>Create / Configure Service</strong> panel (collapsed by default).</li>
+<li>Fill in name, description, ExecStart command, working directory, run-as user (default <code>root</code>), restart policy (default <code>on-failure</code>), and After= ordering (default <code>network.target</code>).</li>
+<li>Leave <strong>Enable + start immediately</strong> checked (the default) or uncheck it.</li>
+<li>Click <strong>Create Service</strong>.</li>
+</ol>
+
+<h3>Configure a service's dependencies</h3>
+<ol>
+<li>In the same panel, fill in After= / Requires= / Wants= as space-separated unit names.</li>
+<li>Click <strong>Save Dependencies</strong> — this writes a non-destructive systemd override drop-in rather than editing the unit file itself.</li>
+</ol>
+
+<h2 id="tasks-envpolicy">Environmental Policies</h2>
+<p>Open from System Administration. See Section 10 for how this baseline relates to User &amp; Group Administration's password actions.</p>
+
+<h3>Set the baseline policy</h3>
+<ol>
+<li>Fill in Minimum length, Retry attempts, the require-uppercase / lowercase / digit / symbol checkboxes, Failed attempts before lock, Unlock time in seconds (0 = manual unlock only), Session timeout in minutes, Require password for sudo, and Default umask (octal, e.g. <code>027</code>).</li>
+<li>Click <strong>Save Policy Defaults</strong>. This takes effect immediately — with no host interaction — for one purpose: every Generate / Set Password / Create User action in User &amp; Group Administration reads this same saved policy.</li>
+</ol>
+
+<h3>Push the policy out to hosts</h3>
+<ol>
+<li>Check whichever of Password Quality, Lockout, Sudo, and Umask you want pushed (Password Quality and Lockout are checked by default).</li>
+<li>Check the target hosts in the host checklist.</li>
+<li>Click <strong>Push Selected Policies to Checked Hosts</strong>. This pushes whatever was last saved, not whatever is currently typed but unsaved in the fields above.</li>
+</ol>
+
+<h2 id="tasks-cron">Cron &amp; Systemd Timers</h2>
+<p>Open from System Administration.</p>
+
+<h3>List cron jobs</h3>
+<ol><li>Check hosts, click <strong>List Cron Jobs</strong> — shows the connecting account's own crontab plus <code>/etc/crontab</code> and <code>/etc/cron.d</code>.</li></ol>
+
+<h3>Add a cron job</h3>
+<ol>
+<li>Use the schedule builder to pick a plain-English frequency and time, or switch to its Advanced mode to type raw cron syntax directly.</li>
+<li>Enter the Command, and an optional Comment.</li>
+<li>Click <strong>Add Cron Job</strong>.</li>
+</ol>
+
+<h3>Remove a cron job</h3>
+<ol>
+<li>Enter the exact line, a snippet of it, or its comment text to match against.</li>
+<li>Click <strong>Remove Cron Job</strong>.</li>
+</ol>
+
+<h3>List, start/stop, enable/disable, or check a systemd timer</h3>
+<ol>
+<li>Enter the Timer name; click <strong>List All Timers</strong> to confirm it exists.</li>
+<li>Click <strong>Start</strong>, <strong>Stop</strong>, <strong>Enable At Boot</strong>, <strong>Disable At Boot</strong>, or <strong>Check Status</strong>.</li>
+</ol>
+
+<h3>Delete a systemd timer</h3>
+<ol>
+<li>Enter the Timer name.</li>
+<li>Leave <strong>Also delete paired .service unit</strong> checked (the default) to remove the oneshot service it triggers too, or uncheck it to keep that unit.</li>
+<li>Click <strong>Delete Timer</strong>.</li>
+</ol>
+
+<h3>Create a systemd timer</h3>
+<ol>
+<li>Expand <strong>Create Systemd Timer</strong>.</li>
+<li>Fill in Timer name, Description, ExecStart command, and run-as user (default <code>root</code>).</li>
+<li>Leave <strong>Run on a calendar schedule</strong> checked (the default) and use the schedule builder, and/or set <code>OnBootSec</code> / <code>OnUnitActiveSec</code> — at least one of these triggers must be set.</li>
+<li>Leave <strong>Enable + start immediately</strong> checked (the default) or uncheck it.</li>
+<li>Click <strong>Create Timer</strong>.</li>
+</ol>
+
+<h2 id="tasks-softwaremgmt">Host Software Management</h2>
+<p>Open from System Administration.</p>
+
+<h3>Check which package manager a host uses</h3>
+<ol><li>Check the host, click <strong>Detect Package Manager / OS</strong>.</li></ol>
+
+<h3>Find a package</h3>
+<ol><li>Click <strong>List Installed Packages</strong>, optionally filter with the search box, then click an entry to fill in the Package name(s) field.</li></ol>
+
+<h3>Install or remove packages</h3>
+<ol>
+<li>Enter one or more space-separated package names in Package name(s).</li>
+<li>Click <strong>Install</strong> or <strong>Remove</strong>.</li>
+</ol>
+
+<h3>Update specific packages, or upgrade everything</h3>
+<ol>
+<li>To update specific packages, enter their names in Package name(s); to upgrade every package on the host instead, leave the field blank.</li>
+<li>Click <strong>Update / Upgrade</strong>.</li>
+</ol>
+
+<h3>Query or verify a package</h3>
+<ol>
+<li>Enter exactly one package name in Package name(s).</li>
+<li>Click <strong>Query Package Info</strong> or <strong>Verify Package Integrity</strong>.</li>
+</ol>
+
+<h3>Clean the package cache</h3>
+<ol><li>Check the target hosts, click <strong>Clean Package Cache</strong> — no package name needed.</li></ol>
+
+<h2 id="tasks-repomgmt">Repository Management</h2>
+<p>Open from System Administration.</p>
+
+<h3>List a host's repositories</h3>
+<ol><li>Check hosts, click <strong>List Repositories</strong>.</li></ol>
+
+<h3>Add a repository</h3>
+<ol>
+<li>Enter the Repository URL (RHEL/SUSE) or full source line (Debian/Ubuntu) in the URL field.</li>
+<li>On <code>zypper</code> and Debian/Ubuntu hosts, also fill in Alias / Repository ID — required there, ignored by <code>dnf</code>/<code>yum</code>, which assigns its own ID instead.</li>
+<li>Click <strong>Add Repository</strong> to add it to whichever hosts are checked, or <strong>Add Repository to All Hosts</strong> to push it to every enrolled host fleet-wide after a confirmation prompt — no need to check every box first.</li>
+<li>If you added it on a <code>dnf</code>/<code>yum</code> host, run List Repositories afterward to find the ID it assigned before trying to Enable/Disable/Remove it.</li>
+</ol>
+
+<h3>Enable, disable, or remove a repository</h3>
+<ol>
+<li>Enter its Alias / Repository ID.</li>
+<li>Click <strong>Enable Repository</strong>, <strong>Disable Repository</strong>, or <strong>Remove Repository</strong>.</li>
+</ol>
+
+<h2 id="tasks-portal-admin">Webserver Portal — administrator side</h2>
+<p>Dashboard tile: <strong>Webserver Portal Configuration</strong>. See Section 11 for the two-audience design behind this tool and its host-facing counterpart below.</p>
+
+<h3>Start or stop the portal</h3>
+<ol><li>Click <strong>Start Portal</strong> or <strong>Stop Portal</strong>. The Status label and "reachable at" URL update to match; <strong>Refresh</strong> re-checks current state.</li></ol>
+
+<h3>Change the portal's port</h3>
+<ol><li>Enter a Port, click <strong>Save Port</strong> — takes effect the next time the portal is started, not retroactively on an already-running one.</li></ol>
+
+<h3>Set or reset the portal's login credentials</h3>
+<ol>
+<li>If credentials already exist, enter the Current Password.</li>
+<li>Enter a New Username and New Password + Confirm New Password.</li>
+<li>Click <strong>Save Credentials</strong> — this also logs out any sessions that were already active.</li>
+</ol>
+
+<h3>Remove portal login access entirely</h3>
+<ol><li>Click the red <strong>Remove Login Access</strong> button, confirm, and enter the current password to authorize wiping the account.</li></ol>
+
+<h3>Review login history</h3>
+<ol><li>Click <strong>Refresh Login History</strong> — Time, Event, Username, IP Address for every attempt.</li></ol>
+
+<h3>View or revoke active portal sessions</h3>
+<ol>
+<li>Click <strong>Refresh Sessions</strong>.</li>
+<li>Select a session, click <strong>Revoke Selected</strong>.</li>
+</ol>
+
+<h3>Manage files hosts have uploaded to you</h3>
+<ol>
+<li>Click <strong>Refresh List</strong>.</li>
+<li>Select a file, then <strong>Save To Computer...</strong> to keep a local copy, or <strong>Delete</strong> (confirm) to remove it from the shared pool.</li>
+</ol>
+
+<h3>Stage a file for a host to download</h3>
+<ol>
+<li>Click <strong>Add File...</strong> and choose a local file to publish.</li>
+<li>To take it down later, select it in the list and click <strong>Delete</strong> (confirm).</li>
+</ol>
+
+<h2 id="tasks-portal-host">Webserver Portal — host-facing side</h2>
+<p>This is what a host operator does in their own browser, not the admin GUI — see Section 11 for the full route list.</p>
+
+<h3>Sign in</h3>
+<ol><li>Visit the portal's URL, enter the Username and Password the administrator gave you, and submit.</li></ol>
+
+<h3>Download the agent bundle</h3>
+<ol><li>From the Files Hub, click <strong>Download Agent Bundle</strong> (only shown once the administrator has set a Controller Configuration address).</li></ol>
+
+<h3>Download a file staged for you</h3>
+<ol><li>Click its entry under <strong>Files Staged For You</strong>.</li></ol>
+
+<h3>Send a file to the controller</h3>
+<ol><li>Under <strong>Send A File To The Controller</strong>, choose a file and submit the upload form.</li></ol>
+
+<h3>Log out</h3>
+<ol><li>Click <strong>Log out</strong>.</li></ol>
+
+</div>
+
+<!-- ===================== APPENDIX ===================== -->
+<div class="page" id="appendix">
+<h1 class="sec"><span class="tag">Appendix</span>CLI Quick Reference</h1>
+
+<p>A condensed reference for <code>sysible_controller</code> — see Section 5 for full detail.</p>
+<pre class="cli">sysible_controller {start|stop|restart|status|logs|gui|destroy}</pre>
+<table class="ref">
+<tr><th>Command</th><th>Root?</th><th>Summary</th></tr>
+<tr><td><code>start</code></td><td>Yes</td><td>Starts the backend, confirms the API is actually reachable, then launches the GUI.</td></tr>
+<tr><td><code>stop</code></td><td>Yes</td><td>Stops the GUI, the backend, the portal, and anything still bound to port 9000.</td></tr>
+<tr><td><code>restart</code></td><td>Yes</td><td><code>stop</code> then <code>start</code>.</td></tr>
+<tr><td><code>status</code></td><td>No</td><td>Backend systemd status plus GUI process state.</td></tr>
+<tr><td><code>logs</code></td><td>No</td><td>Tails the backend's live log stream.</td></tr>
+<tr><td><code>gui</code></td><td>Yes</td><td>Starts only the GUI — use to reopen the dashboard after it's been closed.</td></tr>
+<tr><td><code>destroy</code></td><td>Yes</td><td>Irreversible uninstall. Requires typing <code>destroy</code> to confirm. Backs up the database to <code>/tmp</code> first; does not touch already-enrolled hosts.</td></tr>
+</table>
+</div>
+
+</body>
+</html>

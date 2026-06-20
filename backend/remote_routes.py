@@ -347,8 +347,29 @@ def open_terminal(name: str):
         raise HTTPException(status_code=404, detail="host not found")
 
     existing = _get_terminal_session(name)
-    if existing is not None and not existing["channel"].closed:
-        return {"host": name, "opened": True, "reused": True}
+    if existing is not None:
+        existing_transport = existing["client"].get_transport()
+        if not existing["channel"].closed and existing_transport is not None and existing_transport.is_active():
+            return {"host": name, "opened": True, "reused": True}
+
+        # Stale session - channel.closed only flips when *this* side
+        # explicitly closed the channel; it says nothing about a dead
+        # transport (remote reboot, network drop, idle timeout, or the
+        # previous GUI process going away without ever reaching
+        # /terminal/close - e.g. `sysible_controller stop`/a kill
+        # instead of a clean host switch in the UI - leaves this exact
+        # session sitting here, since sessions are keyed by host name
+        # and live in the backend process, not the GUI). Blindly
+        # reusing it is what made the terminal look "connected" while
+        # doing nothing: /terminal/read kept long-polling and
+        # answering {"data": "", "closed": False} forever, and
+        # /terminal/write's channel.send() can succeed locally into an
+        # already-dead transport without raising anything the
+        # OSError-only catch below would see. Drop it and open a fresh
+        # session instead of trusting it.
+        with _TERMINAL_SESSIONS_LOCK:
+            _TERMINAL_SESSIONS.pop(name, None)
+        _close_session(existing)
 
     try:
         import paramiko
@@ -446,7 +467,19 @@ def read_terminal(name: str):
         except OSError:
             pass
 
-    closed = channel.closed or channel.exit_status_ready()
+    # Same transport-aliveness gap as /terminal/open's reuse check:
+    # channel.closed alone misses a transport that died mid-session
+    # (host rebooted, network dropped) without this side ever calling
+    # .close() - that left the read loop above silently long-polling
+    # forever with nothing to show for it instead of ever reporting
+    # "closed" so the UI can surface "[remote session ended...]".
+    transport = session["client"].get_transport()
+    closed = (
+        channel.closed
+        or channel.exit_status_ready()
+        or transport is None
+        or not transport.is_active()
+    )
 
     return {"host": name, "data": "".join(chunks), "closed": closed}
 

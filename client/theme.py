@@ -300,6 +300,7 @@ CATEGORY_COLORS = {
     "amber":  {"dark": ("#2C2310", "#E0B04A"), "light": ("#FCF0D6", "#9A6B0A")},
     "green":  {"dark": ("#16301C", "#3AC95A"), "light": ("#DFF5E3", "#1F8A3B")},
     "rose":   {"dark": ("#33141F", "#E0608F"), "light": ("#FBE3EC", "#B13564")},
+    "sky":    {"dark": ("#102A3B", "#4FA8E0"), "light": ("#DCEEFB", "#1C6FA0")},
 }
 
 

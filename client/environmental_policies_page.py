@@ -11,6 +11,8 @@ from client import api
 from client import theme
 from client.theme import STATUS_NEUTRAL_COLOR, STATUS_SUCCESS_COLOR, STATUS_ERROR_COLOR
 from client.branding import make_page_header
+from client.tab_sizing import shrink_tabwidget_to_current_page
+from client.host_panel import build_host_panel
 
 HOST_REFRESH_MS = 10000
 PUSH_POLL_MS = 2000
@@ -45,7 +47,7 @@ class EnvironmentalPoliciesPage(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Environmental Policies")
-        self.resize(900, 860)
+        self.resize(1150, 860)
 
         self.push_results = {}   # entry_key -> {label, stdout, stderr, code, pending}
         self.push_pending = {}   # entry_key -> (entry, task_id)
@@ -55,10 +57,39 @@ class EnvironmentalPoliciesPage(QWidget):
 
         outer.addLayout(make_page_header("Environmental Policies", font_size=22, logo_height=32))
 
+        body = QHBoxLayout()
+
+        # =========================================================
+        # TARGET HOSTS (agent + SSH, merged) - left column, full height
+        # =========================================================
+        # Used to live as a fixed-110px-tall QListWidget mid-scroll inside
+        # the "Push To Hosts" section below - moved up here (#352) so the
+        # checklist gets the page's full height instead of a few visible
+        # rows, same as every other System Administration tool.
+        self.host_list = QListWidget()
+
+        btn_refresh_hosts = QPushButton("Refresh Hosts")
+        btn_refresh_hosts.clicked.connect(self.load_hosts)
+
+        btn_select_all = QPushButton("Select All")
+        btn_select_all.clicked.connect(self.select_all_hosts)
+
+        btn_deselect_all = QPushButton("Deselect All")
+        btn_deselect_all.clicked.connect(self.deselect_all_hosts)
+
+        host_panel = build_host_panel(
+            "Target Hosts (agent + SSH)",
+            self.host_list,
+            [[btn_refresh_hosts, btn_select_all, btn_deselect_all]],
+        )
+        body.addWidget(host_panel)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
-        outer.addWidget(scroll, 1)
+        body.addWidget(scroll, 1)
+
+        outer.addLayout(body, 1)
 
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -289,26 +320,10 @@ class EnvironmentalPoliciesPage(QWidget):
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        hosts_header = QHBoxLayout()
-        hosts_title = QLabel("Target Hosts (agent + SSH)")
-        hosts_title.setStyleSheet("font-weight:bold;")
-        hosts_header.addWidget(hosts_title)
-        hosts_header.addStretch()
-
-        btn_refresh_hosts = QPushButton("Refresh Hosts")
-        btn_refresh_hosts.clicked.connect(self.load_hosts)
-        btn_select_all = QPushButton("Select All")
-        btn_select_all.clicked.connect(self.select_all_hosts)
-        btn_deselect_all = QPushButton("Deselect All")
-        btn_deselect_all.clicked.connect(self.deselect_all_hosts)
-        hosts_header.addWidget(btn_refresh_hosts)
-        hosts_header.addWidget(btn_select_all)
-        hosts_header.addWidget(btn_deselect_all)
-        layout.addLayout(hosts_header)
-
-        self.host_list = QListWidget()
-        self.host_list.setFixedHeight(110)
-        layout.addWidget(self.host_list)
+        # Target Hosts checklist itself now lives in the left-column panel
+        # built in __init__ (see #352, client/host_panel.py) - this section
+        # just keeps the "which policies + push button" controls that act
+        # on whatever's checked over there.
 
         which_row = QHBoxLayout()
         which_row.addWidget(QLabel("Push:"))
@@ -339,6 +354,7 @@ class EnvironmentalPoliciesPage(QWidget):
         self.push_tabs = QTabWidget()
         self.push_tabs.setTabsClosable(True)
         self.push_tabs.tabCloseRequested.connect(self._close_push_tab)
+        shrink_tabwidget_to_current_page(self.push_tabs)
         layout.addWidget(self.push_tabs)
 
     def checked_entries(self):

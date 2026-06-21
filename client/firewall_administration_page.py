@@ -14,6 +14,7 @@ from client.collapsible_groups import (
     make_group_header_item, apply_collapse_state, get_collapsed_groups,
     connect_group_toggle, add_collapse_expand_buttons,
 )
+from client.tab_sizing import shrink_tabwidget_to_current_page
 
 HOST_REFRESH_MS = 10000
 FIREWALL_POLL_MS = 2000
@@ -100,6 +101,7 @@ class FirewallAdministrationPage(QWidget):
         action_tabs.addTab(self._build_rich_rules_tab(), "Rich Rules")
         action_tabs.addTab(self._build_nftables_tab(), "nftables")
         action_tabs.addTab(self._build_iptables_tab(), "iptables")
+        shrink_tabwidget_to_current_page(action_tabs)
         main.addWidget(action_tabs)
 
         # =========================================================

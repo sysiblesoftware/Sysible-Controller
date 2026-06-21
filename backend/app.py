@@ -56,7 +56,7 @@ from backend.db import (
     get_admin_password_policy,
     set_admin_password_policy,
 )
-from backend import portal_auth, portal_files, portal_manager
+from backend import portal_auth, portal_files, portal_manager, tls_manager
 from backend.policy import validate_password_against_policy
 from backend.models.agent_models import (
     EnrollRequest,
@@ -453,6 +453,76 @@ def download_agent_bundle_route():
         content=zip_bytes,
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# =========================================================
+# TLS CERTIFICATE (admin-only)
+# Lets an admin swap the controller's self-signed cert for one issued
+# by an external PKI team. See backend/tls_manager.py for the actual
+# parse/validate/install/restart logic - these routes just wire it up
+# to HTTP the same multipart-upload way remote_routes.py's
+# /hosts/{name}/files/upload route already does.
+# =========================================================
+@app.get("/controller-config/tls/info", dependencies=[Depends(require_api_key)])
+def get_tls_info_route():
+    """Metadata about whatever cert is currently in front of uvicorn -
+    never returns key material."""
+
+    return tls_manager.get_tls_info()
+
+
+@app.post("/controller-config/tls/install", dependencies=[Depends(require_api_key)])
+async def install_tls_certificate_route(
+    cert_file: UploadFile = File(...),
+    key_file: UploadFile = File(...),
+    chain_file: Optional[UploadFile] = File(None),
+):
+    """Validates the uploaded cert/key(/chain), installs them as
+    server.crt/server.key/trust.crt, then restarts the backend so
+    uvicorn actually picks up the new cert - it only reads
+    --ssl-certfile/--ssl-keyfile once, at process start, there's no
+    dynamic reload. The restart is deliberately delayed a couple
+    seconds (see tls_manager.restart_backend) so this response makes it
+    back to the GUI first; the GUI itself is expected to suppress its
+    backend watchdog for a few seconds around this call (see
+    client/events.py's backend_restart_expected signal) so a deliberate
+    restart doesn't get mistaken for a crash."""
+
+    cert_pem = await cert_file.read()
+    key_pem = await key_file.read()
+    chain_pem = await chain_file.read() if chain_file is not None else None
+
+    try:
+        info = tls_manager.install_certificate(cert_pem, key_pem, chain_pem or None)
+    except tls_manager.TLSValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    tls_manager.restart_backend()
+
+    return {
+        **info,
+        "restarting": True,
+        "message": "Certificate installed. The backend is restarting now to apply it.",
+    }
+
+
+@app.get("/controller-config/tls/trust-bundle", dependencies=[Depends(require_api_key)])
+def download_trust_bundle_route():
+    """Current trust.crt content - what an admin hands to GUI
+    machines/agents that were enrolled before this cert was installed,
+    so they can refresh their pinned copy by hand (new agent bundles
+    pick this up automatically already - see backend/agent_bundle.py)."""
+
+    try:
+        data = tls_manager.trust_bundle_bytes()
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    return Response(
+        content=data,
+        media_type="application/x-pem-file",
+        headers={"Content-Disposition": 'attachment; filename="trust.crt"'},
     )
 
 

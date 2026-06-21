@@ -27,6 +27,13 @@ AGENT_SOURCE_FILE = PROJECT_ROOT / "host_agent" / "agent.py"
 # file instead of also hand-editing the install scripts below.
 AGENT_REQUIREMENTS_FILE = PROJECT_ROOT / "host_agent" / "requirements.txt"
 CERT_FILE = Path(os.getenv("SYSIBLE_CERT_FILE", str(PROJECT_ROOT / "certs" / "server.crt")))
+# What new agent bundles should pin as their trust anchor - see
+# backend/tls_manager.py's module docstring. trust.crt is the issuing
+# CA chain when a PKI-issued cert has been installed, or just doesn't
+# exist yet on a controller still running its original self-signed
+# cert (CERT_FILE is its own valid anchor in that case - see
+# _trust_cert_path below).
+TRUST_FILE = Path(os.getenv("SYSIBLE_TRUST_FILE", str(PROJECT_ROOT / "certs" / "trust.crt")))
 
 BUNDLE_FILENAME = "sysible-agent-bundle.zip"
 
@@ -400,6 +407,21 @@ def _patch_agent_controller_default(agent_source: str, controller_url: str) -> s
     return agent_source.replace(_CONTROLLER_DEFAULT_LINE, patched_fragment, 1)
 
 
+def _trust_cert_path():
+    """The trust anchor to hand new agent bundles - trust.crt if a cert
+    has been installed via Sysible Settings' TLS section (covers both
+    the default self-signed case, where install_sysible.sh/tls_manager
+    just seed it as a copy of server.crt, and a PKI-issued cert, where
+    it's the actual issuing CA chain), falling back to server.crt
+    directly for a controller that predates trust.crt entirely. Returns
+    None if neither file exists yet (no cert at all, e.g. mid-install)."""
+    if TRUST_FILE.exists():
+        return TRUST_FILE
+    if CERT_FILE.exists():
+        return CERT_FILE
+    return None
+
+
 def build_agent_bundle(controller_addresses, controller_port: int, token: str):
     """Returns (filename, zip_bytes). `controller_addresses` is either a
     single hostname/IP string (the normal "hostname"/"ip" address_mode)
@@ -424,7 +446,8 @@ def build_agent_bundle(controller_addresses, controller_port: int, token: str):
 
     agent_source = _patch_agent_controller_default(agent_source, controller_url)
 
-    include_cert = CERT_FILE.exists()
+    trust_path = _trust_cert_path()
+    include_cert = trust_path is not None
 
     buf = io.BytesIO()
 
@@ -449,7 +472,12 @@ def build_agent_bundle(controller_addresses, controller_port: int, token: str):
         info.external_attr = (0o755 & 0xFFFF) << 16
 
         if include_cert:
-            zf.writestr("server.crt", CERT_FILE.read_text())
+            # Zip entry is still named server.crt - that's the filename
+            # run_agent.sh's cp step (see _run_script above) installs to
+            # _CERT_INSTALL_PATH for the agent to pin; only the source
+            # of its *content* changes here (trust.crt's content, not
+            # necessarily server.crt's).
+            zf.writestr("server.crt", trust_path.read_text())
 
         zf.writestr("README.txt", _readme(include_cert))
 

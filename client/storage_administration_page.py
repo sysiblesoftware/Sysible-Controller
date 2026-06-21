@@ -15,6 +15,7 @@ from client.collapsible_groups import (
     connect_group_toggle, add_collapse_expand_buttons,
 )
 from client.tab_sizing import shrink_tabwidget_to_current_page
+from client.host_panel import build_host_panel
 
 HOST_REFRESH_MS = 10000
 STORAGE_POLL_MS = 2000
@@ -42,7 +43,7 @@ class StorageAdministrationPage(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Storage Administration")
-        self.resize(1150, 860)
+        self.resize(1400, 860)
 
         self.storage_results = {}   # entry_key -> {label, stdout, stderr, code, pending}
         self.storage_pending = {}   # entry_key -> (entry, task_id)
@@ -54,20 +55,13 @@ class StorageAdministrationPage(QWidget):
 
         main.addLayout(make_page_header("Storage Administration"))
 
-        # =========================================================
-        # TARGET HOSTS (agent + SSH, merged)
-        # =========================================================
-        hosts_box = QVBoxLayout()
+        body = QHBoxLayout()
 
+        # =========================================================
+        # TARGET HOSTS (agent + SSH, merged) - left column, full height
+        # =========================================================
         self.host_list = QListWidget()
-        self.host_list.setFixedHeight(70)
         connect_group_toggle(self.host_list)
-
-        hosts_header = QHBoxLayout()
-        hosts_title = QLabel("Target Hosts (agent + SSH)")
-        hosts_title.setStyleSheet("font-weight: bold;")
-        hosts_header.addWidget(hosts_title)
-        hosts_header.addStretch()
 
         btn_refresh_hosts = QPushButton("Refresh Hosts")
         btn_refresh_hosts.clicked.connect(self.load_hosts)
@@ -80,16 +74,19 @@ class StorageAdministrationPage(QWidget):
 
         btn_collapse_all, btn_expand_all = add_collapse_expand_buttons(self.host_list)
 
-        hosts_header.addWidget(btn_refresh_hosts)
-        hosts_header.addWidget(btn_select_all)
-        hosts_header.addWidget(btn_deselect_all)
-        hosts_header.addWidget(btn_collapse_all)
-        hosts_header.addWidget(btn_expand_all)
+        host_panel = build_host_panel(
+            "Target Hosts (agent + SSH)",
+            self.host_list,
+            [
+                [btn_refresh_hosts, btn_select_all, btn_deselect_all],
+                [btn_collapse_all, btn_expand_all],
+            ],
+        )
+        body.addWidget(host_panel)
 
-        hosts_box.addLayout(hosts_header)
-        hosts_box.addWidget(self.host_list)
-
-        main.addLayout(hosts_box)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
 
         # =========================================================
         # ACTIONS (tabbed - 16 distinct features grouped logically)
@@ -102,12 +99,15 @@ class StorageAdministrationPage(QWidget):
         action_tabs.addTab(self._build_raid_tab(), "RAID")
         action_tabs.addTab(self._build_swap_tab(), "Swap")
         shrink_tabwidget_to_current_page(action_tabs)
-        main.addWidget(action_tabs)
+        content_layout.addWidget(action_tabs)
 
         # =========================================================
         # RESULTS (stretchy - see file_system_management_page.py for why)
         # =========================================================
-        main.addWidget(self._build_results_panel(), 1)
+        content_layout.addWidget(self._build_results_panel(), 1)
+
+        body.addWidget(content, 1)
+        main.addLayout(body, 1)
 
         # =========================================================
         # DATA
@@ -145,8 +145,18 @@ class StorageAdministrationPage(QWidget):
         btn_monitor_health = QPushButton("Monitor Disk Health")
         btn_monitor_health.clicked.connect(self.run_monitor_disk_health)
         overview_row.addWidget(btn_monitor_health)
+        btn_install_smartmontools = QPushButton("Install smartmontools")
+        btn_install_smartmontools.clicked.connect(self.run_install_smartmontools)
+        overview_row.addWidget(btn_install_smartmontools)
         overview_row.addStretch()
         layout.addLayout(overview_row)
+        smartmontools_hint = QLabel(
+            "Monitor Disk Health and Check SMART Status need smartmontools (smartctl) - "
+            "install it first if a host reports it missing."
+        )
+        theme.style_hint_label(smartmontools_hint)
+        smartmontools_hint.setWordWrap(True)
+        layout.addWidget(smartmontools_hint)
 
         smart_row = QHBoxLayout()
         smart_row.addWidget(QLabel("Device:"))
@@ -632,6 +642,33 @@ class StorageAdministrationPage(QWidget):
 
         layout.addSpacing(14)
 
+        resize_title = QLabel("Resize Swap File")
+        resize_title.setStyleSheet("font-weight: bold;")
+        layout.addWidget(resize_title)
+
+        resize_row = QHBoxLayout()
+        resize_row.addWidget(QLabel("Path:"))
+        self.swap_resize_path_input = QLineEdit()
+        self.swap_resize_path_input.setPlaceholderText("e.g. /swapfile")
+        resize_row.addWidget(self.swap_resize_path_input, 1)
+        resize_row.addWidget(QLabel("New Size (MB):"))
+        self.swap_resize_size_input = QLineEdit()
+        self.swap_resize_size_input.setPlaceholderText("e.g. 4096")
+        self.swap_resize_size_input.setMaximumWidth(80)
+        resize_row.addWidget(self.swap_resize_size_input)
+        self.swap_resize_persist_check = QCheckBox("Persist (add to /etc/fstab)")
+        self.swap_resize_persist_check.setChecked(True)
+        resize_row.addWidget(self.swap_resize_persist_check)
+        btn_resize_swap_file = QPushButton("Resize Swap File")
+        btn_resize_swap_file.clicked.connect(self.run_resize_swap_file)
+        resize_row.addWidget(btn_resize_swap_file)
+        layout.addLayout(resize_row)
+        resize_hint = QLabel("Only works on swap files (not partitions). Briefly disables swap on the file while resizing.")
+        theme.style_hint_label(resize_hint)
+        layout.addWidget(resize_hint)
+
+        layout.addSpacing(14)
+
         part_title = QLabel("Swap Partition")
         part_title.setStyleSheet("font-weight: bold;")
         layout.addWidget(part_title)
@@ -681,6 +718,7 @@ class StorageAdministrationPage(QWidget):
         self.storage_tabs = QTabWidget()
         self.storage_tabs.setTabsClosable(True)
         self.storage_tabs.tabCloseRequested.connect(self._close_storage_tab)
+        shrink_tabwidget_to_current_page(self.storage_tabs)
         layout.addWidget(self.storage_tabs)
         return panel
 
@@ -754,15 +792,13 @@ class StorageAdministrationPage(QWidget):
         self.host_list.addItem(item)
 
     def _fit_host_list_height(self):
-        visible = sum(
-            1 for i in range(self.host_list.count())
-            if not self.host_list.item(i).isHidden()
-        )
-        row_h = self.host_list.sizeHintForRow(0) if visible else 22
-        if row_h <= 0:
-            row_h = 22
-        height = row_h * min(visible, 6) + 2 * self.host_list.frameWidth() + 6
-        self.host_list.setFixedHeight(max(48, min(height, 160)))
+        """No-op: the host list now lives in a full-height left column
+        (see #352, client/host_panel.py) instead of a short horizontal
+        strip, so it always expands to fill the available vertical
+        space instead of being capped to a handful of rows. Kept as a
+        method (rather than removing call sites) so existing
+        load_hosts() calls don't need to change."""
+        pass
 
     def select_all_hosts(self):
         for i in range(self.host_list.count()):
@@ -784,6 +820,9 @@ class StorageAdministrationPage(QWidget):
 
     def run_monitor_disk_health(self):
         self._run_storage_command(api.cmd_monitor_disk_health(), "Monitor Disk Health")
+
+    def run_install_smartmontools(self):
+        self._run_storage_command(api.cmd_install_smartmontools(), "Install smartmontools")
 
     def run_check_smart_status(self):
         try:
@@ -1059,6 +1098,22 @@ class StorageAdministrationPage(QWidget):
             QMessageBox.warning(self, "Invalid input", str(e))
             return
         self._run_storage_command(cmd, "Create Swap File")
+
+    def run_resize_swap_file(self):
+        size_text = self.swap_resize_size_input.text().strip()
+        try:
+            size_mb = int(size_text)
+        except ValueError:
+            QMessageBox.warning(self, "Invalid input", "New Size (MB) must be a whole number.")
+            return
+        try:
+            cmd = api.cmd_resize_swap_file(
+                self.swap_resize_path_input.text(), size_mb, self.swap_resize_persist_check.isChecked(),
+            )
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid input", str(e))
+            return
+        self._run_storage_command(cmd, "Resize Swap File")
 
     def run_create_swap_partition(self):
         try:

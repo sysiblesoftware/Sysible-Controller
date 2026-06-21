@@ -14,6 +14,8 @@ from client.repository_management_page import RepositoryManagementPage
 from client.network_management_page import NetworkManagementPage
 from client.file_system_management_page import FileSystemManagementPage
 from client.storage_administration_page import StorageAdministrationPage
+from client.firewall_administration_page import FirewallAdministrationPage
+from client.security_administration_page import SecurityAdministrationPage
 
 
 class SystemAdministrationPage(QWidget):
@@ -45,6 +47,8 @@ class SystemAdministrationPage(QWidget):
         self.network_mgmt_window = None
         self.filesystem_mgmt_window = None
         self.storage_admin_window = None
+        self.firewall_admin_window = None
+        self.security_admin_window = None
 
         main = QVBoxLayout()
         self.setLayout(main)
@@ -102,6 +106,15 @@ class SystemAdministrationPage(QWidget):
              "Partition, format, and monitor disks, manage LVM physical volumes/volume groups/logical "
              "volumes, configure RAID and replace failed disks, and set up swap space across managed hosts.",
              self.open_storage_admin, "fa5s.database", "copper"),
+            ("Firewall Administration",
+             "Configure firewalld zones, ports, and rich rules, and manage the underlying "
+             "nftables and iptables rule sets across managed hosts.",
+             self.open_firewall_admin, "fa5s.fire", "crimson"),
+            ("Security Administration",
+             "Configure and troubleshoot SELinux, harden SSH access and rotate keys, review "
+             "audit logs and failed logins, install security updates, set password policy, "
+             "harden systems, and run vulnerability scans across managed hosts.",
+             self.open_security_admin, "fa5s.lock", "graphite"),
         ]
 
         for index, (card_title, description, handler, icon, color) in enumerate(cards):
@@ -187,3 +200,17 @@ class SystemAdministrationPage(QWidget):
         self.storage_admin_window.show()
         self.storage_admin_window.raise_()
         return self.storage_admin_window
+
+    def open_firewall_admin(self):
+        if self.firewall_admin_window is None:
+            self.firewall_admin_window = FirewallAdministrationPage()
+        self.firewall_admin_window.show()
+        self.firewall_admin_window.raise_()
+        return self.firewall_admin_window
+
+    def open_security_admin(self):
+        if self.security_admin_window is None:
+            self.security_admin_window = SecurityAdministrationPage()
+        self.security_admin_window.show()
+        self.security_admin_window.raise_()
+        return self.security_admin_window

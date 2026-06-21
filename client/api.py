@@ -330,3 +330,5 @@ from client._api_network import *  # noqa: E402,F401,F403
 from client._api_filesystem import *  # noqa: E402,F401,F403
 from client._api_filesystem_mount import *  # noqa: E402,F401,F403
 from client._api_storage import *  # noqa: E402,F401,F403
+from client._api_firewall import *  # noqa: E402,F401,F403
+from client._api_security import *  # noqa: E402,F401,F403

@@ -449,17 +449,33 @@ def read_terminal(name: str):
     channel = session["channel"]
     chunks = []
 
+    # Wait for output to arrive WITHOUT holding the session lock.
+    #
+    # This wait must stay outside `session["lock"]`. The lock serializes
+    # real channel I/O (the recv drain below and /terminal/write's
+    # send()), but select() only watches for readability - it consumes
+    # nothing - so it doesn't need the lock. Holding the lock across
+    # this blocking wait was the bug behind "the SSH terminal blinks but
+    # won't accept typing": the GUI runs a continuous, back-to-back read
+    # loop, so this long-poll kept the lock held almost permanently,
+    # leaving /terminal/write unable to acquire it to send a keystroke.
+    # And because an idle shell emits no output, every wait ran the full
+    # TERMINAL_LONG_POLL_S before releasing - while a keystroke can't
+    # echo until it's been sent, and couldn't be sent until the read
+    # released the lock, so the two sides starved each other.
+    #
+    # channel.recv_ready()/recv_stderr_ready() are non-mutating
+    # readiness checks (safe unlocked), and channel.fileno() is
+    # paramiko's internal event pipe made for exactly this kind of
+    # select() wait, not a real socket.
+    try:
+        if not channel.recv_ready() and not channel.recv_stderr_ready():
+            select.select([channel], [], [], TERMINAL_LONG_POLL_S)
+    except OSError:
+        pass
+
     with session["lock"]:
         try:
-            if not channel.recv_ready() and not channel.recv_stderr_ready():
-                # Nothing buffered yet - wait briefly for either some
-                # data or the channel closing, instead of answering
-                # empty immediately. channel.fileno() is paramiko's
-                # internal event pipe made for exactly this purpose,
-                # not a real socket, so select() on it is the
-                # documented way to wait without spinning.
-                select.select([channel], [], [], TERMINAL_LONG_POLL_S)
-
             while channel.recv_ready():
                 chunks.append(channel.recv(TERMINAL_READ_CHUNK).decode(errors="replace"))
             while channel.recv_stderr_ready():

@@ -302,6 +302,7 @@ CATEGORY_COLORS = {
     "rose":   {"dark": ("#33141F", "#E0608F"), "light": ("#FBE3EC", "#B13564")},
     "sky":    {"dark": ("#102A3B", "#4FA8E0"), "light": ("#DCEEFB", "#1C6FA0")},
     "indigo": {"dark": ("#1E2142", "#7C83E8"), "light": ("#E6E8FC", "#4A4FC4")},
+    "copper": {"dark": ("#2E2014", "#C98A4B"), "light": ("#F7E8D9", "#9C5B1F")},
 }
 
 

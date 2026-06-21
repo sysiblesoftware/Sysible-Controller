@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, QTableWidgetItem,
     QAbstractItemView, QPushButton, QLineEdit, QTextEdit, QComboBox, QInputDialog,
-    QMessageBox, QApplication, QFileDialog, QFrame
+    QMessageBox, QApplication, QFileDialog, QFrame, QSizePolicy
 )
 from PySide6.QtCore import Qt, QTimer, QObject, Signal
 from PySide6.QtGui import QFont, QKeySequence
@@ -341,9 +341,17 @@ class RemoteAdministrationPage(QWidget):
         self.host_list.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.host_list.horizontalHeader().setStretchLastSection(True)
         self.host_list.setColumnWidth(1, 70)
-        self.host_list.setFixedHeight(140)
+        # No fixed-height cap (was 140px). Like the System Administration
+        # tools' shared host panel (client/host_panel.py), the table now
+        # expands into the available vertical space and scrolls normally
+        # so a growing fleet stays visible instead of disappearing into a
+        # ~6-row box. A minimum keeps a useful number of rows on screen,
+        # and the stretch factor below lets it share growth with the
+        # terminal output further down.
+        self.host_list.setMinimumHeight(180)
+        self.host_list.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         self.host_list.itemSelectionChanged.connect(self.on_host_selected)
-        layout.addWidget(self.host_list)
+        layout.addWidget(self.host_list, 1)
 
         quick_connect_hint = QLabel(
             "Click a host above to connect instantly - already-enrolled hosts "
@@ -474,7 +482,10 @@ class RemoteAdministrationPage(QWidget):
             "}"
         )
         self.output.setMinimumHeight(220)
-        layout.addWidget(self.output)
+        # Stretch factor matches the host table above so the two
+        # expanding areas share extra vertical space proportionally
+        # rather than the now-uncapped host table dominating the page.
+        layout.addWidget(self.output, 1)
 
         self.ssh_hint = QLabel(
             "SSH terminal is live - click into the panel above and type "

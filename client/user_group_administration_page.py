@@ -13,6 +13,8 @@ from client.events import bus
 from client import theme
 from client.theme import STATUS_NEUTRAL_COLOR, STATUS_SUCCESS_COLOR, STATUS_ERROR_COLOR, STATUS_WARNING_COLOR
 from client.branding import make_page_header
+from client.tab_sizing import shrink_tabwidget_to_current_page
+from client.host_panel import build_host_panel
 from client.collapsible_groups import (
     make_group_header_item, apply_collapse_state, get_collapsed_groups,
     connect_group_toggle, add_collapse_expand_buttons,
@@ -175,7 +177,7 @@ class UserGroupAdministrationPage(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("User & Group Administration")
-        self.resize(1040, 760)
+        self.resize(1290, 760)
 
         self.host_data = {}         # entry_key -> {users, groups, sessions, synced_at, error}
         self.active_entry = None
@@ -191,16 +193,14 @@ class UserGroupAdministrationPage(QWidget):
 
         main.addLayout(make_page_header("User & Group Administration"))
 
-        # =========================================================
-        # TARGET HOSTS (agent + SSH, merged)
-        # =========================================================
-        hosts_box = QVBoxLayout()
+        body = QHBoxLayout()
 
-        hosts_header = QHBoxLayout()
-        hosts_title = QLabel("Target Hosts (agent + SSH)")
-        hosts_title.setStyleSheet("font-weight: bold;")
-        hosts_header.addWidget(hosts_title)
-        hosts_header.addStretch()
+        # =========================================================
+        # TARGET HOSTS (agent + SSH, merged) - left column, full height
+        # =========================================================
+        self.host_list = QListWidget()
+        self.host_list.itemClicked.connect(self.on_host_selected)
+        connect_group_toggle(self.host_list)
 
         btn_refresh_hosts = QPushButton("Refresh Hosts")
         btn_refresh_hosts.clicked.connect(self.load_hosts)
@@ -214,39 +214,35 @@ class UserGroupAdministrationPage(QWidget):
         self.btn_sync = QPushButton("Sync Checked Hosts")
         self.btn_sync.clicked.connect(self.sync_checked_hosts)
 
-        self.host_list = QListWidget()
-        self.host_list.setFixedHeight(70)
-        self.host_list.itemClicked.connect(self.on_host_selected)
-        connect_group_toggle(self.host_list)
-
         btn_collapse_all, btn_expand_all = add_collapse_expand_buttons(self.host_list)
-
-        hosts_header.addWidget(btn_refresh_hosts)
-        hosts_header.addWidget(btn_select_all)
-        hosts_header.addWidget(btn_deselect_all)
-        hosts_header.addWidget(self.btn_sync)
-        hosts_header.addWidget(btn_collapse_all)
-        hosts_header.addWidget(btn_expand_all)
-
-        hosts_box.addLayout(hosts_header)
-        hosts_box.addWidget(self.host_list)
 
         self.sync_status = QLabel("Check one or more hosts, then Sync to pull live user data.")
         self.sync_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
-        hosts_box.addWidget(self.sync_status)
+        self.sync_status.setWordWrap(True)
 
-        # Stretch 0: this section's natural height (header + a short,
-        # capped-height host list + status line) is already correct -
-        # leaving stretch ambiguous between this and the panel below
-        # is what caused a dead gap under the host list previously.
-        main.addLayout(hosts_box, 0)
+        host_panel = build_host_panel(
+            "Target Hosts (agent + SSH)",
+            self.host_list,
+            [
+                [btn_refresh_hosts, btn_select_all, btn_deselect_all],
+                [self.btn_sync],
+                [btn_collapse_all, btn_expand_all],
+            ],
+            extra_widgets=[self.sync_status],
+        )
+        body.addWidget(host_panel)
+
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
 
         # =========================================================
         # USER & GROUP PANEL
         # =========================================================
-        # Stretch 1: claims all leftover vertical space so the host
-        # box above doesn't get padded out with blank area.
-        main.addWidget(self._build_users_panel(), 1)
+        content_layout.addWidget(self._build_users_panel(), 1)
+
+        body.addWidget(content, 1)
+        main.addLayout(body, 1)
 
         # =========================================================
         # DATA
@@ -326,6 +322,7 @@ class UserGroupAdministrationPage(QWidget):
         tabs.addTab(self._build_password_tab(), "Password")
         tabs.addTab(self._build_groups_tab(), "Groups")
         tabs.addTab(self._build_reports_tab(), "Reports")
+        shrink_tabwidget_to_current_page(tabs)
         # Kept as an attribute (not just a local) so the dashboard's
         # feature search bar (client/home.py / client/feature_search.py)
         # can jump straight to a specific tab - e.g. typing "create a
@@ -779,22 +776,13 @@ class UserGroupAdministrationPage(QWidget):
         self.host_list.addItem(item)
 
     def _fit_host_list_height(self):
-        """A fixed 110px box looked fine with a handful of hosts but
-        left a large, obviously-unused blank gap below the rows when
-        there were only one or two - size to the actual *visible* row
-        count instead (collapsed groups should shrink the box, not
-        just hide their rows inside an unchanged-size box), capped so
-        a long host list still scrolls rather than taking over the
-        page."""
-        visible = sum(
-            1 for i in range(self.host_list.count())
-            if not self.host_list.item(i).isHidden()
-        )
-        row_h = self.host_list.sizeHintForRow(0) if visible else 22
-        if row_h <= 0:
-            row_h = 22
-        height = row_h * min(visible, 6) + 2 * self.host_list.frameWidth() + 6
-        self.host_list.setFixedHeight(max(48, min(height, 160)))
+        """No-op: the host list now lives in a full-height left column
+        (see #352, client/host_panel.py) instead of a short horizontal
+        strip, so it always expands to fill the available vertical
+        space instead of being capped to a handful of rows. Kept as a
+        method (rather than removing call sites) so existing
+        load_hosts() calls don't need to change."""
+        pass
 
     def select_all_hosts(self):
         for i in range(self.host_list.count()):

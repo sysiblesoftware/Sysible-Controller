@@ -14,6 +14,7 @@ from client.collapsible_groups import (
     make_group_header_item, apply_collapse_state, get_collapsed_groups,
     connect_group_toggle, add_collapse_expand_buttons,
 )
+from client.tab_sizing import shrink_tabwidget_to_current_page
 
 HOST_REFRESH_MS = 10000
 SECURITY_POLL_MS = 2000
@@ -106,6 +107,7 @@ class SecurityAdministrationPage(QWidget):
         action_tabs.addTab(self._build_audit_logins_tab(), "Audit && Logins")
         action_tabs.addTab(self._build_updates_policy_tab(), "Updates && Policy")
         action_tabs.addTab(self._build_hardening_scans_tab(), "Hardening && Scans")
+        shrink_tabwidget_to_current_page(action_tabs)
         main.addWidget(action_tabs)
 
         # =========================================================

@@ -11,10 +11,12 @@ from client import theme
 from client.events import bus
 from client.theme import STATUS_NEUTRAL_COLOR, STATUS_SUCCESS_COLOR, STATUS_ERROR_COLOR
 from client.branding import make_page_header
+from client.tab_sizing import shrink_tabwidget_to_current_page
 from client.collapsible_groups import (
     make_group_header_item, apply_collapse_state, get_collapsed_groups,
     connect_group_toggle, add_collapse_expand_buttons,
 )
+from client.host_panel import build_host_panel
 
 HOST_REFRESH_MS = 10000
 REPO_POLL_MS = 2000
@@ -51,7 +53,7 @@ class RepositoryManagementPage(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Repository Management")
-        self.resize(1000, 760)
+        self.resize(1250, 760)
 
         self.repo_results = {}    # entry_key -> {label, stdout, stderr, code, pending}
         self.repo_pending = {}    # entry_key -> (entry, task_id)
@@ -62,19 +64,13 @@ class RepositoryManagementPage(QWidget):
         main.addLayout(make_page_header("Repository Management"))
 
         # =========================================================
-        # TARGET HOSTS (agent + SSH, merged)
+        # BODY: Target Hosts as a full-height left column (#352),
+        # everything else in the right-hand content column.
         # =========================================================
-        hosts_box = QVBoxLayout()
+        body = QHBoxLayout()
 
         self.host_list = QListWidget()
-        self.host_list.setFixedHeight(70)
         connect_group_toggle(self.host_list)
-
-        hosts_header = QHBoxLayout()
-        hosts_title = QLabel("Target Hosts (agent + SSH)")
-        hosts_title.setStyleSheet("font-weight: bold;")
-        hosts_header.addWidget(hosts_title)
-        hosts_header.addStretch()
 
         btn_refresh_hosts = QPushButton("Refresh Hosts")
         btn_refresh_hosts.clicked.connect(self.load_hosts)
@@ -87,26 +83,28 @@ class RepositoryManagementPage(QWidget):
 
         btn_collapse_all, btn_expand_all = add_collapse_expand_buttons(self.host_list)
 
-        hosts_header.addWidget(btn_refresh_hosts)
-        hosts_header.addWidget(btn_select_all)
-        hosts_header.addWidget(btn_deselect_all)
-        hosts_header.addWidget(btn_collapse_all)
-        hosts_header.addWidget(btn_expand_all)
+        body.addWidget(build_host_panel(
+            "Target Hosts (agent + SSH)", self.host_list,
+            [[btn_refresh_hosts, btn_select_all, btn_deselect_all],
+             [btn_collapse_all, btn_expand_all]],
+        ))
 
-        hosts_box.addLayout(hosts_header)
-        hosts_box.addWidget(self.host_list)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
 
-        main.addLayout(hosts_box)
-
-        # =========================================================
+        # ---------------------------------------------------------
         # REPOSITORY FIELDS + ACTIONS
-        # =========================================================
-        main.addWidget(self._build_actions_panel())
+        # ---------------------------------------------------------
+        content_layout.addWidget(self._build_actions_panel())
 
-        # =========================================================
+        # ---------------------------------------------------------
         # RESULTS
-        # =========================================================
-        main.addWidget(self._build_results_panel(), 1)
+        # ---------------------------------------------------------
+        content_layout.addWidget(self._build_results_panel(), 1)
+
+        body.addWidget(content, 1)
+        main.addLayout(body, 1)
 
         # =========================================================
         # DATA
@@ -279,6 +277,7 @@ class RepositoryManagementPage(QWidget):
         self.repo_tabs = QTabWidget()
         self.repo_tabs.setTabsClosable(True)
         self.repo_tabs.tabCloseRequested.connect(self._close_repo_tab)
+        shrink_tabwidget_to_current_page(self.repo_tabs)
         layout.addWidget(self.repo_tabs)
         return panel
 
@@ -352,15 +351,13 @@ class RepositoryManagementPage(QWidget):
         self.host_list.addItem(item)
 
     def _fit_host_list_height(self):
-        visible = sum(
-            1 for i in range(self.host_list.count())
-            if not self.host_list.item(i).isHidden()
-        )
-        row_h = self.host_list.sizeHintForRow(0) if visible else 22
-        if row_h <= 0:
-            row_h = 22
-        height = row_h * min(visible, 6) + 2 * self.host_list.frameWidth() + 6
-        self.host_list.setFixedHeight(max(48, min(height, 160)))
+        """No-op: the host list now lives in a full-height left column
+        (see #352, client/host_panel.py) instead of a short horizontal
+        strip, so it always expands to fill the available vertical
+        space instead of being capped to a handful of rows. Kept as a
+        method (rather than removing call sites) so existing
+        load_hosts() calls don't need to change."""
+        pass
 
     def select_all_hosts(self):
         for i in range(self.host_list.count()):

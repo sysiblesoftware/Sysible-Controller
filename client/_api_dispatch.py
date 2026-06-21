@@ -386,3 +386,321 @@ def cmd_search_log(pattern: str = "", lines: int = 200) -> str:
         f"|| tail -n {lines} /var/log/messages 2>/dev/null "
         "|| echo 'No readable log source found on this host.'"
     )
+
+
+# ---------------------------------------------------------
+# Logging and Troubleshooting (System Health & Logs, continued) -
+# same rules as the rest of this section: plain POSIX sh, shlex.quote()
+# on anything interpolated, and an explicit message instead of silent
+# empty output whenever a tool/log source might be missing.
+# ---------------------------------------------------------
+def cmd_review_system_logs(lines: int = 200) -> str:
+    """A quicker skim than Search/Tail Logs above - leads with how many
+    error/warning-level lines this boot has logged so far, then shows
+    the most recent N lines, so a glance at the tab catches a problem
+    without reading the whole thing."""
+    lines = max(1, int(lines))
+    return (
+        "if command -v journalctl >/dev/null 2>&1; then "
+        "err=$(journalctl -b -p err --no-pager 2>/dev/null | wc -l | tr -d ' '); "
+        "warnplus=$(journalctl -b -p warning --no-pager 2>/dev/null | wc -l | tr -d ' '); "
+        "warn=$((warnplus - err)); "
+        "echo \"This boot so far: $err error-level line(s), $warn warning-level line(s).\"; echo; "
+        f"echo '== Most recent {lines} log lines =='; "
+        f"journalctl -n {lines} --no-pager 2>&1; "
+        "else "
+        "echo '(journalctl not available - falling back to flat log files)'; echo; "
+        f"tail -n {lines} /var/log/syslog 2>/dev/null "
+        f"|| tail -n {lines} /var/log/messages 2>/dev/null "
+        "|| echo 'No readable log source found on this host.'; "
+        "fi"
+    )
+
+
+_JOURNAL_PRIORITIES = ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"]
+
+
+def cmd_analyze_journal_logs(priority: str = "", lines: int = 200) -> str:
+    """Journal-specific drill-down, scoped to the current boot (-b) -
+    distinct from Review System Logs above, which tails the live log
+    regardless of boot or priority. An optional priority floor (e.g.
+    "warning" = warning and anything more severe) narrows it to just
+    the entries worth investigating."""
+    lines = max(1, int(lines))
+    priority = (priority or "").strip().lower()
+    if priority and priority not in _JOURNAL_PRIORITIES:
+        raise ValueError(f"Priority must be one of: {', '.join(_JOURNAL_PRIORITIES)}")
+
+    no_journal_msg = "journalctl is not available on this host (no systemd journal)."
+
+    if not priority:
+        return (
+            "if ! command -v journalctl >/dev/null 2>&1; then "
+            f"echo {shlex.quote(no_journal_msg)}; exit 0; fi; "
+            f"journalctl -b -n {lines} --no-pager 2>&1"
+        )
+
+    p = shlex.quote(priority)
+    empty_msg = shlex.quote(f"No journal entries at priority '{priority}' or higher for this boot.")
+    return (
+        "if ! command -v journalctl >/dev/null 2>&1; then "
+        f"echo {shlex.quote(no_journal_msg)}; exit 0; fi; "
+        f"out=$(journalctl -b -p {p} -n {lines} --no-pager 2>&1); "
+        f"if [ -z \"$out\" ]; then echo {empty_msg}; else echo \"$out\"; fi"
+    )
+
+
+def cmd_investigate_boot_failures() -> str:
+    """Combined boot diagnostic: which boots systemd knows about (so an
+    unclean shutdown/crash is visible at a glance), how long the most
+    recent boot took and what held it up the longest, and any unit
+    that's currently sitting in the failed list."""
+    return r"""
+echo '== Recent boots (journalctl --list-boots) =='
+if command -v journalctl >/dev/null 2>&1; then
+    journalctl --list-boots --no-pager 2>&1
+else
+    echo 'journalctl is not available on this host.'
+fi
+echo
+echo '== Boot time breakdown (systemd-analyze) =='
+if command -v systemd-analyze >/dev/null 2>&1; then
+    systemd-analyze 2>&1
+    echo
+    echo '== Slowest units to start (systemd-analyze blame, top 20) =='
+    systemd-analyze blame --no-pager 2>&1 | head -n 20
+    echo
+    echo '== Critical chain (what the boot waited on) =='
+    systemd-analyze critical-chain --no-pager 2>&1
+else
+    echo 'systemd-analyze is not available on this host.'
+fi
+echo
+echo '== Units currently in the failed list =='
+if command -v systemctl >/dev/null 2>&1; then
+    out=$(systemctl --failed --no-legend 2>/dev/null)
+    if [ -z "$out" ]; then echo 'No failed units.'; else echo "$out"; fi
+else
+    echo 'systemctl not available on this host.'
+fi
+""".strip()
+
+
+def cmd_trace_application_errors(unit: str = "", lines: int = 200) -> str:
+    """Scoped to one service's journal when a unit is given - grepped
+    for error/exception/stack-trace vocabulary even if logged at a
+    lower priority, since application code often logs its own errors
+    at "info"; otherwise scans the whole journal for the same
+    vocabulary."""
+    lines = max(1, int(lines))
+    grep_pattern = shlex.quote("(error|exception|traceback|fatal|panic)")
+    unit = (unit or "").strip()
+    no_journal_msg = shlex.quote("journalctl is not available on this host.")
+
+    if unit:
+        u = shlex.quote(unit)
+        empty_msg = shlex.quote(
+            f"No application-error-like lines found for '{unit}' in the last {lines} journal lines."
+        )
+        return (
+            f"if ! command -v journalctl >/dev/null 2>&1; then echo {no_journal_msg}; exit 0; fi; "
+            f"out=$(journalctl -u {u} -n {lines} --no-pager 2>&1 | grep -iE {grep_pattern}); "
+            f"if [ -z \"$out\" ]; then echo {empty_msg}; else echo \"$out\"; fi"
+        )
+
+    empty_msg = shlex.quote(f"No application-error-like lines found in the last {lines} journal lines.")
+    return (
+        f"if ! command -v journalctl >/dev/null 2>&1; then echo {no_journal_msg}; exit 0; fi; "
+        f"out=$(journalctl -n {lines} --no-pager 2>&1 | grep -iE {grep_pattern}); "
+        f"if [ -z \"$out\" ]; then echo {empty_msg}; else echo \"$out\"; fi"
+    )
+
+
+def cmd_monitor_kernel_messages(lines: int = 200) -> str:
+    """Kernel ring buffer with human-readable timestamps where dmesg
+    supports it, falling back to the journal's kernel-tagged entries
+    on hosts where dmesg needs privileges this user doesn't have."""
+    lines = max(1, int(lines))
+    return (
+        "if command -v dmesg >/dev/null 2>&1 && dmesg -T >/dev/null 2>&1; then "
+        f"dmesg -T 2>/dev/null | tail -n {lines}; "
+        "elif command -v journalctl >/dev/null 2>&1; then "
+        f"journalctl -k -n {lines} --no-pager 2>&1; "
+        "else "
+        "echo 'Neither dmesg nor journalctl -k is available/permitted on this host.'; "
+        "fi"
+    )
+
+
+def cmd_collect_support_info() -> str:
+    """A quick, read-only support-info snapshot to paste into a ticket
+    without waiting on a full sos report - identity/OS/kernel, uptime
+    and load, memory and disk, network basics, and failed services.
+    For a complete, vendor-format diagnostic archive instead, see
+    Generate sos Report below."""
+    return r"""
+echo '== Identity =='
+echo "Hostname: $(hostname 2>/dev/null)"
+if [ -r /etc/os-release ]; then . /etc/os-release; echo "OS: ${PRETTY_NAME:-unknown}"; fi
+echo "Kernel: $(uname -srm 2>/dev/null)"
+echo "Date: $(date 2>/dev/null)"
+echo
+echo '== Uptime / Load =='
+uptime
+echo
+echo '== Memory =='
+free -h 2>/dev/null || echo 'free not available'
+echo
+echo '== Disk =='
+df -hT 2>/dev/null
+echo
+echo '== Network interfaces =='
+(ip -brief addr 2>/dev/null || ifconfig 2>/dev/null || echo 'no ip/ifconfig available')
+echo
+echo '== Failed services =='
+if command -v systemctl >/dev/null 2>&1; then
+    out=$(systemctl --failed --no-legend 2>/dev/null)
+    if [ -z "$out" ]; then echo 'No failed services.'; else echo "$out"; fi
+else
+    echo 'systemctl not available.'
+fi
+""".strip()
+
+
+_SOS_MISSING_MSG = (
+    "sos is not installed on this host (package: 'sos' on RHEL/Fedora/openSUSE, "
+    "'sosreport' on Debian/Ubuntu). Install it first, then try again."
+)
+
+
+def cmd_generate_sos_report() -> str:
+    """Runs the distro's sos/sosreport tool in unattended batch mode and
+    prints where it wrote the finished archive. This deliberately does
+    NOT auto-install the tool if it's missing - unlike a read-only
+    report, installing software is a deliberate action this button
+    didn't ask for, so it just says what's missing instead."""
+    return (
+        "if command -v sos >/dev/null 2>&1; then "
+        "sos report --batch 2>&1; "
+        "elif command -v sosreport >/dev/null 2>&1; then "
+        "sosreport --batch 2>&1; "
+        "else "
+        f"echo {shlex.quote(_SOS_MISSING_MSG)} >&2; exit 1; "
+        "fi"
+    )
+
+
+def cmd_investigate_crashes() -> str:
+    """Three different "something crashed" signals in one pass: kernel-
+    level oops/panic/segfault lines from dmesg, OOM-killer events (a
+    crash that looks application-side but is actually the kernel
+    killing a process for memory), and systemd-coredump's own record of
+    core dumps, wherever each source is available."""
+    return r"""
+echo '== Kernel oops / panic / segfault (dmesg) =='
+if command -v dmesg >/dev/null 2>&1; then
+    out=$(dmesg -T 2>/dev/null | grep -iE 'panic|oops|segfault|general protection fault')
+    if [ -z "$out" ]; then echo 'No kernel panic/oops/segfault lines found.'; else echo "$out"; fi
+else
+    echo 'dmesg not available on this host.'
+fi
+echo
+echo '== OOM killer events =='
+if command -v journalctl >/dev/null 2>&1; then
+    out=$(journalctl -k --no-pager 2>/dev/null | grep -iE 'out of memory|oom-kill|killed process')
+    if [ -z "$out" ]; then echo 'No OOM-killer events found in the kernel journal.'; else echo "$out"; fi
+else
+    echo 'journalctl not available on this host.'
+fi
+echo
+echo '== Recorded core dumps (coredumpctl) =='
+if command -v coredumpctl >/dev/null 2>&1; then
+    coredumpctl list --no-pager 2>&1 || echo 'No core dumps recorded.'
+else
+    echo 'coredumpctl not available on this host.'
+fi
+""".strip()
+
+
+def cmd_troubleshoot_memory_issues() -> str:
+    """Leads with the same computed usage-percent status line as
+    Memory && CPU Snapshot above, then layers on the memory-specific
+    signals that snapshot doesn't show: the top memory consumers, one
+    swap-activity sample, and any OOM-killer history."""
+    return r"""
+mem_pct=$(LANG=C free -m 2>/dev/null | awk 'NR==2 && $2>0 {printf "%.0f", $3/$2*100}')
+mem_status=OK
+if [ -n "$mem_pct" ]; then
+    if [ "$mem_pct" -ge 90 ] 2>/dev/null; then mem_status=CRITICAL
+    elif [ "$mem_pct" -ge 75 ] 2>/dev/null; then mem_status=WARNING
+    fi
+fi
+echo "Memory usage: ${mem_pct:-unknown}% ($mem_status)"
+echo
+echo '== Memory / Swap =='
+free -h
+echo
+echo '== Top 15 memory consumers =='
+ps -eo pid,ppid,user,%mem,%cpu,comm --sort=-%mem | head -n 16
+echo
+echo '== Swap activity (vmstat, one 1s sample) =='
+vmstat 1 2 2>/dev/null | tail -n 1 || echo 'vmstat not available on this host'
+echo
+echo '== OOM-killer history (journal, kernel) =='
+if command -v journalctl >/dev/null 2>&1; then
+    out=$(journalctl -k --no-pager 2>/dev/null | grep -iE 'out of memory|oom-kill|killed process')
+    if [ -z "$out" ]; then echo 'No OOM-killer events found.'; else echo "$out"; fi
+else
+    echo 'journalctl not available on this host.'
+fi
+""".strip()
+
+
+def cmd_analyze_cpu_bottlenecks() -> str:
+    """CPU-specific companion to Investigate High Load above: the same
+    load/core-ratio scoring, then per-core utilization where mpstat is
+    available, the run-queue/context-switch/interrupt counters from
+    vmstat, and the top CPU consumers."""
+    return r"""
+cores=$(nproc 2>/dev/null || echo 1)
+load1=$(uptime | awk -F'load average' '{print $2}' | tr -d ':' | awk -F',' '{print $1}' | tr -d ' ')
+load_ratio=$(awk -v l="$load1" -v c="$cores" 'BEGIN{ if (c=="" || c==0) c=1; if (l=="") l=0; printf "%.2f", l/c }')
+load_status=OK
+if awk -v r="$load_ratio" 'BEGIN{exit !(r>=2)}'; then load_status=CRITICAL
+elif awk -v r="$load_ratio" 'BEGIN{exit !(r>=1)}'; then load_status=WARNING
+fi
+echo "CPU load: $load_status  (load $load1 across $cores core(s), ratio $load_ratio)"
+echo
+echo '== Per-core utilization (mpstat, one 1s sample) =='
+if command -v mpstat >/dev/null 2>&1; then
+    mpstat -P ALL 1 1 2>/dev/null
+else
+    echo 'mpstat not available (package: sysstat) - see the load average above instead.'
+fi
+echo
+echo '== Run queue / context switches / interrupts (vmstat, one 1s sample) =='
+vmstat 1 2 2>/dev/null | tail -n 2 || echo 'vmstat not available on this host'
+echo
+echo '== Top 15 by CPU =='
+ps -eo pid,ppid,user,%cpu,%mem,stat,etime,comm --sort=-%cpu | head -n 16
+""".strip()
+
+
+def cmd_review_audit_logs(lines: int = 200) -> str:
+    """auditd's log usually needs root to read directly, so this prefers
+    ausearch (which goes through the audit dispatcher) and only falls
+    back to reading the flat file if ausearch isn't present."""
+    lines = max(1, int(lines))
+    no_audit_msg = shlex.quote(
+        "No readable audit log found (auditd may not be installed, or this user "
+        "cannot read /var/log/audit/audit.log)."
+    )
+    return (
+        "if command -v ausearch >/dev/null 2>&1; then "
+        f"ausearch -i 2>&1 | tail -n {lines}; "
+        "elif [ -r /var/log/audit/audit.log ]; then "
+        f"tail -n {lines} /var/log/audit/audit.log 2>&1; "
+        "else "
+        f"echo {no_audit_msg}; "
+        "fi"
+    )

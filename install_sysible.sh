@@ -188,6 +188,20 @@ else
   echo "TLS certificate already present, leaving it in place."
 fi
 
+# trust.crt is the trust anchor copied out to GUI machines/agents for
+# pinning (see backend/tls_manager.py) - distinct from CERT_FILE once an
+# externally-issued PKI cert is installed via Sysible Settings, since a
+# PKI leaf does not verify against itself the way a self-signed one
+# does. For the default self-signed case above, the leaf IS its own
+# valid anchor, so just seed trust.crt as a copy of it. Only done if
+# missing, same as the cert itself - never clobbers an already-installed
+# PKI trust.crt on a redeploy.
+TRUST_FILE="$CERT_DIR/trust.crt"
+if [[ -f "$CERT_FILE" && ! -f "$TRUST_FILE" ]]; then
+  cp -f "$CERT_FILE" "$TRUST_FILE"
+  chmod 644 "$TRUST_FILE"
+fi
+
 # =========================================================
 # PROVISION THE ADMIN API KEY
 # Every admin/GUI endpoint requires this key (X-API-Key header).

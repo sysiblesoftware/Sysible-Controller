@@ -13,6 +13,7 @@ from client.host_software_management_page import HostSoftwareManagementPage
 from client.repository_management_page import RepositoryManagementPage
 from client.network_management_page import NetworkManagementPage
 from client.file_system_management_page import FileSystemManagementPage
+from client.storage_administration_page import StorageAdministrationPage
 
 
 class SystemAdministrationPage(QWidget):
@@ -43,6 +44,7 @@ class SystemAdministrationPage(QWidget):
         self.repo_mgmt_window = None
         self.network_mgmt_window = None
         self.filesystem_mgmt_window = None
+        self.storage_admin_window = None
 
         main = QVBoxLayout()
         self.setLayout(main)
@@ -96,6 +98,10 @@ class SystemAdministrationPage(QWidget):
              "links, mount/unmount/resize/repair filesystems, configure /etc/fstab and quotas, and "
              "archive/compress files across managed hosts.",
              self.open_filesystem_mgmt, "fa5s.hdd", "indigo"),
+            ("Storage Administration",
+             "Partition, format, and monitor disks, manage LVM physical volumes/volume groups/logical "
+             "volumes, configure RAID and replace failed disks, and set up swap space across managed hosts.",
+             self.open_storage_admin, "fa5s.database", "copper"),
         ]
 
         for index, (card_title, description, handler, icon, color) in enumerate(cards):
@@ -174,3 +180,10 @@ class SystemAdministrationPage(QWidget):
         self.filesystem_mgmt_window.show()
         self.filesystem_mgmt_window.raise_()
         return self.filesystem_mgmt_window
+
+    def open_storage_admin(self):
+        if self.storage_admin_window is None:
+            self.storage_admin_window = StorageAdministrationPage()
+        self.storage_admin_window.show()
+        self.storage_admin_window.raise_()
+        return self.storage_admin_window

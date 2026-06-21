@@ -680,6 +680,7 @@ class RemoteAdministrationPage(QWidget):
                 self._add_host_row(e)
 
         if self.active_id is not None and (self.active_kind, self.active_id) not in current_ids:
+            self._cancel_pending_agent_task()
             self._end_ssh_session()
             self.active_kind = None
             self.active_id = None
@@ -780,6 +781,7 @@ class RemoteAdministrationPage(QWidget):
         if underlying["kind"] == self.active_kind and underlying["id"] == self.active_id:
             return  # re-selecting the already-active connection - leave its session alone
 
+        self._cancel_pending_agent_task()
         self._end_ssh_session()
 
         self.active_kind = underlying["kind"]
@@ -1113,10 +1115,36 @@ class RemoteAdministrationPage(QWidget):
 
         self.agent_poll_timer.start(AGENT_CMD_POLL_MS)
 
+    def _cancel_pending_agent_task(self):
+        """Stop watching for an in-flight agent command's result -
+        called whenever the active connection is about to change (a
+        different host, or a merged host's connection-type switching
+        away from "agent"). Without this, agent_poll_timer kept firing
+        against a host that was no longer the active connection: its
+        eventual _finish_command() call re-focused cmd_input even
+        while a live SSH session was using the same panel instead -
+        cmd_input is hidden during an SSH session, so that stole focus
+        away from the terminal with nothing actually able to receive
+        it, which is what made the SSH terminal look like it had
+        stopped accepting keystrokes. The agent still finishes the
+        command server-side either way - this only stops the client
+        from watching for/displaying that result."""
+        self.pending_agent_task = None
+        self.agent_poll_timer.stop()
+
     def _poll_agent_task(self):
         task = self.pending_agent_task
 
         if not task:
+            self.agent_poll_timer.stop()
+            return
+
+        # Belt-and-suspenders against the same staleness this is meant
+        # to prevent (see _cancel_pending_agent_task) - if the active
+        # connection has since moved on, drop this result instead of
+        # rendering it into whatever's on screen now and stealing focus.
+        if self.active_kind != "agent" or self.active_id != task["host_id"]:
+            self.pending_agent_task = None
             self.agent_poll_timer.stop()
             return
 

@@ -14,6 +14,7 @@ from client.collapsible_groups import (
     make_group_header_item, apply_collapse_state, get_collapsed_groups,
     connect_group_toggle, add_collapse_expand_buttons,
 )
+from client.tab_sizing import shrink_tabwidget_to_current_page
 
 HOST_REFRESH_MS = 10000
 NET_POLL_MS = 2000
@@ -113,6 +114,7 @@ class NetworkManagementPage(QWidget):
         action_tabs.addTab(self._build_dns_hostname_tab(), "DNS and Hostname")
         action_tabs.addTab(self._build_routing_tab(), "Gateway and Routing")
         action_tabs.addTab(self._build_advanced_tab(), "Bonding, Teaming, VLANs, Bridges")
+        shrink_tabwidget_to_current_page(action_tabs)
         main.addWidget(action_tabs)
 
         # =========================================================

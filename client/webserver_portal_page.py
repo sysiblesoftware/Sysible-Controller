@@ -1,6 +1,7 @@
 import datetime
 
 from PySide6.QtWidgets import (
+    QApplication,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QAbstractItemView,
     QScrollArea,
+    QTextEdit,
 )
 
 from client import api
@@ -129,6 +131,36 @@ class WebserverPortalPage(QWidget):
         status_buttons.addWidget(self.stop_btn)
 
         layout.addLayout(status_buttons)
+
+        layout.addWidget(self._divider())
+
+        # =====================================================
+        # COMMAND-LINE BUNDLE DOWNLOAD (curl)
+        # =====================================================
+        curl_label = QLabel("Command-Line Bundle Download (curl)")
+        curl_label.setStyleSheet("font-size:18px;font-weight:bold;")
+        layout.addWidget(curl_label)
+
+        curl_hint = QLabel(
+            "For terminal-only or headless systems that can't open a browser: "
+            "logs into the portal and downloads the agent bundle in one shot. "
+            "-k skips certificate verification (same self-signed cert warning "
+            "as above) and the cookie jar carries the session from login to "
+            "download. Swap in the real password before running."
+        )
+        theme.style_hint_label(curl_hint)
+        curl_hint.setWordWrap(True)
+        layout.addWidget(curl_hint)
+
+        self.curl_text = QTextEdit()
+        self.curl_text.setReadOnly(True)
+        self.curl_text.setStyleSheet("font-family: monospace;")
+        self.curl_text.setFixedHeight(90)
+        layout.addWidget(self.curl_text)
+
+        copy_curl_btn = QPushButton("Copy to Clipboard")
+        copy_curl_btn.clicked.connect(self.copy_curl_command)
+        layout.addWidget(copy_curl_btn)
 
         layout.addWidget(self._divider())
 
@@ -447,6 +479,17 @@ class WebserverPortalPage(QWidget):
         else:
             self.config_warning_label.setVisible(False)
 
+        curl_host = config.get("address") or "<this machine's address>"
+        curl_port = configured_port or port or 443
+        curl_user = status.get("username") if status.get("credentials_configured") else "<username>"
+        self.curl_text.setPlainText(
+            f'curl -k -c /tmp/sysible_portal_cookies.txt '
+            f'-d "username={curl_user}" --data-urlencode "password=<password>" '
+            f'"https://{curl_host}:{curl_port}/login" '
+            f'&& curl -k -b /tmp/sysible_portal_cookies.txt -OJ '
+            f'"https://{curl_host}:{curl_port}/files/bundle"'
+        )
+
         if error:
             QMessageBox.critical(self, "Portal failed to start", error)
 
@@ -496,6 +539,9 @@ class WebserverPortalPage(QWidget):
             self.refresh()
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
+
+    def copy_curl_command(self):
+        QApplication.clipboard().setText(self.curl_text.toPlainText())
 
     # =====================================================
     # PORTAL PORT

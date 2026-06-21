@@ -15,6 +15,7 @@ from client.collapsible_groups import (
     connect_group_toggle, add_collapse_expand_buttons,
 )
 from client.tab_sizing import shrink_tabwidget_to_current_page
+from client.host_panel import build_host_panel
 
 HOST_REFRESH_MS = 10000
 SECURITY_POLL_MS = 2000
@@ -49,7 +50,7 @@ class SecurityAdministrationPage(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Security Administration")
-        self.resize(1100, 820)
+        self.resize(1350, 820)
 
         self.security_results = {}   # entry_key -> {label, stdout, stderr, code, pending}
         self.security_pending = {}   # entry_key -> (entry, task_id)
@@ -61,20 +62,13 @@ class SecurityAdministrationPage(QWidget):
 
         main.addLayout(make_page_header("Security Administration"))
 
-        # =========================================================
-        # TARGET HOSTS (agent + SSH, merged)
-        # =========================================================
-        hosts_box = QVBoxLayout()
+        body = QHBoxLayout()
 
+        # =========================================================
+        # TARGET HOSTS (agent + SSH, merged) - left column, full height
+        # =========================================================
         self.host_list = QListWidget()
-        self.host_list.setFixedHeight(70)
         connect_group_toggle(self.host_list)
-
-        hosts_header = QHBoxLayout()
-        hosts_title = QLabel("Target Hosts (agent + SSH)")
-        hosts_title.setStyleSheet("font-weight: bold;")
-        hosts_header.addWidget(hosts_title)
-        hosts_header.addStretch()
 
         btn_refresh_hosts = QPushButton("Refresh Hosts")
         btn_refresh_hosts.clicked.connect(self.load_hosts)
@@ -87,16 +81,19 @@ class SecurityAdministrationPage(QWidget):
 
         btn_collapse_all, btn_expand_all = add_collapse_expand_buttons(self.host_list)
 
-        hosts_header.addWidget(btn_refresh_hosts)
-        hosts_header.addWidget(btn_select_all)
-        hosts_header.addWidget(btn_deselect_all)
-        hosts_header.addWidget(btn_collapse_all)
-        hosts_header.addWidget(btn_expand_all)
+        host_panel = build_host_panel(
+            "Target Hosts (agent + SSH)",
+            self.host_list,
+            [
+                [btn_refresh_hosts, btn_select_all, btn_deselect_all],
+                [btn_collapse_all, btn_expand_all],
+            ],
+        )
+        body.addWidget(host_panel)
 
-        hosts_box.addLayout(hosts_header)
-        hosts_box.addWidget(self.host_list)
-
-        main.addLayout(hosts_box)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
 
         # =========================================================
         # ACTIONS (tabbed - one tab per feature group)
@@ -108,12 +105,15 @@ class SecurityAdministrationPage(QWidget):
         action_tabs.addTab(self._build_updates_policy_tab(), "Updates && Policy")
         action_tabs.addTab(self._build_hardening_scans_tab(), "Hardening && Scans")
         shrink_tabwidget_to_current_page(action_tabs)
-        main.addWidget(action_tabs)
+        content_layout.addWidget(action_tabs)
 
         # =========================================================
         # RESULTS
         # =========================================================
-        main.addWidget(self._build_results_panel(), 1)
+        content_layout.addWidget(self._build_results_panel(), 1)
+
+        body.addWidget(content, 1)
+        main.addLayout(body, 1)
 
         # =========================================================
         # DATA
@@ -671,6 +671,7 @@ class SecurityAdministrationPage(QWidget):
         self.security_tabs = QTabWidget()
         self.security_tabs.setTabsClosable(True)
         self.security_tabs.tabCloseRequested.connect(self._close_security_tab)
+        shrink_tabwidget_to_current_page(self.security_tabs)
         layout.addWidget(self.security_tabs)
         return panel
 
@@ -744,15 +745,13 @@ class SecurityAdministrationPage(QWidget):
         self.host_list.addItem(item)
 
     def _fit_host_list_height(self):
-        visible = sum(
-            1 for i in range(self.host_list.count())
-            if not self.host_list.item(i).isHidden()
-        )
-        row_h = self.host_list.sizeHintForRow(0) if visible else 22
-        if row_h <= 0:
-            row_h = 22
-        height = row_h * min(visible, 6) + 2 * self.host_list.frameWidth() + 6
-        self.host_list.setFixedHeight(max(48, min(height, 160)))
+        """No-op: the host list now lives in a full-height left column
+        (see #352, client/host_panel.py) instead of a short horizontal
+        strip, so it always expands to fill the available vertical
+        space instead of being capped to a handful of rows. Kept as a
+        method (rather than removing call sites) so existing
+        load_hosts() calls don't need to change."""
+        pass
 
     def select_all_hosts(self):
         for i in range(self.host_list.count()):

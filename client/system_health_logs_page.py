@@ -40,6 +40,9 @@ def _status_color(status):
     return _STATUS_COLORS.get(status, STATUS_NEUTRAL_COLOR)
 
 
+_JOURNAL_PRIORITY_CHOICES = ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"]
+
+
 def _entry_key(entry):
     """Hashable identity for a merged-host entry (api.list_merged_hosts()) -
     agent host_ids and SSH host names live in separate namespaces, so the
@@ -463,6 +466,79 @@ class SystemHealthLogsPage(QWidget):
         proc_action_row.addWidget(btn_restart)
         layout.addLayout(proc_action_row)
 
+        divider2 = QFrame()
+        divider2.setFrameShape(QFrame.HLine)
+        divider2.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(divider2)
+
+        log_header = QLabel("Logging and Troubleshooting")
+        log_header.setStyleSheet("font-weight: bold;")
+        layout.addWidget(log_header)
+
+        log_review_row = QHBoxLayout()
+        self.logging_lines = QSpinBox()
+        self.logging_lines.setRange(1, 5000)
+        self.logging_lines.setValue(200)
+        btn_review_logs = QPushButton("Review System Logs")
+        btn_review_logs.clicked.connect(self.run_review_system_logs)
+        self.journal_priority = QComboBox()
+        self.journal_priority.addItems(["(any priority)"] + _JOURNAL_PRIORITY_CHOICES)
+        self.journal_priority.setMaximumWidth(130)
+        btn_analyze_journal = QPushButton("Analyze Journal Logs")
+        btn_analyze_journal.clicked.connect(self.run_analyze_journal_logs)
+        btn_kernel_msgs = QPushButton("Monitor Kernel Messages")
+        btn_kernel_msgs.clicked.connect(self.run_monitor_kernel_messages)
+        btn_audit_logs = QPushButton("Review Audit Logs")
+        btn_audit_logs.clicked.connect(self.run_review_audit_logs)
+        log_review_row.addWidget(QLabel("Lines:"))
+        log_review_row.addWidget(self.logging_lines)
+        log_review_row.addWidget(btn_review_logs)
+        log_review_row.addWidget(self.journal_priority)
+        log_review_row.addWidget(btn_analyze_journal)
+        log_review_row.addWidget(btn_kernel_msgs)
+        log_review_row.addWidget(btn_audit_logs)
+        layout.addLayout(log_review_row)
+
+        app_errors_row = QHBoxLayout()
+        self.app_error_unit = QLineEdit()
+        self.app_error_unit.setPlaceholderText("Service/unit (optional - blank = whole journal)")
+        self.app_error_unit.setMaximumWidth(260)
+        btn_trace_errors = QPushButton("Trace Application Errors")
+        btn_trace_errors.clicked.connect(self.run_trace_application_errors)
+        app_errors_row.addWidget(QLabel("Trace Application Errors:"))
+        app_errors_row.addWidget(self.app_error_unit)
+        app_errors_row.addWidget(btn_trace_errors)
+        layout.addLayout(app_errors_row)
+
+        diag_row = QHBoxLayout()
+        btn_boot_failures = QPushButton("Investigate Boot Failures")
+        btn_boot_failures.clicked.connect(self.run_investigate_boot_failures)
+        btn_crashes = QPushButton("Investigate Crashes")
+        btn_crashes.clicked.connect(self.run_investigate_crashes)
+        btn_mem_issues = QPushButton("Troubleshoot Memory Issues")
+        btn_mem_issues.clicked.connect(self.run_troubleshoot_memory_issues)
+        btn_cpu_bottlenecks = QPushButton("Analyze CPU Bottlenecks")
+        btn_cpu_bottlenecks.clicked.connect(self.run_analyze_cpu_bottlenecks)
+        diag_row.addWidget(btn_boot_failures)
+        diag_row.addWidget(btn_crashes)
+        diag_row.addWidget(btn_mem_issues)
+        diag_row.addWidget(btn_cpu_bottlenecks)
+        layout.addLayout(diag_row)
+
+        support_row = QHBoxLayout()
+        btn_support_info = QPushButton("Collect Support Information")
+        btn_support_info.clicked.connect(self.run_collect_support_info)
+        btn_sos_report = QPushButton("Generate sos Report")
+        btn_sos_report.setToolTip(
+            "Runs the distro's sos/sosreport tool in unattended batch mode. "
+            "Does not install it if missing - install the 'sos' (RHEL/Fedora/openSUSE) "
+            "or 'sosreport' (Debian/Ubuntu) package first."
+        )
+        btn_sos_report.clicked.connect(self.run_generate_sos_report)
+        support_row.addWidget(btn_support_info)
+        support_row.addWidget(btn_sos_report)
+        layout.addLayout(support_row)
+
         self.health_status = QLabel("Pick an action above to run it on all checked hosts.")
         self.health_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
         layout.addWidget(self.health_status)
@@ -680,6 +756,62 @@ class SystemHealthLogsPage(QWidget):
             QMessageBox.warning(self, "Invalid input", str(e))
             return
         self._run_health_command(cmd, f"Restart Process (PID {pid})")
+
+    # ---------------------------------------------------------
+    # LOGGING AND TROUBLESHOOTING
+    # ---------------------------------------------------------
+    def run_review_system_logs(self):
+        lines = self.logging_lines.value()
+        cmd = api.cmd_review_system_logs(lines)
+        self._run_health_command(cmd, f"Review System Logs ({lines} lines)")
+
+    def run_analyze_journal_logs(self):
+        lines = self.logging_lines.value()
+        priority = self.journal_priority.currentText().strip()
+        if priority == "(any priority)":
+            priority = ""
+        try:
+            cmd = api.cmd_analyze_journal_logs(priority, lines)
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid input", str(e))
+            return
+        label = f"Analyze Journal Logs ({priority or 'any priority'}, {lines} lines)"
+        self._run_health_command(cmd, label)
+
+    def run_monitor_kernel_messages(self):
+        lines = self.logging_lines.value()
+        cmd = api.cmd_monitor_kernel_messages(lines)
+        self._run_health_command(cmd, f"Monitor Kernel Messages ({lines} lines)")
+
+    def run_review_audit_logs(self):
+        lines = self.logging_lines.value()
+        cmd = api.cmd_review_audit_logs(lines)
+        self._run_health_command(cmd, f"Review Audit Logs ({lines} lines)")
+
+    def run_trace_application_errors(self):
+        unit = self.app_error_unit.text().strip()
+        lines = self.logging_lines.value()
+        cmd = api.cmd_trace_application_errors(unit, lines)
+        label = f"Trace Application Errors ({unit})" if unit else f"Trace Application Errors ({lines} lines, whole journal)"
+        self._run_health_command(cmd, label)
+
+    def run_investigate_boot_failures(self):
+        self._run_health_command(api.cmd_investigate_boot_failures(), "Investigate Boot Failures")
+
+    def run_investigate_crashes(self):
+        self._run_health_command(api.cmd_investigate_crashes(), "Investigate Crashes")
+
+    def run_troubleshoot_memory_issues(self):
+        self._run_health_command(api.cmd_troubleshoot_memory_issues(), "Troubleshoot Memory Issues")
+
+    def run_analyze_cpu_bottlenecks(self):
+        self._run_health_command(api.cmd_analyze_cpu_bottlenecks(), "Analyze CPU Bottlenecks")
+
+    def run_collect_support_info(self):
+        self._run_health_command(api.cmd_collect_support_info(), "Collect Support Information")
+
+    def run_generate_sos_report(self):
+        self._run_health_command(api.cmd_generate_sos_report(), "Generate sos Report")
 
     def _tab_key(self, entry, label):
         """Identity for one (host, report) result tab. Including the

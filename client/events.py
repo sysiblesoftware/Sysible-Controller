@@ -16,5 +16,16 @@ class _Events(QObject):
     # cached data and reset its view instead of showing stale state.
     host_removed = Signal(str)
 
+    # Emitted with a grace-period in seconds right before a deliberate
+    # action that's expected to make the backend briefly unreachable -
+    # currently just installing a new TLS certificate (Sysible Settings,
+    # see client/admin_configuration_page.py), which makes the backend
+    # restart itself so uvicorn picks up the new cert/key. main.py's
+    # backend watchdog normally force-closes every window within ~3
+    # seconds of the backend going quiet (see BACKEND_FAILURE_THRESHOLD)
+    # - it subscribes to this to suppress that for the given window
+    # instead of mistaking a deliberate restart for a crash.
+    backend_restart_expected = Signal(int)
+
 
 bus = _Events()

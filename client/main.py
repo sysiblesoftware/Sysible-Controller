@@ -1,5 +1,6 @@
 import signal
 import sys
+import time
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QMessageBox, QSystemTrayIcon, QMenu, QStyle,
@@ -13,6 +14,7 @@ from client import api
 from client.admin_login_dialog import AdminLoginDialog
 from client.force_password_change_dialog import ForcePasswordChangeDialog
 from client.branding import LOGO_PATH
+from client.events import bus
 
 # Consecutive missed health checks before treating the backend as
 # down. A couple intervals of slack avoids closing everything over
@@ -123,6 +125,15 @@ class MainWindow(QMainWindow):
         # shut the whole app down after a few consecutive misses.
         # =====================================================
         self._backend_down_count = 0
+        # Set by _suppress_watchdog (below) right before a deliberate
+        # action that's expected to make the backend briefly
+        # unreachable - currently just a TLS certificate install (see
+        # client/events.py's backend_restart_expected signal). A bare
+        # monotonic deadline rather than a bool so a second restart
+        # request mid-grace-period just extends it instead of needing
+        # its own timer to clear a flag.
+        self._suppress_watchdog_until = 0.0
+        bus.backend_restart_expected.connect(self._suppress_watchdog)
 
         self._backend_timer = QTimer(self)
         self._backend_timer.timeout.connect(self._check_backend)
@@ -163,9 +174,24 @@ class MainWindow(QMainWindow):
     def _on_sigusr1(self, signum, frame):
         self._restore_window()
 
+    def _suppress_watchdog(self, grace_seconds):
+        """Connected to bus.backend_restart_expected - holds off on
+        treating failed health checks as a real outage for
+        grace_seconds, since a deliberate restart (TLS cert install)
+        can easily take longer than BACKEND_FAILURE_THRESHOLD intervals
+        and would otherwise get mistaken for a crash. Normal counting
+        resumes automatically once the deadline passes, so a restart
+        that genuinely fails to come back up still eventually surfaces
+        the usual "lost connection" message instead of hanging forever."""
+        self._backend_down_count = 0
+        self._suppress_watchdog_until = time.monotonic() + grace_seconds
+
     def _check_backend(self):
         if api.ping():
             self._backend_down_count = 0
+            return
+
+        if time.monotonic() < self._suppress_watchdog_until:
             return
 
         self._backend_down_count += 1

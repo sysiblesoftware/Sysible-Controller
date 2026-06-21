@@ -7,6 +7,7 @@ configured in one spot.
 """
 
 import base64
+import contextlib
 import json
 import os
 import random
@@ -181,6 +182,35 @@ def get_local_ips():
 
 def download_agent_bundle(save_path):
     data = _download_binary("/controller-config/agent-bundle")
+    Path(save_path).write_bytes(data)
+    return save_path
+
+
+def get_tls_info():
+    return _request("GET", "/controller-config/tls/info")
+
+
+def install_tls_certificate(cert_path, key_path, chain_path=None):
+    """Uploads a cert/key(/optional chain) for the controller to
+    validate and install as its TLS identity (see
+    backend/tls_manager.py) - the backend restarts itself right after a
+    successful install, so the caller should emit
+    client/events.py's bus.backend_restart_expected signal first so the
+    GUI's backend watchdog doesn't mistake the restart for a crash."""
+    cert_path, key_path = Path(cert_path), Path(key_path)
+    with contextlib.ExitStack() as stack:
+        files = {
+            "cert_file": (cert_path.name, stack.enter_context(open(cert_path, "rb"))),
+            "key_file": (key_path.name, stack.enter_context(open(key_path, "rb"))),
+        }
+        if chain_path:
+            chain_path = Path(chain_path)
+            files["chain_file"] = (chain_path.name, stack.enter_context(open(chain_path, "rb")))
+        return _request("POST", "/controller-config/tls/install", files=files, timeout=30)
+
+
+def download_trust_certificate(save_path):
+    data = _download_binary("/controller-config/tls/trust-bundle")
     Path(save_path).write_bytes(data)
     return save_path
 

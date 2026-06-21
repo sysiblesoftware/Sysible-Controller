@@ -1,15 +1,140 @@
 import datetime
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QMessageBox, QFrame, QComboBox, QTableWidget, QTableWidgetItem,
-    QAbstractItemView, QScrollArea, QCheckBox,
+    QAbstractItemView, QScrollArea, QCheckBox, QDialog, QFileDialog, QApplication,
 )
 
 from client import api, session
 from client import theme
+from client.theme import STATUS_NEUTRAL_COLOR, STATUS_SUCCESS_COLOR, STATUS_ERROR_COLOR, STATUS_WARNING_COLOR
 from client.branding import make_page_header
+from client.events import bus
 from version import VERSION
+
+
+class _InstallCertificateDialog(QDialog):
+    """Lets an admin pick a certificate + private key (+ optional CA
+    chain) off disk and install them as the controller's TLS identity.
+    All parsing/validation happens server-side (see
+    backend/tls_manager.py) - this just collects file paths, confirms
+    the disruptive part (an automatic backend restart) up front, and
+    shows whatever the install endpoint hands back."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle("Install Custom Certificate")
+        self.setModal(True)
+        self.setMinimumWidth(480)
+
+        self.cert_path = ""
+        self.key_path = ""
+        self.chain_path = ""
+
+        layout = QVBoxLayout(self)
+
+        hint = QLabel(
+            "Upload a certificate and private key issued by your PKI team (PEM format). "
+            "Add the issuing CA chain too if you have one - without it, clients and agents "
+            "will pin the leaf certificate itself, which only verifies correctly for "
+            "self-signed certs, not ones issued by a CA."
+        )
+        hint.setWordWrap(True)
+        theme.style_hint_label(hint)
+        layout.addWidget(hint)
+
+        layout.addLayout(self._file_row("Certificate (.crt/.pem):", "cert_path"))
+        layout.addLayout(self._file_row("Private Key (.key/.pem):", "key_path"))
+        layout.addLayout(self._file_row("CA Chain (optional):", "chain_path"))
+
+        warning = QLabel(
+            "Installing restarts the backend automatically to apply the new certificate. "
+            "Every open Sysible window will briefly show as disconnected, then recover on "
+            "its own once the backend is back up."
+        )
+        warning.setWordWrap(True)
+        warning.setStyleSheet(f"color: {STATUS_WARNING_COLOR};")
+        layout.addWidget(warning)
+
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        buttons = QHBoxLayout()
+        self.install_btn = QPushButton("Install Certificate")
+        self.install_btn.clicked.connect(self._install)
+        buttons.addWidget(self.install_btn)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        buttons.addWidget(cancel_btn)
+        layout.addLayout(buttons)
+
+    def _file_row(self, label_text, attr_name):
+        row = QHBoxLayout()
+        row.addWidget(QLabel(label_text))
+
+        field = QLineEdit()
+        field.setReadOnly(True)
+        setattr(self, f"{attr_name}_field", field)
+        row.addWidget(field, 1)
+
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(lambda: self._browse(attr_name))
+        row.addWidget(browse_btn)
+        return row
+
+    def _browse(self, attr_name):
+        path, _ = QFileDialog.getOpenFileName(self, "Choose file")
+        if path:
+            setattr(self, attr_name, path)
+            getattr(self, f"{attr_name}_field").setText(path)
+
+    def _install(self):
+        if not self.cert_path or not self.key_path:
+            QMessageBox.warning(self, "Missing file", "Choose both a certificate and a private key.")
+            return
+
+        confirm = QMessageBox.question(
+            self, "Install Certificate",
+            "This replaces the controller's current TLS certificate and restarts the "
+            "backend service to apply it. Continue?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        self.install_btn.setEnabled(False)
+        self.status_label.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
+        self.status_label.setText("Uploading and validating...")
+        QApplication.processEvents()
+
+        # Tell the GUI's backend watchdog to expect a restart BEFORE
+        # calling the endpoint that triggers one (see
+        # client/events.py's backend_restart_expected / main.py's
+        # _suppress_watchdog) - 30s comfortably covers a systemd
+        # restart of this small a process.
+        bus.backend_restart_expected.emit(30)
+
+        try:
+            result = api.install_tls_certificate(self.cert_path, self.key_path, self.chain_path or None)
+        except Exception as e:
+            self.install_btn.setEnabled(True)
+            self.status_label.setStyleSheet(f"color: {STATUS_ERROR_COLOR};")
+            self.status_label.setText(f"Install failed: {e}")
+            return
+
+        self.status_label.setStyleSheet(f"color: {STATUS_SUCCESS_COLOR};")
+        self.status_label.setText(f"Installed - subject: {result.get('subject', '')}.")
+
+        QMessageBox.information(
+            self, "Certificate Installed",
+            "The new certificate was installed and the backend is restarting to apply it. "
+            "Give it a few seconds, then use Refresh on the TLS Certificate section to confirm."
+        )
+        self.accept()
 
 
 class AdminConfigurationPage(QWidget):
@@ -24,9 +149,13 @@ class AdminConfigurationPage(QWidget):
     "Sysible Administrator Configuration" - renamed since it now covers
     more than just administrator accounts.
 
-    Five sections:
+    Six sections:
       - Controller Configuration: hostname/IP/port baked into agent
         bundles (formerly client/controller_configuration_page.py).
+      - TLS Certificate: the cert/key the controller presents over
+        HTTPS. Self-signed by default (install_sysible.sh) - install
+        one issued by an external PKI team here instead, if you have
+        one. See backend/tls_manager.py for the validate/install logic.
       - Administrators: who can log into this dashboard. Replaces the
         old single shared admin/admin login with named accounts -
         add/remove others, and change your own username/password.
@@ -72,28 +201,35 @@ class AdminConfigurationPage(QWidget):
         layout.addWidget(self._divider())
 
         # =====================================================
-        # SECTION 2: ADMINISTRATORS
+        # SECTION 2: TLS CERTIFICATE
+        # =====================================================
+        self._build_tls_section(layout)
+
+        layout.addWidget(self._divider())
+
+        # =====================================================
+        # SECTION 3: ADMINISTRATORS
         # =====================================================
         self._build_administrators_section(layout)
 
         layout.addWidget(self._divider())
 
         # =====================================================
-        # SECTION 3: ADMINISTRATOR PASSWORD POLICY
+        # SECTION 4: ADMINISTRATOR PASSWORD POLICY
         # =====================================================
         self._build_admin_password_policy_section(layout)
 
         layout.addWidget(self._divider())
 
         # =====================================================
-        # SECTION 4: AUDIT LOG
+        # SECTION 5: AUDIT LOG
         # =====================================================
         self._build_audit_log_section(layout)
 
         layout.addWidget(self._divider())
 
         # =====================================================
-        # SECTION 5: LICENSE & VERSION
+        # SECTION 6: LICENSE & VERSION
         # =====================================================
         self._build_license_version_section(layout)
 
@@ -329,7 +465,122 @@ class AdminConfigurationPage(QWidget):
             self.controller_status_label.setText(f"Saved - bundles will use: {used}:{config.get('port')}")
 
     # =========================================================
-    # SECTION 2: ADMINISTRATORS
+    # SECTION 2: TLS CERTIFICATE
+    # =========================================================
+    def _build_tls_section(self, layout):
+        layout.addWidget(self._section_label("TLS Certificate"))
+
+        hint = QLabel(
+            "The certificate the controller presents over HTTPS, to this dashboard and "
+            "every enrolled agent. Self-signed by default (install_sysible.sh) - install "
+            "one issued by your PKI team here instead if you have one. Installing "
+            "replaces it immediately and restarts the backend to apply it; every open "
+            "Sysible window briefly shows as disconnected, then recovers on its own. "
+            "Already-enrolled agents and GUI machines keep trusting whatever certificate "
+            "they last pinned until you redistribute the new one to them - use Download "
+            "Trust Certificate below and copy it over SYSIBLE_CA_CERT on each. New agent "
+            "bundles built after installing pick up the new trust certificate automatically."
+        )
+        theme.style_hint_label(hint)
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self.tls_info_label = QLabel("")
+        self.tls_info_label.setWordWrap(True)
+        layout.addWidget(self.tls_info_label)
+
+        tls_buttons = QHBoxLayout()
+
+        tls_refresh_btn = QPushButton("Refresh")
+        tls_refresh_btn.clicked.connect(self.refresh_tls_info)
+
+        install_cert_btn = QPushButton("Install Custom Certificate...")
+        install_cert_btn.clicked.connect(self.open_install_certificate_dialog)
+
+        download_trust_btn = QPushButton("Download Trust Certificate")
+        download_trust_btn.clicked.connect(self.download_trust_certificate)
+
+        tls_buttons.addWidget(tls_refresh_btn)
+        tls_buttons.addWidget(install_cert_btn)
+        tls_buttons.addWidget(download_trust_btn)
+        layout.addLayout(tls_buttons)
+
+    def refresh_tls_info(self, show_errors=True):
+        try:
+            info = api.get_tls_info()
+        except Exception as e:
+            if show_errors:
+                QMessageBox.critical(self, "Error", str(e))
+            return
+
+        self._render_tls_info(info)
+
+    def _render_tls_info(self, info):
+        """Color-codes the same way Network Management/System Health do for
+        other "is this thing OK" readouts - green/amber/red via the shared
+        STATUS_* constants, see client/theme.py."""
+        if not info.get("installed"):
+            self.tls_info_label.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
+            self.tls_info_label.setText("No certificate installed yet.")
+            return
+
+        kind = "Self-signed" if info.get("is_self_signed") else "PKI-issued"
+        days = info.get("days_remaining")
+
+        if info.get("is_expired"):
+            color = STATUS_ERROR_COLOR
+            validity = f"EXPIRED {abs(days)} day(s) ago"
+        elif days is not None and days <= 30:
+            color = STATUS_WARNING_COLOR
+            validity = f"expires in {days} day(s)"
+        else:
+            color = STATUS_SUCCESS_COLOR
+            validity = f"valid, expires in {days} day(s)" if days is not None else "valid"
+
+        trust_note = (
+            "" if info.get("is_self_signed") or not info.get("has_trust_file")
+            else " A separate trust certificate is installed for clients/agents to pin."
+        )
+
+        self.tls_info_label.setStyleSheet(f"color: {color};")
+        self.tls_info_label.setText(
+            f"{kind} - {validity}\n"
+            f"Subject: {info.get('subject', '')}\n"
+            f"Issuer: {info.get('issuer', '')}{trust_note}"
+        )
+
+    def open_install_certificate_dialog(self):
+        dialog = _InstallCertificateDialog(self)
+        if dialog.exec() == QDialog.Accepted:
+            # Quiet refresh - the backend was just told to restart (see
+            # the dialog's backend_restart_expected emit) and likely
+            # hasn't come back up yet by the time this modal closes. A
+            # failed fetch here is expected, not something to interrupt
+            # the admin over - the section's own Refresh button covers
+            # the "check on it a few seconds later" the dialog's closing
+            # message already points them at.
+            self.refresh_tls_info(show_errors=False)
+
+    def download_trust_certificate(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save Trust Certificate", "trust.crt")
+        if not path:
+            return
+
+        try:
+            api.download_trust_certificate(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+            return
+
+        QMessageBox.information(
+            self, "Saved",
+            f"Trust certificate saved to {path}. Copy it to the path each GUI machine "
+            "and agent host pins via the SYSIBLE_CA_CERT environment variable, then "
+            "restart the GUI / sysible-agent service on each so they pick it up."
+        )
+
+    # =========================================================
+    # SECTION 3: ADMINISTRATORS
     # =========================================================
     def _build_administrators_section(self, layout):
         layout.addWidget(self._section_label("Administrators"))
@@ -536,7 +787,7 @@ class AdminConfigurationPage(QWidget):
         QMessageBox.information(self, "Saved", "Your credentials have been updated.")
 
     # =========================================================
-    # SECTION 3: ADMINISTRATOR PASSWORD POLICY
+    # SECTION 4: ADMINISTRATOR PASSWORD POLICY
     # =========================================================
     def _build_admin_password_policy_section(self, layout):
         layout.addWidget(self._section_label("Administrator Password Policy"))
@@ -623,7 +874,7 @@ class AdminConfigurationPage(QWidget):
         )
 
     # =========================================================
-    # SECTION 4: AUDIT LOG
+    # SECTION 5: AUDIT LOG
     # =========================================================
     def _build_audit_log_section(self, layout):
         layout.addWidget(self._section_label("Audit Log"))
@@ -675,7 +926,7 @@ class AdminConfigurationPage(QWidget):
             return str(value)
 
     # =========================================================
-    # SECTION 5: LICENSE & VERSION
+    # SECTION 6: LICENSE & VERSION
     # =========================================================
     def _build_license_version_section(self, layout):
         layout.addWidget(self._section_label("License & Version"))
@@ -728,6 +979,7 @@ class AdminConfigurationPage(QWidget):
 
     def refresh(self):
         self.refresh_controller_config()
+        self.refresh_tls_info()
         self.refresh_administrators()
         self.refresh_admin_password_policy()
         self.refresh_audit_log()

@@ -10,10 +10,12 @@ from client import theme
 from client.events import bus
 from client.theme import STATUS_NEUTRAL_COLOR, STATUS_SUCCESS_COLOR, STATUS_ERROR_COLOR
 from client.branding import make_page_header
+from client.tab_sizing import shrink_tabwidget_to_current_page
 from client.collapsible_groups import (
     make_group_header_item, apply_collapse_state, get_collapsed_groups,
     connect_group_toggle, add_collapse_expand_buttons,
 )
+from client.host_panel import build_host_panel
 
 HOST_REFRESH_MS = 10000
 SERVICE_POLL_MS = 2000
@@ -43,7 +45,7 @@ class ServiceManagementPage(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Service Management")
-        self.resize(1100, 820)
+        self.resize(1350, 820)
 
         self.service_results = {}    # entry_key -> {label, stdout, stderr, code, pending}
         self.service_pending = {}    # entry_key -> (entry, task_id)
@@ -56,19 +58,13 @@ class ServiceManagementPage(QWidget):
         main.addLayout(make_page_header("Service Management"))
 
         # =========================================================
-        # TARGET HOSTS (agent + SSH, merged)
+        # BODY: Target Hosts as a full-height left column (#352),
+        # everything else in the right-hand content column.
         # =========================================================
-        hosts_box = QVBoxLayout()
+        body = QHBoxLayout()
 
         self.host_list = QListWidget()
-        self.host_list.setFixedHeight(70)
         connect_group_toggle(self.host_list)
-
-        hosts_header = QHBoxLayout()
-        hosts_title = QLabel("Target Hosts (agent + SSH)")
-        hosts_title.setStyleSheet("font-weight: bold;")
-        hosts_header.addWidget(hosts_title)
-        hosts_header.addStretch()
 
         btn_refresh_hosts = QPushButton("Refresh Hosts")
         btn_refresh_hosts.clicked.connect(self.load_hosts)
@@ -81,34 +77,33 @@ class ServiceManagementPage(QWidget):
 
         btn_collapse_all, btn_expand_all = add_collapse_expand_buttons(self.host_list)
 
-        hosts_header.addWidget(btn_refresh_hosts)
-        hosts_header.addWidget(btn_select_all)
-        hosts_header.addWidget(btn_deselect_all)
-        hosts_header.addWidget(btn_collapse_all)
-        hosts_header.addWidget(btn_expand_all)
+        body.addWidget(build_host_panel(
+            "Target Hosts (agent + SSH)", self.host_list,
+            [[btn_refresh_hosts, btn_select_all, btn_deselect_all],
+             [btn_collapse_all, btn_expand_all]],
+        ))
 
-        hosts_box.addLayout(hosts_header)
-        hosts_box.addWidget(self.host_list)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
 
-        main.addLayout(hosts_box)
-
-        # =========================================================
+        # ---------------------------------------------------------
         # SERVICE NAME + ACTIONS
-        # =========================================================
-        main.addWidget(self._build_actions_panel())
+        # ---------------------------------------------------------
+        content_layout.addWidget(self._build_actions_panel())
 
-        # =========================================================
+        # ---------------------------------------------------------
         # CREATE / CONFIGURE (collapsed by default - these are
         # occasional setup actions, not the day-to-day start/stop/
         # status checks above, so they shouldn't permanently eat into
         # the vertical space the results panel below needs to actually
         # be readable)
-        # =========================================================
+        # ---------------------------------------------------------
         self.advanced_toggle = QPushButton("▸ Create / Configure Service (click to expand)")
         self.advanced_toggle.setCheckable(True)
         self.advanced_toggle.setChecked(False)
         self.advanced_toggle.clicked.connect(self._toggle_advanced)
-        main.addWidget(self.advanced_toggle)
+        content_layout.addWidget(self.advanced_toggle)
 
         self.advanced_panel = QWidget()
         advanced_layout = QVBoxLayout(self.advanced_panel)
@@ -116,9 +111,9 @@ class ServiceManagementPage(QWidget):
         advanced_layout.addWidget(self._build_create_panel())
         advanced_layout.addWidget(self._build_dependencies_panel())
         self.advanced_panel.setVisible(False)
-        main.addWidget(self.advanced_panel)
+        content_layout.addWidget(self.advanced_panel)
 
-        # =========================================================
+        # ---------------------------------------------------------
         # RESULTS
         # Given stretch factor 1 - the only stretchy widget in this
         # layout - so it claims all vertical space the sections above
@@ -127,8 +122,11 @@ class ServiceManagementPage(QWidget):
         # services is too small to use": there was nothing wrong with
         # the widget itself, it just never got given any room to grow
         # into.
-        # =========================================================
-        main.addWidget(self._build_results_panel(), 1)
+        # ---------------------------------------------------------
+        content_layout.addWidget(self._build_results_panel(), 1)
+
+        body.addWidget(content, 1)
+        main.addLayout(body, 1)
 
         # =========================================================
         # DATA
@@ -351,6 +349,7 @@ class ServiceManagementPage(QWidget):
         self.service_tabs.setTabsClosable(True)
         self.service_tabs.tabCloseRequested.connect(self._close_service_tab)
         self.service_tabs.currentChanged.connect(self.on_service_tab_changed)
+        shrink_tabwidget_to_current_page(self.service_tabs)
         layout.addWidget(self.service_tabs)
         return panel
 
@@ -424,22 +423,13 @@ class ServiceManagementPage(QWidget):
         self.host_list.addItem(item)
 
     def _fit_host_list_height(self):
-        """A fixed 110px box looked fine with a handful of hosts but
-        left a large, obviously-unused blank gap below the rows when
-        there were only one or two - size to the actual *visible* row
-        count instead (collapsed groups should shrink the box, not
-        just hide their rows inside an unchanged-size box), capped so
-        a long host list still scrolls rather than taking over the
-        page."""
-        visible = sum(
-            1 for i in range(self.host_list.count())
-            if not self.host_list.item(i).isHidden()
-        )
-        row_h = self.host_list.sizeHintForRow(0) if visible else 22
-        if row_h <= 0:
-            row_h = 22
-        height = row_h * min(visible, 6) + 2 * self.host_list.frameWidth() + 6
-        self.host_list.setFixedHeight(max(48, min(height, 160)))
+        """No-op: the host list now lives in a full-height left column
+        (see #352, client/host_panel.py) instead of a short horizontal
+        strip, so it always expands to fill the available vertical
+        space instead of being capped to a handful of rows. Kept as a
+        method (rather than removing call sites) so existing
+        load_hosts() calls don't need to change."""
+        pass
 
     def select_all_hosts(self):
         for i in range(self.host_list.count()):

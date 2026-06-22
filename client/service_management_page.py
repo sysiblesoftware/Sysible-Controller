@@ -3,7 +3,7 @@ import html
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton,
-    QLineEdit, QTextEdit, QMessageBox, QCheckBox, QFrame, QTabWidget,
+    QLineEdit, QTextEdit, QMessageBox, QCheckBox, QFrame, QTabWidget, QComboBox,
 )
 from PySide6.QtCore import Qt, QTimer
 
@@ -53,6 +53,8 @@ class ServiceManagementPage(QWidget):
         self.service_pending = {}    # entry_key -> (entry, task_id)
         self.last_command_label = None
         self.installed_services = []   # parsed from the most recent "List Installed Services" run
+        self._user_fetch_pending = {}  # entry_key -> (entry, task_id) for the user dropdown
+        self._fetched_users = set()    # usernames gathered from checked hosts
 
         main = QVBoxLayout()
         self.setLayout(main)
@@ -144,6 +146,9 @@ class ServiceManagementPage(QWidget):
 
         self.service_poll_timer = QTimer()
         self.service_poll_timer.timeout.connect(self._poll_service)
+
+        self.user_fetch_timer = QTimer()
+        self.user_fetch_timer.timeout.connect(self._poll_user_fetch)
 
         bus.host_removed.connect(self.load_hosts)
 
@@ -269,12 +274,25 @@ class ServiceManagementPage(QWidget):
         self.new_service_workdir.setPlaceholderText("Working directory (optional)")
         self.new_service_workdir.setMaximumWidth(380)
 
-        self.new_service_user = QLineEdit()
-        self.new_service_user.setPlaceholderText("Run as user (default root)")
-        self.new_service_user.setMaximumWidth(220)
+        # Run-as-user: editable dropdown, populated on demand from the
+        # checked hosts (still typeable for a user the list doesn't have).
+        self.new_service_user = QComboBox()
+        self.new_service_user.setEditable(True)
+        self.new_service_user.addItem("root")
+        self.new_service_user.lineEdit().setPlaceholderText("Run as user (default root)")
+        self.new_service_user.setMinimumWidth(180)
+        self.new_service_user.setMaximumWidth(260)
+        btn_load_users = QPushButton("Load users from checked host(s)")
+        btn_load_users.clicked.connect(self.load_service_users)
+        self.user_load_status = QLabel("")
+        theme.style_hint_label(self.user_load_status)
 
-        self.new_service_restart = QLineEdit()
-        self.new_service_restart.setPlaceholderText("Restart policy (default on-failure)")
+        # Restart policy: the fixed set of systemd Restart= values.
+        self.new_service_restart = QComboBox()
+        self.new_service_restart.addItems([
+            "on-failure", "always", "on-success", "on-abnormal",
+            "on-abort", "on-watchdog", "no",
+        ])
         self.new_service_restart.setMaximumWidth(220)
 
         self.new_service_after = QLineEdit()
@@ -288,10 +306,23 @@ class ServiceManagementPage(QWidget):
         for w in (
             self.new_service_name, self.new_service_description,
             self.new_service_exec_start, self.new_service_workdir,
-            self.new_service_user, self.new_service_restart,
-            self.new_service_after,
         ):
             layout.addWidget(w)
+
+        user_row = QHBoxLayout()
+        user_row.addWidget(QLabel("Run as user:"))
+        user_row.addWidget(self.new_service_user)
+        user_row.addWidget(btn_load_users)
+        user_row.addWidget(self.user_load_status, 1)
+        layout.addLayout(user_row)
+
+        restart_row = QHBoxLayout()
+        restart_row.addWidget(QLabel("Restart policy:"))
+        restart_row.addWidget(self.new_service_restart)
+        restart_row.addStretch()
+        layout.addLayout(restart_row)
+
+        layout.addWidget(self.new_service_after)
         layout.addWidget(self.new_service_enable_now)
 
         btn_create = QPushButton("Create Service")
@@ -533,8 +564,8 @@ class ServiceManagementPage(QWidget):
                 description=self.new_service_description.text(),
                 exec_start=self.new_service_exec_start.text(),
                 working_directory=self.new_service_workdir.text(),
-                run_as_user=self.new_service_user.text() or "root",
-                restart_policy=self.new_service_restart.text() or "on-failure",
+                run_as_user=self.new_service_user.currentText() or "root",
+                restart_policy=self.new_service_restart.currentText() or "on-failure",
                 after=self.new_service_after.text() or "network.target",
                 enable_now=self.new_service_enable_now.isChecked(),
             )
@@ -543,6 +574,78 @@ class ServiceManagementPage(QWidget):
             return
 
         self._run_service_command(cmd, f"Create service '{name}'")
+
+    # ---------------- "Run as user" dropdown population ----------------
+    def load_service_users(self):
+        """Fetch local usernames from the checked host(s) into the Run-as-user
+        dropdown. SSH results come back synchronously; agent results are
+        polled in. The union across hosts is shown (still editable, so a
+        user only some hosts have can still be typed)."""
+        entries = self.checked_entries()
+        if not entries:
+            QMessageBox.information(self, "No hosts checked", "Check one or more target hosts first.")
+            return
+
+        self.user_fetch_timer.stop()
+        self._user_fetch_pending = {}
+        self._fetched_users = set()
+        self.user_load_status.setText("Loading users...")
+
+        for entry in entries:
+            try:
+                result = api.run_on_entry(entry, api.cmd_list_usernames())
+            except Exception:
+                continue
+            if result["sync"]:
+                self._fetched_users |= self._parse_usernames(result["stdout"])
+            elif not result.get("error"):
+                self._user_fetch_pending[_entry_key(entry)] = (entry, result["task_id"])
+
+        self._apply_user_combo()
+        if self._user_fetch_pending:
+            self.user_fetch_timer.start(SERVICE_POLL_MS)
+        else:
+            self.user_load_status.setText(f"{len(self._fetched_users)} user(s) loaded.")
+
+    def _poll_user_fetch(self):
+        if not self._user_fetch_pending:
+            self.user_fetch_timer.stop()
+            return
+        done = []
+        for key, (entry, task_id) in list(self._user_fetch_pending.items()):
+            result = api.poll_entry_result(entry, task_id)
+            if result is None:
+                continue
+            self._fetched_users |= self._parse_usernames(result["stdout"])
+            done.append(key)
+        for key in done:
+            del self._user_fetch_pending[key]
+        self._apply_user_combo()
+        if not self._user_fetch_pending:
+            self.user_fetch_timer.stop()
+            self.user_load_status.setText(f"{len(self._fetched_users)} user(s) loaded.")
+
+    @staticmethod
+    def _parse_usernames(stdout):
+        out = set()
+        for line in (stdout or "").splitlines():
+            name = line.strip()
+            if name and name != "could not read user list":
+                out.add(name)
+        return out
+
+    def _apply_user_combo(self):
+        # Preserve whatever's currently typed/selected, root first.
+        current = self.new_service_user.currentText().strip()
+        names = sorted(self._fetched_users)
+        ordered = (["root"] if "root" in names else []) + [n for n in names if n != "root"]
+        if not ordered:
+            ordered = ["root"]
+        self.new_service_user.blockSignals(True)
+        self.new_service_user.clear()
+        self.new_service_user.addItems(ordered)
+        self.new_service_user.setCurrentText(current or "root")
+        self.new_service_user.blockSignals(False)
 
     def run_set_dependencies(self):
         name = self._service_name()

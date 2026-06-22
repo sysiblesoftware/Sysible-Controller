@@ -181,6 +181,17 @@ def _service_unit(name: str) -> str:
     return name if name.endswith(".service") else f"{name}.service"
 
 
+def cmd_list_usernames() -> str:
+    """All local usernames on the host, one per line - used to populate the
+    "Run as user" dropdown when creating a service. getent covers NSS
+    sources (LDAP/SSSD) too, with a flat /etc/passwd fallback."""
+    return (
+        "getent passwd 2>/dev/null | cut -d: -f1 "
+        "|| awk -F: '{print $1}' /etc/passwd 2>/dev/null "
+        "|| echo 'could not read user list'"
+    )
+
+
 def cmd_list_services() -> str:
     return (
         "systemctl list-unit-files --type=service --no-legend 2>/dev/null "

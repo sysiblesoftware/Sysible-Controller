@@ -577,12 +577,11 @@ class ServiceManagementPage(QWidget):
         self.service_pending = {}
         self.service_tabs.clear()
 
-        if label != "Installed Services":
-            # Stale results from a previous "List Installed Services"
-            # run shouldn't keep showing up as filterable/clickable
-            # once a different command's output is on screen.
-            self.installed_services = []
-            self.installed_services_list.clear()
+        # NOTE: the installed-services picker is deliberately NOT cleared
+        # here. It's a convenience list for filling the service name field,
+        # not tied to the current output - wiping it on every Start/Stop/...
+        # meant the service you just picked vanished and had to be looked up
+        # again. It's only replaced when "List Installed Services" reruns.
 
         for entry in entries:
             key = _entry_key(entry)

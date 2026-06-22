@@ -2,7 +2,7 @@
 
 **IT Infrastructure Management Software for Linux fleets — one console, agent or SSH, no DSL to learn.**
 
-Sysible Controller is a self-hosted infrastructure management console for Linux system administrators and engineers. One controller, installed on a single Linux machine, gives you a single point of control over an entire fleet of Linux hosts — user and group administration, health diagnostics, service control, scheduled jobs, package and repository management, and a live remote terminal — whether each host runs Sysible's lightweight agent or is reached directly over SSH.
+Sysible Controller is a self-hosted infrastructure management console for Linux system administrators and engineers. One controller, installed on a single Linux machine, gives you a single point of control over an entire fleet of Linux hosts — user and group administration, health diagnostics, service control, scheduled jobs, package and repository management, networking, storage and filesystem management, firewall and security hardening, and a live remote terminal — whether each host runs Sysible's lightweight agent or is reached directly over SSH.
 
 ![Sysible Controller](sysible_logo.png)
 
@@ -37,6 +37,8 @@ What that buys you in practice:
 - **Security defaults that don't require a PKI team.** Self-signed TLS scoped to every address the controller can be reached at, a dedicated SSH key pair generated and managed per fleet, single-use enrollment tokens so a leaked agent bundle can't silently enroll a second host, and an audit log of who logged in and what administrator accounts changed — all provisioned automatically at install time.
 - **Self-service without handing out admin access.** The Webserver Portal lets a host owner fetch their own agent bundle or drop off a file without ever touching the admin GUI, SSH, or a credential that could be used for anything else.
 - **Cross-distro by design.** The installer and every package/repository action detect `dnf`, `yum`, `zypper`, or `apt-get` at the moment they run, so a mixed RHEL/SUSE/Debian fleet is one fleet, not three separate runbooks.
+- **Find any action by name.** A search box on the dashboard matches plain-language tasks — "create a user", "add a repository", "open a firewall port" — and jumps straight to the right tool (and, for User & Group Administration, the right tab), so you never have to remember which of the twelve System Administration tools owns it.
+- **Dark or light, your call.** A header toggle switches the entire GUI between a dark and a light theme on the fly — every open window re-skins immediately, no restart — and remembers the choice for next time.
 
 ## Key capabilities
 
@@ -51,6 +53,11 @@ What that buys you in practice:
 | **Cron & Systemd Timers** | Manage both scheduling mechanisms side by side, with a plain-English schedule builder that writes correct cron or `OnCalendar` syntax for you. |
 | **Host Software Management** | Detect the package manager, list/install/remove/update packages, query package info, verify package integrity, and clean the package cache — across `dnf`, `yum`, `zypper`, and `apt` hosts with the same buttons. |
 | **Repository Management** | Add, enable, disable, and remove package repositories on one host or roll a new repo out to the entire fleet at once. |
+| **Network Management** | Connectivity and DNS diagnostics, port/socket inspection and packet capture, and configuration of IP addressing, DHCP, DNS, hostname, gateways and routing, MTU, and advanced layer-2 setups (bonding, teaming, VLANs, bridges) across managed hosts. |
+| **File System Management** | Create/remove directories, copy/move/rename files, manage ownership, permissions, ACLs, and links, mount/unmount/resize/repair filesystems, configure `/etc/fstab` and quotas, and archive/compress files. |
+| **Storage Administration** | Partition, format, and monitor disks; manage LVM physical volumes, volume groups, and logical volumes; configure RAID arrays and replace failed disks; and set up swap space. |
+| **Firewall Administration** | Manage firewalld zones, ports, and rich rules, plus the underlying `nftables` and `iptables` rule sets, across managed hosts. |
+| **Security Administration** | Configure and troubleshoot SELinux, harden SSH access and rotate keys, review audit logs and failed logins, install security updates, set OS-level password policy, apply system hardening, and run vulnerability scans. |
 | **Webserver Portal** | A separate, optional HTTPS web app for host operators to self-service agent downloads and file exchange, with full login history, active-session visibility, and a shared file pool managed from the admin GUI. |
 | **Sysible Controller Settings** | Controller address/port configuration, administrator accounts, the administrator password policy, the audit log, and license/version info, all in one place. |
 

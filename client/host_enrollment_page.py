@@ -41,6 +41,10 @@ class HostEnrollmentPage(QWidget):
         super().__init__()
 
         self.setWindowTitle("Sysible Controller Host Enrollment")
+        # Open at a usable size rather than Qt's tiny default. Freely
+        # resizable.
+        self.resize(900, 720)
+        self.setMinimumSize(680, 500)
 
         self.agents = []
         self.environments = []

@@ -178,6 +178,12 @@ class AdminConfigurationPage(QWidget):
         super().__init__()
 
         self.setWindowTitle("Sysible Controller Settings")
+        # Open at a usable size rather than Qt's tiny default - this page
+        # stacks Controller Configuration, Administrators, the password
+        # policy, and the audit log, so it needs room. Still freely
+        # resizable; the content lives in a scroll area below.
+        self.resize(960, 820)
+        self.setMinimumSize(720, 520)
 
         outer = QVBoxLayout()
         self.setLayout(outer)

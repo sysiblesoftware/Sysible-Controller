@@ -36,6 +36,17 @@ _TERM_DEFAULT_FG = "#E8E8E8"
 _WEIGHT_NORMAL = 400
 _WEIGHT_BOLD = 700
 
+# Sent into a fresh SSH shell to give it a consistent, safety-coloured
+# prompt: user@host in GREEN normally, RED when you are root. The colour
+# is re-evaluated on every prompt (via $EUID), so su / sudo -i flips it
+# to red live. bash only - other shells ($BASH_VERSION empty) are left
+# untouched. The trailing `clear` wipes this command's own echo.
+_PROMPT_SETUP = (
+    'if [ -n "$BASH_VERSION" ]; then '
+    "export PS1='\\[\\e[$([ $EUID -eq 0 ] && echo 31 || echo 32)m\\]"
+    "\\u@\\h\\[\\e[0m\\]:\\w\\$ '; fi; clear\n"
+)
+
 from client import api
 from client.branding import make_page_header
 from client.events import bus
@@ -403,9 +414,8 @@ def _connection_options(entry):
 
 
 def _default_underlying(entry):
-    """The sub-entry the main page targets for quick commands and file
-    transfer - SSH preferred on a merged host, otherwise the entry
-    itself."""
+    """The sub-entry the main page targets for file transfer - SSH
+    preferred on a merged host, otherwise the entry itself."""
     if entry["kind"] == "merged":
         return entry["ssh_entry"] or entry["agent_entry"]
     return entry
@@ -525,10 +535,14 @@ class TerminalPopout(QWidget):
         clear_btn = QPushButton("Clear")
         clear_btn.clicked.connect(self.output.clear)
 
+        exit_btn = QPushButton("Exit Session")
+        exit_btn.clicked.connect(self.close)
+
         cmd_row.addWidget(self.cmd_input, 4)
         cmd_row.addWidget(self.run_btn)
         cmd_row.addWidget(self.interrupt_btn)
         cmd_row.addWidget(clear_btn)
+        cmd_row.addWidget(exit_btn)
         layout.addLayout(cmd_row)
 
         # ---- timers / io ----
@@ -617,6 +631,8 @@ class TerminalPopout(QWidget):
         self.output.setFocus()
         self._ssh_session_active = True
         self._terminal_io.submit_read(self.active_id)
+        # Apply the green-user / red-root prompt colouring (bash only).
+        self._send_terminal_input(_PROMPT_SETUP)
 
     def _send_terminal_input(self, data):
         self._terminal_io.submit_write(self.active_id, data)
@@ -817,8 +833,8 @@ class RemoteAdministrationPage(QWidget):
     Host" below): the password is used once to install the controller's
     key, then discarded. Agent hosts are enrolled from Host Enrollment.
 
-    The right-hand panel keeps the quick one-off command box and file
-    transfer, both acting on the currently selected host.
+    The right-hand panel keeps file transfer (acting on the currently
+    selected host) and the connect-a-new-SSH-host form.
     """
 
     def __init__(self):
@@ -835,7 +851,6 @@ class RemoteAdministrationPage(QWidget):
         self.active_id = None
         self.active_label = None
 
-        self.pending_quick_task = None     # agent one-off command
         self.pending_file_task = None      # agent file transfer
 
         self._terminals = {}               # host label -> TerminalPopout
@@ -878,9 +893,6 @@ class RemoteAdministrationPage(QWidget):
         main.addLayout(body, 1)
 
         # ---------------- timers / data ----------------
-        self.quick_timer = QTimer()
-        self.quick_timer.timeout.connect(self._poll_quick_task)
-
         self.file_poll_timer = QTimer()
         self.file_poll_timer.timeout.connect(self._poll_file_task)
 
@@ -922,37 +934,6 @@ class RemoteAdministrationPage(QWidget):
         detail_buttons.addWidget(self.remove_host_btn)
         detail_buttons.addStretch()
         col.addLayout(detail_buttons)
-
-        col.addWidget(self._divider())
-
-        # ---- quick one-off command ----
-        cmd_label = QLabel("Quick Command (runs once on the selected host)")
-        cmd_label.setStyleSheet("font-weight: bold;")
-        col.addWidget(cmd_label)
-
-        cmd_row = QHBoxLayout()
-        self.quick_input = QLineEdit()
-        self.quick_input.setPlaceholderText("Select a host, type a command, press Enter...")
-        self.quick_input.returnPressed.connect(self.run_quick_command)
-        self.quick_run_btn = QPushButton("Run")
-        self.quick_run_btn.clicked.connect(self.run_quick_command)
-        quick_clear_btn = QPushButton("Clear")
-        cmd_row.addWidget(self.quick_input, 4)
-        cmd_row.addWidget(self.quick_run_btn)
-        cmd_row.addWidget(quick_clear_btn)
-        col.addLayout(cmd_row)
-
-        mono = QFont()
-        mono.setFamilies(["Menlo", "Consolas", "DejaVu Sans Mono", "Courier New"])
-        mono.setStyleHint(QFont.Monospace)
-        mono.setPointSize(11)
-
-        self.quick_output = QTextEdit()
-        self.quick_output.setReadOnly(True)
-        self.quick_output.setFont(mono)
-        self.quick_output.setMinimumHeight(160)
-        quick_clear_btn.clicked.connect(self.quick_output.clear)
-        col.addWidget(self.quick_output, 1)
 
         col.addWidget(self._divider())
 
@@ -1153,7 +1134,7 @@ class RemoteAdministrationPage(QWidget):
         if entry["kind"] == "merged":
             self.connection_label.setText(
                 "Available connections: Agent and SSH — double-click to open a terminal and pick one. "
-                "Quick Command and File Transfer below use SSH."
+                "File Transfer below uses SSH."
             )
         elif entry["kind"] == "ssh":
             self.connection_label.setText("Connection: SSH.")
@@ -1285,102 +1266,6 @@ class RemoteAdministrationPage(QWidget):
             bus.host_removed.emit(agent_id)
         for ssh_id in (ssh_ids or []):
             bus.host_removed.emit(ssh_id)
-
-    # =====================================================
-    # QUICK ONE-OFF COMMAND
-    # =====================================================
-    def run_quick_command(self):
-        if not self.active_id:
-            self.quick_output.append("[select a host first]")
-            return
-
-        cmd = self.quick_input.text().strip()
-        if not cmd:
-            return
-
-        self.quick_input.clear()
-        self.quick_output.append(f"{self.active_label} ({self.active_kind}) $ {cmd}")
-        self._scroll_quick()
-
-        if self.active_kind == "ssh":
-            try:
-                result = api.exec_remote(self.active_id, cmd)
-            except Exception as e:
-                self.quick_output.append(str(e))
-                self._scroll_quick()
-                return
-            if result.get("stdout"):
-                self.quick_output.append(result["stdout"].rstrip("\n"))
-            if result.get("stderr"):
-                self.quick_output.append(result["stderr"].rstrip("\n"))
-            if result.get("code", 0) != 0:
-                self.quick_output.append(f"[exit code {result.get('code')}]")
-            self._scroll_quick()
-            return
-
-        # agent
-        if self.pending_quick_task:
-            self.quick_output.append("[a command is already running on this host - wait for it to finish]")
-            return
-
-        try:
-            task_ids = api.queue_command_on_hosts([self.active_id], cmd)
-        except Exception as e:
-            self.quick_output.append(str(e))
-            return
-
-        task_id = task_ids.get(self.active_id)
-        if task_id is None:
-            self.quick_output.append("[failed to queue command on agent]")
-            return
-
-        self.quick_output.append("running...")
-        self.quick_run_btn.setEnabled(False)
-        self.pending_quick_task = {
-            "host_id": self.active_id,
-            "task_id": task_id,
-            "deadline": time.time() + AGENT_CMD_TIMEOUT_S,
-        }
-        self.quick_timer.start(AGENT_CMD_POLL_MS)
-
-    def _poll_quick_task(self):
-        task = self.pending_quick_task
-        if not task:
-            self.quick_timer.stop()
-            return
-
-        try:
-            raw = api.get_result_by_task(task["host_id"], task["task_id"])
-        except Exception:
-            raw = None
-
-        if raw is None:
-            if time.time() > task["deadline"]:
-                self.quick_output.append("[timed out waiting for agent to report back]")
-                self.pending_quick_task = None
-                self.quick_timer.stop()
-                self.quick_run_btn.setEnabled(True)
-            return
-
-        output = api.parse_task_output(raw)
-        if output:
-            if output.get("stdout"):
-                self.quick_output.append(output["stdout"].rstrip("\n"))
-            if output.get("stderr"):
-                self.quick_output.append(output["stderr"].rstrip("\n"))
-            if output.get("returncode", 0) != 0:
-                self.quick_output.append(f"[exit code {output.get('returncode')}]")
-        else:
-            self.quick_output.append("[agent reported no usable output]")
-
-        self.pending_quick_task = None
-        self.quick_timer.stop()
-        self.quick_run_btn.setEnabled(True)
-        self._scroll_quick()
-
-    def _scroll_quick(self):
-        sb = self.quick_output.verticalScrollBar()
-        sb.setValue(sb.maximum())
 
     # =====================================================
     # ENVIRONMENTS (connect form)

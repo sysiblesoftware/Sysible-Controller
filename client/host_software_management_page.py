@@ -1,3 +1,5 @@
+import html
+
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton,
@@ -442,13 +444,43 @@ class HostSoftwareManagementPage(QWidget):
             text_edit.setPlainText("Waiting for this agent host to report back...")
             return
 
-        if data["stderr"] and not data["stdout"]:
-            text_edit.setPlainText(f"ERROR:\n{data['stderr']}")
+        # Success is judged by the exit code, not by whether anything went
+        # to stderr - apt writes harmless notices there ("apt does not have
+        # a stable CLI...", autoremove hints) even on a clean upgrade. A
+        # prominent banner makes "it finished" obvious: apt's own output
+        # just trails off (e.g. "Processing triggers for ...") with nothing
+        # that reads as "done".
+        code = data["code"]
+        label = getattr(self, "last_command_label", "Operation")
+        if code is not None:
+            failed = code != 0
         else:
-            text = data["stdout"]
-            if data["stderr"]:
-                text += f"\n\n--- stderr ---\n{data['stderr']}"
-            text_edit.setPlainText(text)
+            failed = bool(data["stderr"]) and not data["stdout"]
+
+        if failed:
+            bg = STATUS_ERROR_COLOR
+            headline = f"✗ {label} failed"
+        else:
+            bg = STATUS_SUCCESS_COLOR
+            headline = f"✓ {label} complete"
+        if code is not None:
+            headline += f" (exit {code})"
+
+        banner = (
+            f'<div style="background-color:{bg}; color:#ffffff; font-weight:bold; '
+            f'padding:5px 10px; border-radius:4px; margin:0 0 6px 0;">'
+            f'{html.escape(headline)}</div>'
+        )
+
+        text = data["stdout"]
+        if data["stderr"]:
+            text += f"\n\n--- stderr ---\n{data['stderr']}"
+
+        body = (
+            f'<pre style="font-family:monospace; white-space:pre-wrap; margin:0;">'
+            f'{html.escape(text)}</pre>'
+        )
+        text_edit.setHtml(banner + body)
 
     def _close_pkg_tab(self, index):
         bar = self.pkg_tabs.tabBar()
@@ -513,7 +545,7 @@ class HostSoftwareManagementPage(QWidget):
         if not self.pkg_pending:
             self.pkg_poll_timer.stop()
             self.pkg_status.setStyleSheet(f"color: {STATUS_SUCCESS_COLOR};")
-            self.pkg_status.setText("All hosts reported back.")
+            self.pkg_status.setText(f"'{self.last_command_label}' complete on all hosts.")
 
     def on_pkg_tab_changed(self, index):
         if index < 0:

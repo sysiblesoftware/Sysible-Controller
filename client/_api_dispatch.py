@@ -262,7 +262,18 @@ def poll_entry_sync_result(entry, task_id):
 # MANAGEMENT write actions above).
 # ---------------------------------------------------------
 def cmd_disk_usage() -> str:
-    return "df -hT"
+    """Human-readable disk usage with the noise filtered out. Drops pseudo
+    and read-only filesystems (tmpfs, devtmpfs, overlay, and squashfs/snap
+    loop images, optical iso9660/udf) and removable-media mounts under
+    /media, /run/media or /cdrom - none of that is real fixed storage and
+    it just buries the actual volumes. The System Health page rewrites the
+    remaining `df -hT` rows into plain sentences (the header is kept intact
+    so that rewrite still matches)."""
+    return (
+        "df -hT -x tmpfs -x devtmpfs -x overlay -x squashfs "
+        "-x iso9660 -x udf 2>/dev/null "
+        "| awk 'NR==1 || $7 !~ /^\\/(media|run\\/media|cdrom|snap)(\\/|$)/'"
+    )
 
 
 def cmd_memory_cpu_snapshot() -> str:

@@ -268,6 +268,51 @@ def _highlight_problems(text):
     return "\n".join(out_lines)
 
 
+_MEM_VERDICT_RE = re.compile(r"(?i)^memory usage:\s*.+?\((OK|WARNING|CRITICAL)\)")
+
+
+def _report_header(text):
+    """Pick a one-line status headline + severity for a coloured banner at
+    the top of a report, or None for reports with no clear verdict (plain
+    logs, process lists). Recognizes the explicit verdicts the health
+    commands emit - "HEALTH: X" (Host Health Check) and "Memory usage: NN%
+    (X)" (Memory & CPU Snapshot) - and otherwise raises a generic banner
+    only when a problem line is actually present. Returns (headline,
+    is_problem); is_problem is True for WARNING/CRITICAL (banner goes red),
+    False for OK (banner goes green)."""
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("HEALTH:"):
+            verdict = s.split(":", 1)[1].strip().upper()
+            if verdict in ("OK", "WARNING", "CRITICAL"):
+                return f"Overall health: {verdict}", verdict != "OK"
+        m = _MEM_VERDICT_RE.match(s)
+        if m:
+            verdict = m.group(1).upper()
+            return s, verdict != "OK"
+    # No explicit verdict: flag a red banner only if some line is a problem.
+    for line in text.splitlines():
+        color = _line_color(line)
+        if color in (_status_color("CRITICAL"), _status_color("WARNING")):
+            return "Issues detected", True
+    return None
+
+
+def _report_banner_html(text):
+    """Coloured status banner (green = OK, red = problem) for the top of a
+    report tab, or "" when the report has no verdict worth a banner."""
+    header = _report_header(text)
+    if header is None:
+        return ""
+    headline, is_problem = header
+    bg = _status_color("CRITICAL") if is_problem else _status_color("OK")
+    return (
+        f'<div style="background-color:{bg}; color:#ffffff; font-weight:bold; '
+        f'padding:5px 10px; border-radius:4px; margin:0 0 6px 0;">'
+        f'{html.escape(headline)}</div>'
+    )
+
+
 class SystemHealthLogsPage(QWidget):
     """
     System Health & Logs against a *merged* host list (agent-enrolled
@@ -917,6 +962,7 @@ class SystemHealthLogsPage(QWidget):
         # just the combined Host Health Check's leading verdict, every
         # health/process/log report gets the same treatment.
         text_edit.setHtml(
+            f'{_report_banner_html(data["stdout"])}'
             f'<pre style="font-family:monospace; white-space:pre-wrap; margin:0;">'
             f'{_highlight_problems(_humanize_report(text))}</pre>'
         )

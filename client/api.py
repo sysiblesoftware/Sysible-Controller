@@ -370,3 +370,8 @@ from client._api_filesystem_mount import *  # noqa: E402,F401,F403
 from client._api_storage import *  # noqa: E402,F401,F403
 from client._api_firewall import *  # noqa: E402,F401,F403
 from client._api_security import *  # noqa: E402,F401,F403
+from client._api_backup import *  # noqa: E402,F401,F403
+from client._api_boot import *  # noqa: E402,F401,F403
+from client._api_timesync import *  # noqa: E402,F401,F403
+from client._api_certs import *  # noqa: E402,F401,F403
+from client._api_containers import *  # noqa: E402,F401,F403

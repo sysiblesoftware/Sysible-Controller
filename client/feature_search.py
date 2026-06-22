@@ -104,6 +104,44 @@ REGISTRY = [
                   "disable repository", "remove repository",
                   "repository to all hosts", "add repo to all hosts"]},
 
+    # ---- Backup & Recovery ----
+    {"title": "Backup & Recovery", "open": "open_system_admin", "sub_open": "open_backup_recovery",
+     "keywords": ["backup", "back up files", "restore files", "verify backup",
+                  "backup schedule", "schedule backup", "snapshot", "create snapshot",
+                  "restore snapshot", "recover deleted files", "disaster recovery",
+                  "dr test"]},
+
+    # ---- System Boot & Recovery ----
+    {"title": "System Boot & Recovery", "open": "open_system_admin", "sub_open": "open_boot_recovery",
+     "keywords": ["boot failure", "analyze boot", "grub", "change grub",
+                  "rebuild grub", "rescue mode", "emergency mode", "boot target",
+                  "initramfs", "regenerate initramfs", "kernel parameters",
+                  "kernel cmdline", "manage kernels", "remove old kernels"]},
+
+    # ---- Time Synchronization ----
+    {"title": "Time Synchronization", "open": "open_system_admin", "sub_open": "open_timesync",
+     "keywords": ["ntp", "configure ntp", "chrony", "configure chrony",
+                  "time sync", "verify synchronization", "clock drift",
+                  "time zone", "timezone", "set time zone"]},
+
+    # ---- Certificate Management ----
+    {"title": "Certificate Management", "open": "open_system_admin", "sub_open": "open_cert_mgmt",
+     "keywords": ["certificate", "csr", "generate csr", "install certificate",
+                  "ssl certificate", "renew certificate", "replace expired certificate",
+                  "certificate chain", "tls", "troubleshoot tls", "openssl"]},
+
+    # ---- Containers & VMs ----
+    {"title": "Containers & VMs", "open": "open_system_admin", "sub_open": "open_containers_vms",
+     "keywords": ["container", "docker", "podman", "container logs", "list containers",
+                  "images", "virtual machine", "vm", "libvirt", "virsh", "kvm"]},
+
+    # ---- Run Command & Automation ----
+    {"title": "Run Command & Automation", "open": "open_system_admin", "sub_open": "open_automation",
+     "keywords": ["run command", "run script", "run a script", "run a command",
+                  "ad hoc", "ad-hoc", "automate", "automation", "execute command",
+                  "fleet command", "run on all hosts", "across all hosts",
+                  "script on hosts", "repetitive task", "shell command"]},
+
     # ---- License & Version (now a section of Sysible Controller
     # Settings, not its own tile - see client/admin_configuration_page.py) ----
     {"title": "License & Version", "open": "open_admin_config",

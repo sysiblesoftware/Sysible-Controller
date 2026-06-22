@@ -58,6 +58,12 @@ What that buys you in practice:
 | **Storage Administration** | Partition, format, and monitor disks; manage LVM physical volumes, volume groups, and logical volumes; configure RAID arrays and replace failed disks; and set up swap space. |
 | **Firewall Administration** | Manage firewalld zones, ports, and rich rules, plus the underlying `nftables` and `iptables` rule sets, across managed hosts. |
 | **Security Administration** | Configure and troubleshoot SELinux, harden SSH access and rotate keys, review audit logs and failed logins, install security updates, set OS-level password policy, apply system hardening, and run vulnerability scans. |
+| **Backup & Recovery** | Back up and restore files (timestamped tar.gz), verify backup integrity, install scheduled backups, create and merge LVM snapshots, guide deleted-file recovery, and run a read-only disaster-recovery drill. |
+| **System Boot & Recovery** | Analyze boot failures, view/change/rebuild GRUB, set a recovery boot target (rescue/emergency), configure kernel parameters, regenerate the initramfs, and list/remove old kernels. |
+| **Time Synchronization** | Configure chrony/NTP and point it at chosen servers, verify synchronization, troubleshoot clock drift, and set the system time zone. |
+| **Certificate Management** | Generate CSRs, install/renew/replace certificates, check expiry, verify certificate chains, and troubleshoot TLS endpoints with `openssl s_client`. |
+| **Containers & VMs** | List and start/stop/restart Docker or Podman containers, view container logs and images, prune, and manage libvirt virtual machines (list/start/shutdown/destroy/info). |
+| **Run Command & Automation** | Run an ad-hoc command or multi-line script on every checked host at once — the general-purpose tool for automating repetitive tasks across the fleet, with per-host output and exit code. |
 | **Webserver Portal** | A separate, optional HTTPS web app for host operators to self-service agent downloads and file exchange, with full login history, active-session visibility, and a shared file pool managed from the admin GUI. |
 | **Sysible Controller Settings** | Controller address/port configuration, administrator accounts, the administrator password policy, the audit log, and license/version info, all in one place. |
 

@@ -670,7 +670,7 @@ sudo ./run_agent.sh</pre>
 <div class="page" id="sysadmin">
 <h1 class="sec"><span class="tag">Section 10</span>System Administration</h1>
 
-<p>The System Administration menu is the hub for day-to-day fleet management. Rather than one sprawling window, it opens a compact launcher with twelve tiles, each opening its own dedicated window: <strong>User &amp; Group Administration</strong>, <strong>System Health &amp; Logs</strong>, <strong>Service Management</strong>, <strong>Environmental Policies</strong>, <strong>Cron &amp; Systemd Timers</strong>, <strong>Host Software Management</strong>, <strong>Repository Management</strong>, <strong>Network Management</strong>, <strong>File System Management</strong>, <strong>Storage Administration</strong>, <strong>Firewall Administration</strong>, and <strong>Security Administration</strong>.</p>
+<p>The System Administration menu is the hub for day-to-day fleet management. Rather than one sprawling window, it opens a compact launcher with eighteen tiles, each opening its own dedicated window: <strong>User &amp; Group Administration</strong>, <strong>System Health &amp; Logs</strong>, <strong>Service Management</strong>, <strong>Environmental Policies</strong>, <strong>Cron &amp; Systemd Timers</strong>, <strong>Host Software Management</strong>, <strong>Repository Management</strong>, <strong>Network Management</strong>, <strong>File System Management</strong>, <strong>Storage Administration</strong>, <strong>Firewall Administration</strong>, <strong>Security Administration</strong>, <strong>Backup &amp; Recovery</strong>, <strong>System Boot &amp; Recovery</strong>, <strong>Time Synchronization</strong>, <strong>Certificate Management</strong>, <strong>Containers &amp; VMs</strong>, and <strong>Run Command &amp; Automation</strong>.</p>
 
 <h2>What ties the twelve tools together</h2>
 <ul>
@@ -1135,6 +1135,68 @@ sudo ./run_agent.sh</pre>
 <tr><td>Run Lynis Scan</td><td>Runs a Lynis security audit and returns its findings.</td></tr>
 <tr><td>Run rkhunter Scan</td><td>Runs an rkhunter rootkit scan.</td></tr>
 </table>
+
+<h2 id="backuprecovery">Backup &amp; Recovery</h2>
+<p>File backups and recovery, dispatched to whichever hosts are checked, with a green/red success-or-failure banner on each host's result. Three tabs: <strong>Files</strong>, <strong>Snapshots</strong>, and <strong>Schedule &amp; DR</strong>.</p>
+<table class="ref">
+<tr><th>Action</th><th>What it does</th></tr>
+<tr><td>Back Up</td><td>Creates a timestamped <code>.tar.gz</code> of a source path under a destination directory.</td></tr>
+<tr><td>Restore</td><td>Extracts a <code>.tar.gz</code> archive into a chosen directory.</td></tr>
+<tr><td>Verify</td><td>Checks an archive's gzip integrity and confirms it is readable end to end.</td></tr>
+<tr><td>Install Scheduled Backup</td><td>Writes <code>/etc/cron.d/sysible-backup</code> (plus a helper script) that runs a timestamped backup on a given cron schedule.</td></tr>
+<tr><td>Create / Restore Snapshot</td><td>Creates an LVM snapshot of a logical volume, or merges a snapshot back into its origin (completing on the origin's next deactivation/reboot).</td></tr>
+<tr><td>Recover Deleted Files</td><td>Reports which recovery tools are present (extundelete/testdisk/photorec) and the safe, unmounted procedure — it does not auto-run recovery.</td></tr>
+<tr><td>Run DR Drill</td><td>Read-only disaster-recovery test: confirms a recent backup exists in a directory, reports its age, and verifies its integrity.</td></tr>
+</table>
+
+<h2 id="bootrecovery">System Boot &amp; Recovery</h2>
+<p>Boot diagnostics, GRUB, and kernel management. Two tabs: <strong>Boot &amp; GRUB</strong> and <strong>Kernels</strong>.</p>
+<table class="ref">
+<tr><th>Action</th><th>What it does</th></tr>
+<tr><td>Analyze Boot Failures</td><td>Recent boots, boot timing and slowest units, failed units, and boot-time error log lines.</td></tr>
+<tr><td>Show GRUB Config / Set Default / Set Timeout / Rebuild GRUB</td><td>Views <code>/etc/default/grub</code>, sets the default entry or menu timeout, and regenerates <code>grub.cfg</code> (update-grub / grub2-mkconfig, whichever the host uses).</td></tr>
+<tr><td>Set Boot Target</td><td>Sets the persistent default systemd target (multi-user / graphical / rescue / emergency) for the next boot.</td></tr>
+<tr><td>Set Kernel Parameters</td><td>Replaces <code>GRUB_CMDLINE_LINUX</code> and rebuilds grub.cfg (effective next boot).</td></tr>
+<tr><td>Regenerate initramfs</td><td>Rebuilds the initramfs via dracut / update-initramfs / mkinitcpio.</td></tr>
+<tr><td>List / Remove Old Kernels</td><td>Lists installed kernels and removes superseded ones, always keeping the running kernel and the newest N.</td></tr>
+</table>
+
+<h2 id="timesync">Time Synchronization</h2>
+<p>Time service configuration and time-zone management. Two tabs: <strong>NTP &amp; Chrony</strong> and <strong>Time Zone</strong>.</p>
+<table class="ref">
+<tr><th>Action</th><th>What it does</th></tr>
+<tr><td>Sync Status / Verify Synchronization</td><td>Shows <code>timedatectl</code> plus <code>chronyc</code>/<code>ntpq</code> state, and verifies whether the clock is synchronized.</td></tr>
+<tr><td>Install &amp; Enable chrony</td><td>Installs chrony (if needed) and enables and starts the service.</td></tr>
+<tr><td>Set NTP Servers</td><td>Rewrites chrony's server list and restarts it (keeping a backup of the config).</td></tr>
+<tr><td>Troubleshoot Clock Drift</td><td>Reports system-vs-hardware clock, drift/offset, and per-source measurements.</td></tr>
+<tr><td>Set Time Zone / List Time Zones</td><td>Sets the system time zone via <code>timedatectl</code>; the list action finds the exact zone name by filter.</td></tr>
+</table>
+
+<h2 id="certmgmt">Certificate Management</h2>
+<p>X.509 certificate lifecycle and TLS troubleshooting. Two tabs: <strong>Certificates</strong> and <strong>Chain &amp; TLS</strong>.</p>
+<table class="ref">
+<tr><th>Action</th><th>What it does</th></tr>
+<tr><td>Generate CSR</td><td>Creates a 2048-bit key and CSR under <code>/etc/ssl/sysible</code> and prints the CSR to submit to a CA.</td></tr>
+<tr><td>Install Certificate</td><td>Validates a certificate, then installs it (mode 644) and its key (mode 600) into <code>/etc/ssl/sysible</code>.</td></tr>
+<tr><td>Check Expiry</td><td>Shows subject/issuer/validity and flags certificates that are expired or due within 30 days (replace those).</td></tr>
+<tr><td>Renew via certbot</td><td>Renews Let's Encrypt certificates (all, or one domain) where certbot is installed.</td></tr>
+<tr><td>Verify Chain</td><td>Verifies a certificate (optionally against an intermediate chain) and lists the issuer chain.</td></tr>
+<tr><td>Troubleshoot TLS</td><td>Connects to a host:port with <code>openssl s_client</code> and reports the presented chain, validity, and verification result.</td></tr>
+</table>
+
+<h2 id="containersvms">Containers &amp; VMs</h2>
+<p>Container and virtual-machine management. Two tabs: <strong>Containers</strong> (Docker if present, else Podman) and <strong>Virtual Machines</strong> (libvirt).</p>
+<table class="ref">
+<tr><th>Action</th><th>What it does</th></tr>
+<tr><td>Detect Runtime / List Containers / List Images / Prune</td><td>Reports the container runtime and version, lists containers and images, and prunes stopped containers and dangling images.</td></tr>
+<tr><td>Container Action</td><td>start / stop / restart / pause / unpause / rm a container by name or ID.</td></tr>
+<tr><td>View Container Logs</td><td>Tails the last N log lines from a container.</td></tr>
+<tr><td>List VMs / VM Action / VM Info</td><td>Lists libvirt domains, performs start / shutdown / reboot / suspend / resume / destroy, and shows <code>virsh dominfo</code> for a domain.</td></tr>
+</table>
+
+<h2 id="automation">Run Command &amp; Automation</h2>
+<p>The general-purpose tool for ad-hoc tasks and automating repetitive work across the fleet. Enter a shell command or a multi-line script and run it on every checked host at once; each host's output and exit code come back in its own result tab with the usual green/red banner.</p>
+<div class="warn"><b>Runs exactly what you enter</b>The command/script executes as root via the agent (or over SSH) on every checked host. A confirmation dialog shows the host count and a preview before anything runs, but there is no syntax checking - double-check destructive commands first.</div>
 </div>
 
 <!-- ===================== 11. WEBSERVER PORTAL ===================== -->

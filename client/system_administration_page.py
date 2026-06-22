@@ -16,6 +16,12 @@ from client.file_system_management_page import FileSystemManagementPage
 from client.storage_administration_page import StorageAdministrationPage
 from client.firewall_administration_page import FirewallAdministrationPage
 from client.security_administration_page import SecurityAdministrationPage
+from client.backup_recovery_page import BackupRecoveryPage
+from client.system_boot_recovery_page import SystemBootRecoveryPage
+from client.time_synchronization_page import TimeSynchronizationPage
+from client.certificate_management_page import CertificateManagementPage
+from client.containers_vms_page import ContainersVMsPage
+from client.automation_page import AutomationPage
 
 
 class SystemAdministrationPage(QWidget):
@@ -49,6 +55,12 @@ class SystemAdministrationPage(QWidget):
         self.storage_admin_window = None
         self.firewall_admin_window = None
         self.security_admin_window = None
+        self.backup_recovery_window = None
+        self.boot_recovery_window = None
+        self.timesync_window = None
+        self.cert_mgmt_window = None
+        self.containers_vms_window = None
+        self.automation_window = None
 
         main = QVBoxLayout()
         self.setLayout(main)
@@ -115,6 +127,30 @@ class SystemAdministrationPage(QWidget):
              "audit logs and failed logins, install security updates, set password policy, "
              "harden systems, and run vulnerability scans across managed hosts.",
              self.open_security_admin, "fa5s.lock", "graphite"),
+            ("Backup & Recovery",
+             "Back up and restore files, verify backup integrity, schedule backups, create and "
+             "restore LVM snapshots, guide deleted-file recovery, and run disaster-recovery drills.",
+             self.open_backup_recovery, "fa5s.save", "teal"),
+            ("System Boot & Recovery",
+             "Analyze boot failures, change and rebuild GRUB, set recovery boot targets, configure "
+             "kernel parameters, regenerate initramfs, and manage/remove old kernels.",
+             self.open_boot_recovery, "fa5s.power-off", "amber"),
+            ("Time Synchronization",
+             "Configure NTP/chrony, verify synchronization, troubleshoot clock drift, and set the "
+             "system time zone across managed hosts.",
+             self.open_timesync, "fa5s.clock", "sky"),
+            ("Certificate Management",
+             "Generate CSRs, install/renew/replace certificates, verify certificate chains, and "
+             "troubleshoot TLS endpoints across managed hosts.",
+             self.open_cert_mgmt, "fa5s.certificate", "rose"),
+            ("Containers & VMs",
+             "List and start/stop/restart Docker or Podman containers, view container logs and images, "
+             "and manage libvirt virtual machines across managed hosts.",
+             self.open_containers_vms, "fa5s.cube", "indigo"),
+            ("Run Command & Automation",
+             "Run an ad-hoc command or multi-line script on every checked host at once - the "
+             "general-purpose tool for automating repetitive tasks across the fleet.",
+             self.open_automation, "fa5s.terminal", "slate"),
         ]
 
         for index, (card_title, description, handler, icon, color) in enumerate(cards):
@@ -214,3 +250,45 @@ class SystemAdministrationPage(QWidget):
         self.security_admin_window.show()
         self.security_admin_window.raise_()
         return self.security_admin_window
+
+    def open_backup_recovery(self):
+        if self.backup_recovery_window is None:
+            self.backup_recovery_window = BackupRecoveryPage()
+        self.backup_recovery_window.show()
+        self.backup_recovery_window.raise_()
+        return self.backup_recovery_window
+
+    def open_boot_recovery(self):
+        if self.boot_recovery_window is None:
+            self.boot_recovery_window = SystemBootRecoveryPage()
+        self.boot_recovery_window.show()
+        self.boot_recovery_window.raise_()
+        return self.boot_recovery_window
+
+    def open_timesync(self):
+        if self.timesync_window is None:
+            self.timesync_window = TimeSynchronizationPage()
+        self.timesync_window.show()
+        self.timesync_window.raise_()
+        return self.timesync_window
+
+    def open_cert_mgmt(self):
+        if self.cert_mgmt_window is None:
+            self.cert_mgmt_window = CertificateManagementPage()
+        self.cert_mgmt_window.show()
+        self.cert_mgmt_window.raise_()
+        return self.cert_mgmt_window
+
+    def open_containers_vms(self):
+        if self.containers_vms_window is None:
+            self.containers_vms_window = ContainersVMsPage()
+        self.containers_vms_window.show()
+        self.containers_vms_window.raise_()
+        return self.containers_vms_window
+
+    def open_automation(self):
+        if self.automation_window is None:
+            self.automation_window = AutomationPage()
+        self.automation_window.show()
+        self.automation_window.raise_()
+        return self.automation_window

@@ -249,6 +249,21 @@ def _default_underlying(entry):
     return entry
 
 
+def _row_ip(entry):
+    """A short IP/address to show next to a host in the list. SSH
+    addresses come through as "user@ip", so strip the user; merged
+    hosts (same physical box, two transports) show a single IP,
+    preferring the SSH side."""
+    def _ip(addr):
+        return (addr or "").split("@")[-1].strip()
+
+    if entry["kind"] == "merged":
+        ssh = entry.get("ssh_entry") or {}
+        agent = entry.get("agent_entry") or {}
+        return _ip(ssh.get("address")) or _ip(agent.get("address"))
+    return _ip(entry.get("address"))
+
+
 # =====================================================================
 # PER-HOST TERMINAL POPOUT
 # =====================================================================
@@ -402,6 +417,16 @@ class TerminalPopout(QWidget):
         self.cmd_input.setEnabled(False)
         self.run_btn.setEnabled(False)
         QApplication.processEvents()
+
+        # Force a fresh PTY: close any session the backend may still be
+        # holding for this host from a previous GUI run that didn't shut
+        # down cleanly, so we never attach to a dead/stale channel (which
+        # shows "live" but produces no output and accepts no input).
+        # close_terminal is idempotent - a no-op if there's nothing open.
+        try:
+            api.close_terminal(entry["id"])
+        except Exception:
+            pass
 
         try:
             api.open_terminal(entry["id"])
@@ -656,6 +681,7 @@ class RemoteAdministrationPage(QWidget):
                 [btn_refresh],
                 [btn_collapse_all, btn_expand_all],
             ],
+            width=340,  # wider so each host's IP fits next to it
         )
         body.addWidget(host_panel)
 
@@ -896,7 +922,11 @@ class RemoteAdministrationPage(QWidget):
         self.host_list.addItem(item)
 
     def _add_host_row(self, entry):
-        item = QListWidgetItem(f"    {entry['label']}  [{entry['type_text']}]")
+        ip = _row_ip(entry)
+        text = f"    {entry['label']}  [{entry['type_text']}]"
+        if ip:
+            text += f"   {ip}"
+        item = QListWidgetItem(text)
         item.setData(Qt.UserRole, entry)
         self.host_list.addItem(item)
 

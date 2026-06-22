@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame,
 )
 from PySide6.QtCore import Qt, QTimer, QObject, Signal
-from PySide6.QtGui import QFont, QKeySequence, QTextCursor
+from PySide6.QtGui import QFont, QKeySequence, QTextCursor, QColor, QTextCharFormat
 
 # PySide6 6.4+ uses scoped enums, so QTextCursor.End no longer exists -
 # it's QTextCursor.MoveOperation.End. Resolve it once, with a fallback
@@ -20,6 +20,21 @@ _CURSOR_END = (
     if hasattr(QTextCursor, "MoveOperation")
     else QTextCursor.End
 )
+
+# Standard 16-colour ANSI palette (xterm-ish): 0-7 normal, 8-15 bright.
+# Used to colourise SGR ("\x1b[...m") escape sequences in the live
+# terminal instead of stripping them out.
+_ANSI_PALETTE = [
+    "#1E1E1E", "#CD3131", "#0DBC79", "#E5E510",
+    "#2472C8", "#BC3FBC", "#11A8CD", "#E5E5E5",
+    "#666666", "#F14C4C", "#23D18B", "#F5F543",
+    "#3B8EEA", "#D670D6", "#29B8DB", "#FFFFFF",
+]
+_TERM_DEFAULT_FG = "#E8E8E8"
+# Qt6 font weights are numeric (Normal=400, Bold=700); use the ints
+# directly to avoid any scoped-enum pitfalls like the one above.
+_WEIGHT_NORMAL = 400
+_WEIGHT_BOLD = 700
 
 from client import api
 from client.branding import make_page_header
@@ -46,22 +61,6 @@ AGENT_CMD_TIMEOUT_S = 30
 SSH_TERMINAL_POLL_MS = 60
 
 
-# Optional diagnostic logging for the SSH terminal read path. Disabled
-# unless SYSIBLE_TERM_LOG is set to a writable path (e.g.
-# SYSIBLE_TERM_LOG=/tmp/sysible_term.log). Safe to leave in - it never
-# raises and is a no-op when unset.
-import datetime as _dt
-_TERM_LOG_PATH = os.getenv("SYSIBLE_TERM_LOG")
-
-
-def _tlog(msg):
-    if not _TERM_LOG_PATH:
-        return
-    try:
-        with open(_TERM_LOG_PATH, "a") as f:
-            f.write(f"{_dt.datetime.now().strftime('%H:%M:%S.%f')} {msg}\n")
-    except Exception:
-        pass
 
 
 # =====================================================================
@@ -91,10 +90,8 @@ class _TerminalIO(QObject):
 
     def submit_read(self, host_id):
         if host_id in self._reads_inflight:
-            _tlog(f"submit_read host={host_id} SKIPPED (inflight)")
             return
         self._reads_inflight.add(host_id)
-        _tlog(f"submit_read host={host_id}")
 
         def work():
             try:
@@ -108,8 +105,6 @@ class _TerminalIO(QObject):
     def _on_read_finished(self, host_id, future):
         self._reads_inflight.discard(host_id)
         ok, result = future.result()
-        _tlog(f"read_finished host={host_id} ok={ok} datalen="
-              f"{len((result or {}).get('data','')) if (ok and result) else 'NA'}")
         # Push to a thread-safe queue instead of emitting a Qt signal.
         # This callback runs on a plain ThreadPoolExecutor worker (not a
         # QThread), and a signal emitted from such a thread was not being
@@ -231,6 +226,14 @@ class _LiveTerminalOutput(QTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.on_key_data = None
+        self._ansi_pending = ""        # incomplete escape carried across reads
+        self._reset_char_format()
+
+    def _reset_char_format(self):
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(_TERM_DEFAULT_FG))
+        fmt.setFontWeight(_WEIGHT_NORMAL)
+        self._char_format = fmt
 
     def keyPressEvent(self, event):
         if self.on_key_data is None:
@@ -252,33 +255,136 @@ class _LiveTerminalOutput(QTextEdit):
             self.on_key_data(data)
 
     def append_terminal_text(self, text):
-        clean = _strip_ansi(text)
-        _tlog(f"append called len={len(clean)}")
+        # Render remote output, honouring SGR colour escapes. A rendering
+        # hiccup must never bubble up and kill the read loop (that would
+        # leave the terminal blank but still "connected"), so fall back to
+        # plain, colour-stripped text if anything goes wrong.
         try:
-            cursor = self.textCursor()
-            cursor.movePosition(_CURSOR_END)
-
-            for ch in clean:
-                if ch == "\r":
-                    continue
-                elif ch in ("\x08", "\x7f"):
-                    cursor.deletePreviousChar()
-                else:
-                    cursor.insertText(ch)
-
-            self.setTextCursor(cursor)
-            self.ensureCursorVisible()
-        except Exception as e:
-            # A rendering hiccup must never bubble up and kill the read
-            # loop (that would leave the terminal blank but still
-            # "connected"). Fall back to a plain append so output still
-            # shows, and swallow anything that still goes wrong.
-            _tlog(f"append PRIMARY EXC: {e!r}")
+            self._render(self._ansi_pending + text)
+        except Exception:
             try:
                 self.moveCursor(_CURSOR_END)
-                self.insertPlainText(clean.replace("\r", ""))
-            except Exception as e2:
-                _tlog(f"append FALLBACK EXC: {e2!r}")
+                self.insertPlainText(_strip_ansi(text).replace("\r", ""))
+            except Exception:
+                pass
+
+    def _render(self, text):
+        cursor = self.textCursor()
+        cursor.movePosition(_CURSOR_END)
+        self._ansi_pending = ""
+        i, n = 0, len(text)
+        while i < n:
+            ch = text[i]
+            if ch == "\x1b":
+                consumed, sgr_params = self._scan_escape(text, i)
+                if consumed is None:
+                    # Incomplete escape split across reads - finish it next
+                    # time rather than rendering a half sequence as text.
+                    self._ansi_pending = text[i:]
+                    break
+                if sgr_params is not None:
+                    self._apply_sgr(sgr_params)
+                i += consumed
+                continue
+            if ch == "\r":
+                i += 1
+                continue
+            if ch in ("\x08", "\x7f"):
+                cursor.deletePreviousChar()
+                i += 1
+                continue
+            # Insert a whole run of plain characters at once (faster, and
+            # carries the current colour/weight format).
+            j = i
+            while j < n and text[j] not in ("\x1b", "\r", "\x08", "\x7f"):
+                j += 1
+            cursor.insertText(text[i:j], self._char_format)
+            i = j
+        self.setTextCursor(cursor)
+        self.ensureCursorVisible()
+
+    @staticmethod
+    def _scan_escape(text, i):
+        """Scan one escape sequence starting at text[i] == ESC. Returns
+        (consumed, sgr_params): consumed = chars used; sgr_params = the
+        parameter string for a colour (SGR, final 'm') sequence, else
+        None. Returns (None, None) if the sequence is incomplete (carry
+        it to the next read)."""
+        n = len(text)
+        if i + 1 >= n:
+            return None, None
+        nxt = text[i + 1]
+        if nxt == "[":  # CSI ... final byte 0x40-0x7e
+            j = i + 2
+            while j < n and not (0x40 <= ord(text[j]) <= 0x7e):
+                j += 1
+            if j >= n:
+                return None, None
+            final = text[j]
+            consumed = j + 1 - i
+            return (consumed, text[i + 2:j]) if final == "m" else (consumed, None)
+        if nxt == "]":  # OSC ... terminated by BEL or ESC-backslash (ST)
+            j = i + 2
+            while j < n:
+                if text[j] == "\x07":
+                    return j + 1 - i, None
+                if text[j] == "\x1b":
+                    if j + 1 < n and text[j + 1] == "\\":
+                        return j + 2 - i, None
+                    return None, None
+                j += 1
+            return None, None
+        # Any other two-character escape (ESC =, ESC >, charset selects...)
+        return 2, None
+
+    def _apply_sgr(self, params):
+        codes = params.split(";") if params else ["0"]
+        fmt = self._char_format
+        idx = 0
+        while idx < len(codes):
+            tok = codes[idx]
+            code = int(tok) if tok.isdigit() else 0
+            if code == 0:
+                self._reset_char_format()
+                fmt = self._char_format
+            elif code == 1:
+                fmt.setFontWeight(_WEIGHT_BOLD)
+            elif code == 22:
+                fmt.setFontWeight(_WEIGHT_NORMAL)
+            elif code == 4:
+                fmt.setFontUnderline(True)
+            elif code == 24:
+                fmt.setFontUnderline(False)
+            elif 30 <= code <= 37:
+                fmt.setForeground(QColor(_ANSI_PALETTE[code - 30]))
+            elif 90 <= code <= 97:
+                fmt.setForeground(QColor(_ANSI_PALETTE[code - 90 + 8]))
+            elif code == 39:
+                fmt.setForeground(QColor(_TERM_DEFAULT_FG))
+            elif 40 <= code <= 47:
+                fmt.setBackground(QColor(_ANSI_PALETTE[code - 40]))
+            elif 100 <= code <= 107:
+                fmt.setBackground(QColor(_ANSI_PALETTE[code - 100 + 8]))
+            elif code == 49:
+                fmt.clearBackground()
+            elif code in (38, 48):
+                # 256-colour (38;5;N) or truecolour (38;2;R;G;B): apply the
+                # colour and skip its extra params so they aren't misread.
+                is_fg = code == 38
+                if idx + 1 < len(codes) and codes[idx + 1] == "5" and idx + 2 < len(codes):
+                    col = QColor(_ANSI_PALETTE[int(codes[idx + 2])]) if codes[idx + 2].isdigit() and int(codes[idx + 2]) < 16 else None
+                    if col is not None:
+                        fmt.setForeground(col) if is_fg else fmt.setBackground(col)
+                    idx += 2
+                elif idx + 1 < len(codes) and codes[idx + 1] == "2" and idx + 4 < len(codes):
+                    try:
+                        col = QColor(int(codes[idx + 2]), int(codes[idx + 3]), int(codes[idx + 4]))
+                        fmt.setForeground(col) if is_fg else fmt.setBackground(col)
+                    except (ValueError, IndexError):
+                        pass
+                    idx += 4
+            idx += 1
+        self._char_format = fmt
 
 
 def _connection_options(entry):
@@ -510,7 +616,6 @@ class TerminalPopout(QWidget):
         self.output.on_key_data = self._send_terminal_input
         self.output.setFocus()
         self._ssh_session_active = True
-        _tlog(f"ssh session LIVE host={self.active_id}, issuing first read")
         self._terminal_io.submit_read(self.active_id)
 
     def _send_terminal_input(self, data):
@@ -536,9 +641,6 @@ class TerminalPopout(QWidget):
                 self._on_ssh_read_done(host_id, result)
 
     def _on_ssh_read_done(self, host_id, result):
-        _tlog(f"read_done host={host_id} active={self.active_id} kind={self.active_kind} "
-              f"sess={self._ssh_session_active} datalen={len(result.get('data',''))} "
-              f"closed={result.get('closed')}")
         if not self._ssh_session_active or self.active_kind != "ssh" or self.active_id != host_id:
             return
 

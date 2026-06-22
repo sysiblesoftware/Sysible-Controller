@@ -1013,50 +1013,78 @@ class RemoteAdministrationPage(QWidget):
             QMessageBox.information(self, "No host selected", "Select a host first.")
             return
 
+        # A host enrolled both ways gets a choice: drop just the SSH
+        # connection, just the agent connection, or both. Removing one
+        # leaves the host reachable via the other (it simply re-appears
+        # in the list as a single-transport host).
         if entry["kind"] == "merged":
-            confirm = QMessageBox.question(
-                self, "Confirm",
-                f"Remove {entry['label']}? This removes both its Agent and SSH connections."
-            )
-            if confirm != QMessageBox.Yes:
-                return
-
             agent_entry = entry["agent_entry"]
             ssh_entry = entry["ssh_entry"]
 
-            errors = []
-            try:
-                api.disenroll_agent(agent_entry["id"])
-            except Exception as e:
-                errors.append(f"agent: {e}")
-            try:
-                api.delete_host(ssh_entry["id"])
-            except Exception as e:
-                errors.append(f"ssh: {e}")
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Question)
+            box.setWindowTitle("Remove Connection")
+            box.setText(
+                f"{entry['label']} is enrolled both ways (Agent + SSH).\n"
+                "What would you like to remove?"
+            )
+            ssh_btn = box.addButton("SSH connection only", QMessageBox.AcceptRole)
+            agent_btn = box.addButton("Agent connection only", QMessageBox.AcceptRole)
+            both_btn = box.addButton("Both connections", QMessageBox.DestructiveRole)
+            box.addButton("Cancel", QMessageBox.RejectRole)
+            box.exec()
+            clicked = box.clickedButton()
 
-            if errors:
-                QMessageBox.critical(self, "Error", "\n".join(errors))
-
-            self._close_terminal_for(entry["label"])
-            bus.host_removed.emit(agent_entry["id"])
-            bus.host_removed.emit(ssh_entry["id"])
+            if clicked is ssh_btn:
+                self._remove_connections(entry["label"], ssh_ids=[ssh_entry["id"]])
+            elif clicked is agent_btn:
+                self._remove_connections(entry["label"], agent_ids=[agent_entry["id"]])
+            elif clicked is both_btn:
+                self._remove_connections(
+                    entry["label"],
+                    agent_ids=[agent_entry["id"]],
+                    ssh_ids=[ssh_entry["id"]],
+                )
             return
 
+        # Single-transport host.
         confirm = QMessageBox.question(self, "Confirm", f"Remove {entry['label']}?")
         if confirm != QMessageBox.Yes:
             return
 
-        try:
-            if entry["kind"] == "agent":
-                api.disenroll_agent(entry["id"])
-            else:
-                api.delete_host(entry["id"])
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
-            return
+        if entry["kind"] == "agent":
+            self._remove_connections(entry["label"], agent_ids=[entry["id"]])
+        else:
+            self._remove_connections(entry["label"], ssh_ids=[entry["id"]])
 
-        self._close_terminal_for(entry["label"])
-        bus.host_removed.emit(entry["id"])
+    def _remove_connections(self, label, agent_ids=None, ssh_ids=None):
+        """Drop the given agent and/or SSH connections for a host. Used
+        for both whole-host removal and removing just one transport from
+        a host that's enrolled both ways."""
+        errors = []
+        for agent_id in (agent_ids or []):
+            try:
+                api.disenroll_agent(agent_id)
+            except Exception as e:
+                errors.append(f"agent: {e}")
+        for ssh_id in (ssh_ids or []):
+            try:
+                api.delete_host(ssh_id)
+            except Exception as e:
+                errors.append(f"ssh: {e}")
+
+        if errors:
+            QMessageBox.critical(self, "Error", "\n".join(errors))
+
+        # Close any open terminal for this host - if a connection it was
+        # using just went away, the session is no longer valid; the list
+        # refresh below lets the user reopen against whatever remains.
+        self._close_terminal_for(label)
+
+        for agent_id in (agent_ids or []):
+            bus.host_removed.emit(agent_id)
+        for ssh_id in (ssh_ids or []):
+            bus.host_removed.emit(ssh_id)
 
     # =====================================================
     # QUICK ONE-OFF COMMAND

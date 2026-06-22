@@ -37,6 +37,21 @@ AGENT_CMD_TIMEOUT_S = 30
 SSH_TERMINAL_POLL_MS = 60
 
 
+# Temporary diagnostic logging for the SSH terminal read path. Writes to
+# /tmp/sysible_term.log (override with SYSIBLE_TERM_LOG). Off unless the
+# file's directory is writable; safe to leave in - it never raises.
+import datetime as _dt
+_TERM_LOG_PATH = os.getenv("SYSIBLE_TERM_LOG", "/tmp/sysible_term.log")
+
+
+def _tlog(msg):
+    try:
+        with open(_TERM_LOG_PATH, "a") as f:
+            f.write(f"{_dt.datetime.now().strftime('%H:%M:%S.%f')} {msg}\n")
+    except Exception:
+        pass
+
+
 # =====================================================================
 # LOW-LEVEL TERMINAL I/O (shared by every TerminalPopout)
 # =====================================================================
@@ -64,8 +79,10 @@ class _TerminalIO(QObject):
 
     def submit_read(self, host_id):
         if host_id in self._reads_inflight:
+            _tlog(f"submit_read host={host_id} SKIPPED (inflight)")
             return
         self._reads_inflight.add(host_id)
+        _tlog(f"submit_read host={host_id}")
 
         def work():
             try:
@@ -79,6 +96,8 @@ class _TerminalIO(QObject):
     def _on_read_finished(self, host_id, future):
         self._reads_inflight.discard(host_id)
         ok, result = future.result()
+        _tlog(f"read_finished host={host_id} ok={ok} datalen="
+              f"{len((result or {}).get('data','')) if (ok and result) else 'NA'}")
         # Push to a thread-safe queue instead of emitting a Qt signal.
         # This callback runs on a plain ThreadPoolExecutor worker (not a
         # QThread), and a signal emitted from such a thread was not being
@@ -222,6 +241,7 @@ class _LiveTerminalOutput(QTextEdit):
 
     def append_terminal_text(self, text):
         clean = _strip_ansi(text)
+        _tlog(f"append called len={len(clean)}")
         try:
             cursor = self.textCursor()
             cursor.movePosition(cursor.End)
@@ -236,16 +256,17 @@ class _LiveTerminalOutput(QTextEdit):
 
             self.setTextCursor(cursor)
             self.ensureCursorVisible()
-        except Exception:
+        except Exception as e:
             # A rendering hiccup must never bubble up and kill the read
             # loop (that would leave the terminal blank but still
             # "connected"). Fall back to a plain append so output still
             # shows, and swallow anything that still goes wrong.
+            _tlog(f"append PRIMARY EXC: {e!r}")
             try:
                 self.moveCursor(self.textCursor().End)
                 self.insertPlainText(clean.replace("\r", ""))
-            except Exception:
-                pass
+            except Exception as e2:
+                _tlog(f"append FALLBACK EXC: {e2!r}")
 
 
 def _connection_options(entry):
@@ -477,6 +498,7 @@ class TerminalPopout(QWidget):
         self.output.on_key_data = self._send_terminal_input
         self.output.setFocus()
         self._ssh_session_active = True
+        _tlog(f"ssh session LIVE host={self.active_id}, issuing first read")
         self._terminal_io.submit_read(self.active_id)
 
     def _send_terminal_input(self, data):
@@ -502,6 +524,9 @@ class TerminalPopout(QWidget):
                 self._on_ssh_read_done(host_id, result)
 
     def _on_ssh_read_done(self, host_id, result):
+        _tlog(f"read_done host={host_id} active={self.active_id} kind={self.active_kind} "
+              f"sess={self._ssh_session_active} datalen={len(result.get('data',''))} "
+              f"closed={result.get('closed')}")
         if not self._ssh_session_active or self.active_kind != "ssh" or self.active_id != host_id:
             return
 

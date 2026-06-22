@@ -1297,7 +1297,10 @@ class RemoteAdministrationPage(QWidget):
         prev_label = self.active_label
 
         try:
-            entries = api.list_merged_hosts()
+            # Remote Host Administration manages SSH connections themselves,
+            # so it shows every host (agent, SSH, and merged) - unlike the
+            # System Administration tools, which are agent-only.
+            entries = api.list_merged_hosts(agent_only=False)
         except Exception as e:
             self.enroll_status.setStyleSheet(f"color: {STATUS_ERROR_COLOR};")
             self.enroll_status.setText(f"Could not load hosts: {e}")

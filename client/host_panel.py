@@ -23,7 +23,7 @@ PANEL_WIDTH = 268
 
 def build_host_panel(title, host_list, button_rows, extra_widgets=None, width=PANEL_WIDTH):
     """
-    title: heading text for the panel, e.g. "Target Hosts (agent + SSH)".
+    title: heading text for the panel, e.g. "Target Hosts (agent-managed)".
     host_list: the page's already-constructed QListWidget - resized in
         place (no fixed/capped height, expanding vertical size policy)
         and placed into the returned panel.

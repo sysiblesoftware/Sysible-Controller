@@ -221,7 +221,7 @@ class UserGroupAdministrationPage(QWidget):
         self.sync_status.setWordWrap(True)
 
         host_panel = build_host_panel(
-            "Target Hosts (agent + SSH)",
+            "Target Hosts (agent-managed)",
             self.host_list,
             [
                 [btn_refresh_hosts, btn_select_all, btn_deselect_all],

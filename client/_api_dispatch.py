@@ -70,26 +70,38 @@ def merge_duplicate_host_entries(entries):
 
 def _underlying_entry(entry):
     """A "merged" entry (merge_duplicate_host_entries() above) has both
-    an agent and an SSH connection for the same physical host - prefer
-    SSH (a real, synchronous connection, and the only option that
-    supports an actual interactive terminal) the same way Remote Host
-    Administration's terminal session picker does, falling back to
-    agent only if SSH is somehow missing. Entries that aren't merged
-    pass through untouched."""
+    an agent and an SSH connection for the same physical host - for
+    command execution in the System Administration tools, prefer the
+    AGENT. The agent runs as root, so privileged actions (apt, systemctl,
+    writing under /etc, ...) work; the SSH connection logs in as an
+    ordinary user with no sudo, so the same commands fail with
+    "Permission denied". (The interactive terminal in Remote Host
+    Administration still picks SSH itself - it has its own connection
+    picker and does not go through here.) Falls back to SSH only if the
+    agent side is somehow missing. Entries that aren't merged pass
+    through untouched."""
     if entry["kind"] == "merged":
-        return entry["ssh_entry"] or entry["agent_entry"]
+        return entry["agent_entry"] or entry["ssh_entry"]
     return entry
 
 
-def list_merged_hosts():
+def list_merged_hosts(agent_only=True):
     """Agent hosts + SSH hosts as one list of dicts: {"kind": "agent"|
     "ssh"|"merged", "id", "label", "type_text", "address",
     "environment"} (a "merged" entry additionally carries "agent_entry"/
     "ssh_entry" - see merge_duplicate_host_entries()) - the same shape
     Remote Administration builds internally for its own host list,
     exposed here so other pages (System Administration) can target
-    both kinds, with duplicates already collapsed, without
-    re-implementing the merge."""
+    hosts with duplicates already collapsed, without re-implementing the
+    merge.
+
+    agent_only (default True): drop SSH-only hosts, leaving just agent
+    and agent+SSH (merged) hosts. The System Administration tools run
+    privileged fleet actions that only work through the root-level agent,
+    so a host with no agent has no business appearing there - including
+    it just produces "Permission denied" failures (the SSH login has no
+    sudo). Remote Host Administration, which is where SSH connections are
+    actually managed, passes agent_only=False to still see every host."""
     entries = []
 
     try:
@@ -129,7 +141,10 @@ def list_merged_hosts():
             "environment": h.get("environment") or "",
         })
 
-    return merge_duplicate_host_entries(entries)
+    merged = merge_duplicate_host_entries(entries)
+    if agent_only:
+        merged = [e for e in merged if e["kind"] != "ssh"]
+    return merged
 
 
 def run_on_entry(entry, command: str, kind: str = "command"):

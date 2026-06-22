@@ -75,7 +75,7 @@ class FirewallAdministrationPage(QWidget):
         btn_collapse_all, btn_expand_all = add_collapse_expand_buttons(self.host_list)
 
         host_panel = build_host_panel(
-            "Target Hosts (agent + SSH)",
+            "Target Hosts (agent-managed)",
             self.host_list,
             [
                 [btn_refresh_hosts, btn_select_all, btn_deselect_all],

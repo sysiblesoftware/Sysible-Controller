@@ -18,7 +18,7 @@ panel.
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy
 
-PANEL_WIDTH = 240
+PANEL_WIDTH = 268
 
 
 def build_host_panel(title, host_list, button_rows, extra_widgets=None):
@@ -37,16 +37,39 @@ def build_host_panel(title, host_list, button_rows, extra_widgets=None):
     panel = QWidget()
     panel.setFixedWidth(PANEL_WIDTH)
     layout = QVBoxLayout(panel)
-    layout.setContentsMargins(0, 0, 0, 8)
+    layout.setContentsMargins(0, 0, 6, 8)
+    layout.setSpacing(6)
 
     title_label = QLabel(title)
     title_label.setStyleSheet("font-weight: bold;")
     title_label.setWordWrap(True)
     layout.addWidget(title_label)
 
+    # Each row of buttons shares its width evenly and is allowed to
+    # shrink its own internal padding, so labels like "Refresh Hosts"
+    # are no longer clipped at the edges in this narrow fixed-width
+    # column. Tighter, uniform spacing also reads less cluttered than
+    # the default per-button size hints did.
     for row in button_rows:
         row_layout = QHBoxLayout()
+        row_layout.setSpacing(6)
+        row_layout.setContentsMargins(0, 0, 0, 0)
         for btn in row:
+            # The stock "Refresh Hosts" label is the one button text wide
+            # enough to clip inside this fixed-width column once it has to
+            # share a row with Select All / Deselect All. Normalising it to
+            # "Refresh" here keeps every page's host panel fitting cleanly
+            # without each page having to special-case its own label.
+            if btn.text() == "Refresh Hosts":
+                btn.setText("Refresh")
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            btn.setMinimumWidth(0)
+            btn.setMinimumHeight(28)
+            # Trim the default horizontal padding so the text uses the
+            # button's full width instead of being squeezed/clipped.
+            # (None of the buttons routed through here carry their own
+            # stylesheet, so a plain set is safe.)
+            btn.setStyleSheet("QPushButton { padding: 3px 6px; }")
             row_layout.addWidget(btn)
         layout.addLayout(row_layout)
 

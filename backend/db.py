@@ -1422,6 +1422,19 @@ def submit_task_result(task_id, host_id, result):
     conn.close()
 
 
+def get_task_kind(task_id):
+    """The 'kind' a task was queued with (e.g. 'command', 'ssh_enable'),
+    or None if the task no longer exists. Lets the result handler tell
+    an ordinary queued command apart from the controller's own
+    SSH-terminal auto-enroll task without scanning result text."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT kind FROM agent_tasks WHERE id=?", (task_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
 def list_results(host_id, limit=50, kind=None, task_id=None):
     conn = _connect()
     conn.row_factory = sqlite3.Row

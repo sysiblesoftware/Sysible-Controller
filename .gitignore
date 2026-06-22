@@ -1,20 +1,16 @@
-# Python
 __pycache__/
 *.pyc
 venv/
 .venv/
-
-# Sysible runtime data (secrets, local state - never commit)
 *.db
 api_key.txt
 hosts.json
 agent_state.json
+agent_ssh_state.json
 remote_keys/
 certs/
 logs/
 portal_files/
-
-# Editors / OS
 .vscode/
 .idea/
 .DS_Store

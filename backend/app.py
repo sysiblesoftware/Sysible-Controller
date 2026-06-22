@@ -2,6 +2,7 @@ from typing import Optional
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
+import json
 import secrets
 import time
 
@@ -21,6 +22,7 @@ from backend.db import (
     queue_task,
     fetch_pending_tasks,
     submit_task_result,
+    get_task_kind,
     list_results,
     list_environments,
     create_environment,
@@ -87,6 +89,15 @@ from backend.models.policy_models import (
 from backend.routes.groups import router as groups_router
 from backend.routes.users import router as users_router
 from backend.remote_routes import router as remote_router
+from backend.remote_routes import (
+    _ensure_controller_key,
+    agent_ssh_enable_command,
+    register_agent_ssh_host,
+    ssh_host_exists,
+    get_agent_ssh_state,
+    set_agent_ssh_state,
+    AGENT_SSH_MARKER,
+)
 
 app = FastAPI(title="Sysible Controller")
 
@@ -147,6 +158,88 @@ async def generate_token(request: Request):
 # lands back on its existing inventory entry instead of silently
 # failing to appear under a new, orphaned host_id.
 # =========================================================
+# =========================================================
+# AGENT -> SSH TERMINAL AUTO-ENROLLMENT (see backend/remote_routes.py)
+#
+# When an agent enrolls (or heartbeats without ever having been set
+# up), the controller queues one root command on it that installs the
+# controller's SSH key and reports whether sshd is running. The result
+# comes back through the normal task-result path below, where
+# _consume_ssh_enable_result() registers the host as an SSH connection
+# (giving it a real interactive terminal) or records that sshd is
+# missing so the GUI can tell the operator.
+# =========================================================
+def _find_agent(host_id):
+    for a in list_agents():
+        if a.get("host_id") == host_id:
+            return a
+    return None
+
+
+def _maybe_enroll_agent_ssh(host_id, hostname, ip, environment, force=False):
+    """Queue the one-time SSH-enable command on an agent host, unless we
+    already have an SSH connection for it or an attempt is already
+    pending. force=True (a fresh /enroll) always re-queues - the
+    operator may have just installed sshd after a prior 'sshd_missing'."""
+    if not hostname or not ip:
+        return
+    if ssh_host_exists(hostname):
+        set_agent_ssh_state(host_id, {"status": "enabled"})
+        return
+    state = get_agent_ssh_state(host_id)
+    if not force and state and state.get("status") in ("pending", "enabled"):
+        return
+    try:
+        pubkey = _ensure_controller_key()
+        task_id = queue_task(host_id, agent_ssh_enable_command(pubkey), kind="ssh_enable")
+    except Exception:
+        return
+    set_agent_ssh_state(host_id, {
+        "status": "pending",
+        "task_id": task_id,
+        "hostname": hostname,
+        "ip": ip,
+        "environment": environment or "",
+    })
+
+
+def _consume_ssh_enable_result(host_id, result_str):
+    """Process the agent's reply to the SSH-enable command: register the
+    host as an SSH connection if sshd is up, else record sshd_missing."""
+    state = get_agent_ssh_state(host_id) or {}
+    hostname = state.get("hostname")
+    ip = state.get("ip")
+    environment = state.get("environment", "")
+    if not hostname or not ip:
+        agent = _find_agent(host_id)
+        if agent:
+            hostname = hostname or agent.get("hostname")
+            ip = ip or agent.get("ip")
+            environment = environment or agent.get("environment") or ""
+
+    stdout = ""
+    try:
+        parsed = json.loads(result_str)
+        if isinstance(parsed, dict):
+            stdout = parsed.get("stdout") or ""
+    except (ValueError, TypeError):
+        stdout = result_str or ""
+
+    if f"{AGENT_SSH_MARKER}running" in stdout:
+        if hostname and ip:
+            try:
+                register_agent_ssh_host(hostname, ip, environment)
+                set_agent_ssh_state(host_id, {"status": "enabled"})
+                return
+            except Exception:
+                pass
+        set_agent_ssh_state(host_id, {"status": "error"})
+    elif f"{AGENT_SSH_MARKER}stopped" in stdout:
+        set_agent_ssh_state(host_id, {"status": "sshd_missing"})
+    else:
+        set_agent_ssh_state(host_id, {"status": "error"})
+
+
 @app.post("/agents/enroll")
 async def enroll(req: EnrollRequest):
 
@@ -173,6 +266,18 @@ async def enroll(req: EnrollRequest):
 
     consume_enroll_token(req.token, host_id)
 
+    # Give this agent host a real SSH terminal automatically: queue the
+    # controller's key-install + sshd-check command. force=True so a
+    # re-enroll retries even if a previous attempt found sshd missing.
+    agent = _find_agent(host_id)
+    _maybe_enroll_agent_ssh(
+        host_id,
+        req.hostname or (agent or {}).get("hostname"),
+        req.ip or (agent or {}).get("ip"),
+        (agent or {}).get("environment"),
+        force=True,
+    )
+
     return {
         "host_id": host_id,
         "agent_secret": agent_secret,
@@ -189,6 +294,21 @@ async def heartbeat(req: HeartbeatRequest):
     verify_agent(req.host_id, req.agent_secret)
 
     update_agent_heartbeat(req.host_id, req.ip)
+
+    # Catch up already-enrolled agents that predate SSH auto-enrollment.
+    # Heartbeats are frequent, so gate on the cheap state read first:
+    # only when a host has *never* been attempted (state is None) do we
+    # pay for the agent lookup + queue. Once set (pending/enabled/
+    # sshd_missing/error) this is a single small file read and returns.
+    if get_agent_ssh_state(req.host_id) is None:
+        agent = _find_agent(req.host_id)
+        if agent:
+            _maybe_enroll_agent_ssh(
+                req.host_id,
+                agent.get("hostname"),
+                req.ip or agent.get("ip"),
+                agent.get("environment"),
+            )
 
     return {
         "status": "ok"
@@ -232,6 +352,13 @@ def post_task_result(host_id: str, body: TaskResultRequest):
 
     submit_task_result(body.task_id, body.host_id, body.result)
 
+    # The controller's own SSH-terminal auto-enroll command reports back
+    # through this same path - intercept its result to register the SSH
+    # connection (or record sshd_missing) rather than showing it to the
+    # operator as an ordinary command result.
+    if get_task_kind(body.task_id) == "ssh_enable":
+        _consume_ssh_enable_result(body.host_id, body.result)
+
     return {
         "status": "recorded"
     }
@@ -258,8 +385,14 @@ def get_agent_results(
 @app.get("/agents", dependencies=[Depends(require_api_key)])
 def get_agents():
 
+    agents = list_agents()
+    for a in agents:
+        st = get_agent_ssh_state(a.get("host_id"))
+        # "enabled" | "pending" | "sshd_missing" | "error" | None
+        a["ssh_terminal_state"] = (st or {}).get("status")
+
     return {
-        "agents": list_agents()
+        "agents": agents
     }
 
 

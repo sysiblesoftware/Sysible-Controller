@@ -106,6 +106,12 @@ def list_merged_hosts():
             "type_text": "Agent",
             "address": a.get("ip") or host_id,
             "environment": a.get("environment") or "",
+            # Controller's SSH-terminal auto-enroll status for this agent
+            # host (see backend/remote_routes.py): "enabled" | "pending" |
+            # "sshd_missing" | "error" | None. Lets Remote Administration
+            # tell the operator when a host can't get a real terminal
+            # because no SSH server is running on it.
+            "ssh_terminal_state": a.get("ssh_terminal_state"),
         })
 
     try:

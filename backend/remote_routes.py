@@ -167,6 +167,102 @@ def get_controller_key():
 
 
 # =========================================================
+# AGENT -> SSH TERMINAL AUTO-ENROLLMENT
+#
+# An agent already runs as root on its host and polls the controller
+# for queued commands, but that command channel is one-shot (no
+# interactive shell). To give every agent host a *real* terminal, the
+# controller queues a single root command (built by
+# agent_ssh_enable_command below) that installs the controller's own
+# SSH public key into root's authorized_keys and reports whether an
+# SSH server is actually running. If it is, the controller registers
+# the host as an SSH connection too (register_agent_ssh_host) and
+# Remote Administration shows it as "Agent + SSH" with a live PTY.
+#
+# Deliberately non-invasive: it never installs packages or starts
+# services. If sshd isn't running it just reports SYSIBLE_SSHD=stopped
+# and the controller leaves the host agent-only and records
+# "sshd_missing" so the GUI can tell the operator to install/start it.
+# The per-host state is tracked in agent_ssh_state.json (next to
+# hosts.json) so enrollment doesn't re-fire the command on every
+# heartbeat. See backend/app.py for where this is triggered/consumed.
+# =========================================================
+AGENT_SSH_MARKER = "SYSIBLE_SSHD="
+
+_AGENT_SSH_STATE_FILE = HOST_FILE.parent / "agent_ssh_state.json"
+
+
+def agent_ssh_enable_command(public_key: str) -> str:
+    """Root shell one-liner the agent runs: install the controller key
+    into root's authorized_keys (idempotently) and report whether an
+    SSH server is up. Never touches packages or services."""
+    key = public_key.strip().replace("'", "")  # ssh pubkeys never contain quotes
+    return (
+        "mkdir -p /root/.ssh && chmod 700 /root/.ssh; "
+        f"grep -qxF '{key}' /root/.ssh/authorized_keys 2>/dev/null || "
+        f"echo '{key}' >> /root/.ssh/authorized_keys; "
+        "chmod 600 /root/.ssh/authorized_keys; "
+        "if systemctl is-active --quiet sshd 2>/dev/null "
+        "|| systemctl is-active --quiet ssh 2>/dev/null "
+        "|| pgrep -x sshd >/dev/null 2>&1; then "
+        f"echo {AGENT_SSH_MARKER}running; else echo {AGENT_SSH_MARKER}stopped; fi"
+    )
+
+
+def ssh_host_exists(name: str) -> bool:
+    return name in load_hosts()
+
+
+def register_agent_ssh_host(name: str, ip: str, environment: str = ""):
+    """Add/refresh an SSH host record for an agent host that now accepts
+    the controller key, so Remote Administration can open a real
+    terminal to it. Connects as root with the shared controller key,
+    exactly like any manually-enrolled SSH host."""
+    hosts = load_hosts()
+    hosts[name] = {
+        "ip": ip,
+        "user": "root",
+        "key_path": str(CONTROLLER_KEY_PATH),
+        "environment": environment or "",
+    }
+    save_hosts(hosts)
+
+
+def _load_agent_ssh_state():
+    if _AGENT_SSH_STATE_FILE.exists():
+        try:
+            return json.loads(_AGENT_SSH_STATE_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def _save_agent_ssh_state(state):
+    _AGENT_SSH_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _AGENT_SSH_STATE_FILE.write_text(json.dumps(state, indent=2))
+    try:
+        os.chmod(_AGENT_SSH_STATE_FILE, 0o600)
+    except OSError:
+        pass
+
+
+def get_agent_ssh_state(host_id: str):
+    """Return the recorded SSH-terminal auto-enroll state for an agent
+    host: a dict like {"status": "pending"|"enabled"|"sshd_missing"|
+    "error", "task_id": int} - or None if never attempted."""
+    return _load_agent_ssh_state().get(host_id)
+
+
+def set_agent_ssh_state(host_id: str, value):
+    state = _load_agent_ssh_state()
+    if value is None:
+        state.pop(host_id, None)
+    else:
+        state[host_id] = value
+    _save_agent_ssh_state(state)
+
+
+# =========================================================
 # HOST MANAGEMENT
 # =========================================================
 @router.post("/hosts")

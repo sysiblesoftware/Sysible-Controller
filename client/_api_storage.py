@@ -71,6 +71,31 @@ def _validate_parted_token(value: str, label: str, default: str = None) -> str:
     return value
 
 
+def _pkgmgr_detect_fragment(var: str = "PKGMGR") -> str:
+    """Shell fragment that sets $<var> to whichever of dnf / yum /
+    zypper / apt-get is actually present on this host, preferring dnf
+    over yum where a host has both."""
+    return (
+        f"if command -v dnf >/dev/null 2>&1; then {var}=dnf; "
+        f"elif command -v yum >/dev/null 2>&1; then {var}=yum; "
+        f"elif command -v zypper >/dev/null 2>&1; then {var}=zypper; "
+        f"elif command -v apt-get >/dev/null 2>&1; then {var}=apt-get; "
+        f"else echo 'No supported package manager found (looked for dnf, yum, zypper, apt-get).' >&2; exit 1; fi"
+    )
+
+
+def _pkgmgr_dispatch(rpm_cmd: str, zypper_cmd: str, apt_cmd: str) -> str:
+    """Wraps the detection fragment above around three command
+    templates and branches to whichever one matches."""
+    detect = _pkgmgr_detect_fragment()
+    return (
+        f'{detect}; '
+        f'if [ "$PKGMGR" = "dnf" ] || [ "$PKGMGR" = "yum" ]; then {rpm_cmd}; '
+        f'elif [ "$PKGMGR" = "zypper" ]; then {zypper_cmd}; '
+        f'else {apt_cmd}; fi'
+    )
+
+
 # ---------------------------------------------------------
 # Disks overview, health, add/remove
 # ---------------------------------------------------------
@@ -186,6 +211,17 @@ def cmd_check_smart_status(device: str) -> str:
         "echo 'smartctl is not installed on this host (package: smartmontools).' >&2; exit 1; fi; "
         f"smartctl -a {q_dev} 2>&1"
     )
+
+
+def cmd_install_smartmontools() -> str:
+    """Installs smartmontools (smartctl) via whichever package manager
+    the host has - needed for Monitor Disk Health and Check SMART
+    Status above."""
+    return _pkgmgr_dispatch(
+        rpm_cmd='"$PKGMGR" install -y smartmontools',
+        zypper_cmd="zypper --non-interactive install smartmontools",
+        apt_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y smartmontools",
+    ) + " && echo 'smartmontools installed.'"
 
 
 # ---------------------------------------------------------
@@ -591,6 +627,38 @@ def cmd_create_swap_file(path: str, size_mb, persist: bool = True) -> str:
             f" && (grep -qF {q_path_match} /etc/fstab 2>/dev/null "
             f"|| (cp /etc/fstab /etc/fstab.bak.$(date +%s) && echo {q_line} >> /etc/fstab)) "
             "&& echo 'Added to /etc/fstab.'"
+        )
+    return cmd
+
+
+def cmd_resize_swap_file(path: str, size_mb, persist: bool = True) -> str:
+    """Resizes an existing swap file to `size_mb` megabytes: deactivates
+    it, recreates it at the new size, reformats, and reactivates it -
+    same on-disk steps as Create Swap File, but against a file that's
+    already in use. Only works on swap *files*; a swap partition's size
+    is fixed by the partition itself and can't be changed here. If
+    `persist` is set and the file isn't already in /etc/fstab, adds it -
+    if it's already there, the existing line (the size is implicit, not
+    recorded) needs no change."""
+    path = _validate_path(path, "Swap file path")
+    size_mb = _validate_int_range(size_mb, 1, 1_048_576, "Size (MB)")
+    q_path = shlex.quote(path)
+    cmd = (
+        f"if [ ! -f {q_path} ]; then echo '{path} does not exist - use Create Swap File for a new swap file.' >&2; exit 1; fi; "
+        f"swapoff {q_path} 2>/dev/null; "
+        f"(fallocate -l {size_mb}M {q_path} 2>/dev/null || dd if=/dev/zero of={q_path} bs=1M count={size_mb} 2>&1) "
+        f"&& chmod 600 {q_path} "
+        f"&& mkswap {q_path} 2>&1 "
+        f"&& swapon {q_path} 2>&1 "
+        f"&& echo 'Swap file {path} resized to {size_mb}MB and reactivated.'"
+    )
+    if persist:
+        q_line = shlex.quote(f"{path}\tnone\tswap\tsw\t0\t0")
+        q_path_match = shlex.quote(path)
+        cmd += (
+            f" && (grep -qF {q_path_match} /etc/fstab 2>/dev/null "
+            f"|| (cp /etc/fstab /etc/fstab.bak.$(date +%s) && echo {q_line} >> /etc/fstab)) "
+            "&& echo 'Confirmed entry in /etc/fstab.'"
         )
     return cmd
 

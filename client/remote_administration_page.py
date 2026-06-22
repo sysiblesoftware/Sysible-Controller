@@ -975,7 +975,24 @@ class RemoteAdministrationPage(QWidget):
         elif entry["kind"] == "ssh":
             self.connection_label.setText("Connection: SSH.")
         else:
-            self.connection_label.setText("Connection: Agent (queued commands).")
+            # Agent-only host. The controller tries to auto-enroll every
+            # agent host for a real SSH terminal (installs its key, checks
+            # for sshd); surface where that stands so the operator knows
+            # whether to expect a live terminal or to start sshd.
+            ssh_state = entry.get("ssh_terminal_state")
+            if ssh_state == "sshd_missing":
+                self.connection_label.setText(
+                    "Connection: Agent (queued commands). SSH terminal unavailable — "
+                    "no SSH server is running on this host. Install/start sshd, then it "
+                    "will be picked up automatically (or re-enroll the agent)."
+                )
+            elif ssh_state == "pending":
+                self.connection_label.setText(
+                    "Connection: Agent (queued commands). Setting up an SSH terminal for "
+                    "this host — it will appear as Agent + SSH once the agent reports back."
+                )
+            else:
+                self.connection_label.setText("Connection: Agent (queued commands).")
 
     def open_terminal_for_item(self, item):
         entry = item.data(Qt.UserRole)

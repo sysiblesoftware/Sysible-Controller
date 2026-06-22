@@ -108,7 +108,7 @@ def cmd_resize_filesystem(target: str, new_size: str = "") -> str:
         "|| echo 'xfs_growfs not installed, or target is not a mounted xfs filesystem (xfs can only grow while mounted).' >&2;; "
         f'btrfs) [ -n "$_mnt" ] && command -v btrfs >/dev/null 2>&1 && btrfs filesystem resize {btrfs_size} "$_mnt" 2>&1 '
         "|| echo 'btrfs-progs not installed, or target is not a mounted btrfs filesystem (btrfs can only resize while mounted).' >&2;; "
-        '*) echo "Unsupported or undetected filesystem type (\\"$_fst\\")" - supported: ext2/ext3/ext4, xfs, btrfs." >&2; exit 1;; '
+        '*) echo "Unsupported or undetected filesystem type (\\"$_fst\\") - supported: ext2/ext3/ext4, xfs, btrfs." >&2; exit 1;; '
         "esac"
     )
 

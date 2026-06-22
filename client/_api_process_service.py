@@ -193,28 +193,46 @@ def cmd_service_status(name: str) -> str:
     return f"systemctl status {shlex.quote(_service_unit(name))} --no-pager -l 2>&1; true"
 
 
+def _service_action_cmd(verb: str, name: str, past: str) -> str:
+    """`systemctl <verb> <unit>` is silent on success, which makes the GUI
+    look like nothing happened. Wrap it so it always reports the outcome
+    and the unit's resulting state (active / enabled), and exits with the
+    real return code so the GUI can colour it success/failure. `verb` and
+    `past` are fixed English words chosen here, never user input."""
+    q = shlex.quote(_service_unit(name))
+    return (
+        f"u={q}; "
+        f'systemctl {verb} "$u"; rc=$?; '
+        f'if [ "$rc" -eq 0 ]; then echo "{past} $u."; '
+        f'else echo "Failed to {verb} $u (exit $rc)." >&2; fi; '
+        f'echo "Now: active=$(systemctl is-active "$u" 2>/dev/null), '
+        f'enabled=$(systemctl is-enabled "$u" 2>/dev/null)"; '
+        f'exit "$rc"'
+    )
+
+
 def cmd_service_start(name: str) -> str:
-    return f"systemctl start {shlex.quote(_service_unit(name))}"
+    return _service_action_cmd("start", name, "Started")
 
 
 def cmd_service_stop(name: str) -> str:
-    return f"systemctl stop {shlex.quote(_service_unit(name))}"
+    return _service_action_cmd("stop", name, "Stopped")
 
 
 def cmd_service_restart(name: str) -> str:
-    return f"systemctl restart {shlex.quote(_service_unit(name))}"
+    return _service_action_cmd("restart", name, "Restarted")
 
 
 def cmd_service_reload(name: str) -> str:
-    return f"systemctl reload {shlex.quote(_service_unit(name))}"
+    return _service_action_cmd("reload", name, "Reloaded")
 
 
 def cmd_service_enable(name: str) -> str:
-    return f"systemctl enable {shlex.quote(_service_unit(name))}"
+    return _service_action_cmd("enable", name, "Enabled")
 
 
 def cmd_service_disable(name: str) -> str:
-    return f"systemctl disable {shlex.quote(_service_unit(name))}"
+    return _service_action_cmd("disable", name, "Disabled")
 
 
 def cmd_service_logs(name: str, lines: int = 200) -> str:

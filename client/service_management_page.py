@@ -1,3 +1,5 @@
+import html
+
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton,
@@ -171,16 +173,8 @@ class ServiceManagementPage(QWidget):
         name_row.addWidget(QLabel("Service name:"))
         self.service_name_input = QLineEdit()
         self.service_name_input.setPlaceholderText(
-            "e.g. nginx  (also filters the list below)"
+            "e.g. nginx  (also the search term / filter for the list)"
         )
-        # Stretch factor so this actually grows with the window instead
-        # of sitting at its cramped default width next to the label and
-        # button - it's the field every action below depends on, so it
-        # needs to be wide enough to read a real service name in.
-        # Also doubles as the live filter for the installed-services
-        # list below once "List Installed Services" has been run, so
-        # there's one field instead of a second one that just feeds
-        # back into this one.
         self.service_name_input.textChanged.connect(self.filter_installed_services)
         name_row.addWidget(self.service_name_input, 1)
         btn_list_services = QPushButton("List Installed Services")
@@ -188,49 +182,63 @@ class ServiceManagementPage(QWidget):
         name_row.addWidget(btn_list_services)
         layout.addLayout(name_row)
 
+        # Services list to the LEFT of the action buttons (rather than
+        # stacked above them), so the buttons can be grouped under headings
+        # without eating the vertical space the results panel needs. The
+        # window has plenty of width to spend on this.
+        split = QHBoxLayout()
+
+        left_col = QVBoxLayout()
+        left_col.setContentsMargins(0, 0, 0, 0)
+        list_label = QLabel("Installed services (click to fill the field):")
+        theme.style_hint_label(list_label)
+        left_col.addWidget(list_label)
         self.installed_services_list = QListWidget()
-        self.installed_services_list.setMaximumHeight(130)
+        self.installed_services_list.setMinimumHeight(150)
         self.installed_services_list.itemClicked.connect(self._pick_installed_service)
-        layout.addWidget(self.installed_services_list)
+        left_col.addWidget(self.installed_services_list, 1)
+        split.addLayout(left_col, 2)
 
-        row1 = QHBoxLayout()
-        btn_start = QPushButton("Start")
-        btn_start.clicked.connect(self.run_start)
-        btn_stop = QPushButton("Stop")
-        btn_stop.clicked.connect(self.run_stop)
-        btn_restart = QPushButton("Restart")
-        btn_restart.clicked.connect(self.run_restart)
-        btn_reload = QPushButton("Reload")
-        btn_reload.clicked.connect(self.run_reload)
-        for b in (btn_start, btn_stop, btn_restart, btn_reload):
-            row1.addWidget(b)
-        layout.addLayout(row1)
+        def _subheading(text):
+            lbl = QLabel(text)
+            lbl.setStyleSheet(f"font-weight: bold; color: {STATUS_NEUTRAL_COLOR};")
+            return lbl
 
-        row2 = QHBoxLayout()
-        btn_enable = QPushButton("Enable At Boot")
-        btn_enable.clicked.connect(self.run_enable)
-        btn_disable = QPushButton("Disable At Boot")
-        btn_disable.clicked.connect(self.run_disable)
-        btn_status = QPushButton("Check Status")
-        btn_status.clicked.connect(self.run_status)
-        btn_logs = QPushButton("View Logs")
-        btn_logs.clicked.connect(self.run_logs)
-        for b in (btn_enable, btn_disable, btn_status, btn_logs):
-            row2.addWidget(b)
-        layout.addLayout(row2)
+        def _btn(text, slot, bold=False):
+            b = QPushButton(text)
+            if bold:
+                b.setStyleSheet("font-weight: bold;")
+            b.clicked.connect(slot)
+            return b
 
-        row3 = QHBoxLayout()
-        btn_troubleshoot = QPushButton("Troubleshoot This Service")
-        btn_troubleshoot.setStyleSheet("font-weight: bold;")
-        btn_troubleshoot.clicked.connect(self.run_troubleshoot)
-        btn_failed = QPushButton("Troubleshoot All Failed Services")
-        btn_failed.clicked.connect(self.run_troubleshoot_failed)
-        btn_deps = QPushButton("View Dependencies")
-        btn_deps.clicked.connect(self.run_dependencies)
-        row3.addWidget(btn_troubleshoot)
-        row3.addWidget(btn_failed)
-        row3.addWidget(btn_deps)
-        layout.addLayout(row3)
+        btn_col = QVBoxLayout()
+        btn_col.setContentsMargins(0, 0, 0, 0)
+
+        btn_col.addWidget(_subheading("Service control"))
+        ctrl_row = QHBoxLayout()
+        for b in (_btn("Start", self.run_start), _btn("Stop", self.run_stop),
+                  _btn("Restart", self.run_restart), _btn("Reload", self.run_reload)):
+            ctrl_row.addWidget(b)
+        btn_col.addLayout(ctrl_row)
+
+        btn_col.addWidget(_subheading("Boot & status"))
+        boot_row = QHBoxLayout()
+        for b in (_btn("Enable At Boot", self.run_enable), _btn("Disable At Boot", self.run_disable),
+                  _btn("Check Status", self.run_status), _btn("View Logs", self.run_logs)):
+            boot_row.addWidget(b)
+        btn_col.addLayout(boot_row)
+
+        btn_col.addWidget(_subheading("Diagnostics"))
+        diag_row = QHBoxLayout()
+        for b in (_btn("Troubleshoot This Service", self.run_troubleshoot, bold=True),
+                  _btn("Troubleshoot All Failed", self.run_troubleshoot_failed),
+                  _btn("View Dependencies", self.run_dependencies)):
+            diag_row.addWidget(b)
+        btn_col.addLayout(diag_row)
+        btn_col.addStretch()
+
+        split.addLayout(btn_col, 3)
+        layout.addLayout(split)
 
         return panel
 
@@ -625,13 +633,34 @@ class ServiceManagementPage(QWidget):
             text_edit.setPlainText("Waiting for this agent host to report back...")
             return
 
-        if data["stderr"] and not data["stdout"]:
-            text_edit.setPlainText(f"ERROR:\n{data['stderr']}")
+        # A coloured banner makes the outcome obvious even for the silent
+        # actions (start/stop/enable/...), which on their own print nothing
+        # on success. Success is judged by exit code where we have one.
+        code = data["code"]
+        label = self.last_command_label or "Action"
+        if code is not None:
+            failed = code != 0
         else:
-            text = data["stdout"]
-            if data["stderr"]:
-                text += f"\n\n--- stderr ---\n{data['stderr']}"
-            text_edit.setPlainText(text)
+            failed = bool(data["stderr"]) and not data["stdout"]
+
+        bg = STATUS_ERROR_COLOR if failed else STATUS_SUCCESS_COLOR
+        headline = f"{'✗' if failed else '✓'} {label}{' failed' if failed else ' complete'}"
+        if code is not None:
+            headline += f" (exit {code})"
+        banner = (
+            f'<div style="background-color:{bg}; color:#ffffff; font-weight:bold; '
+            f'padding:5px 10px; border-radius:4px; margin:0 0 6px 0;">'
+            f'{html.escape(headline)}</div>'
+        )
+
+        text = data["stdout"]
+        if data["stderr"]:
+            text += f"\n\n--- stderr ---\n{data['stderr']}"
+        body = (
+            f'<pre style="font-family:monospace; white-space:pre-wrap; margin:0;">'
+            f'{html.escape(text)}</pre>'
+        )
+        text_edit.setHtml(banner + body)
 
     def _close_service_tab(self, index):
         bar = self.service_tabs.tabBar()

@@ -29,6 +29,8 @@ import shlex
 import stat as stat_module
 import subprocess
 import threading
+import time
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -88,10 +90,35 @@ TERMINAL_READ_CHUNK = 4096
 # thread pool, so blocking here doesn't stall the asyncio event loop.
 TERMINAL_LONG_POLL_S = 0.5
 
+# Sessions are keyed by an opaque session_id (not host name), so a single
+# host can have several independent shells open at once. Each open()
+# mints a new id; read/write/close address that id. The trade-off of
+# per-session (vs per-host) state is that a GUI that dies without calling
+# /close leaks its session here. The GUI long-polls /read continuously,
+# so an *active* session's last_activity stays fresh; a dead one goes
+# quiet and is reaped on the next open() after this timeout.
+TERMINAL_IDLE_TIMEOUT_S = 180
 
-def _get_terminal_session(name):
+
+def _get_terminal_session(session_id):
     with _TERMINAL_SESSIONS_LOCK:
-        return _TERMINAL_SESSIONS.get(name)
+        return _TERMINAL_SESSIONS.get(session_id)
+
+
+def _touch_session(session):
+    session["last_activity"] = time.time()
+
+
+def _reap_idle_sessions():
+    now = time.time()
+    stale = []
+    with _TERMINAL_SESSIONS_LOCK:
+        for sid in list(_TERMINAL_SESSIONS):
+            s = _TERMINAL_SESSIONS[sid]
+            if now - s.get("last_activity", now) > TERMINAL_IDLE_TIMEOUT_S:
+                stale.append(_TERMINAL_SESSIONS.pop(sid))
+    for s in stale:
+        _close_session(s)
 
 
 def _close_session(session):
@@ -442,30 +469,10 @@ def open_terminal(name: str):
     if name not in hosts:
         raise HTTPException(status_code=404, detail="host not found")
 
-    existing = _get_terminal_session(name)
-    if existing is not None:
-        existing_transport = existing["client"].get_transport()
-        if not existing["channel"].closed and existing_transport is not None and existing_transport.is_active():
-            return {"host": name, "opened": True, "reused": True}
-
-        # Stale session - channel.closed only flips when *this* side
-        # explicitly closed the channel; it says nothing about a dead
-        # transport (remote reboot, network drop, idle timeout, or the
-        # previous GUI process going away without ever reaching
-        # /terminal/close - e.g. `sysible_controller stop`/a kill
-        # instead of a clean host switch in the UI - leaves this exact
-        # session sitting here, since sessions are keyed by host name
-        # and live in the backend process, not the GUI). Blindly
-        # reusing it is what made the terminal look "connected" while
-        # doing nothing: /terminal/read kept long-polling and
-        # answering {"data": "", "closed": False} forever, and
-        # /terminal/write's channel.send() can succeed locally into an
-        # already-dead transport without raising anything the
-        # OSError-only catch below would see. Drop it and open a fresh
-        # session instead of trusting it.
-        with _TERMINAL_SESSIONS_LOCK:
-            _TERMINAL_SESSIONS.pop(name, None)
-        _close_session(existing)
+    # Each open mints a brand-new, independent session - never reuse an
+    # existing one - so a host can have several shells open at once.
+    # Opportunistically reap sessions abandoned by a dead GUI first.
+    _reap_idle_sessions()
 
     try:
         import paramiko
@@ -500,48 +507,50 @@ def open_terminal(name: str):
         client.close()
         raise HTTPException(status_code=400, detail=f"SSH error: {e}")
 
+    session_id = uuid.uuid4().hex
     with _TERMINAL_SESSIONS_LOCK:
-        old = _TERMINAL_SESSIONS.get(name)
-        if old is not None:
-            _close_session(old)
-        _TERMINAL_SESSIONS[name] = {
+        _TERMINAL_SESSIONS[session_id] = {
             "client": client,
             "channel": channel,
             "lock": threading.Lock(),
+            "name": name,
+            "last_activity": time.time(),
         }
 
-    return {"host": name, "opened": True, "reused": False}
+    return {"host": name, "session_id": session_id, "opened": True}
 
 
-@router.post("/hosts/{name}/terminal/write")
-def write_terminal(name: str, body: TerminalWriteRequest):
-    session = _get_terminal_session(name)
+@router.post("/terminal/{session_id}/write")
+def write_terminal(session_id: str, body: TerminalWriteRequest):
+    session = _get_terminal_session(session_id)
 
     if session is None:
         raise HTTPException(
             status_code=404,
-            detail="no open terminal session for this host - call /terminal/open first"
+            detail="no open terminal session - call /terminal/open first"
         )
 
+    _touch_session(session)
     with session["lock"]:
         try:
             session["channel"].send(body.data)
         except OSError as e:
             raise HTTPException(status_code=400, detail=f"Could not write to terminal: {e}")
 
-    return {"host": name, "written": len(body.data)}
+    return {"session_id": session_id, "written": len(body.data)}
 
 
-@router.get("/hosts/{name}/terminal/read")
-def read_terminal(name: str):
-    session = _get_terminal_session(name)
+@router.get("/terminal/{session_id}/read")
+def read_terminal(session_id: str):
+    session = _get_terminal_session(session_id)
 
     if session is None:
         raise HTTPException(
             status_code=404,
-            detail="no open terminal session for this host - call /terminal/open first"
+            detail="no open terminal session - call /terminal/open first"
         )
 
+    _touch_session(session)
     channel = session["channel"]
     chunks = []
 
@@ -593,18 +602,18 @@ def read_terminal(name: str):
         or not transport.is_active()
     )
 
-    return {"host": name, "data": "".join(chunks), "closed": closed}
+    return {"session_id": session_id, "data": "".join(chunks), "closed": closed}
 
 
-@router.post("/hosts/{name}/terminal/close")
-def close_terminal(name: str):
+@router.post("/terminal/{session_id}/close")
+def close_terminal(session_id: str):
     with _TERMINAL_SESSIONS_LOCK:
-        session = _TERMINAL_SESSIONS.pop(name, None)
+        session = _TERMINAL_SESSIONS.pop(session_id, None)
 
     if session is not None:
         _close_session(session)
 
-    return {"host": name, "closed": True}
+    return {"session_id": session_id, "closed": True}
 
 
 # =========================================================

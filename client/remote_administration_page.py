@@ -477,13 +477,15 @@ class TerminalPopout(QWidget):
     once.
     """
 
-    def __init__(self, entry, on_close=None):
+    def __init__(self, entry, on_close=None, session_num=1):
         super().__init__()
 
         self.entry = entry
         self.on_close = on_close
 
-        self.setWindowTitle(f"Terminal — {entry['label']}")
+        # session_num distinguishes multiple windows open on the same host.
+        suffix = f"  (#{session_num})" if session_num > 1 else ""
+        self.setWindowTitle(f"Terminal — {entry['label']}{suffix}")
         self.resize(840, 540)
 
         self.active_kind = None
@@ -492,6 +494,10 @@ class TerminalPopout(QWidget):
 
         self.pending_agent_task = None
         self._ssh_session_active = False
+        # Opaque id for the current backend PTY session (one per open SSH
+        # shell). All terminal read/write/close calls address this, not the
+        # host name, so several shells to one host stay independent.
+        self._session_id = None
 
         mono = QFont()
         mono.setFamilies(["Menlo", "Consolas", "DejaVu Sans Mono", "Courier New"])
@@ -628,18 +634,15 @@ class TerminalPopout(QWidget):
         self.run_btn.setEnabled(False)
         QApplication.processEvents()
 
-        # Force a fresh PTY: close any session the backend may still be
-        # holding for this host from a previous GUI run that didn't shut
-        # down cleanly, so we never attach to a dead/stale channel (which
-        # shows "live" but produces no output and accepts no input).
-        # close_terminal is idempotent - a no-op if there's nothing open.
+        # Each open mints a brand-new backend PTY session and returns its
+        # id; we never reuse one. This is what lets a single host carry
+        # several independent shells at once - including more than one
+        # window pointed at the same host.
         try:
-            api.close_terminal(entry["id"])
-        except Exception:
-            pass
-
-        try:
-            api.open_terminal(entry["id"])
+            resp = api.open_terminal(entry["id"])
+            session_id = resp.get("session_id")
+            if not session_id:
+                raise RuntimeError("backend did not return a session id")
         except Exception as e:
             self.output.append(f"[could not open terminal session: {e}]")
             self.title_label.setText(f"{self.active_label}  [SSH] (failed)")
@@ -648,6 +651,7 @@ class TerminalPopout(QWidget):
             self.active_id = None
             return
 
+        self._session_id = session_id
         self.title_label.setText(f"{self.active_label}  [SSH] (live)")
         self.cmd_input.hide()
         self.run_btn.hide()
@@ -657,10 +661,11 @@ class TerminalPopout(QWidget):
         self.output.on_key_data = self._send_terminal_input
         self.output.setFocus()
         self._ssh_session_active = True
-        self._terminal_io.submit_read(self.active_id)
+        self._terminal_io.submit_read(self._session_id)
 
     def _send_terminal_input(self, data):
-        self._terminal_io.submit_write(self.active_id, data)
+        if self._session_id is not None:
+            self._terminal_io.submit_write(self._session_id, data)
 
     def send_interrupt(self):
         if self.active_kind == "ssh" and self.output.on_key_data is not None:
@@ -682,16 +687,16 @@ class TerminalPopout(QWidget):
         next read, so this is what keeps the live SSH read loop turning."""
         while True:
             try:
-                host_id, result = self._terminal_io.results.get_nowait()
+                session_id, result = self._terminal_io.results.get_nowait()
             except queue.Empty:
                 return
             if result is None:
-                self._on_ssh_read_failed(host_id)
+                self._on_ssh_read_failed(session_id)
             else:
-                self._on_ssh_read_done(host_id, result)
+                self._on_ssh_read_done(session_id, result)
 
-    def _on_ssh_read_done(self, host_id, result):
-        if not self._ssh_session_active or self.active_kind != "ssh" or self.active_id != host_id:
+    def _on_ssh_read_done(self, session_id, result):
+        if not self._ssh_session_active or session_id != self._session_id:
             return
 
         if result.get("data"):
@@ -708,24 +713,26 @@ class TerminalPopout(QWidget):
             self.title_label.setText(f"{self.active_label}  [SSH] (closed)")
             return
 
-        self._terminal_io.submit_read(host_id)
+        self._terminal_io.submit_read(session_id)
 
-    def _on_ssh_read_failed(self, host_id):
-        if not self._ssh_session_active or self.active_kind != "ssh" or self.active_id != host_id:
+    def _on_ssh_read_failed(self, session_id):
+        if not self._ssh_session_active or session_id != self._session_id:
             return
         self._ssh_retry_timer.start(SSH_TERMINAL_POLL_MS)
 
     def _resume_ssh_read_loop(self):
-        if self._ssh_session_active and self.active_kind == "ssh" and self.active_id:
-            self._terminal_io.submit_read(self.active_id)
+        if self._ssh_session_active and self._session_id is not None:
+            self._terminal_io.submit_read(self._session_id)
 
     def _on_ssh_write_failed(self, err):
         self.output.append_terminal_text(f"\n[write failed: {err}]\n")
 
     def _end_ssh_session(self, close_remote=True):
         was_ssh = self.active_kind == "ssh" and self._ssh_session_active
+        session_id = self._session_id
 
         self._ssh_session_active = False
+        self._session_id = None
         self._ssh_retry_timer.stop()
         self.output.on_key_data = None
         self.output.setReadOnly(True)
@@ -736,9 +743,9 @@ class TerminalPopout(QWidget):
         self.run_btn.setEnabled(True)
         self.ssh_hint.setVisible(False)
 
-        if was_ssh and close_remote and self.active_id:
+        if was_ssh and close_remote and session_id is not None:
             try:
-                api.close_terminal(self.active_id)
+                api.close_terminal(session_id)
             except Exception:
                 pass
 
@@ -843,7 +850,7 @@ class TerminalPopout(QWidget):
         self._end_ssh_session()
         self._terminal_io.shutdown()
         if self.on_close:
-            self.on_close(self.entry)
+            self.on_close(self)
         super().closeEvent(event)
 
 
@@ -887,7 +894,7 @@ class RemoteAdministrationPage(QWidget):
 
         self.pending_file_task = None      # agent file transfer
 
-        self._terminals = {}               # host label -> TerminalPopout
+        self._terminals = []               # list of open TerminalPopout windows
 
         main = QVBoxLayout()
         self.setLayout(main)
@@ -1197,26 +1204,28 @@ class RemoteAdministrationPage(QWidget):
         if entry is None:
             return  # header
 
-        key = entry["label"]
-        existing = self._terminals.get(key)
-        if existing is not None:
-            existing.show()
-            existing.raise_()
-            existing.activateWindow()
-            return
+        # Every double-click opens a NEW, independent session - including
+        # additional shells to a host that already has one open. Number
+        # repeat windows for the same host so their titles stay distinct.
+        session_num = sum(
+            1 for p in self._terminals if p.entry.get("label") == entry["label"]
+        ) + 1
 
-        popout = TerminalPopout(entry, on_close=self._on_terminal_closed)
-        self._terminals[key] = popout
+        popout = TerminalPopout(
+            entry, on_close=self._on_terminal_closed, session_num=session_num
+        )
+        self._terminals.append(popout)
         popout.show()
         popout.raise_()
         popout.activateWindow()
 
-    def _on_terminal_closed(self, entry):
-        self._terminals.pop(entry["label"], None)
+    def _on_terminal_closed(self, popout):
+        if popout in self._terminals:
+            self._terminals.remove(popout)
 
     def _close_terminal_for(self, label):
-        popout = self._terminals.get(label)
-        if popout is not None:
+        # Close every open window for this host (there may be several).
+        for popout in [p for p in self._terminals if p.entry.get("label") == label]:
             popout.close()
 
     # =====================================================
@@ -1558,7 +1567,7 @@ class RemoteAdministrationPage(QWidget):
     def closeEvent(self, event):
         # Close any terminal popouts this page spawned so their SSH PTY
         # sessions get torn down rather than left running on the backend.
-        for popout in list(self._terminals.values()):
+        for popout in list(self._terminals):
             popout.close()
         self._terminals.clear()
         super().closeEvent(event)

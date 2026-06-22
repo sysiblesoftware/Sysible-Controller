@@ -90,19 +90,21 @@ def exec_remote(name: str, cmd: str):
 
 
 def open_terminal(name: str):
+    # Returns {"host", "session_id", "opened"}. Each call opens a fresh,
+    # independent session; read/write/close address it by session_id.
     return _request("POST", f"/remote/hosts/{name}/terminal/open", timeout=20)
 
 
-def write_terminal(name: str, data: str):
-    return _request("POST", f"/remote/hosts/{name}/terminal/write", json={"data": data})
+def write_terminal(session_id: str, data: str):
+    return _request("POST", f"/remote/terminal/{session_id}/write", json={"data": data})
 
 
-def read_terminal(name: str):
-    return _request("GET", f"/remote/hosts/{name}/terminal/read")
+def read_terminal(session_id: str):
+    return _request("GET", f"/remote/terminal/{session_id}/read")
 
 
-def close_terminal(name: str):
-    return _request("POST", f"/remote/hosts/{name}/terminal/close")
+def close_terminal(session_id: str):
+    return _request("POST", f"/remote/terminal/{session_id}/close")
 
 
 def upload_file_ssh(name: str, local_path, remote_path: str):

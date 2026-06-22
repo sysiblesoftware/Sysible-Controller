@@ -348,12 +348,6 @@ if echo "$disk_detail" | grep -q "^critical"; then disk_status="CRITICAL"
 elif echo "$disk_detail" | grep -q "^warning"; then disk_status="WARNING"
 fi
 
-disk_excluded=$(df -hPT 2>/dev/null | awk 'NR>1 && $7!="" {
-    fstype=$2; mnt=$7;
-    if (fstype=="squashfs" || fstype=="iso9660" || fstype=="udf" || fstype=="overlay" || mnt ~ /^\/(media|run\/media|cdrom|snap)(\/|$)/)
-        printf "%s (%s)\n", mnt, fstype
-}')
-
 failed_count=$(systemctl --failed --no-legend 2>/dev/null | wc -l | tr -d ' ')
 [ -z "$failed_count" ] && failed_count=0
 failed_status="OK"
@@ -381,15 +375,11 @@ echo
 echo "Reasons:"
 echo "  Disk usage:      $disk_status"
 echo "$disk_detail" | sed 's/^/    /'
-if [ -n "$disk_excluded" ]; then
-    echo "    (excluded - install media / removable / image mounts:)"
-    echo "$disk_excluded" | sed 's/^/      /'
-fi
 echo "  Failed services: $failed_status  ($failed_count failed unit(s))"
 echo "  Load average:    $load_status  (load $load1 across $cores core(s), ratio $load_ratio)"
 echo
 echo "-- Raw signals --"
-echo "df -h (unfiltered - includes the excluded mounts above, for reference):"
+echo "Disk usage (real volumes):"
 df -hT 2>/dev/null
 echo
 echo "systemctl --failed:"
@@ -619,6 +609,41 @@ def cmd_generate_sos_report() -> str:
         "else "
         f"echo {shlex.quote(_SOS_MISSING_MSG)} >&2; exit 1; "
         "fi"
+    )
+
+
+def cmd_install_sos() -> str:
+    """Install the sos / sosreport package across the common package
+    managers, as root via the agent. apt's package is 'sos' on current
+    releases and 'sosreport' on older ones, so try both."""
+    return (
+        "set -e; "
+        "if command -v apt-get >/dev/null 2>&1; then "
+        "export DEBIAN_FRONTEND=noninteractive; apt-get update; "
+        "apt-get install -y sos || apt-get install -y sosreport; "
+        "elif command -v dnf >/dev/null 2>&1; then dnf install -y sos; "
+        "elif command -v yum >/dev/null 2>&1; then yum install -y sos; "
+        "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install sos; "
+        "else echo 'No supported package manager found (apt/dnf/yum/zypper).' >&2; exit 1; fi; "
+        "echo; echo 'sos installed - you can now run Generate sos Report.'"
+    )
+
+
+def cmd_install_auditd() -> str:
+    """Install the Linux audit daemon (auditd on Debian/Ubuntu, audit on
+    RHEL/Fedora/openSUSE/Arch) and enable it, as root via the agent, so
+    Review Audit Logs has logs to read."""
+    return (
+        "set -e; "
+        "if command -v apt-get >/dev/null 2>&1; then "
+        "export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y auditd; "
+        "elif command -v dnf >/dev/null 2>&1; then dnf install -y audit; "
+        "elif command -v yum >/dev/null 2>&1; then yum install -y audit; "
+        "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install audit; "
+        "elif command -v pacman >/dev/null 2>&1; then pacman -Sy --noconfirm audit; "
+        "else echo 'No supported package manager found (apt/dnf/yum/zypper/pacman).' >&2; exit 1; fi; "
+        "systemctl enable --now auditd 2>/dev/null || true; "
+        "echo; echo 'auditd installed and started.'"
     )
 
 

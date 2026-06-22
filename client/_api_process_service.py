@@ -30,8 +30,14 @@ _ALLOWED_SIGNALS = {"TERM", "KILL", "HUP", "INT", "QUIT", "USR1", "USR2", "STOP"
 
 def cmd_list_processes(sort_by: str = "cpu", top_n: int = 30) -> str:
     top_n = max(1, int(top_n))
-    key = "%mem" if (sort_by or "").strip().lower() == "mem" else "%cpu"
-    return f"ps -eo pid,ppid,user,%cpu,%mem,stat,etime,comm --sort=-{key} | head -n {top_n + 1}"
+    mem = (sort_by or "").strip().lower() == "mem"
+    key = "%mem" if mem else "%cpu"
+    title = f"Top {top_n} processes by {'memory' if mem else 'CPU'} usage"
+    # Lead with a title so the bare ps table isn't headerless.
+    return (
+        f"echo '== {title} =='; echo; "
+        f"ps -eo pid,ppid,user,%cpu,%mem,stat,etime,comm --sort=-{key} | head -n {top_n + 1}"
+    )
 
 
 def cmd_investigate_high_load() -> str:

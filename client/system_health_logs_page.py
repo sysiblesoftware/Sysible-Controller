@@ -131,6 +131,12 @@ def _line_color(line):
 # raw df/free/uptime dump is, and guessing wrong on those formats would
 # do more harm than just leaving them as-is.
 _DF_HEADER_TOKENS = ["Filesystem", "Type", "Size", "Used", "Avail", "Use%", "Mounted", "on"]
+# Pseudo / read-only / removable filesystems that just clutter a disk
+# report - dropped from every df table the page renders (Disk Usage and
+# the Host Health Check raw signals).
+_DF_SKIP_TYPES = {"tmpfs", "devtmpfs", "overlay", "squashfs", "iso9660", "udf"}
+_DF_SKIP_MOUNT_RE = re.compile(r"^/(media|run/media|cdrom|snap)(/|$)")
+_HEALTH_LINE_RE = re.compile(r"(?i)^HEALTH:\s*(OK|WARNING|CRITICAL)\s*$")
 _FREE_HEADER_TOKENS = ["total", "used", "free", "shared", "buff/cache", "available"]
 _UNIT_SUFFIXES = (".service", ".timer", ".socket", ".mount", ".path", ".target", ".device", ".swap", ".scope")
 _UPTIME_RE = re.compile(
@@ -157,9 +163,31 @@ def _parse_df_block(lines, start):
         else:
             fs, ftype, size, used, avail, usepct = parts[0:6]
             mount = " ".join(parts[6:])
+            # Skip pseudo/removable/image mounts (tmpfs, snap loops, install
+            # media under /media, ...) - they bury the real volumes.
+            if ftype in _DF_SKIP_TYPES or _DF_SKIP_MOUNT_RE.match(mount):
+                i += 1
+                continue
             rows.append((fs, ftype, size, used, avail, usepct, mount))
         i += 1
     return i, (rows if ok and rows else None)
+
+
+def _format_df_table(rows):
+    """Render parsed df rows as a compact, aligned table - far more
+    readable than either the raw `df` columns or one long sentence per
+    volume. Columns: mount, Use%, Used, Size, Avail, Type."""
+    mount_w = max([len("Mounted on")] + [len(r[6]) for r in rows])
+    out = [
+        f"{'Mounted on':<{mount_w}}  {'Use%':>5}  {'Used':>7}  "
+        f"{'Size':>7}  {'Avail':>7}  Type"
+    ]
+    for fs, ftype, size, used, avail, usepct, mount in rows:
+        out.append(
+            f"{mount:<{mount_w}}  {usepct:>5}  {used:>7}  "
+            f"{size:>7}  {avail:>7}  {ftype}"
+        )
+    return out
 
 
 def _humanize_free_line(line):
@@ -221,14 +249,17 @@ def _humanize_report(text):
     while i < len(lines):
         line = lines[i]
 
+        # The "HEALTH: OK/WARNING/CRITICAL" verdict is already the coloured
+        # banner at the top of the tab - drop the duplicate body line so
+        # there aren't two green/red fields saying the same thing.
+        if _HEALTH_LINE_RE.match(line.strip()):
+            i += 1
+            continue
+
         if line.split() == _DF_HEADER_TOKENS:
             end, rows = _parse_df_block(lines, i)
             if rows is not None:
-                for fs, ftype, size, used, avail, usepct, mount in rows:
-                    out.append(
-                        f"{mount}: {usepct} used ({used} of {size} total, "
-                        f"{avail} available; {ftype})"
-                    )
+                out.extend(_format_df_table(rows))
             else:
                 out.extend(lines[i:end])
             i = end
@@ -272,12 +303,12 @@ _MEM_VERDICT_RE = re.compile(r"(?i)^memory usage:\s*.+?\((OK|WARNING|CRITICAL)\)
 
 
 def _report_header(text):
-    """Pick a one-line status headline + severity for a coloured banner at
-    the top of a report, or None for reports with no clear verdict (plain
-    logs, process lists). Recognizes the explicit verdicts the health
-    commands emit - "HEALTH: X" (Host Health Check) and "Memory usage: NN%
-    (X)" (Memory & CPU Snapshot) - and otherwise raises a generic banner
-    only when a problem line is actually present. Returns (headline,
+    """Pick a one-line status headline + severity for the coloured banner
+    every report tab shows at the top. Recognizes the explicit verdicts the
+    health commands emit - "HEALTH: X" (Host Health Check) and "Memory
+    usage: NN% (X)" (Memory & CPU Snapshot) - and otherwise derives one from
+    whether any problem line is present, so EVERY health tool gets a header
+    (not just the ones with a built-in verdict). Returns (headline,
     is_problem); is_problem is True for WARNING/CRITICAL (banner goes red),
     False for OK (banner goes green)."""
     for line in text.splitlines():
@@ -290,21 +321,18 @@ def _report_header(text):
         if m:
             verdict = m.group(1).upper()
             return s, verdict != "OK"
-    # No explicit verdict: flag a red banner only if some line is a problem.
+    # No explicit verdict: green unless a problem line is present.
     for line in text.splitlines():
         color = _line_color(line)
         if color in (_status_color("CRITICAL"), _status_color("WARNING")):
             return "Issues detected", True
-    return None
+    return "No issues detected", False
 
 
 def _report_banner_html(text):
-    """Coloured status banner (green = OK, red = problem) for the top of a
-    report tab, or "" when the report has no verdict worth a banner."""
-    header = _report_header(text)
-    if header is None:
-        return ""
-    headline, is_problem = header
+    """Coloured status banner (green = OK, red = problem) shown at the top
+    of every report tab."""
+    headline, is_problem = _report_header(text)
     bg = _status_color("CRITICAL") if is_problem else _status_color("OK")
     return (
         f'<div style="background-color:{bg}; color:#ffffff; font-weight:bold; '
@@ -521,6 +549,14 @@ class SystemHealthLogsPage(QWidget):
         log_header.setStyleSheet("font-weight: bold;")
         layout.addWidget(log_header)
 
+        def _subheading(text):
+            lbl = QLabel(text)
+            lbl.setStyleSheet(f"font-weight: bold; color: {STATUS_NEUTRAL_COLOR};")
+            return lbl
+
+        # ---- Logs ----
+        layout.addWidget(_subheading("Logs"))
+
         log_review_row = QHBoxLayout()
         self.logging_lines = QSpinBox()
         self.logging_lines.setRange(1, 5000)
@@ -536,6 +572,13 @@ class SystemHealthLogsPage(QWidget):
         btn_kernel_msgs.clicked.connect(self.run_monitor_kernel_messages)
         btn_audit_logs = QPushButton("Review Audit Logs")
         btn_audit_logs.clicked.connect(self.run_review_audit_logs)
+        btn_install_auditd = QPushButton("Install auditd")
+        btn_install_auditd.setToolTip(
+            "Installs the Linux audit daemon (auditd / audit package) via the "
+            "host's package manager as root through the agent, so Review Audit "
+            "Logs has logs to read."
+        )
+        btn_install_auditd.clicked.connect(self.run_install_auditd)
         log_review_row.addWidget(QLabel("Lines:"))
         log_review_row.addWidget(self.logging_lines)
         log_review_row.addWidget(btn_review_logs)
@@ -543,6 +586,7 @@ class SystemHealthLogsPage(QWidget):
         log_review_row.addWidget(btn_analyze_journal)
         log_review_row.addWidget(btn_kernel_msgs)
         log_review_row.addWidget(btn_audit_logs)
+        log_review_row.addWidget(btn_install_auditd)
         layout.addLayout(log_review_row)
 
         app_errors_row = QHBoxLayout()
@@ -554,7 +598,11 @@ class SystemHealthLogsPage(QWidget):
         app_errors_row.addWidget(QLabel("Trace Application Errors:"))
         app_errors_row.addWidget(self.app_error_unit)
         app_errors_row.addWidget(btn_trace_errors)
+        app_errors_row.addStretch()
         layout.addLayout(app_errors_row)
+
+        # ---- Diagnostics ----
+        layout.addWidget(_subheading("Diagnostics"))
 
         diag_row = QHBoxLayout()
         btn_boot_failures = QPushButton("Investigate Boot Failures")
@@ -571,18 +619,28 @@ class SystemHealthLogsPage(QWidget):
         diag_row.addWidget(btn_cpu_bottlenecks)
         layout.addLayout(diag_row)
 
+        # ---- Support & Reports ----
+        layout.addWidget(_subheading("Support & Reports"))
+
         support_row = QHBoxLayout()
         btn_support_info = QPushButton("Collect Support Information")
         btn_support_info.clicked.connect(self.run_collect_support_info)
         btn_sos_report = QPushButton("Generate sos Report")
         btn_sos_report.setToolTip(
             "Runs the distro's sos/sosreport tool in unattended batch mode. "
-            "Does not install it if missing - install the 'sos' (RHEL/Fedora/openSUSE) "
-            "or 'sosreport' (Debian/Ubuntu) package first."
+            "If it's missing, use Install sos first."
         )
         btn_sos_report.clicked.connect(self.run_generate_sos_report)
+        btn_install_sos = QPushButton("Install sos")
+        btn_install_sos.setToolTip(
+            "Installs the sos / sosreport package via the host's package manager "
+            "as root through the agent, so Generate sos Report works."
+        )
+        btn_install_sos.clicked.connect(self.run_install_sos)
         support_row.addWidget(btn_support_info)
         support_row.addWidget(btn_sos_report)
+        support_row.addWidget(btn_install_sos)
+        support_row.addStretch()
         layout.addLayout(support_row)
 
         self.health_status = QLabel("Pick an action above to run it on all checked hosts.")
@@ -825,6 +883,12 @@ class SystemHealthLogsPage(QWidget):
         lines = self.logging_lines.value()
         cmd = api.cmd_review_audit_logs(lines)
         self._run_health_command(cmd, f"Review Audit Logs ({lines} lines)")
+
+    def run_install_auditd(self):
+        self._run_health_command(api.cmd_install_auditd(), "Install auditd")
+
+    def run_install_sos(self):
+        self._run_health_command(api.cmd_install_sos(), "Install sos")
 
     def run_trace_application_errors(self):
         unit = self.app_error_unit.text().strip()

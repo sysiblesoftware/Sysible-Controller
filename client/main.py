@@ -12,6 +12,7 @@ from home import HomeWindow
 from theme import apply_theme
 from client import api
 from client.admin_login_dialog import AdminLoginDialog
+from client.create_admin_dialog import CreateAdminDialog
 from client.force_password_change_dialog import ForcePasswordChangeDialog
 from client.branding import LOGO_PATH
 from client.events import bus
@@ -237,29 +238,42 @@ def main():
     apply_theme(app)
 
     # =========================================================
-    # ADMIN LOGIN GATE
-    # Shown once per process launch, before the dashboard exists at
-    # all - mirrors how any other admin console makes you log in
-    # before showing anything. Quitting or closing this dialog exits
-    # the app outright rather than falling through to the dashboard.
+    # ADMIN GATE (first-run setup OR login)
+    # On a fresh install no administrator exists - there's no default
+    # account - so the first launch makes the operator create their own
+    # account (and is then logged straight in). Every later launch shows
+    # the normal login. Quitting either dialog exits the app outright
+    # rather than falling through to the dashboard. If the setup check
+    # can't reach the backend, fall back to the login dialog, which
+    # surfaces the connection error itself.
     # =========================================================
-    login = AdminLoginDialog()
-    if login.exec() != AdminLoginDialog.Accepted:
-        sys.exit(0)
+    try:
+        needs_setup = api.admin_setup_required()
+    except Exception:
+        needs_setup = False
 
-    # =========================================================
-    # FORCED PASSWORD CHANGE
-    # Set on the account that just logged in if it's the auto-seeded
-    # default admin/admin, or one a fellow admin just (re)created
-    # with a temporary password. No way to dismiss this short of
-    # quitting - letting someone past this into the dashboard while
-    # still on a known/temporary password is exactly what
-    # must_change_password exists to prevent.
-    # =========================================================
-    if login.must_change_password:
-        change = ForcePasswordChangeDialog(login.username, login.password)
-        if change.exec() != ForcePasswordChangeDialog.Accepted:
+    if needs_setup:
+        setup = CreateAdminDialog()
+        if setup.exec() != CreateAdminDialog.Accepted:
             sys.exit(0)
+        # Account created and session set - go straight to the dashboard.
+    else:
+        login = AdminLoginDialog()
+        if login.exec() != AdminLoginDialog.Accepted:
+            sys.exit(0)
+
+        # =========================================================
+        # FORCED PASSWORD CHANGE
+        # Set on the account that just logged in if a fellow admin
+        # (re)created it with a temporary password. No way to dismiss
+        # this short of quitting - letting someone past this into the
+        # dashboard while still on a temporary password is exactly what
+        # must_change_password exists to prevent.
+        # =========================================================
+        if login.must_change_password:
+            change = ForcePasswordChangeDialog(login.username, login.password)
+            if change.exec() != ForcePasswordChangeDialog.Accepted:
+                sys.exit(0)
 
     window = MainWindow()
     window.show()

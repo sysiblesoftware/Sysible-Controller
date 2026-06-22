@@ -265,6 +265,14 @@ def revoke_portal_session(session_id: int):
     return _request("POST", f"/portal/sessions/{session_id}/revoke")
 
 
+def admin_setup_required():
+    return _request("GET", "/admin/setup-required").get("setup_required", False)
+
+
+def admin_setup(username: str, password: str):
+    return _request("POST", "/admin/setup", json={"username": username, "password": password})
+
+
 def admin_login(username: str, password: str):
     return _request("POST", "/admin/login", json={"username": username, "password": password})
 

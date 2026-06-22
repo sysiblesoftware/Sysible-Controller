@@ -331,25 +331,17 @@ def init_db():
         if legacy and legacy[0]:
             # Pre-existing custom credentials from before multi-admin
             # support - carry them over as-is. Not forced to change
-            # again, since this isn't the untouched admin/admin default.
+            # again, since this isn't a default the operator never chose.
             cur.execute("""
             INSERT INTO administrators (username, password_hash, password_salt, must_change_password, created, created_by)
             VALUES (?, ?, ?, 0, ?, 'migration')
             """, (legacy[0], legacy[1], legacy[2], time.time()))
-        else:
-            # Fresh install - seed the default admin/admin, forced to
-            # change on first login.
-            #
-            # Imported here rather than at module level to avoid a
-            # backend.db <-> backend.portal_auth import cycle if
-            # portal_auth ever needs db.py in the future.
-            from backend import portal_auth
-
-            salt, pw_hash = portal_auth.hash_password("admin")
-            cur.execute("""
-            INSERT INTO administrators (username, password_hash, password_salt, must_change_password, created, created_by)
-            VALUES ('admin', ?, ?, 1, ?, 'system')
-            """, (pw_hash, salt, time.time()))
+        # Otherwise leave the table EMPTY on a fresh install - there is no
+        # built-in default account. The first launch detects the empty
+        # table (GET /admin/setup-required) and makes the operator create
+        # their own administrator with their own password before the GUI
+        # is usable (POST /admin/setup), so there's never a known default
+        # password or a redundant default-then-rename step.
 
     # -----------------------------------------------------
     # Admin Audit Log

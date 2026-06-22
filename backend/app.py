@@ -78,6 +78,7 @@ from backend.models.portal_models import (
     RemovePortalCredentialsRequest,
     SetPortalPortRequest,
     AdminLoginRequest,
+    AdminSetupRequest,
     ChangeAdminCredentialsRequest,
     AddAdministratorRequest,
     ForcePasswordChangeRequest,
@@ -814,6 +815,46 @@ def revoke_portal_session_route(session_id: int):
 # Account changes and logins are recorded to admin_audit_log; see
 # GET /admin/audit-log below.
 # =========================================================
+@app.get("/admin/setup-required", dependencies=[Depends(require_api_key)])
+def admin_setup_required():
+    """True on a fresh install where no administrator exists yet - the GUI
+    uses this to show a "create your administrator account" screen instead
+    of a login screen (there is no default account to log in with)."""
+    return {"setup_required": count_administrators() == 0}
+
+
+@app.post("/admin/setup", dependencies=[Depends(require_api_key)])
+def admin_setup(body: AdminSetupRequest):
+    """Create the first administrator. Only allowed while the
+    administrators table is still empty, so it can't be used to bypass the
+    authenticated add-administrator flow once an account exists. The
+    operator chooses their own password here (must_change_password=0) -
+    there is no default to change."""
+    if count_administrators() != 0:
+        raise HTTPException(status_code=409, detail="An administrator already exists")
+
+    username = body.username.strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username cannot be empty")
+    if not body.password:
+        raise HTTPException(status_code=400, detail="Password cannot be empty")
+
+    ok, message = validate_password_against_policy(body.password, get_admin_password_policy())
+    if not ok:
+        raise HTTPException(status_code=400, detail=message)
+
+    salt, password_hash = portal_auth.hash_password(body.password)
+    created = add_administrator(
+        username, password_hash, salt, must_change_password=0, created_by="setup"
+    )
+    if not created:
+        raise HTTPException(status_code=409, detail="An administrator with that username already exists")
+
+    log_admin_audit("administrator_added", username, "first-run setup")
+
+    return {"username": username, "status": "created"}
+
+
 @app.post("/admin/login", dependencies=[Depends(require_api_key)])
 def admin_login(body: AdminLoginRequest):
 

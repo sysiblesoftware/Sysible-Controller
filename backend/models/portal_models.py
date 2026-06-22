@@ -50,6 +50,14 @@ class AddAdministratorRequest(BaseModel):
     actor: str = ""  # username of the administrator performing the add, for the audit log
 
 
+class AdminSetupRequest(BaseModel):
+    # First-run creation of the very first administrator (no default
+    # account exists). Only honoured while the administrators table is
+    # still empty - see POST /admin/setup.
+    username: str
+    password: str
+
+
 class ForcePasswordChangeRequest(BaseModel):
     username: str
     current_password: str

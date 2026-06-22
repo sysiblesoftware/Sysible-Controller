@@ -15,10 +15,10 @@ class AdminLoginDialog(QDialog):
     """Gate shown once at GUI startup (see client/main.py) before the
     dashboard appears - same idea as logging into any other admin
     console before it'll show you anything. Backed by the
-    administrators table (backend/db.py), which auto-seeds a default
-    admin/admin row on first run so there's something to log in with
-    immediately after install, forced to change on first login. Add
-    more accounts, or change this one's password, from the Sysible
+    administrators table (backend/db.py). There is no default account:
+    a fresh install has no administrators, so the first launch runs the
+    create-administrator setup flow (CreateAdminDialog) instead of this
+    login. Add more accounts, or change a password, from the Sysible
     Administrator Configuration page once you're in.
 
     This is a one-shot check, not a session/token system like the
@@ -65,7 +65,7 @@ class AdminLoginDialog(QDialog):
         title.setStyleSheet("font-size:16px; font-weight:bold;")
         layout.addWidget(title)
 
-        hint = QLabel("Default credentials are admin / admin until changed or another administrator is added.")
+        hint = QLabel("Enter your Sysible Controller administrator username and password.")
         hint.setAlignment(Qt.AlignCenter)
         theme.style_hint_label(hint)
         hint.setWordWrap(True)
@@ -75,7 +75,7 @@ class AdminLoginDialog(QDialog):
 
         user_row = QHBoxLayout()
         user_row.addWidget(QLabel("Username:"))
-        self.username_input = QLineEdit("admin")
+        self.username_input = QLineEdit()
         user_row.addWidget(self.username_input)
         layout.addLayout(user_row)
 

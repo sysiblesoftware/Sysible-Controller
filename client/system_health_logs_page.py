@@ -42,7 +42,18 @@ def _status_color(status):
     return _STATUS_COLORS.get(status, STATUS_NEUTRAL_COLOR)
 
 
-_JOURNAL_PRIORITY_CHOICES = ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"]
+# (display label shown in the dropdown, journalctl priority code). journalctl
+# wants the short code (emerg/crit/err/...); the operator sees the full word.
+_JOURNAL_PRIORITY_OPTIONS = [
+    ("Emergency", "emerg"),
+    ("Alert", "alert"),
+    ("Critical", "crit"),
+    ("Error", "err"),
+    ("Warning", "warning"),
+    ("Notice", "notice"),
+    ("Info", "info"),
+    ("Debug", "debug"),
+]
 
 
 def _entry_key(entry):
@@ -137,6 +148,7 @@ _DF_HEADER_TOKENS = ["Filesystem", "Type", "Size", "Used", "Avail", "Use%", "Mou
 _DF_SKIP_TYPES = {"tmpfs", "devtmpfs", "overlay", "squashfs", "iso9660", "udf"}
 _DF_SKIP_MOUNT_RE = re.compile(r"^/(media|run/media|cdrom|snap)(/|$)")
 _HEALTH_LINE_RE = re.compile(r"(?i)^HEALTH:\s*(OK|WARNING|CRITICAL)\s*$")
+_MEM_USAGE_LINE_RE = re.compile(r"(?i)^Memory usage:\s*.+?\((OK|WARNING|CRITICAL)\)\s*$")
 _FREE_HEADER_TOKENS = ["total", "used", "free", "shared", "buff/cache", "available"]
 _UNIT_SUFFIXES = (".service", ".timer", ".socket", ".mount", ".path", ".target", ".device", ".swap", ".scope")
 _UPTIME_RE = re.compile(
@@ -249,10 +261,12 @@ def _humanize_report(text):
     while i < len(lines):
         line = lines[i]
 
-        # The "HEALTH: OK/WARNING/CRITICAL" verdict is already the coloured
-        # banner at the top of the tab - drop the duplicate body line so
-        # there aren't two green/red fields saying the same thing.
-        if _HEALTH_LINE_RE.match(line.strip()):
+        # The "HEALTH: ..." and "Memory usage: NN% (...)" verdict lines are
+        # already shown as the coloured banner at the top of the tab - drop
+        # the duplicate body line so there aren't two green/red fields
+        # saying the same thing.
+        stripped = line.strip()
+        if _HEALTH_LINE_RE.match(stripped) or _MEM_USAGE_LINE_RE.match(stripped):
             i += 1
             continue
 
@@ -564,9 +578,16 @@ class SystemHealthLogsPage(QWidget):
         btn_review_logs = QPushButton("Review System Logs")
         btn_review_logs.clicked.connect(self.run_review_system_logs)
         self.journal_priority = QComboBox()
-        self.journal_priority.addItems(["(any priority)"] + _JOURNAL_PRIORITY_CHOICES)
-        self.journal_priority.setMaximumWidth(130)
-        btn_analyze_journal = QPushButton("Analyze Journal Logs")
+        self.journal_priority.addItem("(any priority)", "")
+        for _label, _code in _JOURNAL_PRIORITY_OPTIONS:
+            self.journal_priority.addItem(_label, _code)
+        self.journal_priority.setMaximumWidth(150)
+        btn_analyze_journal = QPushButton("View Journal Logs")
+        btn_analyze_journal.setToolTip(
+            "Shows this boot's systemd journal entries (most recent first), "
+            "optionally filtered to a chosen priority and above. A viewer, not "
+            "an analyzer - it doesn't summarize or score the logs."
+        )
         btn_analyze_journal.clicked.connect(self.run_analyze_journal_logs)
         btn_kernel_msgs = QPushButton("Monitor Kernel Messages")
         btn_kernel_msgs.clicked.connect(self.run_monitor_kernel_messages)
@@ -863,15 +884,14 @@ class SystemHealthLogsPage(QWidget):
 
     def run_analyze_journal_logs(self):
         lines = self.logging_lines.value()
-        priority = self.journal_priority.currentText().strip()
-        if priority == "(any priority)":
-            priority = ""
+        priority = self.journal_priority.currentData() or ""   # journalctl code
+        display = self.journal_priority.currentText().strip() if priority else "any priority"
         try:
             cmd = api.cmd_analyze_journal_logs(priority, lines)
         except ValueError as e:
             QMessageBox.warning(self, "Invalid input", str(e))
             return
-        label = f"Analyze Journal Logs ({priority or 'any priority'}, {lines} lines)"
+        label = f"Journal Logs ({display}, {lines} lines)"
         self._run_health_command(cmd, label)
 
     def run_monitor_kernel_messages(self):

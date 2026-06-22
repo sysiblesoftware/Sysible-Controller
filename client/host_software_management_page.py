@@ -58,7 +58,7 @@ class HostSoftwareManagementPage(QWidget):
         self.pkg_results = {}    # entry_key -> {label, stdout, stderr, code, pending}
         self.pkg_pending = {}    # entry_key -> (entry, task_id)
         self.last_command_label = None
-        self.installed_packages = []   # parsed from the most recent "List Installed Packages" run
+        self.package_choices = []      # [(display, name)] from the most recent List/Search run
 
         main = QVBoxLayout()
         self.setLayout(main)
@@ -150,15 +150,22 @@ class HostSoftwareManagementPage(QWidget):
         name_row.addWidget(QLabel("Package name(s):"))
         self.package_name_input = QLineEdit()
         self.package_name_input.setPlaceholderText(
-            "e.g. nginx curl  (space-separated for more than one - also filters the list below)"
+            "e.g. nginx curl  (space-separated for more than one; also the search term / filter)"
         )
-        # Doubles as the live filter for the installed-packages list
-        # below once "List Installed Packages" has been run, so typing
-        # a name does double duty instead of needing a second,
-        # separate search field that just feeds back into this one.
+        # Doubles as the search term AND the live filter for the package
+        # list below, so typing a name does double duty instead of needing
+        # a second, separate field.
         self.package_name_input.textChanged.connect(self.filter_installed_packages)
         name_row.addWidget(self.package_name_input, 1)
-        btn_list_packages = QPushButton("List Installed Packages")
+        btn_search = QPushButton("Search Available")
+        btn_search.setToolTip(
+            "Search the host's repositories for available packages matching the "
+            "term above (e.g. 'http' finds httpd / apache2). Results appear in the "
+            "list below - click one to drop its name into the field, then Install."
+        )
+        btn_search.clicked.connect(self.run_search_packages)
+        name_row.addWidget(btn_search)
+        btn_list_packages = QPushButton("List Installed")
         btn_list_packages.clicked.connect(self.run_list_installed)
         name_row.addWidget(btn_list_packages)
         layout.addLayout(name_row)
@@ -323,6 +330,15 @@ class HostSoftwareManagementPage(QWidget):
     def run_list_installed(self):
         self._run_pkg_command(api.cmd_list_installed_packages(), "Installed Packages")
 
+    def run_search_packages(self):
+        term = self.package_name_input.text().strip()
+        try:
+            cmd = api.cmd_search_packages(term)
+        except ValueError as e:
+            QMessageBox.information(self, "Nothing to search for", str(e))
+            return
+        self._run_pkg_command(cmd, f"Search: '{term}'")
+
     def run_install(self):
         names = self._required_package_names()
         if not names:
@@ -391,8 +407,11 @@ class HostSoftwareManagementPage(QWidget):
         self.pkg_pending = {}
         self.pkg_tabs.clear()
 
-        if label != "Installed Packages":
-            self.installed_packages = []
+        # Clear the stale picker unless this run will repopulate it
+        # (List Installed or a Search), so an old installed list doesn't
+        # linger under, say, an Install result.
+        if label != "Installed Packages" and not label.startswith("Search:"):
+            self.package_choices = []
             self.installed_packages_list.clear()
 
         for entry in entries:
@@ -513,8 +532,8 @@ class HostSoftwareManagementPage(QWidget):
                 status = self._status_text(data)
                 self.pkg_tabs.setTabText(i, f"{data['label']}  [{status}]")
                 self._render_pkg_result(self.pkg_tabs.widget(i), data)
-                if self.last_command_label == "Installed Packages" and i == self.pkg_tabs.currentIndex():
-                    self._populate_installed_packages(data["stdout"])
+                if i == self.pkg_tabs.currentIndex():
+                    self._maybe_populate_picker(data)
             return
 
     def _poll_pkg(self):
@@ -554,8 +573,7 @@ class HostSoftwareManagementPage(QWidget):
         data = self.pkg_results.get(key)
         if not data or data["pending"]:
             return
-        if self.last_command_label == "Installed Packages":
-            self._populate_installed_packages(data["stdout"])
+        self._maybe_populate_picker(data)
 
     # =========================================================
     # INSTALLED PACKAGES SEARCH (filterable view of the most recent
@@ -563,22 +581,57 @@ class HostSoftwareManagementPage(QWidget):
     # above - same pattern as Service Management's installed-services
     # search/filter_services)
     # =========================================================
+    def _maybe_populate_picker(self, data):
+        """Fill the package picker below the field from a result, depending
+        on which action produced it - the installed list, or repository
+        search results. Any other action leaves the picker alone."""
+        if data is None or data.get("pending"):
+            return
+        label = self.last_command_label or ""
+        if label == "Installed Packages":
+            self._populate_installed_packages(data["stdout"])
+        elif label.startswith("Search:"):
+            self._populate_search_results(data["stdout"])
+
     def _populate_installed_packages(self, stdout):
         names = [line.strip() for line in (stdout or "").splitlines() if line.strip()]
         if names == ["Neither dpkg nor rpm found on this host."]:
             names = []
-        self.installed_packages = sorted(set(names))
-        self._render_installed_packages(self.package_name_input.text())
+        # (display, name) - identical here; the search path differs.
+        self.package_choices = [(n, n) for n in sorted(set(names))]
+        self._render_package_choices(self.package_name_input.text())
 
-    def _render_installed_packages(self, text):
+    def _populate_search_results(self, stdout):
+        # Each line is "<name> <summary>" (see api.cmd_search_packages).
+        seen = set()
+        choices = []
+        for line in (stdout or "").splitlines():
+            line = line.strip()
+            if not line or line.startswith("No supported package manager"):
+                continue
+            parts = line.split(None, 1)
+            name = parts[0]
+            if name in seen:
+                continue
+            seen.add(name)
+            choices.append((line, name))
+        self.package_choices = sorted(choices, key=lambda c: c[1].lower())
+        self._render_package_choices(self.package_name_input.text())
+
+    def _render_package_choices(self, text):
         self.installed_packages_list.clear()
         text = (text or "").lower()
-        for name in self.installed_packages:
-            if text in name.lower():
-                self.installed_packages_list.addItem(name)
+        for display, name in self.package_choices:
+            if text in display.lower():
+                item = QListWidgetItem(display)
+                item.setData(Qt.UserRole, name)
+                self.installed_packages_list.addItem(item)
 
     def filter_installed_packages(self, text):
-        self._render_installed_packages(text)
+        self._render_package_choices(text)
 
     def _pick_installed_package(self, item):
-        self.package_name_input.setText(item.text())
+        # Drop just the package name into the field (a search row also
+        # shows its summary, which must not end up in the field).
+        name = item.data(Qt.UserRole) or item.text()
+        self.package_name_input.setText(name)

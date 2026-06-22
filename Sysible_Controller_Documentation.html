@@ -330,14 +330,16 @@ sudo ./install_sysible.sh</pre>
 <div class="page" id="first-login">
 <h1 class="sec"><span class="tag">Section 4</span>First Login &amp; Administrator Accounts</h1>
 
-<p>Before the Dashboard or any of its tools become accessible, Sysible Controller requires every user to authenticate through an <strong>Administrator Login</strong> screen. This appears automatically each time the desktop application starts, and the Dashboard will not appear until it is satisfied.</p>
+<p>Before the Dashboard or any of its tools become accessible, Sysible Controller requires every user to authenticate as an <strong>administrator</strong>. The desktop application checks the controller each time it starts and shows one of two screens — first-run account creation, or the normal login — before the Dashboard appears.</p>
+
+<h2>First run — create your administrator account</h2>
+<p>A brand-new installation ships with <strong>no administrator account and no default password</strong>. The first time the desktop application starts, it detects that no administrator exists yet and presents a <strong>Create Administrator Account</strong> screen instead of a login. Choose a <strong>Username</strong> and a <strong>Password</strong> (entered twice to confirm), click <strong>Create Account</strong>, and the account is created and you are logged straight into the Dashboard. There is no <code>admin</code>/<code>admin</code> default to log in with, and no separate "now change your password" step afterward — you pick your own password up front. The password must satisfy the Administrator Password Policy in effect (see Section 9). This screen only appears while no administrator exists; once the first account is created it never appears again.</p>
 
 <h2>Logging in</h2>
-<p>The login screen displays the Sysible logo and asks for a <strong>Username</strong> and <strong>Password</strong>. On a brand-new installation, a single default account is provided automatically so there is something to log in with immediately: <code>admin</code> / <code>admin</code> — the login screen itself displays this hint. If credentials are incorrect, an error message indicates an invalid username or password and the password field is cleared. If the backend cannot be reached at all, a different error reports that connection problem instead.</p>
+<p>Every launch after the first shows the normal <strong>Administrator Login</strong> screen, which displays the Sysible logo and asks for the <strong>Username</strong> and <strong>Password</strong> of an existing administrator. If credentials are incorrect, an error message indicates an invalid username or password and the password field is cleared. If the backend cannot be reached at all, a different error reports that connection problem instead.</p>
 
-<h2>Forced password change on first login</h2>
-<p>Because <code>admin</code>/<code>admin</code> (and any new administrator account created with a temporary password) is a known, shared credential, Sysible Controller will not let you proceed into the Dashboard on such an account without first setting a real password. Immediately after a successful login with an account flagged this way, a <strong>Change Your Password</strong> dialog appears automatically, asking for a new password twice. There is no way to cancel out of this step — by design, an administrator cannot continue into the application while still using a known or temporary password.</p>
-<p>The new password must satisfy whatever Administrator Password Policy is currently configured (see Section 9). Once set, the Dashboard opens. Future logins on that account use the new password directly with no forced-change step, unless a fellow administrator later resets it back to a temporary one, in which case the same flow runs again.</p>
+<h2>Forced password change for temporary passwords</h2>
+<p>When one administrator adds another from Sysible Controller Settings, the new account is created with a <strong>temporary password</strong> and flagged to change it. The first time someone logs in on such an account, a <strong>Change Your Password</strong> dialog appears automatically and cannot be dismissed — by design, an administrator cannot continue into the Dashboard while still using a temporary password set by someone else. The new password must satisfy the Administrator Password Policy currently configured (see Section 9). Once set, future logins on that account use the new password directly, unless a fellow administrator later resets it back to a temporary one, in which case the same flow runs again. The first-run account you create for yourself is never subject to this, since you chose its password from the start.</p>
 <div class="note"><b>Note</b>This is a one-shot login check, not a session/token scheme — the GUI is a single long-lived desktop process used by one person at a time. The Webserver Portal (Section 11), used by potentially many concurrent host operators in a browser, does use real session tokens. Additional administrator accounts are managed from Sysible Controller Settings once logged in, and every login attempt and account change is recorded to the audit log.</div>
 </div>
 
@@ -575,20 +577,24 @@ sudo ./run_agent.sh</pre>
     <rect x="767" y="608" width="80" height="22" rx="4" fill="#3C4B64" stroke="#506080"/><text x="807" y="623" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Download…</text>
   </svg>
 </figure>
-<figcaption>Remote Host Administration — managed hosts, one-click SSH enrollment, live terminal, and file transfer.</figcaption>
+<figcaption>Remote Host Administration — managed hosts (with IPs), one-click SSH enrollment, pop-out terminals, and file transfer.</figcaption>
 
 <h2>The merged hosts view</h2>
-<p>The <strong>Managed Hosts</strong> table lists every host the controller knows about — agent-enrolled and SSH-connected alike — grouped by environment. Three columns: <strong>Host</strong>, <strong>Type</strong> (Agent, SSH, or a combined row when both apply to the same machine), and <strong>Address</strong>. Clicking any host connects to it immediately — no separate "connect" step, and no password required again, since credentials are already on file. Buttons below the table let you <strong>Refresh</strong>, <strong>Remove Host</strong>, and <strong>Show Sysible Controller Public Key</strong> (for installing the controller's key manually where the one-click flow isn't suitable).</p>
+<p>The <strong>Managed Hosts</strong> list runs down the left of the page and shows every host the controller knows about — agent-enrolled and SSH-connected alike — grouped by environment, with each host's <strong>connection type</strong> and <strong>IP address</strong> shown inline. A host enrolled both ways appears once, as a combined <strong>Agent + SSH</strong> entry, rather than twice. Buttons let you <strong>Refresh</strong>, <strong>Remove Host</strong>, and <strong>Show Sysible Controller Public Key</strong> (for installing the controller's key manually where the one-click flow isn't suitable).</p>
+<p><strong>Removing a connection</strong> from a combined host is granular: when you remove an <strong>Agent + SSH</strong> host you're asked whether to drop just the SSH connection, just the agent connection, or both — so you can, for example, revoke a host's SSH access while leaving its agent enrollment intact.</p>
 
 <h2>One-click enroll via SSH</h2>
 <p>The <strong>SSH to a New Host</strong> section connects a host that isn't enrolled by any method yet — no token, no pre-installed software. Provide Host name, IP address, Username (defaults to <code>root</code>), SSH password, and optionally an Environment. Clicking <strong>Connect Host</strong> does the entire handoff in one step: the controller uses the password once to install its own auto-generated SSH key on the target, then discards the password — all future connections use that key, no password required again.</p>
+<div class="note"><b>Agent hosts get a terminal automatically</b>When a host enrolls via the Sysible agent, the controller automatically installs its SSH key on that host and registers an SSH connection alongside the agent, so the host shows up as <strong>Agent + SSH</strong> and gains a real interactive terminal without any extra step. This only requires an SSH server to be running on the host; if none is, the host stays agent-only and the page explains that an SSH server would be needed for a live terminal.</div>
 
-<h2>The live interactive terminal</h2>
-<p>For <strong>SSH-connected hosts</strong>, the terminal is a genuine PTY-backed interactive session — programs like <code>vim</code>, <code>top</code>, or an interactive <code>sudo</code> prompt behave correctly, arrow keys/Tab/Backspace all work, and pasting sends text directly into the session. A dedicated <strong>Send Ctrl+C</strong> button sends a real interrupt signal, useful for stopping a hung command or as a fallback if the keyboard shortcut is intercepted by a text selection instead.</p>
-<p>For <strong>agent-enrolled hosts</strong>, there's no persistent connection, so true interactive sessions aren't possible. Instead, type a command in the bottom box and press Enter — it's queued for the agent to execute, with output, errors, and exit code returned once it reports back (typically a few seconds; a timeout is reported after about 30 seconds of silence). Command history is recalled with the Up/Down arrow keys.</p>
+<h2>The pop-out terminal</h2>
+<p><strong>Double-click a host</strong> to open its terminal in its own window. The terminal is a pop-out (not docked in the page), so you can place it wherever you like, resize it freely, and keep several open side by side. You can open <strong>more than one session to the same host</strong> at once — each double-click opens a new, independent session, and repeated windows for the same host are numbered in their title bars.</p>
+<p>For a host that's enrolled both ways, a <strong>Connection</strong> picker at the top of the window switches between the <strong>SSH</strong> session and the <strong>Agent</strong> console; single-transport hosts show only what they have.</p>
+<p>On an <strong>SSH</strong> connection the terminal is a genuine PTY-backed interactive session. Full-screen, cursor-addressed programs — <code>vim</code>, <code>top</code>, <code>htop</code>, <code>less</code> — render correctly rather than spilling stray redraw lines, and the terminal <strong>resizes with the window</strong> so those programs use the whole panel. Output is colorized (ANSI colors are honored), and the <code>user@host</code> portion of the prompt is shown in <strong>green</strong>, turning <strong>red</strong> whenever you are <code>root</code> (including after <code>su</code> or <code>sudo -i</code>) as an at-a-glance privilege cue. Arrow keys, Tab, and Backspace all work, and pasting sends text straight into the session. Buttons provide <strong>Send Ctrl+C</strong> (a real interrupt signal), <strong>Clear</strong> (clears the pane and redraws the prompt), and <strong>Exit Session</strong> (closes the window and tears down the remote session).</p>
+<p>On an <strong>Agent</strong> connection there's no persistent shell, so true interactive sessions aren't possible. Instead, type a command in the bottom box and press Enter — it's queued for the agent to execute, with output, errors, and exit code returned once it reports back (typically a few seconds; a timeout is reported after about 30 seconds of silence). Command history is recalled with the Up/Down arrow keys.</p>
 
 <h2>File upload and download</h2>
-<p>The File Transfer section acts on whichever host is currently active in the Terminal section. <strong>SSH hosts</strong> transfer over SFTP with no enforced size limit, completing synchronously. <strong>Agent-enrolled hosts</strong> transfer through the same queued-task channel used for commands, capped at a modest size (the page states the current limit) since that channel isn't designed for bulk data movement.</p>
+<p>The File Transfer section moves files to and from a managed host. <strong>SSH hosts</strong> transfer over SFTP with no enforced size limit, completing synchronously. <strong>Agent-enrolled hosts</strong> transfer through the same queued-task channel used for commands, capped at a modest size (the page states the current limit) since that channel isn't designed for bulk data movement.</p>
 </div>
 
 <!-- ===================== 9. SETTINGS ===================== -->
@@ -818,11 +824,12 @@ sudo ./run_agent.sh</pre>
 <p>Both cron and timer schedules use the same <strong>human-readable schedule builder</strong> — plain-English frequency/time choices translated into the correct cron or <code>OnCalendar</code> syntax behind the scenes, with an advanced option to type the raw expression directly.</p>
 
 <h2 id="softwaremgmt">Host Software Management</h2>
-<p>Installs, removes, updates, and inspects packages across the fleet — working unmodified against RHEL/CentOS/Fedora (<code>dnf</code>, falling back to <code>yum</code>), openSUSE/SLES (<code>zypper</code>), and Debian/Ubuntu (<code>apt</code>) hosts. Every command this tool sends detects the target host's package manager fresh, at the moment it runs, rather than assuming or caching one — so a single action against a checklist of mixed-distro hosts is dispatched correctly to each one without any extra setup.</p>
+<p>Installs, removes, updates, and inspects packages across the fleet — working unmodified against RHEL/CentOS/Fedora (<code>dnf</code>, falling back to <code>yum</code>), openSUSE/SLES (<code>zypper</code>), and Debian/Ubuntu (<code>apt</code>) hosts. Every command this tool sends detects the target host's package manager fresh, at the moment it runs, rather than assuming or caching one — so a single action against a checklist of mixed-distro hosts is dispatched correctly to each one without any extra setup. If you don't know a package's exact name, <strong>Search Available</strong> queries the host's repositories so you can find it (for example, typing <code>http</code> turns up <code>httpd</code> / <code>apache2</code>) and install it without leaving the page.</p>
 <table class="ref">
 <tr><th>Action</th><th>What it does</th></tr>
 <tr><td>Detect Package Manager / OS</td><td>Reports the host's OS name plus which package manager was detected (<code>dnf</code>, <code>yum</code>, <code>zypper</code>, or <code>apt-get</code>) — the literal answer to "which package manager and environment is this host running."</td></tr>
-<tr><td>List Installed Packages</td><td>Every installed package name, sourced from <code>rpm -qa</code> or <code>dpkg-query</code> depending on the host. Filterable; clicking an entry fills the Package name(s) field.</td></tr>
+<tr><td>Search Available</td><td>Searches the host's configured repositories for available (not just installed) packages whose name or summary matches the term in the Package name(s) field — <code>dnf</code>/<code>yum search</code>, <code>zypper search</code>, or <code>apt-cache search</code>, normalized to one "name — summary" line per match. Results fill the list below; clicking one drops its package name into the field, ready to Install. This is how you discover what to install when you only know roughly what you're after.</td></tr>
+<tr><td>List Installed</td><td>Every installed package name, sourced from <code>rpm -qa</code> or <code>dpkg-query</code> depending on the host. Filterable; clicking an entry fills the Package name(s) field.</td></tr>
 <tr><td>Install</td><td>Installs one or more space-separated package names (<code>dnf</code>/<code>yum</code>/<code>zypper install -y</code>, or <code>apt-get install -y</code>).</td></tr>
 <tr><td>Remove</td><td>Removes one or more space-separated package names from the host.</td></tr>
 <tr><td>Update / Upgrade</td><td>With package names entered, updates just those; left blank, upgrades every package on the host — covering both RHEL's "Update packages" and Debian's "Upgrade systems" as one action.</td></tr>
@@ -1515,12 +1522,20 @@ sudo ./run_agent.sh</pre>
 <h3>Check which package manager a host uses</h3>
 <ol><li>Check the host, click <strong>Detect Package Manager / OS</strong>.</li></ol>
 
-<h3>Find a package</h3>
-<ol><li>Click <strong>List Installed Packages</strong>, optionally filter with the search box, then click an entry to fill in the Package name(s) field.</li></ol>
+<h3>Find an installed package</h3>
+<ol><li>Click <strong>List Installed</strong>, optionally filter by typing in the Package name(s) field, then click an entry to fill in that field.</li></ol>
+
+<h3>Find a package to install (search the repositories)</h3>
+<ol>
+<li>Check the target host(s).</li>
+<li>Type what you're looking for in <strong>Package name(s)</strong> — a partial name or keyword is fine (e.g. <code>http</code>).</li>
+<li>Click <strong>Search Available</strong>. Matching packages from the host's repositories appear in the list below, each with a short summary.</li>
+<li>Click the package you want to drop its name into the field, then click <strong>Install</strong>.</li>
+</ol>
 
 <h3>Install or remove packages</h3>
 <ol>
-<li>Enter one or more space-separated package names in Package name(s).</li>
+<li>Enter one or more space-separated package names in Package name(s) (or pick one via List Installed / Search Available).</li>
 <li>Click <strong>Install</strong> or <strong>Remove</strong>.</li>
 </ol>
 

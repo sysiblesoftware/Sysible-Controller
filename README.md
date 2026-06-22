@@ -45,7 +45,7 @@ What that buys you in practice:
 | Area | What it covers |
 |---|---|
 | **Host Enrollment** | Build and download single-use agent bundles; organize enrolled hosts into environments (Production, Staging, etc.); disenroll cleanly. |
-| **Remote Host Administration** | Unified list of agent- and SSH-managed hosts; one-click SSH enrollment (password used once, then discarded in favor of a generated key); a real interactive PTY terminal for SSH hosts; queued command execution for agent hosts; file upload/download. |
+| **Remote Host Administration** | Unified list of agent- and SSH-managed hosts (with each host's IP shown inline); one-click SSH enrollment (password used once, then discarded in favor of a generated key); pop-out terminal windows opened by double-clicking a host, with **multiple concurrent sessions per host**; a real PTY terminal for SSH hosts that renders full-screen apps (`vim`, `top`, `less`) correctly and resizes with the window, with the `user@host` prompt shown green (red for root); queued command execution for agent hosts; per-connection removal (drop just the SSH or just the agent side of a combined host); file upload/download. Agent hosts are **auto-enrolled for SSH** on enrollment, so they also get a real terminal automatically when an SSH server is present. |
 | **User & Group Administration** | Create/lock/unlock/delete accounts, manage sudo and group membership, set or generate passwords against a fleet-wide policy, manage password aging and account expiration, kill active sessions, and terminate an account fleet-wide in one action — across checked hosts, with per-host result tabs. |
 | **System Health & Logs** | Disk usage, memory/CPU snapshots, uptime, failed services, large-file search, log search/tail, process inspection, and a combined OK/WARNING/CRITICAL health verdict per host — with removable/install media excluded from disk scoring so a mounted ISO doesn't false-flag a healthy box. |
 | **Service Management** | Start/stop/restart/reload, enable/disable at boot, status, logs, dependency view, and one-click troubleshooting for one service or every failed service fleet-wide; create new systemd services and dependency overrides from the GUI. |
@@ -86,6 +86,12 @@ sudo sysible_controller start
 ```
 
 The installer detects your package manager, deploys the project to `/opt/sysible`, sets up a Python virtual environment, generates a self-signed TLS certificate and admin API key, installs the backend as the `sysible-backend` systemd service, installs the `sysible_controller` CLI, and — on a machine with a desktop environment — adds a **Sysible Controller** entry to the application menu using the same logo shown throughout the GUI.
+
+## First launch — create your administrator account
+
+A fresh install ships with **no administrator account and no default password**. The first time the desktop GUI starts, it detects that no administrator exists yet and shows a **Create Administrator Account** screen instead of a login: pick a username and password (entered twice to confirm) and you're logged straight in. There is no `admin`/`admin` to log in with and no separate "now change your password" step. The password must satisfy the Administrator Password Policy in effect.
+
+Every launch after that shows the normal login. When one administrator later adds another from Sysible Controller Settings, that new account gets a temporary password and is required to set its own on first login.
 
 ## Getting back in
 

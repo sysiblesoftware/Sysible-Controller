@@ -363,6 +363,30 @@ def cmd_clean_package_cache() -> str:
     )
 
 
+def cmd_search_packages(term: str) -> str:
+    """Search the host's configured repositories for available packages
+    matching `term` (name or summary), so you can find what to install
+    without knowing the exact package name. Normalizes dnf/yum, zypper,
+    and apt-cache search output to one "<name> <summary>" line per match
+    (package name first, so the GUI can pull it out for an Install), and
+    caps the result so a broad term doesn't return thousands of rows."""
+    term = (term or "").strip()
+    if not term:
+        raise ValueError("Type something to search for first.")
+    t = shlex.quote(term)
+    detect = _pkgmgr_detect_fragment()
+    return detect + "\n" + r"""{
+  if [ "$PKGMGR" = "dnf" ] || [ "$PKGMGR" = "yum" ]; then
+    "$PKGMGR" -q search """ + t + r""" 2>/dev/null | grep ' : ' | sed -e 's/\.[^. :]* : / /' -e 's/ : / /'
+  elif [ "$PKGMGR" = "zypper" ]; then
+    zypper -q search """ + t + r""" 2>/dev/null | awk -F'|' 'NF>=3 {n=$2; sub(/^ +/,"",n); sub(/ +$/,"",n); if(n!="" && n!="Name" && n !~ /^-+$/){s=$3; sub(/^ +/,"",s); sub(/ +$/,"",s); print n" "s}}'
+  else
+    apt-cache search """ + t + r""" 2>/dev/null | sed 's/ - / /'
+  fi
+} | head -n 300
+"""
+
+
 def cmd_list_installed_packages() -> str:
     """Newline-per-package list, parsed by the GUI's filterable
     "Installed Packages" picker. Reads dpkg/rpm directly instead of

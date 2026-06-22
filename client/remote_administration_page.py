@@ -4,9 +4,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, QTableWidgetItem,
-    QAbstractItemView, QPushButton, QLineEdit, QTextEdit, QComboBox, QInputDialog,
-    QMessageBox, QApplication, QFileDialog, QFrame, QSizePolicy
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QPushButton, QLineEdit, QTextEdit, QComboBox, QInputDialog, QMessageBox,
+    QApplication, QFileDialog, QFrame,
 )
 from PySide6.QtCore import Qt, QTimer, QObject, Signal
 from PySide6.QtGui import QFont, QKeySequence
@@ -16,35 +16,29 @@ from client.branding import make_page_header
 from client.events import bus
 from client import theme
 from client.theme import STATUS_NEUTRAL_COLOR, STATUS_SUCCESS_COLOR, STATUS_ERROR_COLOR
+from client.host_panel import build_host_panel
+from client.collapsible_groups import (
+    make_group_header_item, apply_collapse_state, get_collapsed_groups,
+    connect_group_toggle, add_collapse_expand_buttons,
+)
 
 _NEW_ENV_OPTION = "+ New environment..."
 _UNASSIGNED_LABEL = "Unassigned"
 
+HOST_REFRESH_MS = 10000
+
 AGENT_CMD_POLL_MS = 1500
 AGENT_CMD_TIMEOUT_S = 30
 
-# History: this used to be a 300ms, then a 60ms, fixed-interval
-# QTimer driving a *synchronous* read_terminal()/write_terminal() call
-# straight on the Qt GUI thread. That kept every poll cheap, but it
-# capped responsiveness at the timer interval and meant every single
-# keystroke blocked the whole app's UI thread for one full network
-# round trip before the keypress even reached the remote shell.
-#
-# Now: backend/remote_routes.py's /terminal/read does a real
-# server-side long-poll (blocks briefly waiting for output instead of
-# returning empty right away - see TERMINAL_LONG_POLL_S there), and
-# _TerminalIO below runs every read/write on a background thread pool
-# instead of the GUI thread, so that backend-side wait never freezes
-# the app. The read loop is now completion-driven (each read
-# immediately kicks off the next one) rather than timer-driven, so
-# new remote output reaches the screen the instant the backend wakes
-# up - not on the next fixed tick. SSH_TERMINAL_POLL_MS now only
-# governs the brief backoff after a transient read error, so a
-# persistent failure (host rebooting, network blip) doesn't spin the
-# loop.
+# Brief backoff after a transient SSH read error so the completion-
+# driven read loop in _TerminalIO doesn't spin against a host that's
+# momentarily unreachable (rebooting, network blip).
 SSH_TERMINAL_POLL_MS = 60
 
 
+# =====================================================================
+# LOW-LEVEL TERMINAL I/O (shared by every TerminalPopout)
+# =====================================================================
 class _TerminalIO(QObject):
     """Runs the blocking SSH terminal read/write HTTP calls on a
     background thread pool instead of the Qt GUI thread, so neither a
@@ -52,8 +46,7 @@ class _TerminalIO(QObject):
     backend/remote_routes.py's TERMINAL_LONG_POLL_S) can ever freeze
     the app. Qt automatically queues a Signal emitted from a worker
     thread onto the thread its receiver lives on, so the connected
-    slots below are still safe to touch widgets directly - no manual
-    locking or invokeMethod needed."""
+    slots are safe to touch widgets directly."""
 
     read_done = Signal(str, dict)   # host_id, result
     read_failed = Signal(str)       # host_id
@@ -65,11 +58,6 @@ class _TerminalIO(QObject):
         self._reads_inflight = set()
 
     def submit_read(self, host_id):
-        # Guard against a second read for the same host going out
-        # before the first one's reply comes back - they'd both be
-        # recv()-ing the same channel concurrently, which is exactly
-        # the kind of overlap the completion-driven loop is meant to
-        # avoid.
         if host_id in self._reads_inflight:
             return
         self._reads_inflight.add(host_id)
@@ -110,12 +98,9 @@ class _TerminalIO(QObject):
     def shutdown(self):
         self._pool.shutdown(wait=False)
 
-# Strips ANSI/VT100 escape sequences (cursor moves, color codes, etc.)
-# before display - the output pane is a plain scrolling text widget,
-# not a real terminal emulator, so sequences that redraw in place
-# (progress bars, full-screen apps like vim/top) will still scroll
-# instead of rendering correctly. Plain shell I/O, including sudo
-# password prompts, displays correctly.
+
+# Strips ANSI/VT100 escape sequences before display - the output pane
+# is a plain scrolling text widget, not a full terminal emulator.
 _ANSI_RE = re.compile(r"\x1b(\[[0-9;?]*[a-zA-Z]|\][^\x07]*\x07|[@-Z\\-_])")
 
 
@@ -138,13 +123,12 @@ _ARROW_KEY_MAP = {
 
 def _key_event_to_bytes(event):
     """Translate one Qt key press into the raw bytes a real terminal
-    would send for it. Returns None for keys that carry no input
-    (modifier-only presses, function keys we don't map, etc.)."""
+    would send for it. Returns None for keys that carry no input."""
     key = event.key()
     modifiers = event.modifiers()
 
     if modifiers & Qt.ControlModifier and Qt.Key_A <= key <= Qt.Key_Z:
-        return chr(key - Qt.Key_A + 1)  # Ctrl+A=0x01 ... Ctrl+C=0x03 ... Ctrl+Z=0x1a
+        return chr(key - Qt.Key_A + 1)  # Ctrl+A=0x01 ... Ctrl+C=0x03 ...
 
     if key in (Qt.Key_Return, Qt.Key_Enter):
         return "\r"
@@ -162,9 +146,8 @@ def _key_event_to_bytes(event):
 
 
 class _TerminalInput(QLineEdit):
-    """QLineEdit with bash-style Up/Down command history, so the
-    command box at the bottom of the terminal actually feels like
-    one."""
+    """QLineEdit with bash-style Up/Down command history, used for the
+    agent (queued-command) console at the bottom of a TerminalPopout."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -200,11 +183,9 @@ class _LiveTerminalOutput(QTextEdit):
     """The terminal output pane doubles as the input surface for an
     SSH host's live session: while `on_key_data` is set, keystrokes
     typed here are forwarded straight to the remote pty instead of
-    being inserted locally - what shows up on screen is only ever
-    what the remote shell echoes back (or doesn't, e.g. while typing
-    a sudo password), exactly like a real terminal. With no session
-    attached (on_key_data is None) it behaves like an ordinary
-    read-only log."""
+    being inserted locally - what shows up is only ever what the remote
+    shell echoes back. With no session attached it behaves like an
+    ordinary read-only log."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -215,15 +196,6 @@ class _LiveTerminalOutput(QTextEdit):
             super().keyPressEvent(event)
             return
 
-        # Only treat the platform Copy shortcut (Ctrl+C on
-        # Windows/Linux, which collides with the terminal interrupt
-        # byte) as "copy" when there's actually a selection to copy -
-        # otherwise it falls through to _key_event_to_bytes below,
-        # which sends the real \x03 interrupt. Without this, Ctrl+C
-        # with nothing selected silently did nothing instead of
-        # interrupting the remote command (see also the dedicated
-        # "Send Ctrl+C" button for a keyboard-independent way to do
-        # the same thing).
         if event.matches(QKeySequence.Copy) and self.textCursor().hasSelection():
             super().keyPressEvent(event)
             return
@@ -239,11 +211,6 @@ class _LiveTerminalOutput(QTextEdit):
             self.on_key_data(data)
 
     def append_terminal_text(self, text):
-        """Render incoming remote bytes in-place rather than via
-        append() (which always starts a new paragraph) - interprets
-        backspace/delete the way a real terminal would (erase the
-        previous on-screen character) instead of showing it as a
-        stray control character."""
         cursor = self.textCursor()
         cursor.movePosition(cursor.End)
 
@@ -258,218 +225,88 @@ class _LiveTerminalOutput(QTextEdit):
         self.setTextCursor(cursor)
 
 
-# Moved into client/api.py as merge_duplicate_host_entries() so System
-# Health & Logs and User & Group Administration (both of which list
-# hosts via api.list_merged_hosts()) get the same agent+SSH dedup this
-# page pioneered, instead of each page growing its own copy. Aliased
-# back to the original name so the rest of this file (display_entries
-# = _merge_entries(entries) below) didn't need to change.
-_merge_entries = api.merge_duplicate_host_entries
+def _connection_options(entry):
+    """Return [(label, underlying_entry), ...] for a host entry. A
+    merged host (enrolled both ways) offers SSH first (the only
+    transport with a real interactive terminal) then Agent; single-mode
+    hosts offer just the one they have."""
+    if entry["kind"] == "merged":
+        return [
+            ("SSH (interactive terminal)", entry["ssh_entry"]),
+            ("Agent (queued commands)", entry["agent_entry"]),
+        ]
+    if entry["kind"] == "ssh":
+        return [("SSH (interactive terminal)", entry)]
+    return [("Agent (queued commands)", entry)]
 
 
-class RemoteAdministrationPage(QWidget):
+def _default_underlying(entry):
+    """The sub-entry the main page targets for quick commands and file
+    transfer - SSH preferred on a merged host, otherwise the entry
+    itself."""
+    if entry["kind"] == "merged":
+        return entry["ssh_entry"] or entry["agent_entry"]
+    return entry
+
+
+# =====================================================================
+# PER-HOST TERMINAL POPOUT
+# =====================================================================
+class TerminalPopout(QWidget):
+    """A standalone terminal window for one host, opened by double-
+    clicking a row in Remote Host Administration's host list.
+
+    For a host enrolled both ways, the connection picker at the top
+    switches between SSH (a real interactive PTY session) and Agent (a
+    queued-command console). Single-transport hosts show only what they
+    have. Each open host gets its own window, so several can be live at
+    once.
     """
-    Unified administration console for every managed host - both
-    SSH-connected hosts and Sysible-agent-enrolled hosts - grouped by
-    environment to match Host Enrollment and User Administration.
 
-    Connecting a *new* host here is always SSH/password-based
-    ("Connect Host (SSH)" below): name/ip/user/password -> the backend
-    installs Sysible's own controller SSH key on the target using that
-    password once, then discards it. Agent-enrolled hosts are never
-    added from here - enroll those from Host Enrollment instead
-    (token-based, no password involved) - they just show up
-    automatically once enrolled.
-
-    The Terminal works for either kind, but not identically under the
-    hood: SSH hosts get a real interactive session - a persistent
-    PTY-backed shell over the stored key (see backend/remote_routes.py's
-    /terminal/* endpoints), polled and streamed live, so sudo prompts,
-    vim, top, etc. behave like a genuine terminal. Agent hosts have no
-    direct connection to the controller, so a command there is queued
-    instead and this page polls for the result until the agent reports
-    back (or it times out) - a real interactive session isn't possible
-    over that polling model.
-    """
-
-    def __init__(self):
+    def __init__(self, entry, on_close=None):
         super().__init__()
 
-        self.setWindowTitle("Remote Host Administration")
+        self.entry = entry
+        self.on_close = on_close
 
-        self.environments = []
+        self.setWindowTitle(f"Terminal — {entry['label']}")
+        self.resize(840, 540)
 
-        self.active_kind = None   # "agent" or "ssh"
-        self.active_id = None     # host_id (agent) or name (ssh)
-        self.active_label = None
+        self.active_kind = None
+        self.active_id = None
+        self.active_label = entry["label"]
 
-        # When the selected row is a merged (Agent + SSH) host, this
-        # holds that merged entry so the connection-type picker below
-        # can re-derive the agent/ssh sub-entry on demand; None for a
-        # plain (non-merged) row. connection_type_host_label tracks
-        # which merged host the picker's current selection belongs to,
-        # so re-clicking the same merged row keeps whatever connection
-        # type you last explicitly picked for it instead of silently
-        # resetting back to SSH every time.
-        self.merged_entry_for_selection = None
-        self.connection_type_host_label = None
+        self.pending_agent_task = None
+        self._ssh_session_active = False
 
-        self.pending_agent_task = None  # {"host_id", "task_id", "deadline"}
-        self.pending_file_task = None   # {"direction", "host_id", "task_id", "label", "deadline", ...}
-
-        layout = QVBoxLayout()
-
-        layout.addLayout(make_page_header("Remote Host Administration"))
-
-        # =====================================================
-        # HOSTS
-        # =====================================================
-        hosts_label = QLabel("Managed Hosts (grouped by environment)")
-        hosts_label.setStyleSheet("font-weight: bold;")
-        layout.addWidget(hosts_label)
-
-        # Columns instead of one long "name (kind detail)" string per
-        # row - the hostname used to get repeated almost verbatim
-        # across an agent row and an SSH row for the very same
-        # physical machine, which read as cluttered. Each fact (host,
-        # connection type, address) now has its own column instead.
-        self.host_list = QTableWidget(0, 3)
-        self.host_list.setHorizontalHeaderLabels(["Host", "Type", "Address"])
-        self.host_list.verticalHeader().setVisible(False)
-        self.host_list.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.host_list.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.host_list.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.host_list.horizontalHeader().setStretchLastSection(True)
-        self.host_list.setColumnWidth(1, 70)
-        # No fixed-height cap (was 140px). Like the System Administration
-        # tools' shared host panel (client/host_panel.py), the table now
-        # expands into the available vertical space and scrolls normally
-        # so a growing fleet stays visible instead of disappearing into a
-        # ~6-row box. A minimum keeps a useful number of rows on screen,
-        # and the stretch factor below lets it share growth with the
-        # terminal output further down.
-        self.host_list.setMinimumHeight(180)
-        self.host_list.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-        self.host_list.itemSelectionChanged.connect(self.on_host_selected)
-        layout.addWidget(self.host_list, 1)
-
-        quick_connect_hint = QLabel(
-            "Click a host above to connect instantly - already-enrolled hosts "
-            "(agent or SSH) need no password re-entry."
-        )
-        theme.style_hint_label(quick_connect_hint)
-        layout.addWidget(quick_connect_hint)
-
-        host_buttons = QHBoxLayout()
-
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.clicked.connect(self.load_hosts)
-
-        delete_btn = QPushButton("Remove Host")
-        delete_btn.clicked.connect(self.delete_host)
-
-        show_key_btn = QPushButton("Show Sysible Controller Public Key")
-        show_key_btn.clicked.connect(self.show_controller_key)
-
-        host_buttons.addWidget(refresh_btn)
-        host_buttons.addWidget(delete_btn)
-        host_buttons.addWidget(show_key_btn)
-
-        layout.addLayout(host_buttons)
-
-        layout.addWidget(self._divider())
-
-        # =====================================================
-        # SSH TO A NEW HOST (NOT YET JOINED) - the one-time key handoff
-        # happens automatically behind this single button. This section
-        # is only for hosts that aren't in the Managed Hosts table above
-        # yet. This is *not* the same as Host Enrollment's token-based
-        # agent enrollment - see the class docstring.
-        # =====================================================
-        enroll_label = QLabel("SSH to a New Host (Not Yet Joined)")
-        enroll_label.setStyleSheet("font-weight: bold;")
-        layout.addWidget(enroll_label)
-
-        enroll_hint = QLabel(
-            "Only needed once per host. Password installs the controller key, then is "
-            "discarded - after that, the host appears above and connects with no password."
-        )
-        theme.style_hint_label(enroll_hint)
-        layout.addWidget(enroll_hint)
-
-        enroll_row = QHBoxLayout()
-
-        self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("Host name")
-        self.name_input.setMaximumWidth(160)
-
-        self.ip_input = QLineEdit()
-        self.ip_input.setPlaceholderText("IP address")
-        self.ip_input.setMaximumWidth(140)
-
-        self.user_input = QLineEdit()
-        self.user_input.setPlaceholderText("Username")
-        self.user_input.setMaximumWidth(120)
-
-        self.password_input = QLineEdit()
-        self.password_input.setPlaceholderText("SSH password")
-        self.password_input.setEchoMode(QLineEdit.Password)
-        self.password_input.setMaximumWidth(160)
-
-        self.connect_env_combo = QComboBox()
-        self.connect_env_combo.currentTextChanged.connect(self._handle_env_combo_change)
-        self.connect_env_combo.setMaximumWidth(160)
-
-        for w in [self.name_input, self.ip_input, self.user_input, self.password_input, self.connect_env_combo]:
-            enroll_row.addWidget(w)
-
-        layout.addLayout(enroll_row)
-
-        enroll_btn = QPushButton("Connect Host")
-        enroll_btn.clicked.connect(self.connect_host)
-        layout.addWidget(enroll_btn)
-
-        self.enroll_status = QLabel()
-        self.enroll_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
-        layout.addWidget(self.enroll_status)
-
-        # =====================================================
-        # TERMINAL
-        # =====================================================
-        self.terminal_label = QLabel("Terminal — (no host selected)")
-        self.terminal_label.setStyleSheet("font-weight: bold;")
-        layout.addWidget(self.terminal_label)
-
-        # Shown only when the selected row is a host enrolled BOTH ways
-        # (merged Agent + SSH). Previously this case silently always
-        # used SSH for the terminal with no way to tell, and no way to
-        # fall back to the agent connection on a host where SSH itself
-        # doesn't work - this makes the choice explicit and switchable
-        # instead of an invisible, fixed decision the program made for
-        # you.
-        connection_type_row = QHBoxLayout()
-        self.connection_type_label = QLabel("Connection:")
-        self.connection_type_combo = QComboBox()
-        self.connection_type_combo.addItem("SSH (interactive terminal)", "ssh")
-        self.connection_type_combo.addItem("Agent (queued commands)", "agent")
-        self.connection_type_combo.currentIndexChanged.connect(self._on_connection_type_changed)
-        connection_type_row.addWidget(self.connection_type_label)
-        connection_type_row.addWidget(self.connection_type_combo)
-        connection_type_row.addStretch()
-        layout.addLayout(connection_type_row)
-
-        self.output = _LiveTerminalOutput()
-        self.output.setReadOnly(True)
-
-        # A bare QFont("Courier New") only actually resolves on Windows -
-        # on macOS/Linux Qt silently substitutes some generic font
-        # instead, which read as inconsistent/"unappealing" depending on
-        # platform. setFamilies() tries each in turn and only falls back
-        # to the Monospace style hint below if none of them exist.
         mono = QFont()
         mono.setFamilies(["Menlo", "Consolas", "DejaVu Sans Mono", "Courier New"])
         mono.setStyleHint(QFont.Monospace)
         mono.setPointSize(11)
+
+        layout = QVBoxLayout(self)
+
+        # ---- connection picker ----
+        options = _connection_options(entry)
+
+        top = QHBoxLayout()
+        self.title_label = QLabel(entry["label"])
+        self.title_label.setStyleSheet("font-weight: bold;")
+        top.addWidget(self.title_label)
+        top.addStretch()
+        top.addWidget(QLabel("Connection:"))
+
+        self.conn_combo = QComboBox()
+        for label, underlying in options:
+            self.conn_combo.addItem(label, underlying)
+        self.conn_combo.setEnabled(len(options) > 1)
+        self.conn_combo.currentIndexChanged.connect(self._on_conn_changed)
+        top.addWidget(self.conn_combo)
+        layout.addLayout(top)
+
+        # ---- terminal output ----
+        self.output = _LiveTerminalOutput()
+        self.output.setReadOnly(True)
         self.output.setFont(mono)
         self.output.setStyleSheet(
             "QTextEdit {"
@@ -481,36 +318,29 @@ class RemoteAdministrationPage(QWidget):
             "  selection-background-color: #4A4A4A;"
             "}"
         )
-        self.output.setMinimumHeight(220)
-        # Stretch factor matches the host table above so the two
-        # expanding areas share extra vertical space proportionally
-        # rather than the now-uncapped host table dominating the page.
+        self.output.setMinimumHeight(280)
         layout.addWidget(self.output, 1)
 
         self.ssh_hint = QLabel(
             "SSH terminal is live - click into the panel above and type "
-            "directly (sudo prompts, vim, Ctrl+C, arrow keys, etc. all work)."
+            "directly (sudo prompts, vim, Ctrl+C, arrow keys all work)."
         )
         theme.style_hint_label(self.ssh_hint)
         self.ssh_hint.setVisible(False)
         layout.addWidget(self.ssh_hint)
 
+        # ---- agent command row (only used in Agent mode) ----
         cmd_row = QHBoxLayout()
 
         self.cmd_input = _TerminalInput()
         self.cmd_input.setFont(mono)
-        self.cmd_input.setPlaceholderText("Select a host above, then type a command and press Enter...")
+        self.cmd_input.setPlaceholderText("Type a command and press Enter...")
         self.cmd_input.setEnabled(False)
         self.cmd_input.returnPressed.connect(self.run_command)
 
         self.run_btn = QPushButton("Run")
         self.run_btn.clicked.connect(self.run_command)
 
-        # Only shown during a live SSH session (swaps places with
-        # cmd_input/run_btn, which aren't used in that mode - see
-        # _start_ssh_session/_end_ssh_session) - a guaranteed way to
-        # send SIGINT to a hung/runaway remote command without relying
-        # on the Ctrl+C keyboard shortcut landing correctly.
         self.interrupt_btn = QPushButton("Send Ctrl+C")
         self.interrupt_btn.clicked.connect(self.send_interrupt)
         self.interrupt_btn.setVisible(False)
@@ -522,68 +352,12 @@ class RemoteAdministrationPage(QWidget):
         cmd_row.addWidget(self.run_btn)
         cmd_row.addWidget(self.interrupt_btn)
         cmd_row.addWidget(clear_btn)
-
         layout.addLayout(cmd_row)
 
-        # =====================================================
-        # FILE TRANSFER (selected host above - same active_kind/
-        # active_id the Terminal section tracks, so there's no separate
-        # host picker here). SSH hosts transfer over SFTP with no size
-        # limit; agent hosts go through the same queued-task channel as
-        # the command box above, capped at AGENT_FILE_TRANSFER_LIMIT_BYTES
-        # (see client/api.py).
-        # =====================================================
-        file_label = QLabel("File Transfer (selected host)")
-        file_label.setStyleSheet("font-weight: bold;")
-        layout.addWidget(file_label)
-
-        upload_row = QHBoxLayout()
-
-        self.upload_local_path = QLineEdit()
-        self.upload_local_path.setPlaceholderText("Local file to send...")
-
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self._browse_upload_file)
-
-        self.upload_remote_path = QLineEdit()
-        self.upload_remote_path.setPlaceholderText("Remote destination path (or directory)")
-
-        self.upload_btn = QPushButton("Upload")
-        self.upload_btn.clicked.connect(self.upload_file)
-
-        upload_row.addWidget(self.upload_local_path, 3)
-        upload_row.addWidget(browse_btn)
-        upload_row.addWidget(self.upload_remote_path, 3)
-        upload_row.addWidget(self.upload_btn)
-
-        layout.addLayout(upload_row)
-
-        download_row = QHBoxLayout()
-
-        self.download_remote_path = QLineEdit()
-        self.download_remote_path.setPlaceholderText("Remote file path to fetch")
-
-        self.download_btn = QPushButton("Download...")
-        self.download_btn.clicked.connect(self.download_file)
-
-        download_row.addWidget(self.download_remote_path, 3)
-        download_row.addWidget(self.download_btn)
-
-        layout.addLayout(download_row)
-
-        self.file_status = QLabel(
-            f"Agent-host transfers are limited to ~{api.AGENT_FILE_TRANSFER_LIMIT_BYTES // 1000} KB; "
-            "SSH hosts have no such limit."
-        )
-        self.file_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
-        layout.addWidget(self.file_status)
-
-        self.setLayout(layout)
-
+        # ---- timers / io ----
         self.agent_poll_timer = QTimer()
         self.agent_poll_timer.timeout.connect(self._poll_agent_task)
 
-        self._ssh_session_active = False
         self._terminal_io = _TerminalIO()
         self._terminal_io.read_done.connect(self._on_ssh_read_done)
         self._terminal_io.read_failed.connect(self._on_ssh_read_failed)
@@ -593,226 +367,38 @@ class RemoteAdministrationPage(QWidget):
         self._ssh_retry_timer.setSingleShot(True)
         self._ssh_retry_timer.timeout.connect(self._resume_ssh_read_loop)
 
-        self.file_poll_timer = QTimer()
-        self.file_poll_timer.timeout.connect(self._poll_file_task)
+        # ---- start on the first (preferred) connection ----
+        self._switch_to(options[0][1])
 
-        bus.host_removed.connect(self.load_hosts)
+    # ---------------- connection switching ----------------
+    def _on_conn_changed(self, _index):
+        underlying = self.conn_combo.currentData()
+        if underlying is not None:
+            self._switch_to(underlying)
 
-        self._set_connection_type_visible(False)
-
-        self.load_hosts()
-
-    @staticmethod
-    def _divider():
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Sunken)
-        return line
-
-    # =====================================================
-    # HOSTS (agent hosts + SSH hosts, merged and grouped by
-    # environment)
-    # =====================================================
-    def load_hosts(self):
-        self.host_list.setRowCount(0)
-
-        try:
-            agents = api.get_agents()
-        except Exception as e:
-            agents = []
-            self.enroll_status.setStyleSheet(f"color: {STATUS_ERROR_COLOR};")
-            self.enroll_status.setText(f"Could not load agent hosts: {e}")
-
-        try:
-            ssh_hosts = api.list_hosts()
-        except Exception as e:
-            ssh_hosts = {}
-            self.enroll_status.setStyleSheet(f"color: {STATUS_ERROR_COLOR};")
-            self.enroll_status.setText(f"Could not load SSH hosts: {e}")
-
-        try:
-            environments = api.list_environments()
-        except Exception:
-            environments = []
-
-        self._populate_env_combos(environments)
-
-        entries = []
-
-        for a in agents:
-            host_id = a.get("host_id")
-            entries.append({
-                "kind": "agent",
-                "id": host_id,
-                "label": a.get("hostname") or host_id,
-                "type_text": "Agent",
-                # Agent-reported local IP (host_agent/agent.py's
-                # _local_ip(), sent on enroll/heartbeat) when available -
-                # falls back to the opaque host_id for agents that
-                # haven't reported one yet (older agent build, or no
-                # heartbeat received since upgrading the controller).
-                "address": a.get("ip") or host_id,
-                "environment": a.get("environment") or "",
-            })
-
-        for name, h in ssh_hosts.items():
-            entries.append({
-                "kind": "ssh",
-                "id": name,
-                "label": name,
-                "type_text": "SSH",
-                "address": f"{h.get('user', 'root')}@{h.get('ip', '?')}",
-                "environment": h.get("environment") or "",
-            })
-
-        # current_ids must reflect the real, unmerged backend state (a
-        # merged row's own "kind" is "merged", not "agent"/"ssh") so the
-        # "did the active connection disappear" check below still works.
-        current_ids = {(e["kind"], e["id"]) for e in entries}
-
-        display_entries = _merge_entries(entries)
-
-        groups = {}
-        for e in display_entries:
-            groups.setdefault(e["environment"], []).append(e)
-
-        known_envs = [env for env in environments if env in groups]
-        extra_envs = sorted(env for env in groups if env and env not in environments)
-        unassigned = groups.get("", [])
-
-        for env in known_envs + extra_envs:
-            self._add_header(env)
-            for e in sorted(groups[env], key=lambda x: x["label"]):
-                self._add_host_row(e)
-
-        if unassigned:
-            self._add_header(_UNASSIGNED_LABEL)
-            for e in sorted(unassigned, key=lambda x: x["label"]):
-                self._add_host_row(e)
-
-        if self.active_id is not None and (self.active_kind, self.active_id) not in current_ids:
-            self._cancel_pending_agent_task()
-            self._end_ssh_session()
-            self.active_kind = None
-            self.active_id = None
-            self.active_label = None
-            self.merged_entry_for_selection = None
-            self.connection_type_host_label = None
-            self._set_connection_type_visible(False)
-            self.terminal_label.setText("Terminal — (no host selected)")
-            self.cmd_input.setEnabled(False)
-            self.cmd_input.setPlaceholderText("Select a host above, then type a command and press Enter...")
-
-    def _add_header(self, text):
-        row = self.host_list.rowCount()
-        self.host_list.insertRow(row)
-
-        item = QTableWidgetItem(text.upper())
-        item.setFlags(Qt.NoItemFlags)
-
-        font = item.font()
-        font.setBold(True)
-        item.setFont(font)
-
-        self.host_list.setItem(row, 0, item)
-        self.host_list.setSpan(row, 0, 1, 3)
-
-    def _add_host_row(self, entry):
-        row = self.host_list.rowCount()
-        self.host_list.insertRow(row)
-
-        host_item = QTableWidgetItem(entry["label"])
-        host_item.setData(Qt.UserRole, entry)
-        self.host_list.setItem(row, 0, host_item)
-        self.host_list.setItem(row, 1, QTableWidgetItem(entry["type_text"]))
-        self.host_list.setItem(row, 2, QTableWidgetItem(entry["address"]))
-
-    def _selected_entry(self):
-        row = self.host_list.currentRow()
-        if row < 0:
-            return None
-
-        item = self.host_list.item(row, 0)
-        return item.data(Qt.UserRole) if item else None
-
-    def on_host_selected(self):
-        entry = self._selected_entry()
-
-        if entry is None:
-            return  # environment header row, not a host
-
-        # A merged row has both an agent and an SSH connection for the
-        # same host. Rather than silently always picking SSH (the old
-        # behavior - confusing when SSH is the side that's broken),
-        # show the connection-type picker and let the user choose. The
-        # picker defaults to SSH only the first time a given merged
-        # host is selected; re-clicking the same merged row keeps
-        # whatever connection type was last explicitly picked for it.
-        if entry["kind"] == "merged":
-            self.merged_entry_for_selection = entry
-            self._set_connection_type_visible(True)
-            if self.connection_type_host_label != entry["label"]:
-                self.connection_type_host_label = entry["label"]
-                self.connection_type_combo.blockSignals(True)
-                self.connection_type_combo.setCurrentIndex(0)
-                self.connection_type_combo.blockSignals(False)
-            underlying = self._merged_underlying_for_combo()
-        else:
-            self.merged_entry_for_selection = None
-            self.connection_type_host_label = None
-            self._set_connection_type_visible(False)
-            underlying = entry
-
-        self._switch_active_connection(underlying, entry["label"])
-
-    def _set_connection_type_visible(self, visible):
-        self.connection_type_label.setVisible(visible)
-        self.connection_type_combo.setVisible(visible)
-
-    def _merged_underlying_for_combo(self):
-        entry = self.merged_entry_for_selection
-        if entry is None:
-            return None
-        choice = self.connection_type_combo.currentData()
-        if choice == "agent":
-            return entry["agent_entry"]
-        return entry["ssh_entry"]
-
-    def _on_connection_type_changed(self, index):
-        if self.merged_entry_for_selection is None:
-            return
-        self.connection_type_host_label = self.merged_entry_for_selection["label"]
-        underlying = self._merged_underlying_for_combo()
-        self._switch_active_connection(underlying, self.merged_entry_for_selection["label"])
-
-    def _switch_active_connection(self, underlying, label):
+    def _switch_to(self, underlying):
         if underlying is None:
             return
-
         if underlying["kind"] == self.active_kind and underlying["id"] == self.active_id:
-            return  # re-selecting the already-active connection - leave its session alone
+            return
 
         self._cancel_pending_agent_task()
         self._end_ssh_session()
 
         self.active_kind = underlying["kind"]
         self.active_id = underlying["id"]
-        self.active_label = label
 
         if underlying["kind"] == "ssh":
             self._start_ssh_session(underlying)
         else:
-            self.terminal_label.setText(f"Terminal — {label} [agent]")
+            self.output.append(f"[agent connection - queued commands on {self.active_label}]")
             self.cmd_input.setEnabled(True)
-            self.cmd_input.setPlaceholderText(f"{label} $ ")
+            self.cmd_input.setPlaceholderText(f"{self.active_label} $ ")
             self.cmd_input.setFocus()
 
-    # =====================================================
-    # SSH LIVE TERMINAL SESSION (persistent PTY - see
-    # backend/remote_routes.py's /terminal/* endpoints)
-    # =====================================================
+    # ---------------- SSH live session ----------------
     def _start_ssh_session(self, entry):
-        self.terminal_label.setText(f"Terminal — {self.active_label} [SSH] (connecting...)")
+        self.title_label.setText(f"{self.active_label}  [SSH] (connecting...)")
         self.cmd_input.setEnabled(False)
         self.run_btn.setEnabled(False)
         QApplication.processEvents()
@@ -821,18 +407,13 @@ class RemoteAdministrationPage(QWidget):
             api.open_terminal(entry["id"])
         except Exception as e:
             self.output.append(f"[could not open terminal session: {e}]")
-            self.terminal_label.setText("Terminal — (no host selected)")
-            self.cmd_input.setEnabled(False)
+            self.title_label.setText(f"{self.active_label}  [SSH] (failed)")
             self.run_btn.setEnabled(True)
-            # Clear active_* so reselecting this same row retries the
-            # connection instead of being treated as a no-op by the
-            # "already active" early return in _switch_active_connection().
             self.active_kind = None
             self.active_id = None
-            self.active_label = None
             return
 
-        self.terminal_label.setText(f"Terminal — {self.active_label} [SSH] (live)")
+        self.title_label.setText(f"{self.active_label}  [SSH] (live)")
         self.cmd_input.hide()
         self.run_btn.hide()
         self.interrupt_btn.setVisible(True)
@@ -847,18 +428,11 @@ class RemoteAdministrationPage(QWidget):
         self._terminal_io.submit_write(self.active_id, data)
 
     def send_interrupt(self):
-        """Send Ctrl+C (\\x03) into the live SSH session - the button
-        equivalent of pressing it on the keyboard, for a hung/runaway
-        remote command (or anyone whose Ctrl+C got eaten as a Copy
-        shortcut before the keyPressEvent fix above)."""
         if self.active_kind == "ssh" and self.output.on_key_data is not None:
             self._send_terminal_input("\x03")
             self.output.setFocus()
 
     def _on_ssh_read_done(self, host_id, result):
-        # The session may have moved on (host switched, ended, etc.)
-        # since this particular read was issued - drop a stale reply
-        # rather than acting on it or restarting its loop.
         if not self._ssh_session_active or self.active_kind != "ssh" or self.active_id != host_id:
             return
 
@@ -867,31 +441,20 @@ class RemoteAdministrationPage(QWidget):
             self._scroll_to_bottom()
 
         if result.get("closed"):
-            self.output.append_terminal_text("\n[remote session ended - select the host again to reconnect]\n")
+            self.output.append_terminal_text(
+                "\n[remote session ended - switch connection or reopen to reconnect]\n"
+            )
             self._end_ssh_session(close_remote=False)
-            # Clear active_* so re-clicking the same row is treated as
-            # a fresh selection (and actually reopens a session)
-            # instead of the early-return "already active" no-op in
-            # on_host_selected().
             self.active_kind = None
             self.active_id = None
-            self.active_label = None
-            self.terminal_label.setText("Terminal — (no host selected)")
+            self.title_label.setText(f"{self.active_label}  [SSH] (closed)")
             return
 
-        # Go again immediately - the backend's /terminal/read now
-        # long-polls (see TERMINAL_LONG_POLL_S in
-        # backend/remote_routes.py), so this naturally paces itself:
-        # it comes back the instant new output exists, or after a
-        # bounded idle wait either way, instead of needing a fixed
-        # QTimer tick to notice.
         self._terminal_io.submit_read(host_id)
 
     def _on_ssh_read_failed(self, host_id):
         if not self._ssh_session_active or self.active_kind != "ssh" or self.active_id != host_id:
             return
-        # Transient (network blip, host rebooting) - brief backoff so
-        # the loop doesn't spin, then try again.
         self._ssh_retry_timer.start(SSH_TERMINAL_POLL_MS)
 
     def _resume_ssh_read_loop(self):
@@ -902,10 +465,6 @@ class RemoteAdministrationPage(QWidget):
         self.output.append_terminal_text(f"\n[write failed: {err}]\n")
 
     def _end_ssh_session(self, close_remote=True):
-        """Leave SSH-live mode (called when switching to another host,
-        deselecting, or the host disappearing) and, unless the remote
-        side already closed it, tear down the backend's PTY session
-        too rather than leaving it running unattended."""
         was_ssh = self.active_kind == "ssh" and self._ssh_session_active
 
         self._ssh_session_active = False
@@ -925,9 +484,503 @@ class RemoteAdministrationPage(QWidget):
             except Exception:
                 pass
 
-    def delete_host(self):
+    # ---------------- Agent queued-command console ----------------
+    def run_command(self):
+        if not self.active_id or self.active_kind != "agent":
+            return
+
+        cmd = self.cmd_input.text().strip()
+        if not cmd:
+            return
+
+        self.cmd_input.remember(cmd)
+        self.cmd_input.clear()
+
+        self.output.append(f"{self.active_label} $ {cmd}")
+        self._scroll_to_bottom()
+        self._run_agent_command(cmd)
+
+    def _run_agent_command(self, cmd):
+        if self.pending_agent_task:
+            self.output.append("[a command is already running on this host - wait for it to finish]")
+            return
+
+        try:
+            task_ids = api.queue_command_on_hosts([self.active_id], cmd)
+        except Exception as e:
+            self.output.append(str(e))
+            return
+
+        task_id = task_ids.get(self.active_id)
+        if task_id is None:
+            self.output.append("[failed to queue command on agent]")
+            return
+
+        self.output.append("running...")
+        self._scroll_to_bottom()
+        self.cmd_input.setEnabled(False)
+
+        self.pending_agent_task = {
+            "host_id": self.active_id,
+            "task_id": task_id,
+            "deadline": time.time() + AGENT_CMD_TIMEOUT_S,
+        }
+        self.agent_poll_timer.start(AGENT_CMD_POLL_MS)
+
+    def _cancel_pending_agent_task(self):
+        self.pending_agent_task = None
+        self.agent_poll_timer.stop()
+
+    def _poll_agent_task(self):
+        task = self.pending_agent_task
+        if not task:
+            self.agent_poll_timer.stop()
+            return
+
+        if self.active_kind != "agent" or self.active_id != task["host_id"]:
+            self.pending_agent_task = None
+            self.agent_poll_timer.stop()
+            return
+
+        try:
+            raw = api.get_result_by_task(task["host_id"], task["task_id"])
+        except Exception:
+            raw = None
+
+        if raw is None:
+            if time.time() > task["deadline"]:
+                self.output.append("[timed out waiting for agent to report back]")
+                self.pending_agent_task = None
+                self.agent_poll_timer.stop()
+                self._finish_command()
+            return
+
+        output = api.parse_task_output(raw)
+        if output:
+            if output.get("stdout"):
+                self.output.append(output["stdout"].rstrip("\n"))
+            if output.get("stderr"):
+                self.output.append(output["stderr"].rstrip("\n"))
+            if output.get("returncode", 0) != 0:
+                self.output.append(f"[exit code {output.get('returncode')}]")
+        else:
+            self.output.append("[agent reported no usable output]")
+
+        self.pending_agent_task = None
+        self.agent_poll_timer.stop()
+        self._finish_command()
+
+    def _finish_command(self):
+        if self.active_kind == "agent":
+            self.cmd_input.setEnabled(True)
+            self.cmd_input.setFocus()
+        self._scroll_to_bottom()
+
+    def _scroll_to_bottom(self):
+        scrollbar = self.output.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def closeEvent(self, event):
+        self._cancel_pending_agent_task()
+        self._end_ssh_session()
+        self._terminal_io.shutdown()
+        if self.on_close:
+            self.on_close(self.entry)
+        super().closeEvent(event)
+
+
+# =====================================================================
+# MAIN PAGE
+# =====================================================================
+class RemoteAdministrationPage(QWidget):
+    """
+    Unified console for every managed host - both SSH-connected hosts
+    and Sysible-agent-enrolled hosts - grouped by environment in a
+    left-hand host list that matches the System Administration tools.
+
+    Double-click a host to open its terminal in its own window (see
+    TerminalPopout); for a host enrolled both ways, that window's
+    connection picker chooses SSH or agent. The host list itself stays
+    a simple single-select list - whether a row is agent, SSH, or both
+    is shown in its [type] tag and in the detail line on the right, not
+    baked into how you act on it.
+
+    Connecting a *new* host here is always SSH/password-based ("Connect
+    Host" below): the password is used once to install the controller's
+    key, then discarded. Agent hosts are enrolled from Host Enrollment.
+
+    The right-hand panel keeps the quick one-off command box and file
+    transfer, both acting on the currently selected host.
+    """
+
+    def __init__(self):
+        super().__init__()
+
+        self.setWindowTitle("Remote Host Administration")
+        self.resize(1180, 760)
+
+        self.environments = []
+        self._collapsed_envs = set()
+
+        self.active_entry = None
+        self.active_kind = None
+        self.active_id = None
+        self.active_label = None
+
+        self.pending_quick_task = None     # agent one-off command
+        self.pending_file_task = None      # agent file transfer
+
+        self._terminals = {}               # host label -> TerminalPopout
+
+        main = QVBoxLayout()
+        self.setLayout(main)
+
+        main.addLayout(make_page_header("Remote Host Administration"))
+
+        body = QHBoxLayout()
+
+        # ---------------- LEFT: host list (consistent column) ----------------
+        self.host_list = QListWidget()
+        connect_group_toggle(self.host_list)
+        self.host_list.itemSelectionChanged.connect(self.on_host_selected)
+        self.host_list.itemDoubleClicked.connect(self.open_terminal_for_item)
+
+        btn_refresh = QPushButton("Refresh")
+        btn_refresh.clicked.connect(self.load_hosts)
+        btn_collapse_all, btn_expand_all = add_collapse_expand_buttons(self.host_list)
+
+        host_panel = build_host_panel(
+            "Managed Hosts (agent + SSH)",
+            self.host_list,
+            [
+                [btn_refresh],
+                [btn_collapse_all, btn_expand_all],
+            ],
+        )
+        body.addWidget(host_panel)
+
+        # ---------------- RIGHT: detail + command + files + connect ----------------
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.addWidget(self._build_content_panel())
+        body.addWidget(content, 1)
+
+        main.addLayout(body, 1)
+
+        # ---------------- timers / data ----------------
+        self.quick_timer = QTimer()
+        self.quick_timer.timeout.connect(self._poll_quick_task)
+
+        self.file_poll_timer = QTimer()
+        self.file_poll_timer.timeout.connect(self._poll_file_task)
+
+        self.host_refresh_timer = QTimer()
+        self.host_refresh_timer.timeout.connect(self.load_hosts)
+        self.host_refresh_timer.start(HOST_REFRESH_MS)
+
+        bus.host_removed.connect(self.load_hosts)
+
+        self.load_hosts()
+
+    @staticmethod
+    def _divider():
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        return line
+
+    def _build_content_panel(self):
+        panel = QWidget()
+        col = QVBoxLayout(panel)
+        col.setContentsMargins(5, 0, 0, 0)
+
+        self.active_host_label = QLabel("Viewing: (no host selected)")
+        self.active_host_label.setStyleSheet("font-weight: bold;")
+        col.addWidget(self.active_host_label)
+
+        self.connection_label = QLabel("")
+        self.connection_label.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
+        col.addWidget(self.connection_label)
+
+        open_hint = QLabel("Double-click a host in the list to open its terminal in a new window.")
+        theme.style_hint_label(open_hint)
+        col.addWidget(open_hint)
+
+        detail_buttons = QHBoxLayout()
+        self.remove_host_btn = QPushButton("Remove Host")
+        self.remove_host_btn.clicked.connect(self.delete_host)
+        detail_buttons.addWidget(self.remove_host_btn)
+        detail_buttons.addStretch()
+        col.addLayout(detail_buttons)
+
+        col.addWidget(self._divider())
+
+        # ---- quick one-off command ----
+        cmd_label = QLabel("Quick Command (runs once on the selected host)")
+        cmd_label.setStyleSheet("font-weight: bold;")
+        col.addWidget(cmd_label)
+
+        cmd_row = QHBoxLayout()
+        self.quick_input = QLineEdit()
+        self.quick_input.setPlaceholderText("Select a host, type a command, press Enter...")
+        self.quick_input.returnPressed.connect(self.run_quick_command)
+        self.quick_run_btn = QPushButton("Run")
+        self.quick_run_btn.clicked.connect(self.run_quick_command)
+        quick_clear_btn = QPushButton("Clear")
+        cmd_row.addWidget(self.quick_input, 4)
+        cmd_row.addWidget(self.quick_run_btn)
+        cmd_row.addWidget(quick_clear_btn)
+        col.addLayout(cmd_row)
+
+        mono = QFont()
+        mono.setFamilies(["Menlo", "Consolas", "DejaVu Sans Mono", "Courier New"])
+        mono.setStyleHint(QFont.Monospace)
+        mono.setPointSize(11)
+
+        self.quick_output = QTextEdit()
+        self.quick_output.setReadOnly(True)
+        self.quick_output.setFont(mono)
+        self.quick_output.setMinimumHeight(160)
+        quick_clear_btn.clicked.connect(self.quick_output.clear)
+        col.addWidget(self.quick_output, 1)
+
+        col.addWidget(self._divider())
+
+        # ---- file transfer ----
+        file_label = QLabel("File Transfer (selected host)")
+        file_label.setStyleSheet("font-weight: bold;")
+        col.addWidget(file_label)
+
+        upload_row = QHBoxLayout()
+        self.upload_local_path = QLineEdit()
+        self.upload_local_path.setPlaceholderText("Local file to send...")
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self._browse_upload_file)
+        self.upload_remote_path = QLineEdit()
+        self.upload_remote_path.setPlaceholderText("Remote destination path (or directory)")
+        self.upload_btn = QPushButton("Upload")
+        self.upload_btn.clicked.connect(self.upload_file)
+        upload_row.addWidget(self.upload_local_path, 3)
+        upload_row.addWidget(browse_btn)
+        upload_row.addWidget(self.upload_remote_path, 3)
+        upload_row.addWidget(self.upload_btn)
+        col.addLayout(upload_row)
+
+        download_row = QHBoxLayout()
+        self.download_remote_path = QLineEdit()
+        self.download_remote_path.setPlaceholderText("Remote file path to fetch")
+        self.download_btn = QPushButton("Download...")
+        self.download_btn.clicked.connect(self.download_file)
+        download_row.addWidget(self.download_remote_path, 3)
+        download_row.addWidget(self.download_btn)
+        col.addLayout(download_row)
+
+        self.file_status = QLabel(
+            f"Agent-host transfers are limited to ~{api.AGENT_FILE_TRANSFER_LIMIT_BYTES // 1000} KB; "
+            "SSH hosts have no such limit."
+        )
+        self.file_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
+        self.file_status.setWordWrap(True)
+        col.addWidget(self.file_status)
+
+        col.addWidget(self._divider())
+
+        # ---- connect a new SSH host ----
+        enroll_label = QLabel("SSH to a New Host (Not Yet Joined)")
+        enroll_label.setStyleSheet("font-weight: bold;")
+        col.addWidget(enroll_label)
+
+        enroll_hint = QLabel(
+            "Only needed once per host. The password installs the controller key, then is "
+            "discarded - after that the host appears in the list and connects with no password."
+        )
+        theme.style_hint_label(enroll_hint)
+        col.addWidget(enroll_hint)
+
+        enroll_row = QHBoxLayout()
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("Host name")
+        self.name_input.setMaximumWidth(150)
+        self.ip_input = QLineEdit()
+        self.ip_input.setPlaceholderText("IP address")
+        self.ip_input.setMaximumWidth(130)
+        self.user_input = QLineEdit()
+        self.user_input.setPlaceholderText("Username")
+        self.user_input.setMaximumWidth(110)
+        self.password_input = QLineEdit()
+        self.password_input.setPlaceholderText("SSH password")
+        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setMaximumWidth(150)
+        self.connect_env_combo = QComboBox()
+        self.connect_env_combo.currentTextChanged.connect(self._handle_env_combo_change)
+        self.connect_env_combo.setMaximumWidth(150)
+        for w in [self.name_input, self.ip_input, self.user_input, self.password_input, self.connect_env_combo]:
+            enroll_row.addWidget(w)
+        col.addLayout(enroll_row)
+
+        connect_buttons = QHBoxLayout()
+        enroll_btn = QPushButton("Connect Host")
+        enroll_btn.clicked.connect(self.connect_host)
+        show_key_btn = QPushButton("Show Controller Public Key")
+        show_key_btn.clicked.connect(self.show_controller_key)
+        connect_buttons.addWidget(enroll_btn)
+        connect_buttons.addWidget(show_key_btn)
+        connect_buttons.addStretch()
+        col.addLayout(connect_buttons)
+
+        self.enroll_status = QLabel()
+        self.enroll_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
+        self.enroll_status.setWordWrap(True)
+        col.addWidget(self.enroll_status)
+
+        return panel
+
+    # =====================================================
+    # HOSTS
+    # =====================================================
+    def load_hosts(self):
+        prev_label = self.active_label
+
+        try:
+            entries = api.list_merged_hosts()
+        except Exception as e:
+            self.enroll_status.setStyleSheet(f"color: {STATUS_ERROR_COLOR};")
+            self.enroll_status.setText(f"Could not load hosts: {e}")
+            entries = []
+
+        try:
+            environments = api.list_environments()
+        except Exception:
+            environments = []
+
+        self._populate_env_combos(environments)
+
+        self._collapsed_envs = get_collapsed_groups(self.host_list)
+        self.host_list.blockSignals(True)
+        self.host_list.clear()
+
+        groups = {}
+        for e in entries:
+            env = e.get("environment") or ""
+            groups.setdefault(env, []).append(e)
+
+        known_envs = [e for e in environments if e in groups]
+        extra_envs = sorted(e for e in groups if e and e not in environments)
+        unassigned = groups.get("", [])
+
+        present_labels = set()
+        for env in known_envs + extra_envs:
+            self._add_host_header(env)
+            for e in sorted(groups[env], key=lambda x: x["label"]):
+                self._add_host_row(e)
+                present_labels.add(e["label"])
+
+        if unassigned:
+            self._add_host_header(_UNASSIGNED_LABEL)
+            for e in sorted(unassigned, key=lambda x: x["label"]):
+                self._add_host_row(e)
+                present_labels.add(e["label"])
+
+        apply_collapse_state(self.host_list)
+        self.host_list.blockSignals(False)
+
+        # Keep the previously selected host selected through the refresh.
+        if prev_label and prev_label in present_labels:
+            self._reselect_label(prev_label)
+        elif prev_label and prev_label not in present_labels:
+            self._clear_active()
+
+    def _add_host_header(self, text):
+        item = make_group_header_item(text, collapsed=text in self._collapsed_envs)
+        self.host_list.addItem(item)
+
+    def _add_host_row(self, entry):
+        item = QListWidgetItem(f"    {entry['label']}  [{entry['type_text']}]")
+        item.setData(Qt.UserRole, entry)
+        self.host_list.addItem(item)
+
+    def _reselect_label(self, label):
+        for i in range(self.host_list.count()):
+            item = self.host_list.item(i)
+            entry = item.data(Qt.UserRole)
+            if entry and entry["label"] == label:
+                self.host_list.blockSignals(True)
+                self.host_list.setCurrentItem(item)
+                self.host_list.blockSignals(False)
+                return
+
+    def _selected_entry(self):
+        item = self.host_list.currentItem()
+        if item is None:
+            return None
+        return item.data(Qt.UserRole)
+
+    def _clear_active(self):
+        self.active_entry = None
+        self.active_kind = None
+        self.active_id = None
+        self.active_label = None
+        self.active_host_label.setText("Viewing: (no host selected)")
+        self.connection_label.setText("")
+
+    def on_host_selected(self):
         entry = self._selected_entry()
         if entry is None:
+            return  # header row
+
+        self.active_entry = entry
+        underlying = _default_underlying(entry)
+        self.active_kind = underlying["kind"]
+        self.active_id = underlying["id"]
+        self.active_label = entry["label"]
+
+        self.active_host_label.setText(f"Viewing: {entry['label']}  [{entry['type_text']}]")
+
+        if entry["kind"] == "merged":
+            self.connection_label.setText(
+                "Available connections: Agent and SSH — double-click to open a terminal and pick one. "
+                "Quick Command and File Transfer below use SSH."
+            )
+        elif entry["kind"] == "ssh":
+            self.connection_label.setText("Connection: SSH.")
+        else:
+            self.connection_label.setText("Connection: Agent (queued commands).")
+
+    def open_terminal_for_item(self, item):
+        entry = item.data(Qt.UserRole)
+        if entry is None:
+            return  # header
+
+        key = entry["label"]
+        existing = self._terminals.get(key)
+        if existing is not None:
+            existing.show()
+            existing.raise_()
+            existing.activateWindow()
+            return
+
+        popout = TerminalPopout(entry, on_close=self._on_terminal_closed)
+        self._terminals[key] = popout
+        popout.show()
+        popout.raise_()
+        popout.activateWindow()
+
+    def _on_terminal_closed(self, entry):
+        self._terminals.pop(entry["label"], None)
+
+    def _close_terminal_for(self, label):
+        popout = self._terminals.get(label)
+        if popout is not None:
+            popout.close()
+
+    # =====================================================
+    # REMOVE HOST
+    # =====================================================
+    def delete_host(self):
+        entry = self.active_entry
+        if entry is None:
+            QMessageBox.information(self, "No host selected", "Select a host first.")
             return
 
         if entry["kind"] == "merged":
@@ -940,9 +993,6 @@ class RemoteAdministrationPage(QWidget):
 
             agent_entry = entry["agent_entry"]
             ssh_entry = entry["ssh_entry"]
-
-            if self.active_id in (agent_entry["id"], ssh_entry["id"]):
-                self._end_ssh_session()
 
             errors = []
             try:
@@ -957,19 +1007,14 @@ class RemoteAdministrationPage(QWidget):
             if errors:
                 QMessageBox.critical(self, "Error", "\n".join(errors))
 
+            self._close_terminal_for(entry["label"])
             bus.host_removed.emit(agent_entry["id"])
             bus.host_removed.emit(ssh_entry["id"])
             return
 
-        confirm = QMessageBox.question(
-            self, "Confirm",
-            f"Remove {entry['label']}?"
-        )
+        confirm = QMessageBox.question(self, "Confirm", f"Remove {entry['label']}?")
         if confirm != QMessageBox.Yes:
             return
-
-        if entry["kind"] == self.active_kind and entry["id"] == self.active_id:
-            self._end_ssh_session()
 
         try:
             if entry["kind"] == "agent":
@@ -980,33 +1025,110 @@ class RemoteAdministrationPage(QWidget):
             QMessageBox.critical(self, "Error", str(e))
             return
 
+        self._close_terminal_for(entry["label"])
         bus.host_removed.emit(entry["id"])
 
-    def show_controller_key(self):
-        try:
-            key = api.get_controller_key()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+    # =====================================================
+    # QUICK ONE-OFF COMMAND
+    # =====================================================
+    def run_quick_command(self):
+        if not self.active_id:
+            self.quick_output.append("[select a host first]")
             return
 
-        QMessageBox.information(
-            self,
-            "Sysible Controller Public Key",
-            "This is the same key Connect Host installs automatically. "
-            "Only needed if you'd rather install it manually (e.g. baked "
-            "into a host image, or a host with password auth disabled):\n\n"
-            + key,
-        )
+        cmd = self.quick_input.text().strip()
+        if not cmd:
+            return
+
+        self.quick_input.clear()
+        self.quick_output.append(f"{self.active_label} ({self.active_kind}) $ {cmd}")
+        self._scroll_quick()
+
+        if self.active_kind == "ssh":
+            try:
+                result = api.exec_remote(self.active_id, cmd)
+            except Exception as e:
+                self.quick_output.append(str(e))
+                self._scroll_quick()
+                return
+            if result.get("stdout"):
+                self.quick_output.append(result["stdout"].rstrip("\n"))
+            if result.get("stderr"):
+                self.quick_output.append(result["stderr"].rstrip("\n"))
+            if result.get("code", 0) != 0:
+                self.quick_output.append(f"[exit code {result.get('code')}]")
+            self._scroll_quick()
+            return
+
+        # agent
+        if self.pending_quick_task:
+            self.quick_output.append("[a command is already running on this host - wait for it to finish]")
+            return
+
+        try:
+            task_ids = api.queue_command_on_hosts([self.active_id], cmd)
+        except Exception as e:
+            self.quick_output.append(str(e))
+            return
+
+        task_id = task_ids.get(self.active_id)
+        if task_id is None:
+            self.quick_output.append("[failed to queue command on agent]")
+            return
+
+        self.quick_output.append("running...")
+        self.quick_run_btn.setEnabled(False)
+        self.pending_quick_task = {
+            "host_id": self.active_id,
+            "task_id": task_id,
+            "deadline": time.time() + AGENT_CMD_TIMEOUT_S,
+        }
+        self.quick_timer.start(AGENT_CMD_POLL_MS)
+
+    def _poll_quick_task(self):
+        task = self.pending_quick_task
+        if not task:
+            self.quick_timer.stop()
+            return
+
+        try:
+            raw = api.get_result_by_task(task["host_id"], task["task_id"])
+        except Exception:
+            raw = None
+
+        if raw is None:
+            if time.time() > task["deadline"]:
+                self.quick_output.append("[timed out waiting for agent to report back]")
+                self.pending_quick_task = None
+                self.quick_timer.stop()
+                self.quick_run_btn.setEnabled(True)
+            return
+
+        output = api.parse_task_output(raw)
+        if output:
+            if output.get("stdout"):
+                self.quick_output.append(output["stdout"].rstrip("\n"))
+            if output.get("stderr"):
+                self.quick_output.append(output["stderr"].rstrip("\n"))
+            if output.get("returncode", 0) != 0:
+                self.quick_output.append(f"[exit code {output.get('returncode')}]")
+        else:
+            self.quick_output.append("[agent reported no usable output]")
+
+        self.pending_quick_task = None
+        self.quick_timer.stop()
+        self.quick_run_btn.setEnabled(True)
+        self._scroll_quick()
+
+    def _scroll_quick(self):
+        sb = self.quick_output.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
     # =====================================================
-    # ENVIRONMENTS (shared registry - used by the connect form to tag
-    # a newly-connected SSH host; reassigning environment for an
-    # already-connected host is handled in Host Enrollment / User &
-    # Group Administration, not duplicated here)
+    # ENVIRONMENTS (connect form)
     # =====================================================
     def _populate_env_combos(self, environments):
         self.environments = environments
-
         combo = self.connect_env_combo
         combo.blockSignals(True)
         combo.clear()
@@ -1017,31 +1139,24 @@ class RemoteAdministrationPage(QWidget):
     def _handle_env_combo_change(self, text):
         if text != _NEW_ENV_OPTION:
             return
-
         combo = self.sender()
-
         name, ok = QInputDialog.getText(self, "New Environment", "Environment name:")
-
         if not ok or not name.strip():
             self._populate_env_combos(self.environments)
             return
-
         name = name.strip()
-
         try:
             environments = api.create_environment(name)
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
             self._populate_env_combos(self.environments)
             return
-
         self._populate_env_combos(environments)
-
         if combo is not None:
             combo.setCurrentText(name)
 
     # =====================================================
-    # CONNECT (password in, key-based access out - one click)
+    # CONNECT NEW SSH HOST
     # =====================================================
     def connect_host(self):
         name = self.name_input.text().strip()
@@ -1067,144 +1182,26 @@ class RemoteAdministrationPage(QWidget):
 
         self.password_input.clear()
         self.enroll_status.setStyleSheet(f"color: {STATUS_SUCCESS_COLOR};")
-        self.enroll_status.setText(f"'{name}' connected — key installed, ready in the Terminal below.")
+        self.enroll_status.setText(f"'{name}' connected — double-click it in the list to open a terminal.")
         self.load_hosts()
 
-    # =====================================================
-    # TERMINAL
-    #
-    # SSH hosts now run through the live PTY session above (see
-    # _start_ssh_session / _send_terminal_input / _on_ssh_read_done) -
-    # this command box is only wired up for agent hosts, which have no
-    # direct connection: the controller queues a task and this page
-    # polls for the result until the agent reports back (or it times
-    # out).
-    # =====================================================
-    def run_command(self):
-        if not self.active_id or self.active_kind != "agent":
-            return
-
-        cmd = self.cmd_input.text().strip()
-        if not cmd:
-            return
-
-        self.cmd_input.remember(cmd)
-        self.cmd_input.clear()
-
-        self.output.append(f"{self.active_label} $ {cmd}")
-        self._scroll_to_bottom()
-
-        self._run_agent_command(cmd)
-
-    def _run_agent_command(self, cmd):
-        if self.pending_agent_task:
-            self.output.append("[a command is already running on this host - wait for it to finish]")
-            return
-
+    def show_controller_key(self):
         try:
-            task_ids = api.queue_command_on_hosts([self.active_id], cmd)
+            key = api.get_controller_key()
         except Exception as e:
-            self.output.append(str(e))
+            QMessageBox.critical(self, "Error", str(e))
             return
-
-        task_id = task_ids.get(self.active_id)
-
-        if task_id is None:
-            self.output.append("[failed to queue command on agent]")
-            return
-
-        self.output.append("running...")
-        self._scroll_to_bottom()
-
-        self.cmd_input.setEnabled(False)
-
-        self.pending_agent_task = {
-            "host_id": self.active_id,
-            "task_id": task_id,
-            "deadline": time.time() + AGENT_CMD_TIMEOUT_S,
-        }
-
-        self.agent_poll_timer.start(AGENT_CMD_POLL_MS)
-
-    def _cancel_pending_agent_task(self):
-        """Stop watching for an in-flight agent command's result -
-        called whenever the active connection is about to change (a
-        different host, or a merged host's connection-type switching
-        away from "agent"). Without this, agent_poll_timer kept firing
-        against a host that was no longer the active connection: its
-        eventual _finish_command() call re-focused cmd_input even
-        while a live SSH session was using the same panel instead -
-        cmd_input is hidden during an SSH session, so that stole focus
-        away from the terminal with nothing actually able to receive
-        it, which is what made the SSH terminal look like it had
-        stopped accepting keystrokes. The agent still finishes the
-        command server-side either way - this only stops the client
-        from watching for/displaying that result."""
-        self.pending_agent_task = None
-        self.agent_poll_timer.stop()
-
-    def _poll_agent_task(self):
-        task = self.pending_agent_task
-
-        if not task:
-            self.agent_poll_timer.stop()
-            return
-
-        # Belt-and-suspenders against the same staleness this is meant
-        # to prevent (see _cancel_pending_agent_task) - if the active
-        # connection has since moved on, drop this result instead of
-        # rendering it into whatever's on screen now and stealing focus.
-        if self.active_kind != "agent" or self.active_id != task["host_id"]:
-            self.pending_agent_task = None
-            self.agent_poll_timer.stop()
-            return
-
-        try:
-            raw = api.get_result_by_task(task["host_id"], task["task_id"])
-        except Exception:
-            raw = None
-
-        if raw is None:
-            if time.time() > task["deadline"]:
-                self.output.append("[timed out waiting for agent to report back]")
-                self.pending_agent_task = None
-                self.agent_poll_timer.stop()
-                self._finish_command()
-            return
-
-        output = api.parse_task_output(raw)
-
-        if output:
-            if output.get("stdout"):
-                self.output.append(output["stdout"].rstrip("\n"))
-            if output.get("stderr"):
-                self.output.append(output["stderr"].rstrip("\n"))
-            if output.get("returncode", 0) != 0:
-                self.output.append(f"[exit code {output.get('returncode')}]")
-        else:
-            self.output.append("[agent reported no usable output]")
-
-        self.pending_agent_task = None
-        self.agent_poll_timer.stop()
-        self._finish_command()
-
-    def _finish_command(self):
-        self.cmd_input.setEnabled(True)
-        self.cmd_input.setFocus()
-        self._scroll_to_bottom()
-
-    def _scroll_to_bottom(self):
-        scrollbar = self.output.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        QMessageBox.information(
+            self,
+            "Sysible Controller Public Key",
+            "This is the same key Connect Host installs automatically. "
+            "Only needed if you'd rather install it manually (e.g. baked "
+            "into a host image, or a host with password auth disabled):\n\n"
+            + key,
+        )
 
     # =====================================================
-    # FILE TRANSFER
-    #
-    # SSH hosts run synchronously (SFTP, no size limit, ready
-    # immediately). Agent hosts queue through the same task channel as
-    # the command box above, so they're dispatched, then polled by
-    # self.file_poll_timer/_poll_file_task until the agent reports
-    # back - mirrors _run_agent_command/_poll_agent_task above.
+    # FILE TRANSFER (selected host)
     # =====================================================
     def _browse_upload_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Choose file to upload")
@@ -1239,14 +1236,12 @@ class RemoteAdministrationPage(QWidget):
             self.file_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
             self.file_status.setText(f"Uploading to {self.active_label}...")
             QApplication.processEvents()
-
             try:
                 result = api.upload_file_ssh(self.active_id, local_path, remote_path)
             except Exception as e:
                 self.file_status.setStyleSheet(f"color: {STATUS_ERROR_COLOR};")
                 self.file_status.setText(f"Upload failed: {e}")
                 return
-
             self.file_status.setStyleSheet(f"color: {STATUS_SUCCESS_COLOR};")
             self.file_status.setText(
                 f"Uploaded to {self.active_label}:{result.get('remote_path', remote_path)} "
@@ -1268,7 +1263,6 @@ class RemoteAdministrationPage(QWidget):
 
         self.file_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
         self.file_status.setText(f"Uploading to {self.active_label} (agent)...")
-
         self.pending_file_task = {
             "direction": "upload",
             "host_id": self.active_id,
@@ -1304,14 +1298,12 @@ class RemoteAdministrationPage(QWidget):
             self.file_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
             self.file_status.setText(f"Downloading from {self.active_label}...")
             QApplication.processEvents()
-
             try:
                 api.download_file_ssh(self.active_id, remote_path, local_path)
             except Exception as e:
                 self.file_status.setStyleSheet(f"color: {STATUS_ERROR_COLOR};")
                 self.file_status.setText(f"Download failed: {e}")
                 return
-
             self.file_status.setStyleSheet(f"color: {STATUS_SUCCESS_COLOR};")
             self.file_status.setText(f"Saved to {local_path}.")
             return
@@ -1330,7 +1322,6 @@ class RemoteAdministrationPage(QWidget):
 
         self.file_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
         self.file_status.setText(f"Downloading from {self.active_label} (agent)...")
-
         self.pending_file_task = {
             "direction": "download",
             "host_id": self.active_id,
@@ -1343,16 +1334,13 @@ class RemoteAdministrationPage(QWidget):
 
     def _poll_file_task(self):
         task = self.pending_file_task
-
         if not task:
             self.file_poll_timer.stop()
             return
 
         if time.time() > task["deadline"]:
             self.file_status.setStyleSheet(f"color: {STATUS_ERROR_COLOR};")
-            self.file_status.setText(
-                f"[timed out waiting for agent to confirm {task['direction']}]"
-            )
+            self.file_status.setText(f"[timed out waiting for agent to confirm {task['direction']}]")
             self.pending_file_task = None
             self.file_poll_timer.stop()
             return
@@ -1362,10 +1350,8 @@ class RemoteAdministrationPage(QWidget):
                 result = api.poll_agent_upload(task["host_id"], task["task_id"])
             except Exception:
                 result = None
-
             if result is None:
                 return
-
             if result["error"]:
                 self.file_status.setStyleSheet(f"color: {STATUS_ERROR_COLOR};")
                 self.file_status.setText(f"Upload to {task['label']} failed: {result['error']}")
@@ -1373,34 +1359,29 @@ class RemoteAdministrationPage(QWidget):
                 shown_path = result.get("remote_path") or task["remote_path"]
                 self.file_status.setStyleSheet(f"color: {STATUS_SUCCESS_COLOR};")
                 self.file_status.setText(f"Uploaded to {task['label']}:{shown_path}.")
-
             self.pending_file_task = None
             self.file_poll_timer.stop()
             return
 
-        # download
         try:
             result = api.poll_agent_download(task["host_id"], task["task_id"], task["local_path"])
         except Exception:
             result = None
-
         if result is None:
             return
-
         if result["error"]:
             self.file_status.setStyleSheet(f"color: {STATUS_ERROR_COLOR};")
             self.file_status.setText(f"Download from {task['label']} failed: {result['error']}")
         else:
             self.file_status.setStyleSheet(f"color: {STATUS_SUCCESS_COLOR};")
             self.file_status.setText(f"Saved to {task['local_path']}.")
-
         self.pending_file_task = None
         self.file_poll_timer.stop()
 
     def closeEvent(self, event):
-        # Don't leave an SSH PTY session running on the backend after
-        # this window closes - the operator would have no way back
-        # into it anyway since closing the popout drops active_id.
-        self._end_ssh_session()
-        self._terminal_io.shutdown()
+        # Close any terminal popouts this page spawned so their SSH PTY
+        # sessions get torn down rather than left running on the backend.
+        for popout in list(self._terminals.values()):
+            popout.close()
+        self._terminals.clear()
         super().closeEvent(event)

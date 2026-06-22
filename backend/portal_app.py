@@ -188,16 +188,27 @@ async def login_page(error: str = ""):
 
 
 @app.post("/login")
-async def login(request: Request, username: str = Form(...), password: str = Form(...)):
+async def login(request: Request, username: str = Form(...), password: str = Form(...), cli: int = 0):
     # Logged either way (success or failure) so the Webserver Portal
     # Configuration page can show real login history, not just "is it
     # configured" - the host operator's IP is the only identifying
     # detail worth keeping here, the password obviously never is.
+    #
+    # cli=1 is the copy-paste curl path: it gets real HTTP status codes
+    # (so `curl -f` stops the chain right here with a clear reason) instead
+    # of browser-style 303 redirects that a script can't tell apart from
+    # success.
     ip = request.client.host if request.client else ""
 
     creds = get_portal_credentials()
 
     if not creds or not creds.get("username"):
+        if cli:
+            return Response(
+                "The portal has no login configured. Set one up in the "
+                "Webserver Portal page of the desktop app first.\n",
+                status_code=409, media_type="text/plain",
+            )
         return RedirectResponse("/?error=notconfigured", status_code=303)
 
     valid = secrets.compare_digest(username, creds["username"]) and portal_auth.verify_password(
@@ -206,12 +217,21 @@ async def login(request: Request, username: str = Form(...), password: str = For
 
     if not valid:
         log_portal_event("login_failed", username, ip)
+        if cli:
+            return Response(
+                "Login failed: wrong username or password. Note the password "
+                "goes inside the single quotes in the curl command.\n",
+                status_code=401, media_type="text/plain",
+            )
         return RedirectResponse("/?error=badlogin", status_code=303)
 
     log_portal_event("login_success", username, ip)
     token = portal_auth.create_session(ip)
 
-    response = RedirectResponse("/files", status_code=303)
+    if cli:
+        response = Response("Login OK\n", media_type="text/plain")
+    else:
+        response = RedirectResponse("/files", status_code=303)
     response.set_cookie(
         SESSION_COOKIE, token, httponly=True, secure=True,
         max_age=portal_auth.SESSION_TTL_SECONDS,

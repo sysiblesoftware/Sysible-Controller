@@ -21,7 +21,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSizePo
 PANEL_WIDTH = 268
 
 
-def build_host_panel(title, host_list, button_rows, extra_widgets=None):
+def build_host_panel(title, host_list, button_rows, extra_widgets=None, width=PANEL_WIDTH):
     """
     title: heading text for the panel, e.g. "Target Hosts (agent + SSH)".
     host_list: the page's already-constructed QListWidget - resized in
@@ -32,10 +32,13 @@ def build_host_panel(title, host_list, button_rows, extra_widgets=None):
         fit this narrow column far better than one long row of 5+.
     extra_widgets: optional list of widgets (e.g. a status label) added
         below the host list, in order.
+    width: fixed column width. Defaults to PANEL_WIDTH; pages that show
+        extra per-row detail (e.g. Remote Administration lists each
+        host's IP next to it) can pass a wider value.
     Returns a QWidget ready to be the left-hand item in a QHBoxLayout.
     """
     panel = QWidget()
-    panel.setFixedWidth(PANEL_WIDTH)
+    panel.setFixedWidth(width)
     layout = QVBoxLayout(panel)
     layout.setContentsMargins(0, 0, 6, 8)
     layout.setSpacing(6)

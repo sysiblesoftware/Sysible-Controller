@@ -143,10 +143,11 @@ class WebserverPortalPage(QWidget):
 
         curl_hint = QLabel(
             "For terminal-only or headless systems that can't open a browser: "
-            "logs into the portal and downloads the agent bundle in one shot. "
-            "-k skips certificate verification (same self-signed cert warning "
-            "as above) and the cookie jar carries the session from login to "
-            "download. Swap in the real password before running."
+            "logs into the portal, downloads the agent bundle, unzips it, and "
+            "runs the installer (run_agent.sh) in one shot. -k skips certificate "
+            "verification (same self-signed cert warning as above) and the cookie "
+            "jar carries the session from login to download. The final step needs "
+            "root, hence sudo. Swap in the real password before running."
         )
         theme.style_hint_label(curl_hint)
         curl_hint.setWordWrap(True)
@@ -155,7 +156,7 @@ class WebserverPortalPage(QWidget):
         self.curl_text = QTextEdit()
         self.curl_text.setReadOnly(True)
         self.curl_text.setStyleSheet("font-family: monospace;")
-        self.curl_text.setFixedHeight(90)
+        self.curl_text.setFixedHeight(140)
         layout.addWidget(self.curl_text)
 
         copy_curl_btn = QPushButton("Copy to Clipboard")
@@ -487,7 +488,11 @@ class WebserverPortalPage(QWidget):
             f'-d "username={curl_user}" --data-urlencode "password=<password>" '
             f'"https://{curl_host}:{curl_port}/login" '
             f'&& curl -k -b /tmp/sysible_portal_cookies.txt -OJ '
-            f'"https://{curl_host}:{curl_port}/files/bundle"'
+            f'"https://{curl_host}:{curl_port}/files/bundle" '
+            f'&& unzip -o sysible-agent-bundle.zip -d sysible-agent-bundle '
+            f'&& cd sysible-agent-bundle '
+            f'&& chmod +x run_agent.sh '
+            f'&& sudo ./run_agent.sh'
         )
 
         if error:

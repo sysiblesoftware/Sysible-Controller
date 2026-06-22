@@ -1,4 +1,5 @@
 import os
+import queue
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -56,6 +57,10 @@ class _TerminalIO(QObject):
         super().__init__()
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ssh-term-io")
         self._reads_inflight = set()
+        # Read results are handed to the GUI thread through this queue
+        # (drained by a QTimer there) rather than a Qt signal - see
+        # _on_read_finished().
+        self.results = queue.Queue()
 
     def submit_read(self, host_id):
         if host_id in self._reads_inflight:
@@ -74,10 +79,15 @@ class _TerminalIO(QObject):
     def _on_read_finished(self, host_id, future):
         self._reads_inflight.discard(host_id)
         ok, result = future.result()
-        if ok:
-            self.read_done.emit(host_id, result)
-        else:
-            self.read_failed.emit(host_id)
+        # Push to a thread-safe queue instead of emitting a Qt signal.
+        # This callback runs on a plain ThreadPoolExecutor worker (not a
+        # QThread), and a signal emitted from such a thread was not being
+        # delivered to the GUI reliably - the symptom was a live SSH
+        # terminal that forwarded keystrokes but never rendered the
+        # remote output, and whose read loop stalled after the first
+        # read (the handler that re-issues reads never ran). A queue
+        # drained by a QTimer on the GUI thread has no such dependency.
+        self.results.put((host_id, result if ok else None))
 
     def submit_write(self, host_id, data):
         def work():
@@ -211,18 +221,31 @@ class _LiveTerminalOutput(QTextEdit):
             self.on_key_data(data)
 
     def append_terminal_text(self, text):
-        cursor = self.textCursor()
-        cursor.movePosition(cursor.End)
+        clean = _strip_ansi(text)
+        try:
+            cursor = self.textCursor()
+            cursor.movePosition(cursor.End)
 
-        for ch in _strip_ansi(text):
-            if ch == "\r":
-                continue
-            elif ch in ("\x08", "\x7f"):
-                cursor.deletePreviousChar()
-            else:
-                cursor.insertText(ch)
+            for ch in clean:
+                if ch == "\r":
+                    continue
+                elif ch in ("\x08", "\x7f"):
+                    cursor.deletePreviousChar()
+                else:
+                    cursor.insertText(ch)
 
-        self.setTextCursor(cursor)
+            self.setTextCursor(cursor)
+            self.ensureCursorVisible()
+        except Exception:
+            # A rendering hiccup must never bubble up and kill the read
+            # loop (that would leave the terminal blank but still
+            # "connected"). Fall back to a plain append so output still
+            # shows, and swallow anything that still goes wrong.
+            try:
+                self.moveCursor(self.textCursor().End)
+                self.insertPlainText(clean.replace("\r", ""))
+            except Exception:
+                pass
 
 
 def _connection_options(entry):
@@ -374,9 +397,16 @@ class TerminalPopout(QWidget):
         self.agent_poll_timer.timeout.connect(self._poll_agent_task)
 
         self._terminal_io = _TerminalIO()
-        self._terminal_io.read_done.connect(self._on_ssh_read_done)
-        self._terminal_io.read_failed.connect(self._on_ssh_read_failed)
         self._terminal_io.write_failed.connect(self._on_ssh_write_failed)
+
+        # Drain SSH read results on the GUI thread. This replaces the
+        # old cross-thread read_done/read_failed signals (see
+        # _TerminalIO._on_read_finished for why). Runs continuously and
+        # is a no-op whenever the queue is empty.
+        self._read_drain_timer = QTimer()
+        self._read_drain_timer.setInterval(20)
+        self._read_drain_timer.timeout.connect(self._drain_read_results)
+        self._read_drain_timer.start()
 
         self._ssh_retry_timer = QTimer()
         self._ssh_retry_timer.setSingleShot(True)
@@ -456,6 +486,20 @@ class TerminalPopout(QWidget):
         if self.active_kind == "ssh" and self.output.on_key_data is not None:
             self._send_terminal_input("\x03")
             self.output.setFocus()
+
+    def _drain_read_results(self):
+        """Pull any read results the worker threads have queued and handle
+        them here on the GUI thread. Each handled read also re-issues the
+        next read, so this is what keeps the live SSH read loop turning."""
+        while True:
+            try:
+                host_id, result = self._terminal_io.results.get_nowait()
+            except queue.Empty:
+                return
+            if result is None:
+                self._on_ssh_read_failed(host_id)
+            else:
+                self._on_ssh_read_done(host_id, result)
 
     def _on_ssh_read_done(self, host_id, result):
         if not self._ssh_session_active or self.active_kind != "ssh" or self.active_id != host_id:

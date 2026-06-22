@@ -10,7 +10,16 @@ from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame,
 )
 from PySide6.QtCore import Qt, QTimer, QObject, Signal
-from PySide6.QtGui import QFont, QKeySequence
+from PySide6.QtGui import QFont, QKeySequence, QTextCursor
+
+# PySide6 6.4+ uses scoped enums, so QTextCursor.End no longer exists -
+# it's QTextCursor.MoveOperation.End. Resolve it once, with a fallback
+# to the old unscoped name so this works on any PySide6 6.x.
+_CURSOR_END = (
+    QTextCursor.MoveOperation.End
+    if hasattr(QTextCursor, "MoveOperation")
+    else QTextCursor.End
+)
 
 from client import api
 from client.branding import make_page_header
@@ -37,14 +46,17 @@ AGENT_CMD_TIMEOUT_S = 30
 SSH_TERMINAL_POLL_MS = 60
 
 
-# Temporary diagnostic logging for the SSH terminal read path. Writes to
-# /tmp/sysible_term.log (override with SYSIBLE_TERM_LOG). Off unless the
-# file's directory is writable; safe to leave in - it never raises.
+# Optional diagnostic logging for the SSH terminal read path. Disabled
+# unless SYSIBLE_TERM_LOG is set to a writable path (e.g.
+# SYSIBLE_TERM_LOG=/tmp/sysible_term.log). Safe to leave in - it never
+# raises and is a no-op when unset.
 import datetime as _dt
-_TERM_LOG_PATH = os.getenv("SYSIBLE_TERM_LOG", "/tmp/sysible_term.log")
+_TERM_LOG_PATH = os.getenv("SYSIBLE_TERM_LOG")
 
 
 def _tlog(msg):
+    if not _TERM_LOG_PATH:
+        return
     try:
         with open(_TERM_LOG_PATH, "a") as f:
             f.write(f"{_dt.datetime.now().strftime('%H:%M:%S.%f')} {msg}\n")
@@ -244,7 +256,7 @@ class _LiveTerminalOutput(QTextEdit):
         _tlog(f"append called len={len(clean)}")
         try:
             cursor = self.textCursor()
-            cursor.movePosition(cursor.End)
+            cursor.movePosition(_CURSOR_END)
 
             for ch in clean:
                 if ch == "\r":
@@ -263,7 +275,7 @@ class _LiveTerminalOutput(QTextEdit):
             # shows, and swallow anything that still goes wrong.
             _tlog(f"append PRIMARY EXC: {e!r}")
             try:
-                self.moveCursor(self.textCursor().End)
+                self.moveCursor(_CURSOR_END)
                 self.insertPlainText(clean.replace("\r", ""))
             except Exception as e2:
                 _tlog(f"append FALLBACK EXC: {e2!r}")

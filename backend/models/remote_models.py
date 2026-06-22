@@ -22,3 +22,8 @@ class EnrollSSHRequest(BaseModel):
 
 class TerminalWriteRequest(BaseModel):
     data: str
+
+
+class TerminalResizeRequest(BaseModel):
+    cols: int
+    rows: int

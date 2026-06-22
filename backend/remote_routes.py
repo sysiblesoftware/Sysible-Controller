@@ -40,6 +40,7 @@ from backend.models.remote_models import (
     AddHostRequest,
     EnrollSSHRequest,
     ExecRequest,
+    TerminalResizeRequest,
     TerminalWriteRequest,
 )
 from backend.models.environment_models import SetEnvironmentRequest
@@ -614,6 +615,28 @@ def close_terminal(session_id: str):
         _close_session(session)
 
     return {"session_id": session_id, "closed": True}
+
+
+@router.post("/terminal/{session_id}/resize")
+def resize_terminal(session_id: str, body: TerminalResizeRequest):
+    session = _get_terminal_session(session_id)
+
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail="no open terminal session - call /terminal/open first"
+        )
+
+    _touch_session(session)
+    cols = max(8, min(500, body.cols))
+    rows = max(4, min(300, body.rows))
+    with session["lock"]:
+        try:
+            session["channel"].resize_pty(width=cols, height=rows)
+        except OSError as e:
+            raise HTTPException(status_code=400, detail=f"Could not resize terminal: {e}")
+
+    return {"session_id": session_id, "cols": cols, "rows": rows}
 
 
 # =========================================================

@@ -107,6 +107,13 @@ def close_terminal(session_id: str):
     return _request("POST", f"/remote/terminal/{session_id}/close")
 
 
+def resize_terminal(session_id: str, cols: int, rows: int):
+    return _request(
+        "POST", f"/remote/terminal/{session_id}/resize",
+        json={"cols": cols, "rows": rows},
+    )
+
+
 def upload_file_ssh(name: str, local_path, remote_path: str):
     local_path = Path(local_path)
     with open(local_path, "rb") as f:

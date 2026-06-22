@@ -10,7 +10,18 @@ from PySide6.QtWidgets import (
     QApplication, QFileDialog, QFrame,
 )
 from PySide6.QtCore import Qt, QTimer, QObject, Signal
-from PySide6.QtGui import QFont, QKeySequence, QTextCursor, QColor, QTextCharFormat
+from PySide6.QtGui import QFont, QFontMetrics, QKeySequence, QTextCursor, QColor, QTextCharFormat
+
+# pyte gives us a real VT screen (a 2D character grid with cursor
+# addressing) so cursor-positioned, full-screen apps - vi, top, less,
+# htop - render correctly instead of having their redraws appended as
+# stray lines. It's optional: if it isn't installed the terminal still
+# works for ordinary shell use, full-screen apps just degrade to the old
+# append behaviour rather than crashing.
+try:
+    import pyte
+except ImportError:
+    pyte = None
 
 # PySide6 6.4+ uses scoped enums, so QTextCursor.End no longer exists -
 # it's QTextCursor.MoveOperation.End. Resolve it once, with a fallback
@@ -140,6 +151,15 @@ class _TerminalIO(QObject):
         if err:
             self.write_failed.emit(err)
 
+    def submit_resize(self, session_id, cols, rows):
+        # Fire-and-forget; a failed pty resize is non-fatal to the session.
+        def work():
+            try:
+                api.resize_terminal(session_id, cols, rows)
+            except Exception:
+                pass
+        self._pool.submit(work)
+
     def shutdown(self):
         self._pool.shutdown(wait=False)
 
@@ -224,19 +244,49 @@ class _TerminalInput(QLineEdit):
         super().keyPressEvent(event)
 
 
+# pyte reports cell colours as names (or a 6-hex string for 256/true
+# colour). Map the names onto the same palette the append renderer uses.
+_PYTE_COLORS = {
+    "black": "#1E1E1E", "red": "#CD3131", "green": "#23D18B",
+    "brown": "#E5E510", "yellow": "#E5E510", "blue": "#3B8EEA",
+    "magenta": "#BC3FBC", "cyan": "#29B8DB", "white": "#E8E8E8",
+    "brightblack": "#666666", "brightred": "#F14C4C", "brightgreen": "#23D18B",
+    "brightbrown": "#F5F543", "brightyellow": "#F5F543", "brightblue": "#3B8EEA",
+    "brightmagenta": "#D670D6", "brightcyan": "#29B8DB", "brightwhite": "#FFFFFF",
+}
+_TERM_DEFAULT_BG = "#1E1E1E"
+_HEXDIGITS = set("0123456789abcdefABCDEF")
+
+
 class _LiveTerminalOutput(QTextEdit):
     """The terminal output pane doubles as the input surface for an
     SSH host's live session: while `on_key_data` is set, keystrokes
     typed here are forwarded straight to the remote pty instead of
     being inserted locally - what shows up is only ever what the remote
     shell echoes back. With no session attached it behaves like an
-    ordinary read-only log."""
+    ordinary read-only log.
+
+    Two rendering modes share this one widget:
+      * Normal mode - an append-only scrolling log (with scrollback),
+        honouring colour/erase escapes. Good for ordinary shell output.
+      * Alternate-screen mode - when a full-screen app (vi, top, less)
+        switches to the xterm alternate screen, output is driven through
+        a pyte VT grid and the widget is repainted from that grid, so
+        cursor-addressed redraws land in the right place. On exit the
+        saved normal log is restored intact."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.on_key_data = None
         self._ansi_pending = ""        # incomplete escape carried across reads
         self._reset_char_format()
+        # alternate-screen (pyte) state
+        self._in_alt = False
+        self._alt_screen = None
+        self._alt_stream = None
+        self._saved_html = None
+        self._cols = 120              # remote pty grid size (kept in sync
+        self._rows = 32               # with the window via resize)
 
     def _reset_char_format(self):
         fmt = QTextCharFormat()
@@ -278,18 +328,59 @@ class _LiveTerminalOutput(QTextEdit):
                 pass
 
     def _render(self, text):
+        # Outer pass: split the stream at alternate-screen enter/exit
+        # boundaries and route each segment to the right renderer. Only
+        # the alt-screen mode-set/reset escapes are interpreted here;
+        # everything else is handed off whole.
+        self._ansi_pending = ""
+        i, n = 0, len(text)
+        seg_start = 0
+        while i < n:
+            if text[i] != "\x1b":
+                nxt = text.find("\x1b", i)
+                if nxt == -1:
+                    break
+                i = nxt
+                continue
+            consumed, kind, params = self._scan_escape(text, i)
+            if consumed is None:
+                # Incomplete escape split across reads: render up to it and
+                # carry the fragment to the next read.
+                self._flush_segment(text[seg_start:i])
+                self._ansi_pending = text[i:]
+                return
+            if kind in ("sm", "rm") and self._is_alt_mode_params(params):
+                want_alt = (kind == "sm")
+                if want_alt != self._in_alt:
+                    self._flush_segment(text[seg_start:i])
+                    self._set_alt(want_alt)
+                    i += consumed
+                    seg_start = i
+                    continue
+            i += consumed
+        self._flush_segment(text[seg_start:n])
+
+    def _flush_segment(self, seg):
+        if not seg:
+            return
+        if self._in_alt and self._alt_stream is not None:
+            self._alt_stream.feed(seg)
+            self._repaint_alt()
+        else:
+            self._render_normal(seg)
+
+    def _render_normal(self, text):
+        """Append-only renderer for ordinary shell output. Assumes the
+        segment contains only complete escapes (the outer pass carries any
+        trailing partial escape across reads)."""
         cursor = self.textCursor()
         cursor.movePosition(_CURSOR_END)
-        self._ansi_pending = ""
         i, n = 0, len(text)
         while i < n:
             ch = text[i]
             if ch == "\x1b":
                 consumed, kind, params = self._scan_escape(text, i)
                 if consumed is None:
-                    # Incomplete escape split across reads - finish it next
-                    # time rather than rendering a half sequence as text.
-                    self._ansi_pending = text[i:]
                     break
                 if kind == "sgr":
                     self._apply_sgr(params)
@@ -308,8 +399,6 @@ class _LiveTerminalOutput(QTextEdit):
                 cursor.deletePreviousChar()
                 i += 1
                 continue
-            # Insert a whole run of plain characters at once (faster, and
-            # carries the current colour/weight format).
             j = i
             while j < n and text[j] not in ("\x1b", "\r", "\x08", "\x7f"):
                 j += 1
@@ -317,6 +406,110 @@ class _LiveTerminalOutput(QTextEdit):
             i = j
         self.setTextCursor(cursor)
         self.ensureCursorVisible()
+
+    # ---------------- alternate-screen (pyte grid) ----------------
+    @staticmethod
+    def _is_alt_mode_params(params):
+        # True only for the xterm alternate-screen private modes, not other
+        # "?..h/l" modes (e.g. ?2004 bracketed paste, ?25 cursor visibility).
+        if not params.startswith("?"):
+            return False
+        return any(p in ("47", "1047", "1049") for p in params[1:].split(";"))
+
+    def _set_alt(self, on):
+        if on:
+            if pyte is None:
+                return  # no emulator available - stay in append mode
+            self._saved_html = self.toHtml()
+            self._alt_screen = pyte.Screen(self._cols, self._rows)
+            self._alt_stream = pyte.Stream(self._alt_screen)
+            self._in_alt = True
+            self.clear()
+        else:
+            if not self._in_alt:
+                return
+            self._in_alt = False
+            self._alt_screen = None
+            self._alt_stream = None
+            if self._saved_html is not None:
+                self.setHtml(self._saved_html)
+                self._saved_html = None
+            self.moveCursor(_CURSOR_END)
+            self.ensureCursorVisible()
+
+    def resize_grid(self, cols, rows):
+        """Track the remote pty grid size and, if a full-screen app is
+        currently up, resize its pyte screen to match so it redraws to the
+        new window dimensions."""
+        self._cols, self._rows = cols, rows
+        if self._in_alt and self._alt_screen is not None:
+            self._alt_screen.resize(rows, cols)  # pyte: (lines, columns)
+            self._repaint_alt()
+
+    @staticmethod
+    def _pyte_color(name, default):
+        if name == "default":
+            return default
+        hexv = _PYTE_COLORS.get(name)
+        if hexv:
+            return hexv
+        if len(name) == 6 and all(c in _HEXDIGITS for c in name):
+            return "#" + name
+        return default
+
+    def _repaint_alt(self):
+        screen = self._alt_screen
+        if screen is None:
+            return
+        lines_html = []
+        buf = screen.buffer
+        for y in range(screen.lines):
+            row = buf[y]
+            spans = []
+            run = []
+            cur_style = None
+            for x in range(screen.columns):
+                cell = row[x]
+                fg = self._pyte_color(cell.fg, _TERM_DEFAULT_FG)
+                bg = self._pyte_color(cell.bg, _TERM_DEFAULT_BG)
+                if cell.reverse:
+                    fg, bg = bg, fg
+                style = (
+                    f"color:{fg};background-color:{bg};"
+                    f"font-weight:{'bold' if cell.bold else 'normal'};"
+                    f"text-decoration:{'underline' if cell.underscore else 'none'};"
+                )
+                if style != cur_style:
+                    if run:
+                        spans.append(f'<span style="{cur_style}">{"".join(run)}</span>')
+                    run = []
+                    cur_style = style
+                ch = cell.data or " "
+                ch = (ch.replace("&", "&amp;").replace("<", "&lt;")
+                      .replace(">", "&gt;").replace(" ", "&nbsp;"))
+                run.append(ch)
+            if run:
+                spans.append(f'<span style="{cur_style}">{"".join(run)}</span>')
+            lines_html.append("".join(spans))
+        html = (
+            '<div style="font-family:Menlo,Consolas,\'DejaVu Sans Mono\',monospace;">'
+            + "<br>".join(lines_html)
+            + "</div>"
+        )
+        self.setUpdatesEnabled(False)
+        self.setHtml(html)
+        self.setUpdatesEnabled(True)
+
+    def grid_size_for_viewport(self):
+        """Compute the (cols, rows) that fit the current viewport at the
+        widget's font - used to size the remote pty to the window."""
+        fm = QFontMetrics(self.font())
+        cw = fm.horizontalAdvance("M") or 8
+        ch = fm.lineSpacing() or 16
+        vp = self.viewport()
+        cols = max(20, vp.width() // cw)
+        rows = max(4, vp.height() // ch)
+        return int(cols), int(rows)
 
     def _insert_run(self, cursor, run):
         """Insert plain text, tinting any "user@host" token as a privilege
@@ -360,6 +553,10 @@ class _LiveTerminalOutput(QTextEdit):
                 return consumed, "sgr", params
             if final == "J":
                 return consumed, "ed", params
+            if final == "h":
+                return consumed, "sm", params   # set mode
+            if final == "l":
+                return consumed, "rm", params   # reset mode
             return consumed, "other", params
         if nxt == "]":  # OSC ... terminated by BEL or ESC-backslash (ST)
             j = i + 2
@@ -598,8 +795,29 @@ class TerminalPopout(QWidget):
         self._ssh_retry_timer.setSingleShot(True)
         self._ssh_retry_timer.timeout.connect(self._resume_ssh_read_loop)
 
+        # Debounce window resizes - only push the new pty size to the host
+        # once the user stops dragging, not on every intermediate pixel.
+        self._resize_timer = QTimer()
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(150)
+        self._resize_timer.timeout.connect(self._apply_pty_resize)
+
         # ---- start on the first (preferred) connection ----
         self._switch_to(options[0][1])
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._ssh_session_active:
+            self._resize_timer.start()
+
+    def _apply_pty_resize(self):
+        if not self._ssh_session_active or self._session_id is None:
+            return
+        cols, rows = self.output.grid_size_for_viewport()
+        if (cols, rows) == (self.output._cols, self.output._rows):
+            return
+        self.output.resize_grid(cols, rows)
+        self._terminal_io.submit_resize(self._session_id, cols, rows)
 
     # ---------------- connection switching ----------------
     def _on_conn_changed(self, _index):
@@ -661,6 +879,11 @@ class TerminalPopout(QWidget):
         self.output.on_key_data = self._send_terminal_input
         self.output.setFocus()
         self._ssh_session_active = True
+        # Size the remote pty to the current window so full-screen apps use
+        # the whole panel from the outset (not the 120x32 pty default).
+        cols, rows = self.output.grid_size_for_viewport()
+        self.output.resize_grid(cols, rows)
+        self._terminal_io.submit_resize(self._session_id, cols, rows)
         self._terminal_io.submit_read(self._session_id)
 
     def _send_terminal_input(self, data):

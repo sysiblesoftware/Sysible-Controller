@@ -287,16 +287,36 @@ async def files_hub(request: Request):
 
 
 @app.get("/files/bundle")
-async def download_bundle(request: Request):
+async def download_bundle(request: Request, cli: int = 0):
+    # cli=1 is set by the copy-paste curl command. For that path we return
+    # real HTTP error codes instead of browser-style 303 redirects, so a
+    # failure (bad login, expired session, no controller address) aborts
+    # the curl `&&` chain with a clear message - rather than silently
+    # saving a redirect page and letting `unzip` fail confusingly with
+    # "cannot find sysible-agent-bundle.zip".
     token_cookie = request.cookies.get(SESSION_COOKIE)
 
     if not portal_auth.validate_session(token_cookie):
+        if cli:
+            return Response(
+                "Not logged in (the portal login failed or the session "
+                "expired). Check the username and password in the curl "
+                "command and try again.\n",
+                status_code=401, media_type="text/plain",
+            )
         return RedirectResponse("/?error=expired", status_code=303)
 
     config = get_controller_config()
     addresses = resolve_controller_addresses(config)
 
     if not addresses:
+        if cli:
+            return Response(
+                "The controller has no configured address, so an agent "
+                "bundle can't be built. Set one in Controller "
+                "Configuration in the desktop app, then retry.\n",
+                status_code=409, media_type="text/plain",
+            )
         return RedirectResponse("/files", status_code=303)
 
     enroll_token = secrets.token_hex(16)

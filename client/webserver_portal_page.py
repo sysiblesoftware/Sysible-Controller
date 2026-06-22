@@ -143,15 +143,15 @@ class WebserverPortalPage(QWidget):
 
         curl_hint = QLabel(
             "For terminal-only or headless systems that can't open a browser: "
-            "logs into the portal, downloads the agent bundle, unzips it, and "
-            "runs the installer (run_agent.sh) in one shot. -k skips certificate "
-            "verification (same self-signed cert warning as above) and the cookie "
-            "jar carries the session from login to download. If the login fails "
-            "or the controller has no configured address, it stops with a clear "
-            "error instead of a broken download. The final step needs root, hence "
-            "sudo. Replace <password> between the single quotes with the real "
-            "portal password (single quotes keep the shell from mangling special "
-            "characters like $ or !)."
+            "downloads the agent bundle, unzips it, and runs the installer "
+            "(run_agent.sh) in one shot. It authenticates in a single request "
+            "with HTTP Basic auth (curl -u), so there's no login cookie to go "
+            "stale. -k skips certificate verification (same self-signed cert "
+            "warning as above). If the credentials are wrong or the controller "
+            "has no configured address, it stops with a clear error instead of "
+            "a broken download. The final step needs root, hence sudo. Replace "
+            "<password> between the single quotes with the real portal password "
+            "(single quotes keep the shell from mangling characters like $ or !)."
         )
         theme.style_hint_label(curl_hint)
         curl_hint.setWordWrap(True)
@@ -488,12 +488,9 @@ class WebserverPortalPage(QWidget):
         curl_port = configured_port or port or 443
         curl_user = status.get("username") if status.get("credentials_configured") else "<username>"
         self.curl_text.setPlainText(
-            f"curl -k -sS -f -c /tmp/sysible_portal_cookies.txt "
-            f"-d 'username={curl_user}' --data-urlencode 'password=<password>' "
-            f'"https://{curl_host}:{curl_port}/login?cli=1" '
-            f"&& curl -k -sS -f -b /tmp/sysible_portal_cookies.txt "
+            f"curl -k -sS -f -u '{curl_user}:<password>' "
             f"-o sysible-agent-bundle.zip "
-            f'"https://{curl_host}:{curl_port}/files/bundle?cli=1" '
+            f'"https://{curl_host}:{curl_port}/cli/bundle" '
             f"&& unzip -o sysible-agent-bundle.zip -d sysible-agent-bundle "
             f"&& cd sysible-agent-bundle "
             f"&& chmod +x run_agent.sh "

@@ -12,6 +12,7 @@ routes on the main API. It does NOT use require_api_key
 typing a username/password into a browser.
 """
 
+import base64
 import html
 import secrets
 from pathlib import Path
@@ -351,6 +352,75 @@ async def download_bundle(request: Request, cli: int = 0):
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+def _build_bundle_response():
+    """Shared bundle builder used by the CLI endpoint. Returns either a
+    zip Response or a plain-text error Response (409) if the controller
+    has no configured address."""
+    config = get_controller_config()
+    addresses = resolve_controller_addresses(config)
+    if not addresses:
+        return Response(
+            "The controller has no configured address, so an agent bundle "
+            "can't be built. Set one in Controller Configuration in the "
+            "desktop app, then retry.\n",
+            status_code=409, media_type="text/plain",
+        )
+    enroll_token = secrets.token_hex(16)
+    create_enroll_token(enroll_token)
+    filename, zip_bytes = build_agent_bundle(addresses, config["port"], enroll_token)
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/cli/bundle")
+async def cli_bundle(request: Request):
+    """One-shot bundle download for the copy-paste curl command. Auth is
+    HTTP Basic (curl -u user:pass) against the portal credentials, so
+    there is no login/cookie round-trip - the single biggest source of
+    "Login OK but 401" breakage (a stale or unwritable /tmp cookie jar
+    leaving the session cookie unsaved between the two requests)."""
+    ip = request.client.host if request.client else ""
+    auth = request.headers.get("Authorization", "")
+
+    if not auth.startswith("Basic "):
+        return Response(
+            "Provide the portal username and password with curl -u "
+            "'user:password'.\n",
+            status_code=401, media_type="text/plain",
+            headers={"WWW-Authenticate": 'Basic realm="sysible-portal"'},
+        )
+
+    try:
+        user, _, pw = base64.b64decode(auth[6:]).decode("utf-8", "replace").partition(":")
+    except Exception:
+        return Response("Malformed authorization header.\n",
+                        status_code=401, media_type="text/plain")
+
+    creds = get_portal_credentials()
+    if not creds or not creds.get("username"):
+        return Response(
+            "The portal has no login configured. Set one up in the "
+            "Webserver Portal page of the desktop app first.\n",
+            status_code=409, media_type="text/plain",
+        )
+
+    valid = secrets.compare_digest(user, creds["username"]) and portal_auth.verify_password(
+        pw, creds.get("password_salt"), creds.get("password_hash")
+    )
+    if not valid:
+        log_portal_event("login_failed", user, ip)
+        return Response(
+            "Login failed: wrong username or password.\n",
+            status_code=401, media_type="text/plain",
+        )
+
+    log_portal_event("login_success", user, ip)
+    return _build_bundle_response()
 
 
 @app.get("/files/download/{filename}")

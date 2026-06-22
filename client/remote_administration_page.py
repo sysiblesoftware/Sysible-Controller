@@ -36,16 +36,14 @@ _TERM_DEFAULT_FG = "#E8E8E8"
 _WEIGHT_NORMAL = 400
 _WEIGHT_BOLD = 700
 
-# Sent into a fresh SSH shell to give it a consistent, safety-coloured
-# prompt: user@host in GREEN normally, RED when you are root. The colour
-# is re-evaluated on every prompt (via $EUID), so su / sudo -i flips it
-# to red live. bash only - other shells ($BASH_VERSION empty) are left
-# untouched. The trailing `clear` wipes this command's own echo.
-_PROMPT_SETUP = (
-    'if [ -n "$BASH_VERSION" ]; then '
-    "export PS1='\\[\\e[$([ $EUID -eq 0 ] && echo 31 || echo 32)m\\]"
-    "\\u@\\h\\[\\e[0m\\]:\\w\\$ '; fi; clear\n"
-)
+# Privilege-cue colouring for "user@host" tokens in the terminal: green
+# normally, red when it's root@. Applied GUI-side (see
+# _LiveTerminalOutput._insert_run) so it works no matter how root was
+# reached - su, sudo -i, etc. - unlike a remote PS1 tweak, which a fresh
+# root shell would just override.
+_PROMPT_GREEN = "#23D18B"
+_PROMPT_RED = "#F14C4C"
+_PROMPT_TOKEN_RE = re.compile(r"[A-Za-z_][\w.\-]*@[A-Za-z0-9][\w.\-]*")
 
 from client import api
 from client.branding import make_page_header
@@ -287,14 +285,20 @@ class _LiveTerminalOutput(QTextEdit):
         while i < n:
             ch = text[i]
             if ch == "\x1b":
-                consumed, sgr_params = self._scan_escape(text, i)
+                consumed, kind, params = self._scan_escape(text, i)
                 if consumed is None:
                     # Incomplete escape split across reads - finish it next
                     # time rather than rendering a half sequence as text.
                     self._ansi_pending = text[i:]
                     break
-                if sgr_params is not None:
-                    self._apply_sgr(sgr_params)
+                if kind == "sgr":
+                    self._apply_sgr(params)
+                elif kind == "ed" and params in ("2", "3"):
+                    # Erase entire display (what `clear` / Ctrl-L send):
+                    # wipe the pane so the shell can redraw into it.
+                    self.clear()
+                    cursor = self.textCursor()
+                    cursor.movePosition(_CURSOR_END)
                 i += consumed
                 continue
             if ch == "\r":
@@ -309,44 +313,67 @@ class _LiveTerminalOutput(QTextEdit):
             j = i
             while j < n and text[j] not in ("\x1b", "\r", "\x08", "\x7f"):
                 j += 1
-            cursor.insertText(text[i:j], self._char_format)
+            self._insert_run(cursor, text[i:j])
             i = j
         self.setTextCursor(cursor)
         self.ensureCursorVisible()
 
+    def _insert_run(self, cursor, run):
+        """Insert plain text, tinting any "user@host" token as a privilege
+        cue: green normally, red when it's root@ (works regardless of how
+        root was reached - su, sudo -i, etc.)."""
+        pos = 0
+        for m in _PROMPT_TOKEN_RE.finditer(run):
+            s, e = m.span()
+            if s > pos:
+                cursor.insertText(run[pos:s], self._char_format)
+            token = run[s:e]
+            fmt = QTextCharFormat(self._char_format)
+            fmt.setForeground(QColor(_PROMPT_RED if token.startswith("root@") else _PROMPT_GREEN))
+            fmt.setFontWeight(_WEIGHT_BOLD)
+            cursor.insertText(token, fmt)
+            pos = e
+        if pos < len(run):
+            cursor.insertText(run[pos:], self._char_format)
+
     @staticmethod
     def _scan_escape(text, i):
         """Scan one escape sequence starting at text[i] == ESC. Returns
-        (consumed, sgr_params): consumed = chars used; sgr_params = the
-        parameter string for a colour (SGR, final 'm') sequence, else
-        None. Returns (None, None) if the sequence is incomplete (carry
-        it to the next read)."""
+        (consumed, kind, params): kind is 'sgr' (colour, final 'm'),
+        'ed' (erase-display, final 'J'), or 'other'; params is the
+        parameter string. Returns (None, None, None) if the sequence is
+        incomplete (carry it to the next read)."""
         n = len(text)
         if i + 1 >= n:
-            return None, None
+            return None, None, None
         nxt = text[i + 1]
         if nxt == "[":  # CSI ... final byte 0x40-0x7e
             j = i + 2
             while j < n and not (0x40 <= ord(text[j]) <= 0x7e):
                 j += 1
             if j >= n:
-                return None, None
+                return None, None, None
             final = text[j]
+            params = text[i + 2:j]
             consumed = j + 1 - i
-            return (consumed, text[i + 2:j]) if final == "m" else (consumed, None)
+            if final == "m":
+                return consumed, "sgr", params
+            if final == "J":
+                return consumed, "ed", params
+            return consumed, "other", params
         if nxt == "]":  # OSC ... terminated by BEL or ESC-backslash (ST)
             j = i + 2
             while j < n:
                 if text[j] == "\x07":
-                    return j + 1 - i, None
+                    return j + 1 - i, "other", None
                 if text[j] == "\x1b":
                     if j + 1 < n and text[j + 1] == "\\":
-                        return j + 2 - i, None
-                    return None, None
+                        return j + 2 - i, "other", None
+                    return None, None, None
                 j += 1
-            return None, None
+            return None, None, None
         # Any other two-character escape (ESC =, ESC >, charset selects...)
-        return 2, None
+        return 2, "other", None
 
     def _apply_sgr(self, params):
         codes = params.split(";") if params else ["0"]
@@ -533,7 +560,7 @@ class TerminalPopout(QWidget):
         self.interrupt_btn.setVisible(False)
 
         clear_btn = QPushButton("Clear")
-        clear_btn.clicked.connect(self.output.clear)
+        clear_btn.clicked.connect(self._clear_terminal)
 
         exit_btn = QPushButton("Exit Session")
         exit_btn.clicked.connect(self.close)
@@ -631,8 +658,6 @@ class TerminalPopout(QWidget):
         self.output.setFocus()
         self._ssh_session_active = True
         self._terminal_io.submit_read(self.active_id)
-        # Apply the green-user / red-root prompt colouring (bash only).
-        self._send_terminal_input(_PROMPT_SETUP)
 
     def _send_terminal_input(self, data):
         self._terminal_io.submit_write(self.active_id, data)
@@ -640,6 +665,15 @@ class TerminalPopout(QWidget):
     def send_interrupt(self):
         if self.active_kind == "ssh" and self.output.on_key_data is not None:
             self._send_terminal_input("\x03")
+            self.output.setFocus()
+
+    def _clear_terminal(self):
+        self.output.clear()
+        # For a live SSH shell, ask it to redraw the prompt into the now
+        # empty pane (Ctrl-L), so you don't end up staring at a blank
+        # terminal with no prompt.
+        if self.active_kind == "ssh" and self._ssh_session_active:
+            self._send_terminal_input("\x0c")
             self.output.setFocus()
 
     def _drain_read_results(self):

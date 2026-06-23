@@ -36,19 +36,19 @@ def _check_icon_qss_path():
     if _CHECK_ICON_PATH and os.path.exists(_CHECK_ICON_PATH):
         return _CHECK_ICON_PATH.replace("\\", "/")
     try:
-        pix = QPixmap(18, 18)
+        pix = QPixmap(13, 13)
         pix.fill(Qt.transparent)
         p = QPainter(pix)
         p.setRenderHint(QPainter.Antialiasing)
-        pen = QPen(QColor("#f5a623"))
+        pen = QPen(QColor("#2ea043"))  # green tick, reads as "on" in a white box
         pen.setWidth(2)
         pen.setCapStyle(Qt.RoundCap)
         pen.setJoinStyle(Qt.RoundJoin)
         p.setPen(pen)
-        p.drawLine(4, 9, 8, 13)
-        p.drawLine(8, 13, 14, 5)
+        p.drawLine(2, 7, 5, 10)
+        p.drawLine(5, 10, 11, 3)
         p.end()
-        path = os.path.join(tempfile.gettempdir(), "sysible_host_check.png")
+        path = os.path.join(tempfile.gettempdir(), "sysible_host_check_v2.png")
         pix.save(path, "PNG")
         _CHECK_ICON_PATH = path
         return path.replace("\\", "/")
@@ -147,18 +147,19 @@ QCheckBox::indicator:disabled {
    they fall back to the near-invisible default. A bright orange border
    makes them readable against the dark row background. */
 QListWidget::indicator, QListView::indicator, QTreeView::indicator {
-    width: 18px;
-    height: 18px;
-    border: 2px solid #f5a623;
-    border-radius: 4px;
-    background: rgba(245,166,35,0.10);
+    width: 15px;
+    height: 15px;
+    border: 1px solid #c9ced6;
+    border-radius: 3px;
+    background: #f3f5f8;
 }
 QListWidget::indicator:hover, QListView::indicator:hover, QTreeView::indicator:hover {
-    background: rgba(245,166,35,0.22);
+    border-color: #ffffff;
+    background: #ffffff;
 }
 QListWidget::indicator:checked, QListView::indicator:checked, QTreeView::indicator:checked {
-    border: 2px solid #f5a623;
-    background: rgba(245,166,35,0.10);
+    border: 1px solid #c9ced6;
+    background: #ffffff;
     image: url(__CHECK_ICON__);
 }
 /* Breathing room between rows so hosts don't look cramped when an
@@ -312,17 +313,17 @@ QCheckBox::indicator:disabled {
 /* Host-list (and other checkable list) checkboxes - see the dark-theme
    note above. Orange border so the boxes stand out in the host list. */
 QListWidget::indicator, QListView::indicator, QTreeView::indicator {
-    width: 18px;
-    height: 18px;
-    border: 2px solid #e08900;
-    border-radius: 4px;
+    width: 15px;
+    height: 15px;
+    border: 1px solid #b8bdc6;
+    border-radius: 3px;
     background: #ffffff;
 }
 QListWidget::indicator:hover, QListView::indicator:hover, QTreeView::indicator:hover {
-    background: #fff5e6;
+    border-color: #8a93a0;
 }
 QListWidget::indicator:checked, QListView::indicator:checked, QTreeView::indicator:checked {
-    border: 2px solid #e08900;
+    border: 1px solid #b8bdc6;
     background: #ffffff;
     image: url(__CHECK_ICON__);
 }

@@ -144,6 +144,12 @@ REGISTRY = [
                   "fleet command", "run on all hosts", "across all hosts",
                   "script on hosts", "repetitive task", "shell command"]},
 
+    # ---- Directory Services (AD / LDAP) - a tab within Security Administration ----
+    {"title": "Directory Services (AD / LDAP) - in Security Administration", "open": "open_system_admin", "sub_open": "open_security_admin",
+     "keywords": ["active directory", "ad", "join domain", "join active directory",
+                  "realm", "realmd", "sssd", "ldap", "ldaps", "kerberos", "domain join",
+                  "leave domain", "directory", "winbind", "add server to active directory"]},
+
     # ---- License & Version (now a section of Sysible Controller
     # Settings, not its own tile - see client/admin_configuration_page.py) ----
     {"title": "License & Version", "open": "open_admin_config",

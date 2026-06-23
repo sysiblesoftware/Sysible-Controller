@@ -1200,6 +1200,19 @@ sudo ./run_agent.sh</pre>
 <h2 id="automation">Run A Script Across All Hosts</h2>
 <p>The general-purpose tool for ad-hoc tasks and automating repetitive work across the fleet. Enter a shell command or a multi-line script and run it on every checked host at once; each host's output and exit code come back in its own result tab with the usual green/red banner.</p>
 <div class="warn"><b>Runs exactly what you enter</b>The command/script executes as root via the agent (or over SSH) on every checked host. A confirmation dialog shows the host count and a preview before anything runs, but there is no syntax checking - double-check destructive commands first.</div>
+
+<h2 id="directory">Directory Services (AD / LDAP) — Security Administration tab</h2>
+<p>Joins managed hosts to Active Directory and configures LDAP/LDAPS identity. This lives as the <strong>Directory (AD / LDAP)</strong> tab inside <strong>Security Administration</strong> (it's host authentication configuration), not a separate tile.</p>
+<table class="ref">
+<tr><th>Action</th><th>What it does</th></tr>
+<tr><td>Realm / Domain Status</td><td>Shows the joined realm (<code>realm list</code>), the SSSD service state, and the Kerberos default realm.</td></tr>
+<tr><td>Join Domain</td><td>Installs the AD client tooling (realmd, SSSD, adcli, Kerberos) and joins the domain with a supplied admin account (optionally into a specific computer OU). Needs working DNS for the domain and the host clock in sync with the DC; the join password is fed to realm via a transient root-only file, never the command line.</td></tr>
+<tr><td>Permit Login</td><td>Allows a specific AD user or group to log in (after a join, realm denies all by default).</td></tr>
+<tr><td>Enable Home-Dir Creation</td><td>Configures automatic home-directory creation on first login (authselect/pam_mkhomedir + oddjobd).</td></tr>
+<tr><td>Leave Domain</td><td>Unjoins the host from the domain.</td></tr>
+<tr><td>Test LDAPS</td><td>Checks the TLS handshake/certificate to an LDAPS endpoint and (with a base DN) runs an anonymous LDAP search.</td></tr>
+<tr><td>Configure LDAP(S) Client</td><td>Writes a basic <code>/etc/sssd/sssd.conf</code> for a generic (non-AD) LDAP or LDAPS directory and restarts SSSD.</td></tr>
+</table>
 </div>
 
 <!-- ===================== 11. WEBSERVER PORTAL ===================== -->

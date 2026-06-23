@@ -14,7 +14,7 @@ class DirectoryServicesPage(FleetToolPage):
     login permits, and configure/test LDAP/LDAPS. See client/_api_directory.py."""
 
     def __init__(self):
-        super().__init__("Directory Services (AD / LDAP)")
+        super().__init__("Directory Services (Active Directory / LDAP)")
 
     def build_action_tabs(self):
         tabs = QTabWidget()

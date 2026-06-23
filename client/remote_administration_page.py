@@ -7,10 +7,13 @@ from concurrent.futures import ThreadPoolExecutor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QPushButton, QLineEdit, QTextEdit, QComboBox, QInputDialog, QMessageBox,
-    QApplication, QFileDialog, QFrame, QGroupBox,
+    QApplication, QFileDialog, QFrame, QGroupBox, QMenu,
 )
-from PySide6.QtCore import Qt, QTimer, QObject, Signal
-from PySide6.QtGui import QFont, QFontMetrics, QKeySequence, QTextCursor, QColor, QTextCharFormat
+from PySide6.QtCore import Qt, QTimer, QObject, Signal, QThread
+from PySide6.QtGui import (
+    QFont, QFontMetrics, QKeySequence, QTextCursor, QColor, QTextCharFormat,
+    QPixmap, QPainter, QIcon,
+)
 
 # pyte gives us a real VT screen (a 2D character grid with cursor
 # addressing) so cursor-positioned, full-screen apps - vi, top, less,
@@ -74,7 +77,9 @@ from client import api
 from client.branding import make_page_header
 from client.events import bus
 from client import theme
-from client.theme import STATUS_NEUTRAL_COLOR, STATUS_SUCCESS_COLOR, STATUS_ERROR_COLOR
+from client.theme import (
+    STATUS_NEUTRAL_COLOR, STATUS_SUCCESS_COLOR, STATUS_ERROR_COLOR, STATUS_WARNING_COLOR,
+)
 from client.host_panel import build_host_panel
 from client.collapsible_groups import (
     make_group_header_item, apply_collapse_state, get_collapsed_groups,
@@ -715,6 +720,102 @@ def _row_ip(entry):
 
 
 # =====================================================================
+# HOST CHECK-IN / PING
+# =====================================================================
+# An agent heartbeats every SYSIBLE_POLL_INTERVAL seconds (default 1.5)
+# when idle, so a host that hasn't checked in within this window is
+# treated as offline. Generous enough to ride out a busy cycle or a
+# brief blip without false alarms.
+CHECKIN_ONLINE_SECONDS = 20
+
+CHECKIN_COLOR_ONLINE = STATUS_SUCCESS_COLOR
+CHECKIN_COLOR_OFFLINE = STATUS_ERROR_COLOR
+
+
+def _ago(seconds):
+    """Compact 'time since' label: '3s', '4m', '2h', '1d'."""
+    seconds = int(max(0, seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
+
+
+def _probe_host(entry, last_seen, now):
+    """Reachability for one host entry. Agent side: judged by heartbeat
+    age (no traffic to the host). SSH side: a live, timed `true` over the
+    existing SSH path. A merged host reports both and counts as online if
+    either path answers. Returns {"state","detail","color"}."""
+    kind = entry["kind"]
+    parts = []  # (ok: bool, detail: str)
+
+    agent_id = None
+    if kind == "agent":
+        agent_id = entry.get("id")
+    elif kind == "merged":
+        agent_id = (entry.get("agent_entry") or {}).get("id")
+    if agent_id is not None:
+        ls = last_seen.get(agent_id)
+        if ls:
+            age = now - ls
+            parts.append((age <= CHECKIN_ONLINE_SECONDS, f"agent {_ago(age)} ago"))
+        else:
+            parts.append((False, "agent: no heartbeat"))
+
+    ssh_entry = None
+    if kind == "ssh":
+        ssh_entry = entry
+    elif kind == "merged":
+        ssh_entry = entry.get("ssh_entry")
+    if ssh_entry is not None and ssh_entry.get("id") is not None:
+        t0 = time.time()
+        try:
+            result = api.exec_remote(ssh_entry["id"], "true")
+            ms = int((time.time() - t0) * 1000)
+            ok = result.get("code") == 0
+            parts.append((ok, f"SSH {ms} ms" if ok else "SSH unreachable"))
+        except Exception:
+            parts.append((False, "SSH unreachable"))
+
+    if not parts:
+        return {"state": "unknown", "detail": "not reachable", "color": CHECKIN_COLOR_OFFLINE}
+
+    online = any(ok for ok, _ in parts)
+    return {
+        "state": "online" if online else "offline",
+        "detail": " · ".join(d for _, d in parts),
+        "color": CHECKIN_COLOR_ONLINE if online else CHECKIN_COLOR_OFFLINE,
+    }
+
+
+class _CheckInWorker(QThread):
+    """Runs the per-host check-in off the GUI thread (SSH connection tests
+    can each take a moment) and emits one results dict, label -> status,
+    when finished."""
+
+    done = Signal(dict)
+
+    def __init__(self, entries):
+        super().__init__()
+        self._entries = entries
+
+    def run(self):
+        try:
+            agents = api.get_agents()
+        except Exception:
+            agents = []
+        last_seen = {a.get("host_id"): a.get("last_seen") for a in agents}
+        now = time.time()
+        results = {}
+        for entry in self._entries:
+            results[entry["label"]] = _probe_host(entry, last_seen, now)
+        self.done.emit(results)
+
+
+# =====================================================================
 # PER-HOST TERMINAL POPOUT
 # =====================================================================
 class TerminalPopout(QWidget):
@@ -814,6 +915,17 @@ class TerminalPopout(QWidget):
             toolbar.addWidget(b)
         toolbar.addStretch()
         toolbar.addWidget(QLabel("Font:"))
+        self.font_combo = QComboBox()
+        self.font_combo.setToolTip("Terminal font family")
+        self._font_families = [
+            "DejaVu Sans Mono", "Liberation Mono", "Menlo", "Consolas",
+            "Ubuntu Mono", "Courier New", "Monospace",
+        ]
+        self.font_combo.addItems(self._font_families)
+        self.font_combo.setMaximumWidth(150)
+        # Connect AFTER populating so building the list doesn't fire a change.
+        self.font_combo.currentTextChanged.connect(self.set_font_family)
+        toolbar.addWidget(self.font_combo)
         toolbar.addWidget(btn_font_dec)
         toolbar.addWidget(btn_font_inc)
         layout.addLayout(toolbar)
@@ -827,6 +939,21 @@ class TerminalPopout(QWidget):
         theme.style_hint_label(self.ssh_hint)
         self.ssh_hint.setVisible(False)
         layout.addWidget(self.ssh_hint)
+
+        # If the VT emulator library isn't importable, full-screen apps
+        # (vim/top/nano/less) silently degrade to garbled append output.
+        # Make that visible instead of leaving it a mystery.
+        if pyte is None:
+            pyte_warning = QLabel(
+                "⚠ Full-screen apps (vim, top, nano, less) need the ‘pyte’ package, which "
+                "isn’t installed in the controller’s Python environment — until it is, they "
+                "will render incorrectly. Fix: install it into the controller venv and "
+                "restart, e.g.  /opt/sysible/venv/bin/pip install pyte  then  "
+                "sudo sysible_controller restart."
+            )
+            pyte_warning.setWordWrap(True)
+            pyte_warning.setStyleSheet(f"color: {STATUS_WARNING_COLOR}; font-weight: bold;")
+            layout.addWidget(pyte_warning)
 
         # ---- agent command row (only used in Agent mode) ----
         cmd_row = QHBoxLayout()
@@ -1052,16 +1179,29 @@ class TerminalPopout(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Save failed", str(e))
 
-    def adjust_font(self, delta):
-        font = self.output.font()
-        size = max(7, min(28, font.pointSize() + delta))
-        font.setPointSize(size)
+    def _apply_terminal_font(self, font):
+        """Apply `font` to the terminal output and, for a live SSH grid,
+        re-measure the cell size and resize the remote pty/grid to match."""
         self.output.setFont(font)
-        # Cell size changed, so re-measure and resize the remote pty/grid.
+        if getattr(self, "cmd_input", None) is not None:
+            self.cmd_input.setFont(font)
         if self._ssh_session_active and self._session_id is not None:
             cols, rows = self.output.grid_size_for_viewport()
             self.output.resize_grid(cols, rows)
             self._terminal_io.submit_resize(self._session_id, cols, rows)
+
+    def adjust_font(self, delta):
+        font = self.output.font()
+        size = max(7, min(28, font.pointSize() + delta))
+        font.setPointSize(size)
+        self._apply_terminal_font(font)
+
+    def set_font_family(self, family):
+        if not family:
+            return
+        font = self.output.font()
+        font.setFamily(family)
+        self._apply_terminal_font(font)
 
     def _drain_read_results(self):
         """Pull any read results the worker threads have queued and handle
@@ -1269,6 +1409,10 @@ class RemoteAdministrationPage(QWidget):
         self.environments = []
         self._collapsed_envs = set()
 
+        self._checkin_status = {}           # label -> {"state","detail","color"}
+        self._dot_cache = {}                # color -> QIcon
+        self._checkin_worker = None
+
         self.active_entry = None
         self.active_kind = None
         self.active_id = None
@@ -1290,22 +1434,35 @@ class RemoteAdministrationPage(QWidget):
         connect_group_toggle(self.host_list)
         self.host_list.itemSelectionChanged.connect(self.on_host_selected)
         self.host_list.itemDoubleClicked.connect(self.open_terminal_for_item)
+        # Right-click a host to assign it to an environment.
+        self.host_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.host_list.customContextMenuRequested.connect(self._host_context_menu)
 
         btn_refresh = QPushButton("Refresh")
         btn_refresh.clicked.connect(self.load_hosts)
         btn_collapse_all, btn_expand_all = add_collapse_expand_buttons(self.host_list)
+        self.btn_checkin = QPushButton("Check In / Ping")
+        self.btn_checkin.setToolTip(
+            "Check every host: agent hosts by their last heartbeat, SSH hosts by a "
+            "live connection test. A colored dot and the result appear next to each host."
+        )
+        self.btn_checkin.clicked.connect(self.check_in_hosts)
         btn_script = QPushButton("Run Script on All Hosts…")
         btn_script.setToolTip("Run an ad-hoc command or multi-line script across checked hosts.")
         btn_script.clicked.connect(self.open_script_runner)
+
+        self.checkin_label = QLabel("")
+        theme.style_hint_label(self.checkin_label)
 
         host_panel = build_host_panel(
             "Managed Hosts (agent + SSH)",
             self.host_list,
             [
-                [btn_refresh],
+                [btn_refresh, self.btn_checkin],
                 [btn_collapse_all, btn_expand_all],
                 [btn_script],
             ],
+            extra_widgets=[self.checkin_label],
             width=340,  # wider so each host's IP fits next to it
         )
         body.addWidget(host_panel)
@@ -1533,9 +1690,133 @@ class RemoteAdministrationPage(QWidget):
         text = f"    {entry['label']}  [{entry['type_text']}]"
         if ip:
             text += f"   {ip}"
+        status = self._checkin_status.get(entry["label"])
+        if status:
+            text += f"   —  {status['detail']}"
         item = QListWidgetItem(text)
+        if status:
+            item.setIcon(self._dot_icon(status["color"]))
         item.setData(Qt.UserRole, entry)
         self.host_list.addItem(item)
+
+    def _dot_icon(self, color):
+        """A small filled circle in `color`, cached per color, used as a
+        host row's status dot after a check-in."""
+        icon = self._dot_cache.get(color)
+        if icon is None:
+            pix = QPixmap(12, 12)
+            pix.fill(Qt.transparent)
+            p = QPainter(pix)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(color))
+            p.drawEllipse(1, 1, 10, 10)
+            p.end()
+            icon = QIcon(pix)
+            self._dot_cache[color] = icon
+        return icon
+
+    # =====================================================
+    # CHECK-IN / PING
+    # =====================================================
+    def check_in_hosts(self):
+        """Probe every host in the list and show a status dot next to each:
+        agent hosts are judged by how recently they last checked in
+        (heartbeat); SSH hosts by a live, timed connection test. Runs in a
+        background thread so the GUI stays responsive."""
+        if self._checkin_worker is not None and self._checkin_worker.isRunning():
+            return
+        entries = []
+        for i in range(self.host_list.count()):
+            entry = self.host_list.item(i).data(Qt.UserRole)
+            if entry is not None:
+                entries.append(entry)
+        if not entries:
+            self.checkin_label.setText("No hosts to check.")
+            return
+        self.btn_checkin.setEnabled(False)
+        self.checkin_label.setText(f"Checking {len(entries)} host(s)…")
+        self._checkin_worker = _CheckInWorker(entries)
+        self._checkin_worker.done.connect(self._on_checkin_done)
+        self._checkin_worker.start()
+
+    def _on_checkin_done(self, results):
+        self._checkin_status = results
+        online = sum(1 for s in results.values() if s["state"] == "online")
+        self.checkin_label.setText(f"{online} of {len(results)} host(s) online")
+        self.btn_checkin.setEnabled(True)
+        self._checkin_worker = None
+        # Redraw rows so each picks up its new dot + detail.
+        self.load_hosts()
+
+    # =====================================================
+    # RIGHT-CLICK: ASSIGN ENVIRONMENT
+    # =====================================================
+    def _host_context_menu(self, pos):
+        item = self.host_list.itemAt(pos)
+        if item is None:
+            return
+        entry = item.data(Qt.UserRole)
+        if not entry:
+            return  # environment header row, not a host
+        current = entry.get("environment") or ""
+
+        menu = QMenu(self)
+        sub = menu.addMenu(f"Assign “{entry['label']}” to environment")
+        for env in self.environments:
+            act = sub.addAction(env)
+            act.setCheckable(True)
+            act.setChecked(env == current)
+            act.triggered.connect(
+                lambda _checked=False, e=entry, n=env: self._assign_environment(e, n)
+            )
+        sub.addSeparator()
+        act_unassigned = sub.addAction("Unassigned")
+        act_unassigned.setCheckable(True)
+        act_unassigned.setChecked(current == "")
+        act_unassigned.triggered.connect(
+            lambda _checked=False, e=entry: self._assign_environment(e, "")
+        )
+        sub.addSeparator()
+        act_new = sub.addAction("New environment…")
+        act_new.triggered.connect(
+            lambda _checked=False, e=entry: self._assign_new_environment(e)
+        )
+        menu.exec(self.host_list.viewport().mapToGlobal(pos))
+
+    def _assign_new_environment(self, entry):
+        name, ok = QInputDialog.getText(self, "New environment", "Environment name:")
+        name = (name or "").strip()
+        if not ok or not name:
+            return
+        try:
+            self.environments = api.create_environment(name) or self.environments
+        except Exception as e:
+            QMessageBox.warning(self, "Environment", f"Could not create environment: {e}")
+            return
+        self._assign_environment(entry, name)
+
+    def _assign_environment(self, entry, env):
+        """Set (or clear, when env == "") the environment for a host. A
+        merged host is updated on both its agent and SSH sides so the two
+        don't drift apart."""
+        try:
+            kind = entry["kind"]
+            if kind == "merged":
+                agent = entry.get("agent_entry") or {}
+                ssh = entry.get("ssh_entry") or {}
+                if agent.get("id"):
+                    api.set_agent_environment(agent["id"], env)
+                if ssh.get("id"):
+                    api.set_host_environment(ssh["id"], env)
+            elif kind == "agent":
+                api.set_agent_environment(entry["id"], env)
+            else:  # ssh
+                api.set_host_environment(entry["id"], env)
+        except Exception as e:
+            QMessageBox.warning(self, "Environment", f"Could not set environment: {e}")
+            return
+        self.load_hosts()
 
     def _reselect_label(self, label):
         for i in range(self.host_list.count()):

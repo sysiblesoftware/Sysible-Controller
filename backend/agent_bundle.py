@@ -179,6 +179,22 @@ if [[ "$EUID" -ne 0 ]]; then
   exit 1
 fi
 
+# --- which account runs the agent service ----------------------------------
+# Default: root (unchanged). Opt in to an unprivileged agent with:
+#   sudo ./run_agent.sh --unprivileged      # dedicated locked 'sysible' user
+#   sudo ./run_agent.sh --user=NAME         # an existing account you manage
+#   sudo SYSIBLE_AGENT_USER=NAME ./run_agent.sh
+# The chosen account is granted passwordless sudo so the controller's
+# root-level command builders keep working; the agent escalates each
+# command via `sudo -n`. The installer itself still runs as root.
+AGENT_USER="${{SYSIBLE_AGENT_USER:-root}}"
+for arg in "$@"; do
+  case "$arg" in
+    --unprivileged) AGENT_USER="sysible" ;;
+    --user=*) AGENT_USER="${{arg#--user=}}" ;;
+  esac
+done
+
 {cert_steps}echo "Installing agent to {_AGENT_INSTALL_DIR}..."
 mkdir -p {_AGENT_INSTALL_DIR}
 cp -f ./agent.py {_AGENT_INSTALL_DIR}/agent.py
@@ -195,13 +211,44 @@ if ! pip3 install -r ./requirements.txt; then
   pip3 install --break-system-packages -r ./requirements.txt
 fi
 
+if [[ "$AGENT_USER" != "root" ]]; then
+  echo "Configuring the agent to run as non-root user '$AGENT_USER' with passwordless sudo..."
+  if ! id "$AGENT_USER" &>/dev/null; then
+    if [[ "$AGENT_USER" == "sysible" ]]; then
+      useradd --system --no-create-home --shell /usr/sbin/nologin sysible 2>/dev/null \
+        || useradd --system --no-create-home --shell /sbin/nologin sysible
+      echo "  created locked system account 'sysible'"
+    else
+      echo "  user '$AGENT_USER' does not exist - create it first, or use --unprivileged for a dedicated 'sysible' account." >&2
+      exit 1
+    fi
+  fi
+  # Passwordless sudo for the agent account, validated before it goes live
+  # so a malformed drop-in can never break sudo on the host.
+  SUDOERS_FILE=/etc/sudoers.d/sysible-agent
+  echo "$AGENT_USER ALL=(ALL) NOPASSWD: ALL" > "$SUDOERS_FILE.tmp"
+  chmod 440 "$SUDOERS_FILE.tmp"
+  if visudo -cf "$SUDOERS_FILE.tmp" >/dev/null 2>&1; then
+    mv -f "$SUDOERS_FILE.tmp" "$SUDOERS_FILE"
+  else
+    rm -f "$SUDOERS_FILE.tmp"
+    echo "  ERROR: generated sudoers entry failed validation - aborting." >&2
+    exit 1
+  fi
+  # The agent must read its env/cert and persist state as its own account.
+  mkdir -p /var/lib/sysible
+  chown -R "$AGENT_USER" {_AGENT_INSTALL_DIR} /var/lib/sysible
+  # Point the unit at the chosen account instead of root.
+  sed -i "s/^User=root$/User=$AGENT_USER/" ./{_SERVICE_NAME}.service
+fi
+
 echo "Installing systemd service ({_SERVICE_NAME})..."
 cp -f ./{_SERVICE_NAME}.service {_SERVICE_UNIT_PATH}
 systemctl daemon-reload
 systemctl enable --now {_SERVICE_NAME}.service
 
 echo
-echo "Agent installed and running in the background as a systemd service."
+echo "Agent installed and running in the background as a systemd service (user: $AGENT_USER)."
 echo "  Status:  systemctl status {_SERVICE_NAME}"
 echo "  Logs:    journalctl -u {_SERVICE_NAME} -f"
 echo "  Stop:    systemctl disable --now {_SERVICE_NAME}"
@@ -314,6 +361,14 @@ if systemctl list-unit-files {_SERVICE_NAME}.service &>/dev/null; then
   systemctl disable --now {_SERVICE_NAME}.service 2>/dev/null || true
 fi
 
+# Note which account the service ran as (root by default) before we delete
+# the unit, so the non-root setup can be undone below.
+AGENT_USER="root"
+if [[ -f "$UNIT_FILE" ]]; then
+  AGENT_USER="$(sed -n 's/^User=//p' "$UNIT_FILE" | head -n1)"
+  [[ -z "$AGENT_USER" ]] && AGENT_USER="root"
+fi
+
 # --------------------------------------------------------
 # 3. Remove everything run_agent.sh installed
 # --------------------------------------------------------
@@ -325,6 +380,19 @@ rm -f "$CERT_FILE"
 rm -f "$STATE_FILE"
 rmdir --ignore-fail-on-non-empty /var/lib/sysible 2>/dev/null || true
 rmdir --ignore-fail-on-non-empty {_CERT_INSTALL_DIR} 2>/dev/null || true
+
+# --------------------------------------------------------
+# 4. Undo the non-root agent setup, if this host used it
+# --------------------------------------------------------
+if [[ "$AGENT_USER" != "root" ]]; then
+  rm -f /etc/sudoers.d/sysible-agent
+  if [[ "$AGENT_USER" == "sysible" ]] && id sysible &>/dev/null; then
+    userdel sysible 2>/dev/null || true
+    echo "Removed the dedicated 'sysible' account and its sudoers entry."
+  else
+    echo "Removed the agent sudoers entry (left account '$AGENT_USER' in place)."
+  fi
+fi
 
 echo
 echo "Agent disenrolled and removed from this host."
@@ -360,6 +428,20 @@ systemd service ({_SERVICE_NAME}) that starts in the background, restarts
 itself automatically (on crash or reboot), and logs to the journal
 instead of your terminal. Once it's running you can disconnect or close
 this terminal - the agent keeps going.
+
+Running the agent unprivileged (optional):
+  By default the service runs as root. To run it as a non-root account
+  with passwordless sudo instead, install with one of:
+    sudo ./run_agent.sh --unprivileged     # dedicated, locked 'sysible' user
+    sudo ./run_agent.sh --user=NAME         # an existing account you manage
+  The installer still needs root (it creates the account, writes a
+  /etc/sudoers.d/sysible-agent drop-in granting passwordless sudo, and
+  sets User= on the unit). The agent then escalates each command through
+  `sudo -n`. disenroll_agent.sh removes the sudoers drop-in (and the
+  'sysible' account if it created one). Note: because the agent's tools
+  span the whole system, the account needs full NOPASSWD sudo - the
+  benefit is no root login and a sudo audit trail, not a smaller blast
+  radius if the agent is compromised.
 
   Check on it:   systemctl status {_SERVICE_NAME}
   Watch its log: journalctl -u {_SERVICE_NAME} -f

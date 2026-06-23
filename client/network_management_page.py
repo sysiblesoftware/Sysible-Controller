@@ -488,6 +488,12 @@ class NetworkManagementPage(QWidget):
         layout.addStretch()
         return panel
 
+    def clear_all_results(self):
+        """Close every per-host result tab at once."""
+        self.net_tabs.clear()
+        self.net_results = {}
+        self.net_pending = {}
+
     def _build_results_panel(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -495,7 +501,14 @@ class NetworkManagementPage(QWidget):
 
         self.net_status = QLabel("Pick an action above to run it on all checked hosts.")
         self.net_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
-        layout.addWidget(self.net_status)
+        _hdr = QHBoxLayout()
+        _hdr.addWidget(self.net_status)
+        _hdr.addStretch()
+        _btn_clear_all = QPushButton("Clear All Results")
+        _btn_clear_all.setToolTip("Close every per-host result tab below.")
+        _btn_clear_all.clicked.connect(self.clear_all_results)
+        _hdr.addWidget(_btn_clear_all)
+        layout.addLayout(_hdr)
 
         self.net_tabs = QTabWidget()
         self.net_tabs.setTabsClosable(True)

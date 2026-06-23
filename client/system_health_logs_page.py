@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton,
     QLineEdit, QTextEdit, QMessageBox, QSpinBox, QTabWidget,
-    QComboBox, QFrame,
+    QComboBox,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
@@ -441,10 +441,17 @@ class SystemHealthLogsPage(QWidget):
     # =========================================================
     # PANEL BUILDER
     # =========================================================
-    def _build_health_panel(self):
+    @staticmethod
+    def _action_tab():
+        """A blank action-tab panel + its vertical layout, top-aligned."""
         panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(5, 5, 5, 5)
+        v = QVBoxLayout(panel)
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(8)
+        return panel, v
+
+    def _build_overview_tab(self):
+        panel, v = self._action_tab()
 
         actions_row = QHBoxLayout()
         btn_health = QPushButton("Check Host Health")
@@ -463,7 +470,7 @@ class SystemHealthLogsPage(QWidget):
         actions_row.addWidget(btn_mem)
         actions_row.addWidget(btn_uptime)
         actions_row.addWidget(btn_failed)
-        layout.addLayout(actions_row)
+        v.addLayout(actions_row)
 
         large_files_row = QHBoxLayout()
         self.large_files_path = QLineEdit()
@@ -479,32 +486,14 @@ class SystemHealthLogsPage(QWidget):
         large_files_row.addWidget(QLabel("Top N:"))
         large_files_row.addWidget(self.large_files_top_n)
         large_files_row.addWidget(btn_large_files)
-        layout.addLayout(large_files_row)
+        large_files_row.addStretch()
+        v.addLayout(large_files_row)
 
-        log_row = QHBoxLayout()
-        self.log_pattern = QLineEdit()
-        self.log_pattern.setPlaceholderText("Search pattern (optional)")
-        self.log_pattern.setMaximumWidth(280)
-        self.log_lines = QSpinBox()
-        self.log_lines.setRange(1, 5000)
-        self.log_lines.setValue(200)
-        btn_search_log = QPushButton("Search / Tail Logs")
-        btn_search_log.clicked.connect(self.run_search_log)
-        log_row.addWidget(QLabel("Search Logs:"))
-        log_row.addWidget(self.log_pattern)
-        log_row.addWidget(QLabel("Lines:"))
-        log_row.addWidget(self.log_lines)
-        log_row.addWidget(btn_search_log)
-        layout.addLayout(log_row)
+        v.addStretch()
+        return panel
 
-        divider = QFrame()
-        divider.setFrameShape(QFrame.HLine)
-        divider.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(divider)
-
-        proc_header = QLabel("Process Management")
-        proc_header.setStyleSheet("font-weight: bold;")
-        layout.addWidget(proc_header)
+    def _build_processes_tab(self):
+        panel, v = self._action_tab()
 
         proc_view_row = QHBoxLayout()
         btn_proc_cpu = QPushButton("View Processes (by CPU)")
@@ -519,7 +508,7 @@ class SystemHealthLogsPage(QWidget):
         proc_view_row.addWidget(btn_proc_mem)
         proc_view_row.addWidget(btn_high_load)
         proc_view_row.addWidget(btn_zombies)
-        layout.addLayout(proc_view_row)
+        v.addLayout(proc_view_row)
 
         proc_action_row = QHBoxLayout()
         self.proc_pid = QLineEdit()
@@ -552,24 +541,30 @@ class SystemHealthLogsPage(QWidget):
         proc_action_row.addWidget(self.proc_nice)
         proc_action_row.addWidget(btn_renice)
         proc_action_row.addWidget(btn_restart)
-        layout.addLayout(proc_action_row)
+        v.addLayout(proc_action_row)
 
-        divider2 = QFrame()
-        divider2.setFrameShape(QFrame.HLine)
-        divider2.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(divider2)
+        v.addStretch()
+        return panel
 
-        log_header = QLabel("Logging and Troubleshooting")
-        log_header.setStyleSheet("font-weight: bold;")
-        layout.addWidget(log_header)
+    def _build_logs_tab(self):
+        panel, v = self._action_tab()
 
-        def _subheading(text):
-            lbl = QLabel(text)
-            lbl.setStyleSheet(f"font-weight: bold; color: {STATUS_NEUTRAL_COLOR};")
-            return lbl
-
-        # ---- Logs ----
-        layout.addWidget(_subheading("Logs"))
+        log_row = QHBoxLayout()
+        self.log_pattern = QLineEdit()
+        self.log_pattern.setPlaceholderText("Search pattern (optional)")
+        self.log_pattern.setMaximumWidth(280)
+        self.log_lines = QSpinBox()
+        self.log_lines.setRange(1, 5000)
+        self.log_lines.setValue(200)
+        btn_search_log = QPushButton("Search / Tail Logs")
+        btn_search_log.clicked.connect(self.run_search_log)
+        log_row.addWidget(QLabel("Search Logs:"))
+        log_row.addWidget(self.log_pattern)
+        log_row.addWidget(QLabel("Lines:"))
+        log_row.addWidget(self.log_lines)
+        log_row.addWidget(btn_search_log)
+        log_row.addStretch()
+        v.addLayout(log_row)
 
         log_review_row = QHBoxLayout()
         self.logging_lines = QSpinBox()
@@ -608,7 +603,7 @@ class SystemHealthLogsPage(QWidget):
         log_review_row.addWidget(btn_kernel_msgs)
         log_review_row.addWidget(btn_audit_logs)
         log_review_row.addWidget(btn_install_auditd)
-        layout.addLayout(log_review_row)
+        v.addLayout(log_review_row)
 
         app_errors_row = QHBoxLayout()
         self.app_error_unit = QLineEdit()
@@ -620,10 +615,13 @@ class SystemHealthLogsPage(QWidget):
         app_errors_row.addWidget(self.app_error_unit)
         app_errors_row.addWidget(btn_trace_errors)
         app_errors_row.addStretch()
-        layout.addLayout(app_errors_row)
+        v.addLayout(app_errors_row)
 
-        # ---- Diagnostics ----
-        layout.addWidget(_subheading("Diagnostics"))
+        v.addStretch()
+        return panel
+
+    def _build_diagnostics_tab(self):
+        panel, v = self._action_tab()
 
         diag_row = QHBoxLayout()
         btn_boot_failures = QPushButton("Investigate Boot Failures")
@@ -638,10 +636,14 @@ class SystemHealthLogsPage(QWidget):
         diag_row.addWidget(btn_crashes)
         diag_row.addWidget(btn_mem_issues)
         diag_row.addWidget(btn_cpu_bottlenecks)
-        layout.addLayout(diag_row)
+        diag_row.addStretch()
+        v.addLayout(diag_row)
 
-        # ---- Support & Reports ----
-        layout.addWidget(_subheading("Support & Reports"))
+        v.addStretch()
+        return panel
+
+    def _build_support_tab(self):
+        panel, v = self._action_tab()
 
         support_row = QHBoxLayout()
         btn_support_info = QPushButton("Collect Support Information")
@@ -662,7 +664,28 @@ class SystemHealthLogsPage(QWidget):
         support_row.addWidget(btn_sos_report)
         support_row.addWidget(btn_install_sos)
         support_row.addStretch()
-        layout.addLayout(support_row)
+        v.addLayout(support_row)
+
+        v.addStretch()
+        return panel
+
+    def _build_health_panel(self):
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(5, 5, 5, 5)
+
+        # Grouped into tabs so the page reads as a handful of focused tools
+        # instead of one long wall of buttons. Each tab's controls (and their
+        # widget attribute names) are unchanged, so every action method works
+        # as before.
+        action_tabs = QTabWidget()
+        action_tabs.addTab(self._build_overview_tab(), "Overview && Disk")
+        action_tabs.addTab(self._build_processes_tab(), "Processes")
+        action_tabs.addTab(self._build_logs_tab(), "Logs")
+        action_tabs.addTab(self._build_diagnostics_tab(), "Diagnostics")
+        action_tabs.addTab(self._build_support_tab(), "Support && Reports")
+        shrink_tabwidget_to_current_page(action_tabs, cap_height=True)
+        layout.addWidget(action_tabs)
 
         self.health_status = QLabel("Pick an action above to run it on all checked hosts.")
         self.health_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
@@ -693,7 +716,7 @@ class SystemHealthLogsPage(QWidget):
         self.health_tabs.setTabsClosable(True)
         self.health_tabs.tabCloseRequested.connect(self._close_health_tab)
         shrink_tabwidget_to_current_page(self.health_tabs)
-        layout.addWidget(self.health_tabs)
+        layout.addWidget(self.health_tabs, 1)
         return panel
 
     # =========================================================

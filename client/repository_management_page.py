@@ -266,6 +266,12 @@ class RepositoryManagementPage(QWidget):
 
         return section
 
+    def clear_all_results(self):
+        """Close every per-host result tab at once."""
+        self.repo_tabs.clear()
+        self.repo_results = {}
+        self.repo_pending = {}
+
     def _build_results_panel(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -273,7 +279,14 @@ class RepositoryManagementPage(QWidget):
 
         self.repo_status = QLabel("Pick an action above to run it on all checked hosts.")
         self.repo_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
-        layout.addWidget(self.repo_status)
+        _hdr = QHBoxLayout()
+        _hdr.addWidget(self.repo_status)
+        _hdr.addStretch()
+        _btn_clear_all = QPushButton("Clear All Results")
+        _btn_clear_all.setToolTip("Close every per-host result tab below.")
+        _btn_clear_all.clicked.connect(self.clear_all_results)
+        _hdr.addWidget(_btn_clear_all)
+        layout.addLayout(_hdr)
 
         self.repo_tabs = QTabWidget()
         self.repo_tabs.setTabsClosable(True)

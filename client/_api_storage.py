@@ -224,6 +224,28 @@ def cmd_install_smartmontools() -> str:
     ) + " && echo 'smartmontools installed.'"
 
 
+def cmd_install_lvm_tools() -> str:
+    """Installs the LVM userspace tools (package: lvm2) via whichever
+    package manager the host has - needed for every action on the LVM
+    tab (pvcreate, vgcreate, lvcreate, and the list/extend/reduce ops)."""
+    return _pkgmgr_dispatch(
+        rpm_cmd='"$PKGMGR" install -y lvm2',
+        zypper_cmd="zypper --non-interactive install lvm2",
+        apt_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y lvm2",
+    ) + " && echo 'LVM tools (lvm2) installed.'"
+
+
+def cmd_install_mdadm() -> str:
+    """Installs mdadm (the Linux software-RAID admin tool) via whichever
+    package manager the host has - needed for every action on the RAID
+    tab (create/list/status/replace)."""
+    return _pkgmgr_dispatch(
+        rpm_cmd='"$PKGMGR" install -y mdadm',
+        zypper_cmd="zypper --non-interactive install mdadm",
+        apt_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y mdadm",
+    ) + " && echo 'mdadm installed.'"
+
+
 # ---------------------------------------------------------
 # Partitions (parted)
 # ---------------------------------------------------------
@@ -356,7 +378,12 @@ def cmd_create_physical_volume(devices: str) -> str:
     return (
         "if ! command -v pvcreate >/dev/null 2>&1; then "
         "echo 'LVM tools are not installed on this host (package: lvm2).' >&2; exit 1; fi; "
-        f"pvcreate {q_devs} 2>&1"
+        # -y: auto-confirm wiping any existing filesystem/partition signature
+        # on the device. The agent runs non-interactively, so without this an
+        # existing signature triggers a "Wipe it? [y/n]" prompt that defaults
+        # to no and fails (exit 5). Creating a PV is an explicit "repurpose
+        # this device for LVM" action, so wiping the old signature is intended.
+        f"pvcreate -y {q_devs} 2>&1"
     )
 
 
@@ -379,7 +406,7 @@ def cmd_create_volume_group(vg_name: str, devices: str) -> str:
     return (
         "if ! command -v vgcreate >/dev/null 2>&1; then "
         "echo 'LVM tools are not installed on this host (package: lvm2).' >&2; exit 1; fi; "
-        f"vgcreate {q_vg} {q_devs} 2>&1"
+        f"vgcreate -y {q_vg} {q_devs} 2>&1"
     )
 
 
@@ -438,7 +465,7 @@ def cmd_create_logical_volume(vg_name: str, lv_name: str, size: str) -> str:
     return (
         "if ! command -v lvcreate >/dev/null 2>&1; then "
         "echo 'LVM tools are not installed on this host (package: lvm2).' >&2; exit 1; fi; "
-        f"lvcreate -n {q_lv} {size_flag} {q_vg} 2>&1"
+        f"lvcreate -y -n {q_lv} {size_flag} {q_vg} 2>&1"
     )
 
 

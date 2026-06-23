@@ -182,7 +182,12 @@ class ServiceManagementPage(QWidget):
         )
         self.service_name_input.textChanged.connect(self.filter_installed_services)
         name_row.addWidget(self.service_name_input, 1)
+        btn_list_running = QPushButton("List Running Services")
+        btn_list_running.setToolTip("Only services active/running right now, with their description.")
+        btn_list_running.clicked.connect(self.run_list_running_services)
+        name_row.addWidget(btn_list_running)
         btn_list_services = QPushButton("List Installed Services")
+        btn_list_services.setToolTip("Every installed service unit, whether running or not.")
         btn_list_services.clicked.connect(self.run_list_services)
         name_row.addWidget(btn_list_services)
         layout.addLayout(name_row)
@@ -371,6 +376,12 @@ class ServiceManagementPage(QWidget):
 
         return panel
 
+    def clear_all_results(self):
+        """Close every per-host result tab at once."""
+        self.service_tabs.clear()
+        self.service_results = {}
+        self.service_pending = {}
+
     def _build_results_panel(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -378,7 +389,14 @@ class ServiceManagementPage(QWidget):
 
         self.service_status = QLabel("Pick an action above to run it on all checked hosts.")
         self.service_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
-        layout.addWidget(self.service_status)
+        _hdr = QHBoxLayout()
+        _hdr.addWidget(self.service_status)
+        _hdr.addStretch()
+        _btn_clear_all = QPushButton("Clear All Results")
+        _btn_clear_all.setToolTip("Close every per-host result tab below.")
+        _btn_clear_all.clicked.connect(self.clear_all_results)
+        _hdr.addWidget(_btn_clear_all)
+        layout.addLayout(_hdr)
 
         # One tab per host instead of a host-list-plus-single-output-panel -
         # same fix as System Health & Logs, for the same reason: a shared
@@ -497,6 +515,9 @@ class ServiceManagementPage(QWidget):
     # =========================================================
     def run_list_services(self):
         self._run_service_command(api.cmd_list_services(), "Installed Services")
+
+    def run_list_running_services(self):
+        self._run_service_command(api.cmd_list_running_services(), "Running Services")
 
     def run_start(self):
         name = self._service_name()

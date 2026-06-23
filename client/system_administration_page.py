@@ -1,11 +1,11 @@
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QGridLayout, QLabel
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QGridLayout, QLabel, QLineEdit
 
 from client.dashboard_card import DashboardCard
 from client.branding import make_page_header
 from client import theme
 from client.user_group_administration_page import UserGroupAdministrationPage
-from client.system_health_logs_page import SystemHealthLogsPage
+from client.system_health_recovery_page import SystemHealthRecoveryPage
 from client.service_management_page import ServiceManagementPage
 from client.environmental_policies_page import EnvironmentalPoliciesPage
 from client.cron_systemd_timers_page import CronSystemdTimersPage
@@ -17,7 +17,6 @@ from client.storage_administration_page import StorageAdministrationPage
 from client.firewall_administration_page import FirewallAdministrationPage
 from client.security_administration_page import SecurityAdministrationPage
 from client.backup_recovery_page import BackupRecoveryPage
-from client.system_boot_recovery_page import SystemBootRecoveryPage
 from client.time_synchronization_page import TimeSynchronizationPage
 from client.certificate_management_page import CertificateManagementPage
 from client.containers_vms_page import ContainersVMsPage
@@ -44,7 +43,7 @@ class SystemAdministrationPage(QWidget):
         self.resize(840, 720)
 
         self.user_group_window = None
-        self.health_window = None
+        self.diagnostics_window = None
         self.service_window = None
         self.environmental_policies_window = None
         self.cron_timers_window = None
@@ -56,7 +55,6 @@ class SystemAdministrationPage(QWidget):
         self.firewall_admin_window = None
         self.security_admin_window = None
         self.backup_recovery_window = None
-        self.boot_recovery_window = None
         self.timesync_window = None
         self.cert_mgmt_window = None
         self.containers_vms_window = None
@@ -74,21 +72,34 @@ class SystemAdministrationPage(QWidget):
         self._apply_subtitle_theme()
         theme.add_theme_listener(self._apply_subtitle_theme)
 
+        # Search box - filters the tiles below as you type, mirroring the
+        # main dashboard's search. Matches the typed words against each
+        # tool's title and description, so "raid", "firewall", or "open a
+        # port" narrows the grid to the relevant tools.
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText(
+            "Search tools… e.g. \"users\", \"firewall\", \"raid\", \"certificates\""
+        )
+        self.search_input.textChanged.connect(self._filter_tiles)
+        main.addWidget(self.search_input)
+
         main.addSpacing(12)
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(16)
-        grid.setVerticalSpacing(16)
+        self._grid = QGridLayout()
+        self._grid.setHorizontalSpacing(16)
+        self._grid.setVerticalSpacing(16)
         for col in range(3):
-            grid.setColumnStretch(col, 1)
+            self._grid.setColumnStretch(col, 1)
+        grid = self._grid
 
         cards = [
             ("User & Group Administration",
              "Create, lock, and manage user accounts, passwords, sudo access, and groups across agent and SSH hosts.",
              self.open_user_group_admin, "fa5s.users", "slate"),
-            ("System Health & Logs",
-             "Disk usage, memory/CPU snapshots, failed services, large files, and log search across agent and SSH hosts.",
-             self.open_health_logs, "fa5s.heartbeat", "green"),
+            ("System Health, Logs & Recovery",
+             "Disk usage, memory/CPU, failed services, logs, and process tools, plus boot/GRUB "
+             "and kernel recovery — across agent and SSH hosts.",
+             self.open_system_diagnostics, "fa5s.heartbeat", "green"),
             ("Service Management",
              "Start, stop, restart, enable/disable, and troubleshoot systemd services, or create and configure new ones.",
              self.open_service_management, "fa5s.cogs", "purple"),
@@ -131,10 +142,6 @@ class SystemAdministrationPage(QWidget):
              "Back up and restore files, verify backup integrity, schedule backups, create and "
              "restore LVM snapshots, guide deleted-file recovery, and run disaster-recovery drills.",
              self.open_backup_recovery, "fa5s.save", "teal"),
-            ("System Boot & Recovery",
-             "Analyze boot failures, change and rebuild GRUB, set recovery boot targets, configure "
-             "kernel parameters, regenerate initramfs, and manage/remove old kernels.",
-             self.open_boot_recovery, "fa5s.power-off", "amber"),
             ("Time Synchronization",
              "Configure NTP/chrony, verify synchronization, troubleshoot clock drift, and set the "
              "system time zone across managed hosts.",
@@ -147,21 +154,52 @@ class SystemAdministrationPage(QWidget):
              "List and start/stop/restart Docker or Podman containers, view container logs and images, "
              "and manage libvirt virtual machines across managed hosts.",
              self.open_containers_vms, "fa5s.cube", "indigo"),
-            ("Directory Services (AD / LDAP)",
+            ("Directory Services (Active Directory / LDAP)",
              "Join hosts to Active Directory (realmd/SSSD), manage realm status and login permits, "
              "enable home-dir creation, and configure/test LDAP and LDAPS.",
              self.open_directory, "fa5s.users-cog", "sky"),
         ]
 
-        for index, (card_title, description, handler, icon, color) in enumerate(cards):
-            row, col = divmod(index, 3)
-            grid.addWidget(
-                DashboardCard(card_title, description, handler, icon, color),
-                row, col,
-            )
+        # Build every card once and keep it with a lowercase haystack
+        # (title + description) for the search filter; the grid is then
+        # (re)populated by _relayout_tiles so hiding a tile leaves no gap.
+        self._tiles = []
+        for card_title, description, handler, icon, color in cards:
+            card = DashboardCard(card_title, description, handler, icon, color)
+            self._tiles.append((card, f"{card_title} {description}".lower()))
 
         main.addLayout(grid)
         main.addStretch()
+
+        self._no_results = QLabel("No tools match your search.")
+        self._no_results.setAlignment(Qt.AlignCenter)
+        theme.style_hint_label(self._no_results)
+        self._no_results.setVisible(False)
+        main.addWidget(self._no_results)
+
+        self._relayout_tiles(self._tiles)
+
+    def _relayout_tiles(self, tiles):
+        """Clear the grid and lay out `tiles` (a list of (card, haystack))
+        in three columns, with no gaps for filtered-out cards."""
+        while self._grid.count():
+            item = self._grid.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+        for index, (card, _haystack) in enumerate(tiles):
+            row, col = divmod(index, 3)
+            self._grid.addWidget(card, row, col)
+            card.setVisible(True)
+        self._no_results.setVisible(not tiles)
+
+    def _filter_tiles(self, text):
+        terms = text.strip().lower().split()
+        if not terms:
+            matches = self._tiles
+        else:
+            matches = [t for t in self._tiles if all(term in t[1] for term in terms)]
+        self._relayout_tiles(matches)
 
     def _apply_subtitle_theme(self):
         color = "#6B7280" if theme.get_theme_mode() == "light" else "#9aa5b1"
@@ -174,12 +212,17 @@ class SystemAdministrationPage(QWidget):
         self.user_group_window.raise_()
         return self.user_group_window
 
+    def open_system_diagnostics(self):
+        if self.diagnostics_window is None:
+            self.diagnostics_window = SystemHealthRecoveryPage()
+        self.diagnostics_window.show()
+        self.diagnostics_window.raise_()
+        return self.diagnostics_window
+
     def open_health_logs(self):
-        if self.health_window is None:
-            self.health_window = SystemHealthLogsPage()
-        self.health_window.show()
-        self.health_window.raise_()
-        return self.health_window
+        # Kept so the dashboard feature search ("disk usage", "tail logs", ...)
+        # still works: opens the combined window on its Health & Logs tab.
+        return self.open_system_diagnostics().show_health()
 
     def open_service_management(self):
         if self.service_window is None:
@@ -259,11 +302,9 @@ class SystemAdministrationPage(QWidget):
         return self.backup_recovery_window
 
     def open_boot_recovery(self):
-        if self.boot_recovery_window is None:
-            self.boot_recovery_window = SystemBootRecoveryPage()
-        self.boot_recovery_window.show()
-        self.boot_recovery_window.raise_()
-        return self.boot_recovery_window
+        # Feature search ("rebuild grub", "remove old kernels", ...) opens the
+        # combined window on its Boot & Recovery tab.
+        return self.open_system_diagnostics().show_boot()
 
     def open_timesync(self):
         if self.timesync_window is None:

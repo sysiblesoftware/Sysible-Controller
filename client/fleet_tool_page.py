@@ -96,15 +96,31 @@ class FleetToolPage(QWidget):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
+
+        header = QHBoxLayout()
         self.status_label = QLabel("Pick an action above to run it on all checked hosts.")
         self.status_label.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
-        layout.addWidget(self.status_label)
+        header.addWidget(self.status_label)
+        header.addStretch()
+        btn_clear = QPushButton("Clear All Results")
+        btn_clear.setToolTip("Close every per-host result tab below.")
+        btn_clear.clicked.connect(self.clear_all_results)
+        header.addWidget(btn_clear)
+        layout.addLayout(header)
+
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
         self.tabs.tabCloseRequested.connect(self._close_tab)
         shrink_tabwidget_to_current_page(self.tabs)
         layout.addWidget(self.tabs)
         return panel
+
+    def clear_all_results(self):
+        """Close every per-host result tab at once. Shared by every tool
+        built on FleetToolPage, so the button appears on all of them."""
+        self.tabs.clear()
+        self.results = {}
+        self.pending = {}
 
     # ---- hosts ----
     def checked_entries(self):

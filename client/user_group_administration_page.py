@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QDialog, QScrollArea, QTabWidget, QDateEdit, QApplication
 )
 from PySide6.QtCore import Qt, QTimer, QDate
+from PySide6.QtGui import QColor
 
 from client import api
 from client.events import bus
@@ -337,6 +338,10 @@ class UserGroupAdministrationPage(QWidget):
         right = QVBoxLayout()
         right.addWidget(tabs)
         right.addWidget(self.dispatch_status)
+        # The action tabs hug the current tab's content (cap_height), so any
+        # leftover height in this column collects here as a single clean
+        # stretch at the bottom rather than padding out the tab area itself.
+        right.addStretch()
 
         split.addLayout(right, 3)
         return panel
@@ -834,8 +839,7 @@ class UserGroupAdministrationPage(QWidget):
         self.sync_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
         self.sync_status.setText(f"Syncing {synced_now}/{self.sync_total} hosts...")
 
-        if self.active_entry is not None and _entry_key(self.active_entry) in self.host_data:
-            self.refresh_user_panel_from_cache()
+        self.refresh_user_panel_from_cache()
 
         if self.pending_sync:
             self.sync_timer.start(SYNC_POLL_MS)
@@ -904,6 +908,17 @@ class UserGroupAdministrationPage(QWidget):
                 self.refresh_user_panel_from_cache()
 
     def _auto_resync(self, entries):
+        # Background re-read after an action. Treat it as its OWN batch so the
+        # "Synced X/Y" counter reflects just this resync - previously this
+        # incremented self.sync_total without ever resetting it, so the total
+        # crept up after every action and showed nonsense like "17/17 hosts"
+        # on a 4-host fleet. Only add to the running total if a sync is
+        # genuinely still in flight (timer active).
+        fresh_batch = not self.sync_timer.isActive()
+        if fresh_batch:
+            self.sync_total = len(entries)
+            self.sync_deadline = time.time() + SYNC_TIMEOUT_S
+
         for entry in entries:
             key = _entry_key(entry)
             result = api.sync_entry_users(entry)
@@ -914,14 +929,13 @@ class UserGroupAdministrationPage(QWidget):
                 self._store_sync_error(key, result["error"])
             else:
                 self.pending_sync[key] = (entry, result["task_id"])
-                self.sync_total += 1
+                if not fresh_batch:
+                    self.sync_total += 1
 
         if self.pending_sync and not self.sync_timer.isActive():
-            self.sync_deadline = time.time() + SYNC_TIMEOUT_S
             self.sync_timer.start(SYNC_POLL_MS)
 
-        if self.active_entry is not None and _entry_key(self.active_entry) in self.host_data:
-            self.refresh_user_panel_from_cache()
+        self.refresh_user_panel_from_cache()
 
     # =========================================================
     # USER PANEL (driven by cached sync data for the active host)
@@ -937,38 +951,135 @@ class UserGroupAdministrationPage(QWidget):
         # that user no longer exists on the host (e.g. just deleted).
         previous_selection = self.selected_user
 
-        self.user_list.clear()
         self.selected_user = None
         self._clear_user_detail()
         self.load_groups_for_active_host()
 
-        if self.active_entry is None:
+        # The user list reflects every CHECKED host that has synced data, so
+        # you can check two or more hosts and see all their users at once. If
+        # nothing is checked, fall back to the single host you clicked to view.
+        entries = self._user_panel_hosts()
+
+        present = {}  # username -> set of host labels it exists on
+        for e in entries:
+            data = self.host_data.get(_entry_key(e), {})
+            for u in data.get("users", []):
+                present.setdefault(u["username"], set()).add(e["label"])
+        self._user_present = present
+        self._user_panel_entries = entries
+
+        if not entries:
+            self.user_list.clear()
+            self.account_info.setText("No synced data yet - check one or more hosts and click Sync.")
             return
 
-        data = self.host_data.get(_entry_key(self.active_entry))
+        self._render_user_list(self.user_search.text())
+        self._set_sync_info(entries)
 
-        if not data:
-            self.account_info.setText("No synced data for this host yet - click Sync.")
+        if previous_selection and previous_selection in present:
+            self._select_username_in_list(previous_selection)
+
+    def _user_panel_hosts(self):
+        """Hosts feeding the user list: all checked hosts with synced data,
+        else the single active (clicked) host if it has data."""
+        entries = [e for e in self.checked_entries()
+                   if self.host_data.get(_entry_key(e))]
+        if not entries and self.active_entry is not None \
+                and self.host_data.get(_entry_key(self.active_entry)):
+            entries = [self.active_entry]
+        return entries
+
+    def _add_user_header(self, text):
+        item = QListWidgetItem(text)
+        item.setFlags(Qt.ItemIsEnabled)  # shown, but not selectable
+        f = item.font()
+        f.setBold(True)
+        item.setFont(f)
+        item.setForeground(QColor(STATUS_NEUTRAL_COLOR))
+        self.user_list.addItem(item)
+
+    def _add_user_row(self, username, note=""):
+        text = username if not note else f"{username}    ({note})"
+        item = QListWidgetItem(text)
+        item.setData(Qt.UserRole, username)  # real username, free of annotation
+        self.user_list.addItem(item)
+
+    def _render_user_list(self, filter_text=""):
+        """(Re)draw the user list from self._user_present. One host: a flat
+        list. Two or more: users present on every selected host first, then a
+        'host mismatch' group for users that exist on only some of them."""
+        self.user_list.clear()
+        present = getattr(self, "_user_present", {})
+        entries = getattr(self, "_user_panel_entries", [])
+        ft = (filter_text or "").strip().lower()
+
+        def show(u):
+            return ft in u.lower()
+
+        if len(entries) <= 1:
+            for u in sorted(present):
+                if show(u):
+                    self._add_user_row(u)
             return
 
-        usernames = [u["username"] for u in data.get("users", [])]
-        for username in usernames:
-            self.user_list.addItem(username)
+        all_hosts = {e["label"] for e in entries}
+        consistent = sorted(u for u, s in present.items() if s == all_hosts and show(u))
+        partial = sorted(u for u, s in present.items() if s != all_hosts and show(u))
 
-        if data.get("error"):
-            self.account_info.setText(f"Last sync error: {data['error']}")
-        elif data.get("synced_at"):
-            synced_at = time.strftime("%H:%M:%S", time.localtime(data["synced_at"]))
-            self.account_info.setText(f"Last synced {synced_at}")
+        if consistent:
+            self._add_user_header(f"On all {len(entries)} selected hosts  ({len(consistent)})")
+            for u in consistent:
+                self._add_user_row(u)
+        if partial:
+            self._add_user_header(f"Host mismatch — on some hosts only  ({len(partial)})")
+            for u in partial:
+                on = present[u]
+                missing = all_hosts - on
+                note = "on " + ", ".join(sorted(on))
+                if missing:
+                    note += "  —  missing on " + ", ".join(sorted(missing))
+                self._add_user_row(u, note)
 
-        if previous_selection and previous_selection in usernames:
-            for i in range(self.user_list.count()):
-                item = self.user_list.item(i)
-                if item.text() == previous_selection:
-                    self.user_list.setCurrentItem(item)
-                    self.selected_user = previous_selection
-                    self.load_user_detail(previous_selection)
-                    break
+    def _set_sync_info(self, entries):
+        times = [self.host_data.get(_entry_key(e), {}).get("synced_at") for e in entries]
+        times = [t for t in times if t]
+        errs = [e["label"] for e in entries
+                if self.host_data.get(_entry_key(e), {}).get("error")]
+        parts = []
+        if len(entries) > 1:
+            parts.append(f"{len(entries)} hosts selected")
+        if times:
+            parts.append("last synced " + time.strftime("%H:%M:%S", time.localtime(max(times))))
+        if errs:
+            parts.append(f"sync error on: {', '.join(errs)}")
+        self.account_info.setText(" · ".join(parts))
+
+    def _select_username_in_list(self, username):
+        for i in range(self.user_list.count()):
+            item = self.user_list.item(i)
+            if item.data(Qt.UserRole) == username:
+                self.user_list.setCurrentItem(item)
+                self.selected_user = username
+                self._ensure_active_has_user(username)
+                self.load_user_detail(username)
+                return
+
+    def _ensure_active_has_user(self, username):
+        """The detail panel loads from self.active_entry; in a multi-host
+        view the clicked user may not exist on whatever host was last
+        'viewed', so point active_entry at a selected host that does have it."""
+        def has(entry):
+            d = self.host_data.get(_entry_key(entry)) if entry else None
+            return bool(d and any(u["username"] == username for u in d.get("users", [])))
+
+        if has(self.active_entry):
+            return
+        for e in self._user_panel_hosts():
+            if has(e):
+                self.active_entry = e
+                self.active_host_label.setText(f"Viewing: {e['label']} [{e['type_text']}]")
+                self.load_groups_for_active_host()
+                return
 
     def load_groups_for_active_host(self):
         self.group_dropdown.clear()
@@ -980,19 +1091,17 @@ class UserGroupAdministrationPage(QWidget):
                 self.group_dropdown.addItem(g["name"])
 
     def filter_users(self, text):
-        if self.active_entry is None:
-            return
-        data = self.host_data.get(_entry_key(self.active_entry))
-        self.user_list.clear()
-        if not data:
-            return
-        for u in data.get("users", []):
-            if text.lower() in u["username"].lower():
-                self.user_list.addItem(u["username"])
+        # Re-render the (possibly multi-host) list with the search filter
+        # applied; the union map was built in refresh_user_panel_from_cache.
+        self._render_user_list(text)
 
     def on_select_user(self, item):
-        self.selected_user = item.text()
-        self.load_user_detail(self.selected_user)
+        username = item.data(Qt.UserRole)
+        if not username:
+            return  # a group header row, not a user
+        self.selected_user = username
+        self._ensure_active_has_user(username)
+        self.load_user_detail(username)
 
     def _clear_user_detail(self):
         self.account_info.setText("")

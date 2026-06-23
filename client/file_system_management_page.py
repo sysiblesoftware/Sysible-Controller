@@ -101,7 +101,10 @@ class FileSystemManagementPage(QWidget):
         action_tabs = QTabWidget()
         action_tabs.addTab(self._build_dirs_files_tab(), "Directories and Files")
         action_tabs.addTab(self._build_permissions_links_tab(), "Permissions, Ownership and Links")
-        action_tabs.addTab(self._build_mount_tab(), "Mount and Filesystem")
+        action_tabs.addTab(self._build_mount_unmount_tab(), "Mount / Unmount")
+        action_tabs.addTab(self._build_network_mounts_tab(), "Network Mounts (NFS/CIFS)")
+        action_tabs.addTab(self._build_resize_repair_tab(), "Resize && Repair")
+        action_tabs.addTab(self._build_disk_usage_tab(), "Disk Usage")
         action_tabs.addTab(self._build_fstab_quota_tab(), "fstab and Quotas")
         action_tabs.addTab(self._build_archive_tab(), "Archive and Compress")
         shrink_tabwidget_to_current_page(action_tabs, cap_height=True)
@@ -154,6 +157,16 @@ class FileSystemManagementPage(QWidget):
         layout.setContentsMargins(5, 5, 5, 5)
 
         _box1, _g1 = self._group("Directories")
+
+        list_row = QHBoxLayout()
+        list_row.addWidget(QLabel("Path:"))
+        self.list_dir_path_input = QLineEdit()
+        self.list_dir_path_input.setPlaceholderText("e.g. /opt/sysibletest  (blank = home directory)")
+        list_row.addWidget(self.list_dir_path_input, 1)
+        btn_list_dir = QPushButton("List Directory")
+        btn_list_dir.clicked.connect(self.run_list_directory)
+        list_row.addWidget(btn_list_dir)
+        _g1.addLayout(list_row)
 
         create_row = QHBoxLayout()
         create_row.addWidget(QLabel("Path:"))
@@ -347,7 +360,7 @@ class FileSystemManagementPage(QWidget):
         layout.addStretch()
         return panel
 
-    def _build_mount_tab(self):
+    def _build_mount_unmount_tab(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
@@ -391,6 +404,13 @@ class FileSystemManagementPage(QWidget):
         unmount_row.addWidget(btn_unmount)
         _g1.addLayout(unmount_row)
         layout.addWidget(_box1)
+        layout.addStretch()
+        return panel
+
+    def _build_network_mounts_tab(self):
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(5, 5, 5, 5)
 
         # ---- Network mounts (NFS / CIFS) ----
         _boxn, _gn = self._group("Network Mounts (NFS / CIFS)")
@@ -463,6 +483,13 @@ class FileSystemManagementPage(QWidget):
             "root-only file, never the command line."
         ))
         layout.addWidget(_boxn)
+        layout.addStretch()
+        return panel
+
+    def _build_resize_repair_tab(self):
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(5, 5, 5, 5)
 
         _box2, _g2 = self._group("Resize and Repair")
 
@@ -505,8 +532,14 @@ class FileSystemManagementPage(QWidget):
         theme.style_hint_label(repair_hint)
         _g2.addWidget(repair_hint)
 
-
         layout.addWidget(_box2)
+        layout.addStretch()
+        return panel
+
+    def _build_disk_usage_tab(self):
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(5, 5, 5, 5)
 
         _box3, _g3 = self._group("Disk Usage")
 
@@ -743,6 +776,12 @@ class FileSystemManagementPage(QWidget):
         layout.addStretch()
         return panel
 
+    def clear_all_results(self):
+        """Close every per-host result tab at once."""
+        self.fs_tabs.clear()
+        self.fs_results = {}
+        self.fs_pending = {}
+
     def _build_results_panel(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -750,7 +789,14 @@ class FileSystemManagementPage(QWidget):
 
         self.fs_status = QLabel("Pick an action above to run it on all checked hosts.")
         self.fs_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
-        layout.addWidget(self.fs_status)
+        _hdr = QHBoxLayout()
+        _hdr.addWidget(self.fs_status)
+        _hdr.addStretch()
+        _btn_clear_all = QPushButton("Clear All Results")
+        _btn_clear_all.setToolTip("Close every per-host result tab below.")
+        _btn_clear_all.clicked.connect(self.clear_all_results)
+        _hdr.addWidget(_btn_clear_all)
+        layout.addLayout(_hdr)
 
         self.fs_tabs = QTabWidget()
         self.fs_tabs.setTabsClosable(True)
@@ -852,6 +898,15 @@ class FileSystemManagementPage(QWidget):
     # =========================================================
     # DIRECTORIES & FILES ACTIONS
     # =========================================================
+    def run_list_directory(self):
+        path = self.list_dir_path_input.text().strip()
+        try:
+            cmd = api.cmd_list_directory(path)
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid input", str(e))
+            return
+        self._run_fs_command(cmd, "List Directory")
+
     def run_create_directory(self):
         try:
             cmd = api.cmd_create_directory(

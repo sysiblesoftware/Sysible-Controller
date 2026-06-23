@@ -144,8 +144,8 @@ REGISTRY = [
                   "fleet command", "run on all hosts", "across all hosts",
                   "script on hosts", "repetitive task", "shell command"]},
 
-    # ---- Directory Services (AD / LDAP) ----
-    {"title": "Directory Services (AD / LDAP)", "open": "open_system_admin", "sub_open": "open_directory",
+    # ---- Directory Services (Active Directory / LDAP) ----
+    {"title": "Directory Services (Active Directory / LDAP)", "open": "open_system_admin", "sub_open": "open_directory",
      "keywords": ["active directory", "ad", "join domain", "join active directory",
                   "realm", "realmd", "sssd", "ldap", "ldaps", "kerberos", "domain join",
                   "leave domain", "directory", "winbind", "add server to active directory"]},

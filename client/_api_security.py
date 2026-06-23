@@ -112,6 +112,19 @@ _SELINUX_MISSING = (
 )
 
 
+def cmd_install_selinux_tools() -> str:
+    """Install the SELinux userspace tools every other action on this tab
+    needs - getenforce/setenforce, semanage, getsebool/setsebool, restorecon,
+    audit2allow, sesearch. Package names differ per distro. On Debian/Ubuntu
+    (AppArmor by default) this installs the tools but does NOT switch the host
+    to SELinux - that's a separate, reboot-level decision."""
+    return _pkgmgr_dispatch(
+        rpm_cmd='"$PKGMGR" install -y policycoreutils policycoreutils-python-utils setools-console libselinux-utils',
+        zypper_cmd="zypper --non-interactive install policycoreutils policycoreutils-python-utils setools-console libselinux-tools",
+        apt_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y policycoreutils selinux-utils setools",
+    ) + " && echo 'SELinux userspace tools installed.'"
+
+
 def cmd_selinux_status() -> str:
     return (
         _SELINUX_MISSING +
@@ -716,6 +729,14 @@ def cmd_install_lynis() -> str:
         zypper_cmd="zypper --non-interactive install lynis",
         apt_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y lynis",
     ) + " && echo 'Lynis installed.'"
+
+
+def cmd_install_rkhunter() -> str:
+    return _pkgmgr_dispatch(
+        rpm_cmd='"$PKGMGR" install -y rkhunter',
+        zypper_cmd="zypper --non-interactive install rkhunter",
+        apt_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y rkhunter",
+    ) + " && echo 'rkhunter installed.'"
 
 
 def cmd_run_lynis_scan() -> str:

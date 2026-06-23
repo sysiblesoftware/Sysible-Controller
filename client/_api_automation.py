@@ -286,6 +286,24 @@ def cmd_install_packages(names: str) -> str:
     )
 
 
+def cmd_install_local_package(remote_path: str) -> str:
+    """Install a package FILE already sitting on the host (uploaded to
+    `remote_path`, e.g. /tmp/foo.deb or /tmp/bar.rpm) via the host's package
+    manager, so dependencies resolve from its repos. apt-get/dnf/yum take a
+    local path directly; zypper needs --allow-unsigned-rpm for an unsigned
+    file."""
+    import shlex as _shlex
+    remote_path = (remote_path or "").strip()
+    if not remote_path:
+        raise ValueError("No package file path given.")
+    q = _shlex.quote(remote_path)
+    return _pkgmgr_dispatch(
+        rpm_cmd=f'"$PKGMGR" install -y {q}',
+        zypper_cmd=f'zypper --non-interactive install --allow-unsigned-rpm {q}',
+        apt_cmd=f'DEBIAN_FRONTEND=noninteractive apt-get install -y {q}',
+    )
+
+
 def cmd_remove_packages(names: str) -> str:
     pkgs = _pkg_quote_list(names)
     if not pkgs:

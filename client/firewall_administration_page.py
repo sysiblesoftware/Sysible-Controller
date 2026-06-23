@@ -141,6 +141,24 @@ class FirewallAdministrationPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
+        _box0, _g0 = self._group("Install a Firewall")
+        install_row = QHBoxLayout()
+        install_hint = QLabel(
+            "No firewall on the host yet? Install one here. firewalld backs the zones/ports/"
+            "rich-rules tabs; ufw is a simpler Debian/Ubuntu front end (installed disabled)."
+        )
+        theme.style_hint_label(install_hint)
+        install_hint.setWordWrap(True)
+        install_row.addWidget(install_hint, 1)
+        btn_install_fwd = QPushButton("Install firewalld")
+        btn_install_fwd.clicked.connect(self.run_install_firewalld)
+        install_row.addWidget(btn_install_fwd)
+        btn_install_ufw = QPushButton("Install ufw")
+        btn_install_ufw.clicked.connect(self.run_install_ufw)
+        install_row.addWidget(btn_install_ufw)
+        _g0.addLayout(install_row)
+        layout.addWidget(_box0)
+
         _box1, _g1 = self._group("Service State")
 
         status_row = QHBoxLayout()
@@ -195,6 +213,18 @@ class FirewallAdministrationPage(QWidget):
         list_row.addWidget(btn_list_ports)
         _g1.addLayout(list_row)
 
+        all_ports_row = QHBoxLayout()
+        all_ports_hint = QLabel(
+            "List ALL open ports shows every actually-listening socket on the host (via ss), "
+            "with the owning process — what's really open right now, regardless of firewall."
+        )
+        theme.style_hint_label(all_ports_hint)
+        all_ports_hint.setWordWrap(True)
+        all_ports_row.addWidget(all_ports_hint, 1)
+        btn_all_ports = QPushButton("List All Open Ports")
+        btn_all_ports.clicked.connect(self.run_list_listening_ports)
+        all_ports_row.addWidget(btn_all_ports)
+        _g1.addLayout(all_ports_row)
 
         layout.addWidget(_box1)
 
@@ -456,6 +486,15 @@ class FirewallAdministrationPage(QWidget):
         delete_row.addWidget(btn_delete_rule)
         _g2.addLayout(delete_row)
 
+        delete_hint = QLabel(
+            "The line number comes from the “num” column of List Rules — it only appears "
+            "once a chain actually has rules (empty chains show just the header). So List "
+            "Rules first, read the number off the rule you want, then delete by that "
+            "number, or paste the full rule spec instead."
+        )
+        theme.style_hint_label(delete_hint)
+        delete_hint.setWordWrap(True)
+        _g2.addWidget(delete_hint)
 
         layout.addWidget(_box2)
 
@@ -474,6 +513,12 @@ class FirewallAdministrationPage(QWidget):
         layout.addStretch()
         return panel
 
+    def clear_all_results(self):
+        """Close every per-host result tab at once."""
+        self.firewall_tabs.clear()
+        self.firewall_results = {}
+        self.firewall_pending = {}
+
     def _build_results_panel(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -481,7 +526,14 @@ class FirewallAdministrationPage(QWidget):
 
         self.firewall_status = QLabel("Pick an action above to run it on all checked hosts.")
         self.firewall_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
-        layout.addWidget(self.firewall_status)
+        _hdr = QHBoxLayout()
+        _hdr.addWidget(self.firewall_status)
+        _hdr.addStretch()
+        _btn_clear_all = QPushButton("Clear All Results")
+        _btn_clear_all.setToolTip("Close every per-host result tab below.")
+        _btn_clear_all.clicked.connect(self.clear_all_results)
+        _hdr.addWidget(_btn_clear_all)
+        layout.addLayout(_hdr)
 
         self.firewall_tabs = QTabWidget()
         self.firewall_tabs.setTabsClosable(True)
@@ -611,11 +663,20 @@ class FirewallAdministrationPage(QWidget):
             return
         self._run_firewall_command(cmd, "Set Default Zone")
 
+    def run_install_firewalld(self):
+        self._run_firewall_command(api.cmd_install_firewalld(), "Install firewalld")
+
+    def run_install_ufw(self):
+        self._run_firewall_command(api.cmd_install_ufw(), "Install ufw")
+
     # =========================================================
     # PORTS ACTIONS
     # =========================================================
     def run_list_ports(self):
         self._run_firewall_command(api.cmd_list_ports(self.list_ports_zone_input.text()), "List Ports")
+
+    def run_list_listening_ports(self):
+        self._run_firewall_command(api.cmd_list_listening_ports(), "List All Open Ports")
 
     def run_open_port(self):
         try:

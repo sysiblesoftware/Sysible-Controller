@@ -79,6 +79,17 @@ def _validate_chmod_mode(mode: str, label: str = "Mode") -> str:
 
 # --- directories -------------------------------------------------------
 
+def cmd_list_directory(path: str = "", show_hidden: bool = True) -> str:
+    """`ls -l` (long listing) of a directory, defaulting to the current
+    directory when no path is given. Human-readable sizes; hidden files
+    included by default. Read-only - safe to run anywhere."""
+    flags = "-lhA" if show_hidden else "-lh"
+    if path and path.strip():
+        path = _validate_path(path, "Directory path")
+        return f"ls {flags} --color=never -- {shlex.quote(path)} 2>&1"
+    return f"ls {flags} --color=never 2>&1"
+
+
 def cmd_create_directory(path: str, mode: str = "") -> str:
     """mkdir -p - safe to call on a path that already exists, and
     creates any missing parent directories along the way."""

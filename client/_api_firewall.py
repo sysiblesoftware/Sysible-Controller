@@ -456,3 +456,48 @@ else
     exit 1
 fi
 """.strip()
+
+
+# ---------------------------------------------------------
+# Installing a firewall backend + a backend-agnostic
+# "what's actually listening" view
+# ---------------------------------------------------------
+_PKG_DETECT = (
+    "if command -v dnf >/dev/null 2>&1; then PM='dnf install -y'; "
+    "elif command -v yum >/dev/null 2>&1; then PM='yum install -y'; "
+    "elif command -v zypper >/dev/null 2>&1; then PM='zypper --non-interactive install'; "
+    "elif command -v apt-get >/dev/null 2>&1; then apt-get update >/dev/null 2>&1; "
+    "PM='apt-get install -y'; "
+    "else echo 'No supported package manager found (dnf/yum/zypper/apt).' >&2; exit 1; fi; "
+)
+
+
+def cmd_install_firewalld() -> str:
+    """Install firewalld via the host's package manager, then enable+start it."""
+    return (
+        _PKG_DETECT
+        + "DEBIAN_FRONTEND=noninteractive $PM firewalld 2>&1 && "
+        "systemctl enable --now firewalld 2>&1 && "
+        "echo 'firewalld installed and started.'"
+    )
+
+
+def cmd_install_ufw() -> str:
+    """Install ufw (Uncomplicated Firewall). Left disabled - turning it on is
+    an explicit, connectivity-affecting step the admin does deliberately."""
+    return (
+        _PKG_DETECT
+        + "DEBIAN_FRONTEND=noninteractive $PM ufw 2>&1 && "
+        "echo 'ufw installed (not enabled). Turn it on later with: ufw enable'"
+    )
+
+
+def cmd_list_listening_ports() -> str:
+    """Every actually-listening TCP/UDP socket on the host, with the owning
+    process - independent of which firewall is in use. Answers 'what ports are
+    open on this box right now?' rather than 'what does the firewall allow?'."""
+    return (
+        "if command -v ss >/dev/null 2>&1; then ss -tulpn 2>&1; "
+        "elif command -v netstat >/dev/null 2>&1; then netstat -tulpn 2>&1; "
+        "else echo 'Neither ss nor netstat is available on this host.' >&2; exit 1; fi"
+    )

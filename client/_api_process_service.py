@@ -200,6 +200,16 @@ def cmd_list_services() -> str:
     )
 
 
+def cmd_list_running_services() -> str:
+    """Only the services actually running right now (active/running), with
+    their description - the live picture, versus cmd_list_services() which
+    lists every installed unit whether it's running or not."""
+    return (
+        "systemctl list-units --type=service --state=running --no-pager --no-legend 2>/dev/null "
+        "|| echo 'systemctl not available on this host'"
+    )
+
+
 def cmd_service_status(name: str) -> str:
     return f"systemctl status {shlex.quote(_service_unit(name))} --no-pager -l 2>&1; true"
 

@@ -223,7 +223,7 @@
   </li>
   <li><span class="num">13</span><a href="#appendix">Appendix: CLI Quick Reference</a></li>
 </ol>
-<div class="note"><b>A note on the screens shown in this guide</b>The illustrations throughout this guide are styled mockups built to match Sysible Controller's real color palette, layout, and labels — not live photographic screenshots of a running instance. They're accurate to the described behavior and intended purely to orient you visually; minor spacing or wording may differ from the exact build you're running.</div>
+<div class="note"><b>A note on the screens shown in this guide</b>Each section opens with an image rendered directly from the application's real theme palette, card styling, and icon set, so it matches what the running GUI draws. They are accurate to the described behavior; minor spacing or wording may differ from the exact build you're running.</div>
 </div>
 
 <!-- ===================== 1. INTRODUCTION ===================== -->
@@ -374,47 +374,13 @@ sudo ./install_sysible.sh</pre>
 <p>After logging in, you land on the main Dashboard — the home screen for the whole application. It is a single window with the Sysible logo and product name at the top, a search bar, and a grid of five clickable tiles below it. Each tile opens that tool in its own window ("popout"), which can be left open alongside the Dashboard and other tool windows — closing a tool window does not close the Dashboard or any other open tool.</p>
 
 <h2>Feature search</h2>
-<p>Typing into the search bar at the top of the Dashboard matches against a curated list of common tasks — things like <strong>create a user</strong>, <strong>add a repository</strong>, <strong>restart a service</strong>, or <strong>reset password</strong> — and lists the matching task(s) below it as you type. Pressing Return, or clicking a result, opens the right tile directly; for tasks that live under System Administration's sub-tiles, it opens straight through to that sub-tile, and for User &amp; Group Administration tasks it lands on the specific tab (Create User, Account, Password, Groups, or Reports) rather than leaving you to find it. This saves having to already know which of the Dashboard's tiles — or, for anything under System Administration, which of its twelve sub-tiles — a given task lives under.</p>
+<p>Typing into the search bar at the top of the Dashboard matches against a curated list of common tasks — things like <strong>create a user</strong>, <strong>add a repository</strong>, <strong>restart a service</strong>, or <strong>reset password</strong> — and lists the matching task(s) below it as you type. Pressing Return, or clicking a result, opens the right tile directly; for tasks that live under System Administration's sub-tiles, it opens straight through to that sub-tile, and for User &amp; Group Administration tasks it lands on the specific tab (Create User, Account, Password, Groups, or Reports) rather than leaving you to find it. This saves having to already know which of the Dashboard's tiles — or, for anything under System Administration, which of its seventeen sub-tiles — a given task lives under.</p>
 
 <figure class="mock">
   <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Sysible Controller</span></div>
-  <svg viewBox="0 0 900 600" xmlns="http://www.w3.org/2000/svg">
-    <rect width="900" height="600" fill="#1E1E1E"/>
-    <rect x="30" y="26" width="34" height="34" rx="8" fill="#2f6fed"/>
-    <text x="47" y="48" font-family="-apple-system,Arial" font-size="16" font-weight="700" fill="#fff" text-anchor="middle">S</text>
-    <text x="76" y="44" font-family="-apple-system,Arial" font-size="20" font-weight="700" fill="#EAEAEA">Sysible Controller</text>
-    <text x="76" y="62" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Select a tool below to get started.</text>
-
-    <!-- Row 1 -->
-    <g><rect x="40" y="100" width="400" height="140" rx="10" fill="#262626" stroke="#3A3A3A"/>
-      <text x="58" y="134" font-family="-apple-system,Arial" font-size="14" font-weight="700" fill="#EAEAEA">Sysible Controller Host Enrollment</text>
-      <text x="58" y="158" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Download the agent bundle and manage</text>
-      <text x="58" y="174" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">the enrolled host fleet.</text></g>
-
-    <g><rect x="460" y="100" width="400" height="140" rx="10" fill="#262626" stroke="#3A3A3A"/>
-      <text x="478" y="134" font-family="-apple-system,Arial" font-size="14" font-weight="700" fill="#EAEAEA">Sysible Controller Settings</text>
-      <text x="478" y="158" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Manage administrators, password</text>
-      <text x="478" y="174" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">policy, address/port, and audit log.</text></g>
-
-    <!-- Row 2 -->
-    <g><rect x="40" y="260" width="400" height="140" rx="10" fill="#262626" stroke="#3A3A3A"/>
-      <text x="58" y="294" font-family="-apple-system,Arial" font-size="14" font-weight="700" fill="#EAEAEA">Sysible Connect</text>
-      <text x="58" y="318" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">SSH and agent terminal access, plus</text>
-      <text x="58" y="334" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">environment tagging for managed hosts.</text></g>
-
-    <g><rect x="460" y="260" width="400" height="140" rx="10" fill="#262626" stroke="#3A3A3A"/>
-      <text x="478" y="294" font-family="-apple-system,Arial" font-size="14" font-weight="700" fill="#EAEAEA">Webserver Portal Configuration</text>
-      <text x="478" y="318" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Run the host-facing portal for agent</text>
-      <text x="478" y="334" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">downloads and file transfers.</text></g>
-
-    <!-- Row 3 -->
-    <g><rect x="40" y="420" width="400" height="140" rx="10" fill="#262626" stroke="#3A3A3A"/>
-      <text x="58" y="454" font-family="-apple-system,Arial" font-size="14" font-weight="700" fill="#EAEAEA">System Administration</text>
-      <text x="58" y="478" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">User/group admin and system health</text>
-      <text x="58" y="494" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">checks across agent and SSH hosts.</text></g>
-  </svg>
+  <img src="screenshot_dashboard.png" alt="The Dashboard — a search box over a single column of five tiles, each opening its own popout window." style="display:block;width:100%;height:auto;">
 </figure>
-<figcaption>The Dashboard — five tiles, each opening its own popout window.</figcaption>
+<figcaption>The Dashboard — a search box over a single column of five tiles, each opening its own popout window.</figcaption>
 
 <h2>Light and dark theme</h2>
 <p>A small pill-shaped switch in the top-right of the Dashboard header toggles the entire interface between a <strong>dark</strong> theme (the default) and a <strong>light</strong> theme. Clicking the sun or moon re-skins every window already on screen — the Dashboard and any open tool popouts — immediately, with no restart, and the choice is remembered the next time you launch the GUI. The toggle deliberately uses plain sun/moon glyphs rather than an icon font, so it always stays usable as the way back out of light mode even if the icon font is unavailable.</p>
@@ -426,7 +392,7 @@ sudo ./install_sysible.sh</pre>
 <tr><td><strong>Sysible Controller Settings</strong></td><td>Configure the controller itself: the address/port baked into agent bundles, administrator accounts, their password policy, the audit log, and the License &amp; Version section.</td></tr>
 <tr><td><strong>Sysible Connect</strong></td><td>Unified console for direct, hands-on work on individual hosts — live terminal, one-off commands, file transfer, and one-click SSH enrollment.</td></tr>
 <tr><td><strong>Webserver Portal Configuration</strong></td><td>Start/stop the optional host-facing portal, set its credentials and port, and manage the shared file pool.</td></tr>
-<tr><td><strong>System Administration</strong></td><td>Sub-menu of twelve fleet-wide operational tools — user/group accounts, health checks, services, environmental policies, scheduled tasks, package management, repositories, networking, the filesystem layer, block storage, the firewall, and host security/hardening.</td></tr>
+<tr><td><strong>System Administration</strong></td><td>Sub-menu of seventeen fleet-wide operational tools — user/group accounts, health/logs/recovery (incl. boot &amp; kernel), services, environmental policies, scheduled tasks, package management, repositories, networking, the filesystem layer (incl. NFS/CIFS), block storage, the firewall, security/hardening, backup &amp; recovery, time sync, certificates, containers &amp; VMs, and directory services (Active Directory/LDAP).</td></tr>
 </table>
 </div>
 
@@ -438,54 +404,9 @@ sudo ./install_sysible.sh</pre>
 
 <figure class="mock">
   <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Sysible Controller Host Enrollment</span></div>
-  <svg viewBox="0 0 900 580" xmlns="http://www.w3.org/2000/svg">
-    <rect width="900" height="580" fill="#1E1E1E"/>
-    <rect x="30" y="22" width="26" height="26" rx="6" fill="#2f6fed"/>
-    <text x="70" y="40" font-family="-apple-system,Arial" font-size="17" font-weight="700" fill="#EAEAEA">Sysible Controller Host Enrollment</text>
-
-    <!-- Agent bundle row -->
-    <text x="40" y="84" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">AGENT BUNDLE</text>
-    <rect x="40" y="92" width="190" height="34" rx="6" fill="#3C4B64" stroke="#506080"/>
-    <text x="135" y="114" font-family="-apple-system,Arial" font-size="12" fill="#fff" text-anchor="middle">Download Agent Bundle</text>
-
-    <!-- Enrolled hosts list panel -->
-    <text x="40" y="158" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">ENROLLED HOSTS</text>
-    <rect x="40" y="168" width="370" height="360" rx="6" fill="#2B2B2B" stroke="#505050"/>
-    <text x="54" y="192" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#6fa8ff">▾ Production (3)</text>
-    <text x="70" y="214" font-family="-apple-system,Arial" font-size="12" fill="#EAEAEA">web-01</text>
-    <text x="70" y="236" font-family="-apple-system,Arial" font-size="12" fill="#EAEAEA">web-02</text>
-    <rect x="60" y="244" width="338" height="22" fill="#3C4B64" opacity="0.5"/>
-    <text x="70" y="260" font-family="-apple-system,Arial" font-size="12" fill="#EAEAEA">db-01</text>
-    <text x="54" y="290" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#6fa8ff">▾ Staging (1)</text>
-    <text x="70" y="312" font-family="-apple-system,Arial" font-size="12" fill="#EAEAEA">stage-app</text>
-    <text x="54" y="342" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#6fa8ff">▾ Unassigned (1)</text>
-    <text x="70" y="364" font-family="-apple-system,Arial" font-size="12" fill="#EAEAEA">test-host</text>
-    <rect x="54" y="496" width="160" height="24" rx="5" fill="#2f2f2f" stroke="#505050"/>
-    <text x="134" y="512" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1" text-anchor="middle">Collapse All</text>
-    <rect x="222" y="496" width="150" height="24" rx="5" fill="#2f2f2f" stroke="#505050"/>
-    <text x="297" y="512" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1" text-anchor="middle">Expand All</text>
-
-    <!-- Details panel -->
-    <rect x="430" y="168" width="430" height="360" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <text x="448" y="194" font-family="-apple-system,Arial" font-size="13" font-weight="700" fill="#EAEAEA">db-01</text>
-    <text x="448" y="222" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Host ID:</text><text x="540" y="222" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">a13f-09c2</text>
-    <text x="448" y="244" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Platform:</text><text x="540" y="244" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">Ubuntu 22.04</text>
-    <text x="448" y="266" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Kernel:</text><text x="540" y="266" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">5.15.0-112</text>
-    <text x="448" y="288" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Status:</text><text x="540" y="288" font-family="-apple-system,Arial" font-size="11" fill="#3ac95a">online</text>
-    <text x="448" y="310" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">Environment:</text><text x="540" y="310" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">Production</text>
-
-    <rect x="448" y="334" width="220" height="28" rx="5" fill="#2B2B2B" stroke="#505050"/>
-    <text x="458" y="352" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">Production ▾</text>
-    <rect x="678" y="334" width="140" height="28" rx="5" fill="#3C4B64" stroke="#506080"/>
-    <text x="748" y="352" font-family="-apple-system,Arial" font-size="11" fill="#fff" text-anchor="middle">Set Environment</text>
-
-    <rect x="448" y="480" width="160" height="30" rx="5" fill="#5a2323" stroke="#7a3030"/>
-    <text x="528" y="500" font-family="-apple-system,Arial" font-size="11" fill="#ffb3b3" text-anchor="middle">Disenroll Host</text>
-    <rect x="618" y="480" width="100" height="30" rx="5" fill="#2f2f2f" stroke="#505050"/>
-    <text x="668" y="500" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1" text-anchor="middle">Refresh</text>
-  </svg>
+  <img src="screenshot_host_enrollment.png" alt="Host Enrollment — download the agent bundle, set a default environment, and manage enrolled hosts." style="display:block;width:100%;height:auto;">
 </figure>
-<figcaption>Host Enrollment — enrolled hosts grouped by environment, with a details and disenrollment panel.</figcaption>
+<figcaption>Host Enrollment — download the agent bundle, set a default environment, and manage enrolled hosts.</figcaption>
 
 <h2>Downloading and running the agent bundle</h2>
 <p>Clicking <strong>Download Agent Bundle</strong> prompts you to choose where to save <code>sysible-agent-bundle.zip</code> — the same ready-to-run bundle the Webserver Portal hands to end users, built here on demand. Each download bakes in a <strong>fresh, one-time enrollment token</strong> plus the controller's configured address and port. The zip contains:</p>
@@ -502,6 +423,7 @@ sudo ./install_sysible.sh</pre>
 <pre class="cli"><span class="cm"># on the target host</span>
 chmod +x run_agent.sh
 sudo ./run_agent.sh</pre>
+<div class="note"><b>Optional: run the agent unprivileged</b>By default the agent service runs as <code>root</code>. To run it as a non-root account with passwordless sudo instead, install with <code>sudo ./run_agent.sh --unprivileged</code> (creates a dedicated, locked <code>sysible</code> system account) or <code>sudo ./run_agent.sh --user=NAME</code> (an existing account you manage). The installer still needs root — it creates the account, writes an <code>/etc/sudoers.d/sysible-agent</code> drop-in (validated with <code>visudo</code>) granting passwordless sudo, and sets <code>User=</code> on the unit; the agent then escalates each command via <code>sudo -n</code>. Because the toolset spans the whole system, the account needs full <code>NOPASSWD</code> sudo, so the benefit is no root login and a sudo audit trail rather than a smaller blast radius. <code>disenroll_agent.sh</code> removes the sudoers drop-in and the <code>sysible</code> account if it created one.</div>
 <p>The agent installs and starts as a background systemd service that restarts itself on crash or reboot. The host then appears in the Enrolled Hosts list (allow a few moments for the first heartbeat).</p>
 <div class="warn"><b>One bundle, one host</b>Each bundle's enrollment token is single-use — download a fresh bundle per host rather than reusing one zip on a second machine.</div>
 
@@ -527,60 +449,21 @@ sudo ./run_agent.sh</pre>
 
 <figure class="mock">
   <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Sysible Connect</span></div>
-  <svg viewBox="0 0 900 660" xmlns="http://www.w3.org/2000/svg">
-    <rect width="900" height="660" fill="#1E1E1E"/>
-    <rect x="30" y="22" width="26" height="26" rx="6" fill="#2f6fed"/>
-    <text x="70" y="40" font-family="-apple-system,Arial" font-size="17" font-weight="700" fill="#EAEAEA">Sysible Connect</text>
-
-    <text x="40" y="80" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">MANAGED HOSTS</text>
-    <rect x="40" y="88" width="820" height="100" rx="6" fill="#2B2B2B" stroke="#505050"/>
-    <rect x="40" y="88" width="820" height="22" fill="#252525"/>
-    <text x="54" y="103" font-family="-apple-system,Arial" font-size="10" font-weight="700" fill="#9aa5b1">HOST</text>
-    <text x="300" y="103" font-family="-apple-system,Arial" font-size="10" font-weight="700" fill="#9aa5b1">TYPE</text>
-    <text x="480" y="103" font-family="-apple-system,Arial" font-size="10" font-weight="700" fill="#9aa5b1">ADDRESS</text>
-    <rect x="40" y="110" width="820" height="24" fill="#3C4B64" opacity="0.45"/>
-    <text x="54" y="127" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">db-01</text>
-    <text x="300" y="127" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">Agent + SSH</text>
-    <text x="480" y="127" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">10.0.1.21</text>
-    <text x="54" y="151" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">web-01</text>
-    <text x="300" y="151" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">Agent</text>
-    <text x="480" y="151" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">10.0.1.14</text>
-    <text x="54" y="175" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">legacy-app</text>
-    <text x="300" y="175" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">SSH (root)</text>
-    <text x="480" y="175" font-family="-apple-system,Arial" font-size="11" fill="#EAEAEA">10.0.2.5</text>
-
-    <text x="40" y="212" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">SSH TO A NEW HOST (NOT YET JOINED)</text>
-    <rect x="40" y="220" width="820" height="56" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <rect x="54" y="236" width="150" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="62" y="252" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Host name</text>
-    <rect x="216" y="236" width="150" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="224" y="252" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">IP address</text>
-    <rect x="378" y="236" width="130" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="386" y="252" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Username</text>
-    <rect x="520" y="236" width="130" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="528" y="252" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">SSH password</text>
-    <rect x="662" y="236" width="180" height="24" rx="4" fill="#3C4B64" stroke="#506080"/><text x="752" y="252" font-size="11" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Connect Host</text>
-
-    <text x="40" y="308" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">TERMINAL — db-01 (SSH session active)</text>
-    <rect x="40" y="316" width="820" height="220" rx="6" fill="#0d0d0d" stroke="#3A3A3A"/>
-    <text x="54" y="338" font-family="Menlo,monospace" font-size="11" fill="#6fcf6f">root@db-01:~# systemctl status postgresql</text>
-    <text x="54" y="356" font-family="Menlo,monospace" font-size="11" fill="#c9d1d9">● postgresql.service - PostgreSQL RDBMS</text>
-    <text x="54" y="374" font-family="Menlo,monospace" font-size="11" fill="#c9d1d9">   Active: active (running) since Tue 09:14:02 UTC</text>
-    <text x="54" y="392" font-family="Menlo,monospace" font-size="11" fill="#6fcf6f">root@db-01:~# █</text>
-    <rect x="690" y="500" width="150" height="24" rx="4" fill="#5a2323" stroke="#7a3030"/>
-    <text x="765" y="516" font-family="-apple-system,Arial" font-size="11" fill="#ffb3b3" text-anchor="middle">Send Ctrl+C</text>
-
-    <text x="40" y="572" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">FILE TRANSFER</text>
-    <rect x="40" y="580" width="395" height="60" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <text x="52" y="600" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Local path → Remote path</text>
-    <rect x="52" y="608" width="280" height="22" rx="4" fill="#2B2B2B" stroke="#505050"/>
-    <rect x="342" y="608" width="80" height="22" rx="4" fill="#3C4B64" stroke="#506080"/><text x="382" y="623" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Upload</text>
-    <rect x="465" y="580" width="395" height="60" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <text x="477" y="600" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Remote path</text>
-    <rect x="477" y="608" width="280" height="22" rx="4" fill="#2B2B2B" stroke="#505050"/>
-    <rect x="767" y="608" width="80" height="22" rx="4" fill="#3C4B64" stroke="#506080"/><text x="807" y="623" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Download…</text>
-  </svg>
+  <img src="screenshot_sysible_connect.png" alt="Sysible Connect — managed hosts with IPs, per-host file transfer, one-click SSH enrollment, and a Run-Script-on-All-Hosts launcher." style="display:block;width:100%;height:auto;">
 </figure>
-<figcaption>Sysible Connect — managed hosts (with IPs), one-click SSH enrollment, pop-out terminals, and file transfer.</figcaption>
+<figcaption>Sysible Connect — managed hosts with IPs, per-host file transfer, one-click SSH enrollment, and a Run-Script-on-All-Hosts launcher.</figcaption>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">root@db-01 — Sysible Connect</span></div>
+  <img src="screenshot_sysible_connect_terminal.png" alt="A pop-out terminal — green user@host prompt (red for root), with upload/download, find, save-output, and font controls." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>A pop-out terminal — green user@host prompt (red for root), with upload/download, find, save-output, and font controls.</figcaption>
 
 <h2>The merged hosts view</h2>
 <p>The <strong>Managed Hosts</strong> list runs down the left of the page and shows every host the controller knows about — agent-enrolled and SSH-connected alike — grouped by environment, with each host's <strong>connection type</strong> and <strong>IP address</strong> shown inline. A host enrolled both ways appears once, as a combined <strong>Agent + SSH</strong> entry, rather than twice. Buttons let you <strong>Refresh</strong>, <strong>Remove Host</strong>, and <strong>Show Sysible Controller Public Key</strong> (for installing the controller's key manually where the one-click flow isn't suitable).</p>
+
+<p><strong>Check In / Ping.</strong> The <strong>Check In / Ping</strong> button probes every host in the list and marks each with a colored status dot: agent hosts are judged by how recently they last checked in (their heartbeat), while SSH hosts get a live, timed connection test. A combined Agent + SSH host shows both signals and counts as online if either answers. Each row gains the result inline (e.g. "agent 3s ago" or "SSH 142 ms"), and a one-line summary reports how many hosts are online. The dots persist through the list's periodic refresh.</p>
+
+<p><strong>Assign an environment by right-clicking.</strong> Right-click any host in the list for an <strong>Assign to environment</strong> menu — pick an existing environment, choose <strong>Unassigned</strong> to clear it, or <strong>New environment…</strong> to create one on the spot. A combined Agent + SSH host is updated on both sides at once, and the list regroups immediately.</p>
 <p><strong>Removing a connection</strong> from a combined host is granular: when you remove an <strong>Agent + SSH</strong> host you're asked whether to drop just the SSH connection, just the agent connection, or both — so you can, for example, revoke a host's SSH access while leaving its agent enrollment intact.</p>
 
 <h2>One-click enroll via SSH</h2>
@@ -605,44 +488,9 @@ sudo ./run_agent.sh</pre>
 
 <figure class="mock">
   <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Sysible Controller Settings</span></div>
-  <svg viewBox="0 0 900 520" xmlns="http://www.w3.org/2000/svg">
-    <rect width="900" height="520" fill="#1E1E1E"/>
-    <rect x="30" y="22" width="26" height="26" rx="6" fill="#2f6fed"/>
-    <text x="70" y="40" font-family="-apple-system,Arial" font-size="17" font-weight="700" fill="#EAEAEA">Sysible Controller Settings</text>
-
-    <text x="40" y="80" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">CONTROLLER CONFIGURATION</text>
-    <rect x="40" y="88" width="820" height="60" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <rect x="54" y="104" width="180" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="62" y="120" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Hostname</text>
-    <rect x="246" y="104" width="180" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="254" y="120" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">10.0.1.5</text>
-    <rect x="438" y="104" width="220" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="446" y="120" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">All Detected IPs (failover) ▾</text>
-    <rect x="670" y="104" width="80" height="24" rx="4" fill="#2B2B2B" stroke="#505050"/><text x="678" y="120" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">9000</text>
-    <rect x="762" y="104" width="84" height="24" rx="4" fill="#3C4B64" stroke="#506080"/><text x="804" y="120" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Save</text>
-
-    <text x="40" y="180" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">ADMINISTRATORS</text>
-    <rect x="40" y="188" width="820" height="120" rx="6" fill="#2B2B2B" stroke="#505050"/>
-    <rect x="40" y="188" width="820" height="22" fill="#252525"/>
-    <text x="54" y="203" font-size="10" font-weight="700" fill="#9aa5b1" font-family="-apple-system,Arial">USERNAME</text>
-    <text x="260" y="203" font-size="10" font-weight="700" fill="#9aa5b1" font-family="-apple-system,Arial">CREATED BY</text>
-    <text x="460" y="203" font-size="10" font-weight="700" fill="#9aa5b1" font-family="-apple-system,Arial">LAST LOGIN</text>
-    <text x="660" y="203" font-size="10" font-weight="700" fill="#9aa5b1" font-family="-apple-system,Arial">MUST CHANGE PW</text>
-    <text x="54" y="228" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">admin</text>
-    <text x="260" y="228" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">system</text>
-    <text x="460" y="228" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">Jun 18, 2026 09:02</text>
-    <text x="660" y="228" font-size="11" fill="#9aa5b1" font-family="-apple-system,Arial">No</text>
-    <text x="54" y="252" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">jdoe</text>
-    <text x="260" y="252" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">admin</text>
-    <text x="460" y="252" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">Never</text>
-    <text x="660" y="252" font-size="11" fill="#e0a93c" font-family="-apple-system,Arial">Yes</text>
-    <rect x="54" y="276" width="170" height="22" rx="4" fill="#3C4B64" stroke="#506080"/><text x="139" y="291" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Add Administrator</text>
-
-    <text x="40" y="340" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">AUDIT LOG</text>
-    <rect x="40" y="348" width="820" height="130" rx="6" fill="#2B2B2B" stroke="#505050"/>
-    <text x="54" y="372" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">2026-06-18 09:02:11 — login_success — admin</text>
-    <text x="54" y="394" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">2026-06-17 17:40:55 — admin_added — jdoe (by admin)</text>
-    <text x="54" y="416" font-size="11" fill="#ff8080" font-family="-apple-system,Arial">2026-06-17 08:11:02 — login_failed — admin</text>
-  </svg>
+  <img src="screenshot_settings.png" alt="Sysible Controller Settings — controller configuration, administrators, password policy, audit log, and license/version, all in one place." style="display:block;width:100%;height:auto;">
 </figure>
-<figcaption>Sysible Controller Settings — controller configuration, administrators, and audit log.</figcaption>
+<figcaption>Sysible Controller Settings — controller configuration, administrators, password policy, audit log, and license/version, all in one place.</figcaption>
 
 <h2 id="settings-controller">Controller Configuration</h2>
 <p>Controls the network address baked into every agent bundle — where enrolled agents are told to connect. Set a <strong>Hostname</strong>, an <strong>IP Address</strong>, or both; a <strong>Detect Local IPs</strong> button populates real candidates. The <strong>"Use for agent bundles"</strong> dropdown decides what's actually used:</p>
@@ -671,9 +519,15 @@ sudo ./run_agent.sh</pre>
 <div class="page" id="sysadmin">
 <h1 class="sec"><span class="tag">Section 10</span>System Administration</h1>
 
-<p>The System Administration menu is the hub for day-to-day fleet management. Rather than one sprawling window, it opens a compact launcher with eighteen tiles, each opening its own dedicated window: <strong>User &amp; Group Administration</strong>, <strong>System Health &amp; Logs</strong>, <strong>Service Management</strong>, <strong>Environmental Policies</strong>, <strong>Cron &amp; Systemd Timers</strong>, <strong>Host Software Management</strong>, <strong>Repository Management</strong>, <strong>Network Management</strong>, <strong>File System Management</strong>, <strong>Storage Administration</strong>, <strong>Firewall Administration</strong>, <strong>Security Administration</strong>, <strong>Backup &amp; Recovery</strong>, <strong>System Boot &amp; Recovery</strong>, <strong>Time Synchronization</strong>, <strong>Certificate Management</strong>, <strong>Containers &amp; VMs</strong>, and <strong>Directory Services (AD / LDAP)</strong>. (Running an ad-hoc script across hosts lives in <strong>Sysible Connect</strong>, not here.)</p>
+<p>The System Administration menu is the hub for day-to-day fleet management. Rather than one sprawling window, it opens a compact launcher with seventeen tiles, each opening its own dedicated window: <strong>User &amp; Group Administration</strong>, <strong>System Health, Logs &amp; Recovery</strong> (health and boot/kernel recovery combined into one window), <strong>Service Management</strong>, <strong>Environmental Policies</strong>, <strong>Cron &amp; Systemd Timers</strong>, <strong>Host Software Management</strong>, <strong>Repository Management</strong>, <strong>Network Management</strong>, <strong>File System Management</strong>, <strong>Storage Administration</strong>, <strong>Firewall Administration</strong>, <strong>Security Administration</strong>, <strong>Backup &amp; Recovery</strong>, <strong>Time Synchronization</strong>, <strong>Certificate Management</strong>, <strong>Containers &amp; VMs</strong>, and <strong>Directory Services (Active Directory / LDAP)</strong>. (Running an ad-hoc script across hosts lives in <strong>Sysible Connect</strong>, not here.) A <strong>search box</strong> at the top of the launcher filters the tiles as you type — enter a word like <em>firewall</em>, <em>users</em>, or <em>raid</em> and only the matching tools remain, the same idea as the main Dashboard's search.</p>
 
-<h2>What ties the twelve tools together</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">System Administration</span></div>
+  <img src="screenshot_system_administration.png" alt="The System Administration launcher — a three-column grid of seventeen color-coded tool tiles, each opening its own focused window." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>The System Administration launcher — a search box (type to filter the tiles, e.g. “firewall” or “raid”) over seventeen color-coded tool tiles, each opening its own focused window.</figcaption>
+
+<h2>What ties the seventeen tools together</h2>
 <ul>
 <li><strong>A unified, merged host list.</strong> Every tool works against the same pool of hosts regardless of connection method (agent or SSH) — you never have to think about which transport a host uses.</li>
 <li><strong>Grouping by environment.</strong> Hosts are organized under collapsible environment headers, with Collapse All / Expand All for tidying a large fleet.</li>
@@ -685,44 +539,13 @@ sudo ./run_agent.sh</pre>
 </ul>
 
 <h2 id="uga">User &amp; Group Administration</h2>
-<p>The most detailed of the five tools — accounts, passwords, sudo rights, group memberships, and account metadata across the fleet.</p>
+<p>The most detailed of the seventeen tools — accounts, passwords, sudo rights, group memberships, and account metadata across the fleet.</p>
 
 <figure class="mock">
-  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">User &amp; Group Administration</span></div>
-  <svg viewBox="0 0 900 520" xmlns="http://www.w3.org/2000/svg">
-    <rect width="900" height="520" fill="#1E1E1E"/>
-    <text x="40" y="40" font-family="-apple-system,Arial" font-size="16" font-weight="700" fill="#EAEAEA">User &amp; Group Administration — Viewing: db-01</text>
-    <rect x="40" y="60" width="200" height="430" rx="6" fill="#2B2B2B" stroke="#505050"/>
-    <rect x="52" y="72" width="176" height="22" rx="4" fill="#1E1E1E" stroke="#505050"/><text x="60" y="87" font-size="10" fill="#9aa5b1" font-family="-apple-system,Arial">Search users…</text>
-    <text x="60" y="116" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">root</text>
-    <rect x="52" y="126" width="176" height="20" fill="#3C4B64" opacity="0.5"/><text x="60" y="140" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">jsmith</text>
-    <text x="60" y="166" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">deploy</text>
-    <text x="60" y="192" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">www-data</text>
-
-    <rect x="250" y="60" width="610" height="32" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <text x="262" y="80" font-size="11" fill="#6fa8ff" font-family="-apple-system,Arial">Create User</text>
-    <text x="350" y="80" font-size="11" fill="#EAEAEA" font-family="-apple-system,Arial">Account</text>
-    <text x="430" y="80" font-size="11" fill="#9aa5b1" font-family="-apple-system,Arial">Password</text>
-    <text x="520" y="80" font-size="11" fill="#9aa5b1" font-family="-apple-system,Arial">Groups</text>
-    <text x="600" y="80" font-size="11" fill="#9aa5b1" font-family="-apple-system,Arial">Reports</text>
-
-    <rect x="250" y="100" width="610" height="390" rx="6" fill="#262626" stroke="#3A3A3A"/>
-    <text x="266" y="128" font-size="12" fill="#9aa5b1" font-family="-apple-system,Arial">Account Status:</text>
-    <text x="400" y="128" font-size="12" font-weight="700" fill="#3ac95a" font-family="-apple-system,Arial">ACTIVE</text>
-    <text x="266" y="156" font-size="11" fill="#9aa5b1" font-family="-apple-system,Arial">Shell: /bin/bash</text>
-    <text x="266" y="178" font-size="11" fill="#9aa5b1" font-family="-apple-system,Arial">Sudo: enabled</text>
-    <text x="266" y="200" font-size="11" fill="#9aa5b1" font-family="-apple-system,Arial">Groups: sudo, deploy, docker</text>
-    <text x="266" y="222" font-size="11" fill="#9aa5b1" font-family="-apple-system,Arial">Active Sessions: pts/0 (10.0.4.2)</text>
-    <rect x="266" y="250" width="80" height="26" rx="4" fill="#3C4B64" stroke="#506080"/><text x="306" y="267" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Lock</text>
-    <rect x="356" y="250" width="80" height="26" rx="4" fill="#3C4B64" stroke="#506080"/><text x="396" y="267" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Unlock</text>
-    <rect x="446" y="250" width="100" height="26" rx="4" fill="#3C4B64" stroke="#506080"/><text x="496" y="267" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Toggle Sudo</text>
-    <rect x="556" y="250" width="110" height="26" rx="4" fill="#3C4B64" stroke="#506080"/><text x="611" y="267" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Kill Sessions</text>
-    <rect x="676" y="250" width="100" height="26" rx="4" fill="#5a2323" stroke="#7a3030"/><text x="726" y="267" font-size="10" fill="#ffb3b3" text-anchor="middle" font-family="-apple-system,Arial">Delete User</text>
-    <rect x="266" y="300" width="280" height="30" rx="5" fill="#7a1f1f" stroke="#9a2a2a"/>
-    <text x="406" y="320" font-size="11" fill="#ffd0d0" text-anchor="middle" font-family="-apple-system,Arial">Terminate User (Remove From ALL Hosts)</text>
-  </svg>
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">User & Group Administration</span></div>
+  <img src="screenshot_user_group.png" alt="User &amp; Group Administration — host checklist on the left, the tabbed account panel (Create User, Account, Password, Groups, Reports), and per-host result tabs." style="display:block;width:100%;height:auto;">
 </figure>
-<figcaption>User &amp; Group Administration — host checklist, user list, and the tabbed account-management panel.</figcaption>
+<figcaption>User &amp; Group Administration — host checklist on the left, the tabbed account panel (Create User, Account, Password, Groups, Reports), and per-host result tabs.</figcaption>
 
 <h3>Host checklist and syncing</h3>
 <p>Before showing anything useful, the tool needs a live snapshot of each host's actual users, groups, and sessions. Check one or more hosts and click <strong>Sync Checked Hosts</strong>; SSH hosts respond immediately, agent hosts are polled until they report back. Clicking a host makes it "active," and every account-changing action automatically triggers a quiet re-sync of the affected host shortly after it completes.</p>
@@ -738,7 +561,13 @@ sudo ./run_agent.sh</pre>
 </table>
 <div class="note"><b>Password policy</b>Any password set here — typed or generated — is checked against the policy defined in Environmental Policies. If the controller can't be reached to check it, a sensible built-in baseline is used instead.</div>
 
-<h2 id="health">System Health &amp; Logs</h2>
+<h2 id="health">System Health, Logs &amp; Recovery</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">System Health, Logs & Recovery</span></div>
+  <img src="screenshot_health_logs.png" alt="System Health, Logs & Recovery — health/logs/process tools grouped into tabs (Overview & Disk, Processes, Logs, Diagnostics, Support & Reports), with a green/amber/red verdict per host." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>System Health, Logs &amp; Recovery — the actions are grouped into tabs (Overview &amp; Disk, Processes, Logs, Diagnostics, Support &amp; Reports), with a green/amber/red verdict per host; the same window's second top-level tab is Boot &amp; Recovery (Section 16).</figcaption>
+<div class="note"><b>One window, two halves</b>System Health &amp; Logs and System Boot &amp; Recovery are now combined into a single tile, <strong>System Health, Logs &amp; Recovery</strong>, opening one window with two top-level tabs: <strong>Health &amp; Logs</strong> (this section) and <strong>Boot &amp; Recovery</strong> (Section 16). They're both "is this host healthy, and how do I fix it?" tools, so they live together. The busy single column of buttons is also gone — the health actions are now grouped into their own tabs.</div>
 <p>A diagnostics tool: read-only checks across checked hosts, plus process-management actions for intervening when something is misbehaving.</p>
 <table class="ref">
 <tr><th>Check / Action</th><th>What it reports</th></tr>
@@ -804,10 +633,20 @@ sudo ./run_agent.sh</pre>
 <p>Each (host, report) pair gets its own closable tab in the <strong>Reports</strong> area below, same as every other System Health &amp; Logs check — <strong>Clear All Reports</strong> closes them all at once.</p>
 
 <h2 id="services">Service Management</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Service Management</span></div>
+  <img src="screenshot_service.png" alt="Service Management — start/stop/restart, enable/disable, status, logs, and troubleshooting for systemd services across checked hosts." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Service Management — start/stop/restart, enable/disable, status, logs, and troubleshooting for systemd services across checked hosts.</figcaption>
 <p>Controls, inspects, and creates systemd services across the fleet. <strong>List Installed Services</strong> populates a searchable list; clicking an entry fills the Service name field. With a name in place: <strong>Start / Stop / Restart / Reload</strong>, <strong>Enable At Boot / Disable At Boot</strong>, <strong>Check Status</strong>, <strong>View Logs</strong>, <strong>Troubleshoot This Service</strong>, <strong>Troubleshoot All Failed Services</strong>, and <strong>View Dependencies</strong>.</p>
 <p>A collapsible <strong>Create / Configure Service</strong> panel (collapsed by default) lets you define a new systemd unit — name, description, ExecStart command, working directory, run-as user (default <code>root</code>), restart policy (default <code>on-failure</code>), and After-ordering (default <code>network.target</code>) — with an "enable + start immediately" checkbox checked by default. <strong>Configure Dependencies</strong> adds <code>After=</code>/<code>Requires=</code>/<code>Wants=</code> relationships via a non-destructive systemd override drop-in, rather than editing the original unit file.</p>
 
 <h2 id="envpolicy">Environmental Policies</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Environmental Policies</span></div>
+  <img src="screenshot_environmental_policies.png" alt="Environmental Policies — set the password, lockout, sudo, and umask baseline, then push selected policies to checked hosts." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Environmental Policies — set the password, lockout, sudo, and umask baseline, then push selected policies to checked hosts.</figcaption>
 <p>Defines the baseline password, lockout, sudo, and umask policy for <em>operating-system</em> accounts on managed hosts — distinct from the Administrator Password Policy, which governs only logins to the Sysible Controller GUI itself.</p>
 <table class="ref">
 <tr><th>Group</th><th>Settings</th></tr>
@@ -819,12 +658,22 @@ sudo ./run_agent.sh</pre>
 <p><strong>Save Policy Defaults</strong> persists the baseline — and takes effect immediately, with no host interaction, for one purpose: User &amp; Group Administration's password Generate/Set/Create actions read this same saved policy everywhere in the application. <strong>Push Selected Policies to Checked Hosts</strong> writes the chosen categories into each host's real configuration: Password Quality into its <code>pwquality.conf</code>-style file, Lockout into <code>faillock.conf</code>-style config, Sudo into a <code>sudoers.d</code> drop-in, and Umask into its <code>login.defs</code>-style default.</p>
 
 <h2 id="cron">Cron &amp; Systemd Timers</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Cron & Systemd Timers</span></div>
+  <img src="screenshot_cron_timers.png" alt="Cron &amp; Systemd Timers — list/add/remove cron jobs and create, start/stop, enable/disable, and delete systemd timers." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Cron &amp; Systemd Timers — list/add/remove cron jobs and create, start/stop, enable/disable, and delete systemd timers.</figcaption>
 <p>Manages two parallel scheduling mechanisms, both against the same merged host checklist.</p>
 <p><strong>Cron Jobs</strong> operates on the connecting account's own crontab; <strong>List Cron Jobs</strong> also includes <code>/etc/crontab</code> and <code>/etc/cron.d</code> so system-wide jobs are visible too. Add a job with the schedule builder (below), a command, and an optional comment; remove one by pasting the exact line, snippet, or comment to match.</p>
 <p><strong>Systemd Timers</strong> mirror ordinary service lifecycle controls (Start, Stop, Enable/Disable At Boot, Check Status) plus <strong>Delete Timer</strong>, which by default also deletes the paired oneshot service the timer triggers (a checkbox controls this). A collapsible <strong>Create Systemd Timer</strong> panel defines a name, description, ExecStart command, a calendar schedule and/or <code>OnBootSec</code>/<code>OnUnitActiveSec</code> triggers, a run-as user, and the same "enable + start immediately" default.</p>
 <p>Both cron and timer schedules use the same <strong>human-readable schedule builder</strong> — plain-English frequency/time choices translated into the correct cron or <code>OnCalendar</code> syntax behind the scenes, with an advanced option to type the raw expression directly.</p>
 
 <h2 id="softwaremgmt">Host Software Management</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Host Software Management</span></div>
+  <img src="screenshot_host_software.png" alt="Host Software Management — detect the package manager, then install, remove, update, query, verify, and clean packages across apt/dnf/yum/zypper." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Host Software Management — detect the package manager, then install, remove, update, query, verify, and clean packages across apt/dnf/yum/zypper.</figcaption>
 <p>Installs, removes, updates, and inspects packages across the fleet — working unmodified against RHEL/CentOS/Fedora (<code>dnf</code>, falling back to <code>yum</code>), openSUSE/SLES (<code>zypper</code>), and Debian/Ubuntu (<code>apt</code>) hosts. Every command this tool sends detects the target host's package manager fresh, at the moment it runs, rather than assuming or caching one — so a single action against a checklist of mixed-distro hosts is dispatched correctly to each one without any extra setup. If you don't know a package's exact name, <strong>Search Available</strong> queries the host's repositories so you can find it (for example, typing <code>http</code> turns up <code>httpd</code> / <code>apache2</code>) and install it without leaving the page.</p>
 <table class="ref">
 <tr><th>Action</th><th>What it does</th></tr>
@@ -841,6 +690,11 @@ sudo ./run_agent.sh</pre>
 <div class="note"><b>Package name(s) field</b>Install, Remove, and Query/Verify (which take exactly one name) all read from the same Package name(s) field — space-separated for Install/Remove, a single name for Query and Verify.</div>
 
 <h2 id="repomgmt">Repository Management</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Repository Management</span></div>
+  <img src="screenshot_repository.png" alt="Repository Management — list, add, enable, disable, and remove repositories on one host or roll a new repo out to the whole fleet." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Repository Management — list, add, enable, disable, and remove repositories on one host or roll a new repo out to the whole fleet.</figcaption>
 <p>Configures where packages come from — separate from Host Software Management on purpose, since adding or toggling a repository source is a distinct, less frequent action from installing or removing the packages that come from it.</p>
 <table class="ref">
 <tr><th>Action</th><th>What it does</th></tr>
@@ -854,6 +708,11 @@ sudo ./run_agent.sh</pre>
 <div class="note"><b>Alias / Repository ID</b>Required to Add on <code>zypper</code> and Debian/Ubuntu, and required for Enable / Disable / Remove on every platform. Letters, numbers, dots, dashes, and underscores only.</div>
 
 <h2 id="netmgmt">Network Management</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Network Management</span></div>
+  <img src="screenshot_network.png" alt="Network Management — ping/traceroute/DNS diagnostics and port inspection (Diagnostics tab), plus addressing, DNS, routing, and layer-2 tabs." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Network Management — ping/traceroute/DNS diagnostics and port inspection (Diagnostics tab), plus addressing, DNS, routing, and layer-2 tabs.</figcaption>
 <p>Diagnoses connectivity and DNS, inspects ports, captures packets, and configures IP/DHCP/DNS/gateway/routing/hostname/bonding/teaming/VLANs/bridges/MTU — across the same merged agent + SSH host list as every other System Administration tool. The read-only diagnostics (ping, traceroute, DNS lookups, port/socket inspection, packet capture) are built on standard tools every supported distro ships or can detect as missing. Everything that actually changes a host's network configuration is standardized on <code>nmcli</code> (NetworkManager's CLI); a host that isn't running NetworkManager gets a clear error instead of a silent no-op when a configuration action is run against it, while the read-only diagnostics still work everywhere regardless.</p>
 
 <h3>Diagnostics</h3>
@@ -904,6 +763,11 @@ sudo ./run_agent.sh</pre>
 </table>
 
 <h2 id="fsmgmt">File System Management</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">File System Management</span></div>
+  <img src="screenshot_filesystem.png" alt="File System Management — List/Create/Remove Directory, copy/move/rename, and tabs for permissions, mounts, NFS/CIFS, resize, fstab, quotas, and archives." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>File System Management — the Directories and Files tab (now with <b>List Directory</b>), plus separate tabs for permissions/links, Mount / Unmount, Network Mounts (NFS/CIFS), Resize &amp; Repair, Disk Usage, fstab &amp; quotas, and archives. Host-list checkboxes have an orange border for legibility.</figcaption>
 <p>Covers directory and file operations, ownership/permissions/ACLs and links, mount/unmount/resize/repair, <code>/etc/fstab</code> and quotas, and archive/compress — across the merged host list. File- and directory-level actions (create/remove, copy/move/rename, ownership/permissions/ACLs, links, archive/compress) are universal coreutils/tar/gzip-family commands with no filesystem-type assumption. Mount/resize/repair are filesystem-type-aware (ext2/3/4, xfs, btrfs) and auto-detect which tool to call. Check Disk Usage and Find Large Files intentionally reuse the same command builders as System Health &amp; Logs rather than duplicating them.</p>
 
 <h3>Directories and Files</h3>
@@ -961,6 +825,11 @@ sudo ./run_agent.sh</pre>
 </table>
 
 <h2 id="storageadmin">Storage Administration</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Storage Administration</span></div>
+  <img src="screenshot_storage.png" alt="Storage Administration — disks and SMART, partitions, formatting, LVM, RAID, and swap, organized into tabs." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Storage Administration — disks and SMART, partitions, formatting, LVM, RAID, and swap, organized into tabs. The Disks, Partitions, and LVM tabs open with a plain-language intro of the workflow, the LVM tab has an <b>Install LVM Tools</b> button, and host-list checkboxes use an orange border so they're easy to see.</figcaption>
 <p>Everything below the filesystem layer that File System Management doesn't cover: partitions, raw <code>mkfs</code> formatting, LVM (physical volumes, volume groups, logical volumes), software RAID, swap, and whole-disk health/add/remove — across the merged host list.</p>
 
 <h3>Disks</h3>
@@ -1018,6 +887,11 @@ sudo ./run_agent.sh</pre>
 </table>
 
 <h2 id="firewalladmin">Firewall Administration</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Firewall Administration</span></div>
+  <img src="screenshot_firewall.png" alt="Firewall Administration — firewalld status, ports, zones, and rich rules, plus raw nftables and iptables tabs." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Firewall Administration — firewalld status, ports, zones, and rich rules, plus raw nftables and iptables tabs.</figcaption>
 <p>Covers firewalld (service state, default zone, ports, zones, rich rules) plus the two lower-level backends it normally sits on top of, nftables and iptables — across the merged host list, so a host can be managed at whichever layer is appropriate for it.</p>
 
 <h3>Firewalld</h3>
@@ -1076,6 +950,11 @@ sudo ./run_agent.sh</pre>
 </table>
 
 <h2 id="securityadmin">Security Administration</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Security Administration</span></div>
+  <img src="screenshot_security.png" alt="Security Administration — SELinux, SSH hardening, audit &amp; logins, updates &amp; policy, and hardening &amp; scans tabs." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Security Administration — SELinux, SSH hardening, audit &amp; logins, updates &amp; policy, and hardening &amp; scans tabs.</figcaption>
 <p>Covers SELinux (mode and booleans, denial troubleshooting, file contexts, policy modules), SSH hardening (sshd options, root login, key-based auth, key rotation), audit logs and failed-login review, security updates and password policy, and baseline system hardening plus vulnerability scans — across the merged host list.</p>
 
 <h3>SELinux</h3>
@@ -1140,6 +1019,11 @@ sudo ./run_agent.sh</pre>
 </table>
 
 <h2 id="backuprecovery">Backup &amp; Recovery</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Backup & Recovery</span></div>
+  <img src="screenshot_backup.png" alt="Backup &amp; Recovery — back up/restore/verify files, LVM snapshots, scheduled backups, and a disaster-recovery drill." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Backup &amp; Recovery — back up/restore/verify files, LVM snapshots, scheduled backups, and a disaster-recovery drill.</figcaption>
 <p>File backups and recovery, dispatched to whichever hosts are checked, with a green/red success-or-failure banner on each host's result. Three tabs: <strong>Files</strong>, <strong>Snapshots</strong>, and <strong>Schedule &amp; DR</strong>.</p>
 <table class="ref">
 <tr><th>Action</th><th>What it does</th></tr>
@@ -1153,7 +1037,12 @@ sudo ./run_agent.sh</pre>
 </table>
 
 <h2 id="bootrecovery">System Boot &amp; Recovery</h2>
-<p>Boot diagnostics, GRUB, and kernel management. Two tabs: <strong>Boot &amp; GRUB</strong> and <strong>Kernels</strong>.</p>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">System Boot & Recovery</span></div>
+  <img src="screenshot_boot.png" alt="System Boot &amp; Recovery — analyze boot failures, manage GRUB, set recovery targets, kernel parameters, initramfs, and old kernels." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>System Boot &amp; Recovery — analyze boot failures, manage GRUB, set recovery targets, kernel parameters, initramfs, and old kernels.</figcaption>
+<p>Boot diagnostics, GRUB, and kernel management. Reached as the <strong>Boot &amp; Recovery</strong> tab of the combined <a href="#health">System Health, Logs &amp; Recovery</a> window (Section 10). Two inner tabs: <strong>Boot &amp; GRUB</strong> and <strong>Kernels</strong>.</p>
 <table class="ref">
 <tr><th>Action</th><th>What it does</th></tr>
 <tr><td>Analyze Boot Failures</td><td>Recent boots, boot timing and slowest units, failed units, and boot-time error log lines.</td></tr>
@@ -1165,6 +1054,11 @@ sudo ./run_agent.sh</pre>
 </table>
 
 <h2 id="timesync">Time Synchronization</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Time Synchronization</span></div>
+  <img src="screenshot_timesync.png" alt="Time Synchronization — chrony/NTP status and configuration, drift troubleshooting, and time-zone management." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Time Synchronization — chrony/NTP status and configuration, drift troubleshooting, and time-zone management.</figcaption>
 <p>Time service configuration and time-zone management. Two tabs: <strong>NTP &amp; Chrony</strong> and <strong>Time Zone</strong>.</p>
 <table class="ref">
 <tr><th>Action</th><th>What it does</th></tr>
@@ -1176,6 +1070,11 @@ sudo ./run_agent.sh</pre>
 </table>
 
 <h2 id="certmgmt">Certificate Management</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Certificate Management</span></div>
+  <img src="screenshot_certs.png" alt="Certificate Management — generate CSRs, install/renew/replace certs, check expiry, and verify chains / troubleshoot TLS." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Certificate Management — generate CSRs, install/renew/replace certs, check expiry, and verify chains / troubleshoot TLS.</figcaption>
 <p>X.509 certificate lifecycle and TLS troubleshooting. Two tabs: <strong>Certificates</strong> and <strong>Chain &amp; TLS</strong>.</p>
 <table class="ref">
 <tr><th>Action</th><th>What it does</th></tr>
@@ -1188,6 +1087,11 @@ sudo ./run_agent.sh</pre>
 </table>
 
 <h2 id="containersvms">Containers &amp; VMs</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Containers & VMs</span></div>
+  <img src="screenshot_containers.png" alt="Containers &amp; VMs — list and control Docker/Podman containers and images, and manage libvirt virtual machines." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Containers &amp; VMs — list and control Docker/Podman containers and images, and manage libvirt virtual machines.</figcaption>
 <p>Container and virtual-machine management. Two tabs: <strong>Containers</strong> (Docker if present, else Podman) and <strong>Virtual Machines</strong> (libvirt).</p>
 <table class="ref">
 <tr><th>Action</th><th>What it does</th></tr>
@@ -1201,7 +1105,12 @@ sudo ./run_agent.sh</pre>
 <p>Opened from the <strong>Run Script on All Hosts…</strong> button at the top of <strong>Sysible Connect</strong> (Section 8). The general-purpose tool for ad-hoc tasks and automating repetitive work across the fleet: enter a shell command or a multi-line script and run it on every checked host at once; each host's output and exit code come back in its own result tab with the usual green/red banner.</p>
 <div class="warn"><b>Runs exactly what you enter</b>The command/script executes as root via the agent (or over SSH) on every checked host. A confirmation dialog shows the host count and a preview before anything runs, but there is no syntax checking - double-check destructive commands first.</div>
 
-<h2 id="directory">Directory Services (AD / LDAP)</h2>
+<h2 id="directory">Directory Services (Active Directory / LDAP)</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Directory Services (Active Directory / LDAP)</span></div>
+  <img src="screenshot_directory.png" alt="Directory Services — install AD/LDAP dependencies, join Active Directory, manage realm status and logins, and configure LDAP/LDAPS and Kerberos." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Directory Services — install AD/LDAP dependencies, join Active Directory, manage realm status and logins, and configure LDAP/LDAPS and Kerberos.</figcaption>
 <p>Its own System Administration tile. Joins managed hosts to Active Directory and configures LDAP/LDAPS identity. Two tabs: <strong>Active Directory</strong> and <strong>LDAP / LDAPS</strong>.</p>
 <table class="ref">
 <tr><th>Action</th><th>What it does</th></tr>
@@ -1218,6 +1127,11 @@ sudo ./run_agent.sh</pre>
 <!-- ===================== 11. WEBSERVER PORTAL ===================== -->
 <div class="page" id="portal">
 <h1 class="sec"><span class="tag">Section 11</span>Webserver Portal</h1>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Webserver Portal Configuration</span></div>
+  <img src="screenshot_portal.png" alt="Webserver Portal Configuration — start/stop the portal, set its port and credentials, review login history and sessions, and manage the shared file pool." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Webserver Portal Configuration — start/stop the portal, set its port and credentials, review login history and sessions, and manage the shared file pool.</figcaption>
 
 <p>The Webserver Portal is a small, separate HTTPS web application — independent of the main controller API — that gives managed hosts a self-service way to download the agent bundle and exchange files with the controller, without needing GUI or SSH access. It runs as its own subprocess, started and stopped from the <strong>Webserver Portal Configuration</strong> tile.</p>
 

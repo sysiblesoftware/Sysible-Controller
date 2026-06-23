@@ -107,6 +107,22 @@ QCheckBox::indicator:disabled {
     background: rgba(127,127,127,0.08);
 }
 
+/* Host-list (and other checkable list) checkboxes. These are item-view
+   indicators, not QCheckBox, so they need their own rule - without it
+   they fall back to the near-invisible default. A bright orange border
+   makes them readable against the dark row background. */
+QListWidget::indicator, QListView::indicator, QTreeView::indicator {
+    width: 16px;
+    height: 16px;
+    border: 2px solid #f5a623;
+    border-radius: 4px;
+    background: rgba(127,127,127,0.20);
+}
+QListWidget::indicator:checked, QListView::indicator:checked, QTreeView::indicator:checked {
+    background: #3ac95a;
+    border-color: #f5a623;
+}
+
 QScrollBar:vertical {
     background: #1E1E1E;
     width: 13px;
@@ -246,6 +262,20 @@ QCheckBox::indicator:checked {
 QCheckBox::indicator:disabled {
     border-color: #cbd0d8;
     background: #eef0f3;
+}
+
+/* Host-list (and other checkable list) checkboxes - see the dark-theme
+   note above. Orange border so the boxes stand out in the host list. */
+QListWidget::indicator, QListView::indicator, QTreeView::indicator {
+    width: 16px;
+    height: 16px;
+    border: 2px solid #e08900;
+    border-radius: 4px;
+    background: #ffffff;
+}
+QListWidget::indicator:checked, QListView::indicator:checked, QTreeView::indicator:checked {
+    background: #3ac95a;
+    border-color: #e08900;
 }
 
 QScrollBar:vertical {

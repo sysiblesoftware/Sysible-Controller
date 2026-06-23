@@ -147,6 +147,21 @@ class SecurityAdministrationPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
+        install_row = QHBoxLayout()
+        install_hint = QLabel(
+            "Every action on this tab needs the SELinux userspace tools (getenforce, "
+            "semanage, setsebool, restorecon, audit2allow…). Install them if a host reports "
+            "them missing. On Debian/Ubuntu this installs the tools but doesn't switch the "
+            "host to SELinux — that's a separate, reboot-level change."
+        )
+        theme.style_hint_label(install_hint)
+        install_hint.setWordWrap(True)
+        install_row.addWidget(install_hint, 1)
+        btn_install_selinux = QPushButton("Install SELinux Tools")
+        btn_install_selinux.clicked.connect(self.run_install_selinux_tools)
+        install_row.addWidget(btn_install_selinux)
+        layout.addLayout(install_row)
+
         _box1, _g1 = self._group("Mode")
 
         status_row = QHBoxLayout()
@@ -635,6 +650,9 @@ class SecurityAdministrationPage(QWidget):
         btn_run_lynis = QPushButton("Run Lynis Scan")
         btn_run_lynis.clicked.connect(self.run_lynis_scan)
         scans_row.addWidget(btn_run_lynis)
+        btn_install_rkhunter = QPushButton("Install rkhunter")
+        btn_install_rkhunter.clicked.connect(self.run_install_rkhunter)
+        scans_row.addWidget(btn_install_rkhunter)
         btn_run_rkhunter = QPushButton("Run rkhunter Scan")
         btn_run_rkhunter.clicked.connect(self.run_rkhunter_scan)
         scans_row.addWidget(btn_run_rkhunter)
@@ -650,6 +668,12 @@ class SecurityAdministrationPage(QWidget):
         layout.addStretch()
         return panel
 
+    def clear_all_results(self):
+        """Close every per-host result tab at once."""
+        self.security_tabs.clear()
+        self.security_results = {}
+        self.security_pending = {}
+
     def _build_results_panel(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -657,7 +681,14 @@ class SecurityAdministrationPage(QWidget):
 
         self.security_status = QLabel("Pick an action above to run it on all checked hosts.")
         self.security_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
-        layout.addWidget(self.security_status)
+        _hdr = QHBoxLayout()
+        _hdr.addWidget(self.security_status)
+        _hdr.addStretch()
+        _btn_clear_all = QPushButton("Clear All Results")
+        _btn_clear_all.setToolTip("Close every per-host result tab below.")
+        _btn_clear_all.clicked.connect(self.clear_all_results)
+        _hdr.addWidget(_btn_clear_all)
+        layout.addLayout(_hdr)
 
         self.security_tabs = QTabWidget()
         self.security_tabs.setTabsClosable(True)
@@ -759,6 +790,9 @@ class SecurityAdministrationPage(QWidget):
     # =========================================================
     # SELINUX ACTIONS
     # =========================================================
+    def run_install_selinux_tools(self):
+        self._run_security_command(api.cmd_install_selinux_tools(), "Install SELinux Tools")
+
     def run_selinux_status(self):
         self._run_security_command(api.cmd_selinux_status(), "SELinux Status")
 
@@ -1113,6 +1147,9 @@ class SecurityAdministrationPage(QWidget):
 
     def run_install_lynis(self):
         self._run_security_command(api.cmd_install_lynis(), "Install Lynis")
+
+    def run_install_rkhunter(self):
+        self._run_security_command(api.cmd_install_rkhunter(), "Install rkhunter")
 
     def run_lynis_scan(self):
         self._run_security_command(api.cmd_run_lynis_scan(), "Run Lynis Scan")

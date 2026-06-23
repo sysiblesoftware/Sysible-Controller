@@ -1,9 +1,10 @@
 import html
+import os
 
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton,
-    QLineEdit, QTextEdit, QMessageBox, QTabWidget,
+    QLineEdit, QTextEdit, QMessageBox, QTabWidget, QFileDialog,
 )
 from PySide6.QtCore import Qt, QTimer
 
@@ -181,7 +182,16 @@ class HostSoftwareManagementPage(QWidget):
         btn_remove = QPushButton("Remove")
         btn_remove.clicked.connect(self.run_remove)
         btn_update = QPushButton("Update / Upgrade")
+        btn_update.setToolTip("Upgrade the named package(s), or every installed package when the field is blank.")
         btn_update.clicked.connect(self.run_update)
+        # Emphasized: keeping a fleet patched is the most common, most
+        # important action here, so it reads as the primary button rather
+        # than sitting flush with Install/Remove.
+        btn_update.setStyleSheet(
+            "QPushButton { font-weight: bold; background-color: #2f6fed; color: #ffffff; "
+            "border: 1px solid #2a63d0; border-radius: 4px; padding: 6px 14px; }"
+            "QPushButton:hover { background-color: #2a63d0; }"
+        )
         for b in (btn_install, btn_remove, btn_update):
             row1.addWidget(b)
         layout.addLayout(row1)
@@ -202,7 +212,39 @@ class HostSoftwareManagementPage(QWidget):
             row2.addWidget(b)
         layout.addLayout(row2)
 
+        # ---- Install a local package file across the checked hosts ----
+        local_hdr = QLabel("Install a Local Package File (.deb / .rpm)")
+        local_hdr.setStyleSheet("font-weight: bold;")
+        layout.addWidget(local_hdr)
+
+        local_row = QHBoxLayout()
+        self.local_pkg_path = QLineEdit()
+        self.local_pkg_path.setPlaceholderText("Local .deb or .rpm file on this computer…")
+        local_row.addWidget(self.local_pkg_path, 1)
+        btn_browse_pkg = QPushButton("Browse…")
+        btn_browse_pkg.clicked.connect(self._browse_local_package)
+        local_row.addWidget(btn_browse_pkg)
+        btn_install_local = QPushButton("Upload && Install on Checked Hosts")
+        btn_install_local.clicked.connect(self.run_install_local_package)
+        local_row.addWidget(btn_install_local)
+        layout.addLayout(local_row)
+
+        local_hint = QLabel(
+            "Uploads the file to /tmp on each checked host over SSH, then installs it with the "
+            "host's package manager (dependencies resolve from its repos). Needs an SSH connection "
+            "to the host; the agent-only file channel is too small for full packages."
+        )
+        theme.style_hint_label(local_hint)
+        local_hint.setWordWrap(True)
+        layout.addWidget(local_hint)
+
         return panel
+
+    def clear_all_results(self):
+        """Close every per-host result tab at once."""
+        self.pkg_tabs.clear()
+        self.pkg_results = {}
+        self.pkg_pending = {}
 
     def _build_results_panel(self):
         panel = QWidget()
@@ -211,7 +253,14 @@ class HostSoftwareManagementPage(QWidget):
 
         self.pkg_status = QLabel("Pick an action above to run it on all checked hosts.")
         self.pkg_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
-        layout.addWidget(self.pkg_status)
+        _hdr = QHBoxLayout()
+        _hdr.addWidget(self.pkg_status)
+        _hdr.addStretch()
+        _btn_clear_all = QPushButton("Clear All Results")
+        _btn_clear_all.setToolTip("Close every per-host result tab below.")
+        _btn_clear_all.clicked.connect(self.clear_all_results)
+        _hdr.addWidget(_btn_clear_all)
+        layout.addLayout(_hdr)
 
         self.pkg_tabs = QTabWidget()
         self.pkg_tabs.setTabsClosable(True)
@@ -339,6 +388,63 @@ class HostSoftwareManagementPage(QWidget):
             return
         self._run_pkg_command(cmd, f"Search: '{term}'")
 
+    def _browse_local_package(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose a package file", "",
+            "Packages (*.deb *.rpm);;All files (*)"
+        )
+        if path:
+            self.local_pkg_path.setText(path)
+
+    @staticmethod
+    def _ssh_id_for(entry):
+        """The SSH host id to upload through for a checked entry, or None if
+        the host has no SSH connection (agent-only - can't take a full file)."""
+        if entry["kind"] == "ssh":
+            return entry.get("id")
+        if entry["kind"] == "merged":
+            return (entry.get("ssh_entry") or {}).get("id")
+        return None
+
+    def run_install_local_package(self):
+        local = self.local_pkg_path.text().strip()
+        if not local or not os.path.isfile(local):
+            QMessageBox.warning(self, "No file", "Choose a local .deb or .rpm file first.")
+            return
+        entries = self.checked_entries()
+        if not entries:
+            QMessageBox.information(self, "No hosts checked", "Check one or more target hosts first.")
+            return
+
+        remote = "/tmp/" + os.path.basename(local)
+        uploaded, failures = [], []
+        for e in entries:
+            ssh_id = self._ssh_id_for(e)
+            if not ssh_id:
+                failures.append(f"{e['label']}: no SSH connection (agent-only)")
+                continue
+            try:
+                api.upload_file_ssh(ssh_id, local, remote)
+                uploaded.append(e)
+            except Exception as ex:
+                failures.append(f"{e['label']}: {ex}")
+
+        if failures:
+            QMessageBox.warning(
+                self, "Some uploads failed",
+                "These hosts won't get the package:\n\n" + "\n".join(failures)
+            )
+        if not uploaded:
+            return
+
+        try:
+            cmd = api.cmd_install_local_package(remote)
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid input", str(e))
+            return
+        # Install only on the hosts that actually received the file.
+        self._run_pkg_command(cmd, f"Install local package {os.path.basename(local)}", entries=uploaded)
+
     def run_install(self):
         names = self._required_package_names()
         if not names:
@@ -395,8 +501,9 @@ class HostSoftwareManagementPage(QWidget):
     # =========================================================
     # DISPATCH + RESULTS (same pattern as Service Management)
     # =========================================================
-    def _run_pkg_command(self, command, label):
-        entries = self.checked_entries()
+    def _run_pkg_command(self, command, label, entries=None):
+        if entries is None:
+            entries = self.checked_entries()
 
         if not entries:
             QMessageBox.information(self, "No hosts checked", "Check one or more target hosts first.")

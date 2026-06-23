@@ -27,6 +27,7 @@ The token may also be passed as the first CLI argument, e.g.:
 import json
 import os
 import platform
+import shlex
 import socket
 import subprocess
 import sys
@@ -310,6 +311,15 @@ def _truncate(s):
 
 
 def run_command(cmd):
+    # The controller's command builders assume root. When the agent is
+    # installed unprivileged (systemd User= a non-root account, see
+    # run_agent.sh --unprivileged), escalate each command through
+    # passwordless sudo so those same commands still work. `sudo -n`
+    # never prompts: if sudo isn't configured for this account it fails
+    # fast with a clear stderr rather than hanging. A root agent (the
+    # default) runs the command directly, exactly as before.
+    if os.geteuid() != 0:
+        cmd = "sudo -n bash -c " + shlex.quote(cmd)
     try:
         proc = subprocess.run(
             cmd,

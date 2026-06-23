@@ -143,6 +143,17 @@ class StorageAdministrationPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
+        intro = QLabel(
+            "A disk is a whole drive (e.g. /dev/sda, /dev/vdb). New to this? Start with "
+            "List Disks to see what's attached and how each is carved up. The usual order "
+            "is: List Disks → Partitions tab (create a partition) → Format Filesystems tab "
+            "→ mount it in File System Management. SMART/Health below report a drive's "
+            "condition; Rescan/Remove handle hot-plugging a drive."
+        )
+        theme.style_hint_label(intro)
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
         box, g = self._group("Overview and Health")
         overview_row = QHBoxLayout()
         btn_list_disks = QPushButton("List Disks")
@@ -219,6 +230,18 @@ class StorageAdministrationPage(QWidget):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
+
+        intro = QLabel(
+            "Partitions divide a disk into sections. Typical workflow on a blank disk: "
+            "List Partitions to inspect → create a partition table (GPT) → create a "
+            "partition → then Format it (Format Filesystems tab) and mount it (File "
+            "System Management). To grow or shrink a partition, use Resize Partition "
+            "below, then resize the filesystem inside it (File System Management → "
+            "Resize & Repair). Steps that erase data say so in red."
+        )
+        theme.style_hint_label(intro)
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
 
         box, g = self._group("Partitions")
         list_row = QHBoxLayout()
@@ -372,6 +395,21 @@ class StorageAdministrationPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
+        lvm_intro = QHBoxLayout()
+        lvm_hint = QLabel(
+            "LVM lets you pool disks/partitions into a Volume Group and carve flexible, "
+            "resizable Logical Volumes out of it. Order: Create Physical Volume(s) → "
+            "Create Volume Group → Create Logical Volume → format &amp; mount it. Every "
+            "action here needs the lvm2 package - install it if a host reports it missing."
+        )
+        theme.style_hint_label(lvm_hint)
+        lvm_hint.setWordWrap(True)
+        lvm_intro.addWidget(lvm_hint, 1)
+        btn_install_lvm = QPushButton("Install LVM Tools")
+        btn_install_lvm.clicked.connect(self.run_install_lvm_tools)
+        lvm_intro.addWidget(btn_install_lvm)
+        layout.addLayout(lvm_intro)
+
         box, g = self._group("Physical Volumes")
         pv_row = QHBoxLayout()
         pv_row.addWidget(QLabel("Device(s):"))
@@ -505,6 +543,20 @@ class StorageAdministrationPage(QWidget):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
+
+        raid_intro = QHBoxLayout()
+        raid_hint = QLabel(
+            "Software RAID (mdadm) combines disks for redundancy or speed - e.g. a "
+            "mirror (RAID1) keeps a full copy on each disk. Every action here needs the "
+            "mdadm package; install it if a host reports it missing."
+        )
+        theme.style_hint_label(raid_hint)
+        raid_hint.setWordWrap(True)
+        raid_intro.addWidget(raid_hint, 1)
+        btn_install_mdadm = QPushButton("Install RAID Tools")
+        btn_install_mdadm.clicked.connect(self.run_install_mdadm)
+        raid_intro.addWidget(btn_install_mdadm)
+        layout.addLayout(raid_intro)
 
         box, g = self._group("RAID Arrays")
         status_row = QHBoxLayout()
@@ -659,6 +711,12 @@ class StorageAdministrationPage(QWidget):
         layout.addStretch()
         return panel
 
+    def clear_all_results(self):
+        """Close every per-host result tab at once."""
+        self.storage_tabs.clear()
+        self.storage_results = {}
+        self.storage_pending = {}
+
     def _build_results_panel(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -666,7 +724,14 @@ class StorageAdministrationPage(QWidget):
 
         self.storage_status = QLabel("Pick an action above to run it on all checked hosts.")
         self.storage_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
-        layout.addWidget(self.storage_status)
+        _hdr = QHBoxLayout()
+        _hdr.addWidget(self.storage_status)
+        _hdr.addStretch()
+        _btn_clear_all = QPushButton("Clear All Results")
+        _btn_clear_all.setToolTip("Close every per-host result tab below.")
+        _btn_clear_all.clicked.connect(self.clear_all_results)
+        _hdr.addWidget(_btn_clear_all)
+        layout.addLayout(_hdr)
 
         self.storage_tabs = QTabWidget()
         self.storage_tabs.setTabsClosable(True)
@@ -776,6 +841,12 @@ class StorageAdministrationPage(QWidget):
 
     def run_install_smartmontools(self):
         self._run_storage_command(api.cmd_install_smartmontools(), "Install smartmontools")
+
+    def run_install_lvm_tools(self):
+        self._run_storage_command(api.cmd_install_lvm_tools(), "Install LVM Tools")
+
+    def run_install_mdadm(self):
+        self._run_storage_command(api.cmd_install_mdadm(), "Install RAID Tools")
 
     def run_check_smart_status(self):
         try:

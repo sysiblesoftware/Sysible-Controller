@@ -35,7 +35,7 @@ Usage, right after every addTab() call on an action-tabs QTabWidget:
     shrink_tabwidget_to_current_page(action_tabs)
     main.addWidget(action_tabs)
 """
-from PySide6.QtWidgets import QSizePolicy
+from PySide6.QtWidgets import QSizePolicy, QScrollArea
 
 
 def shrink_tabwidget_to_current_page(tab_widget, cap_height=False):
@@ -71,11 +71,21 @@ def shrink_tabwidget_to_current_page(tab_widget, cap_height=False):
         if cap_height:
             page = tab_widget.widget(index)
             if page is not None:
-                hint = page.sizeHint().height()
+                # When a page is a QScrollArea (some pages wrap each tab in
+                # one as a small-window safety net), its own sizeHint is a
+                # generic default, not the content height - so measure the
+                # widget *inside* it instead. Otherwise the cap can't hug a
+                # short tab and leaves a big block of dead space below it.
+                measure = page
+                extra = 0
+                if isinstance(page, QScrollArea) and page.widget() is not None:
+                    measure = page.widget()
+                    extra = 2 * page.frameWidth()
+                hint = measure.sizeHint().height()
                 if hint > 0:
                     bar = tab_widget.tabBar().sizeHint().height()
                     # Small margin so word-wrapped hints aren't clipped.
-                    tab_widget.setMaximumHeight(hint + bar + 24)
+                    tab_widget.setMaximumHeight(hint + bar + extra + 24)
 
     tab_widget.currentChanged.connect(_apply)
     _apply(tab_widget.currentIndex())

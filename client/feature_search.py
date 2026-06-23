@@ -135,8 +135,8 @@ REGISTRY = [
      "keywords": ["container", "docker", "podman", "container logs", "list containers",
                   "images", "virtual machine", "vm", "libvirt", "virsh", "kvm"]},
 
-    # ---- Run Command & Automation ----
-    {"title": "Run Command & Automation", "open": "open_system_admin", "sub_open": "open_automation",
+    # ---- Run A Script Across All Hosts ----
+    {"title": "Run A Script Across All Hosts", "open": "open_system_admin", "sub_open": "open_automation",
      "keywords": ["run command", "run script", "run a script", "run a command",
                   "ad hoc", "ad-hoc", "automate", "automation", "execute command",
                   "fleet command", "run on all hosts", "across all hosts",

@@ -63,7 +63,7 @@ What that buys you in practice:
 | **Time Synchronization** | Configure chrony/NTP and point it at chosen servers, verify synchronization, troubleshoot clock drift, and set the system time zone. |
 | **Certificate Management** | Generate CSRs, install/renew/replace certificates, check expiry, verify certificate chains, and troubleshoot TLS endpoints with `openssl s_client`. |
 | **Containers & VMs** | List and start/stop/restart Docker or Podman containers, view container logs and images, prune, and manage libvirt virtual machines (list/start/shutdown/destroy/info). |
-| **Run Command & Automation** | Run an ad-hoc command or multi-line script on every checked host at once — the general-purpose tool for automating repetitive tasks across the fleet, with per-host output and exit code. |
+| **Run A Script Across All Hosts** | Run an ad-hoc command or multi-line script on every checked host at once — the general-purpose tool for automating repetitive tasks across the fleet, with per-host output and exit code. |
 | **Webserver Portal** | A separate, optional HTTPS web app for host operators to self-service agent downloads and file exchange, with full login history, active-session visibility, and a shared file pool managed from the admin GUI. |
 | **Sysible Controller Settings** | Controller address/port configuration, administrator accounts, the administrator password policy, the audit log, and license/version info, all in one place. |
 

@@ -14,7 +14,7 @@ class AutomationPage(FleetToolPage):
     and exit code."""
 
     def __init__(self):
-        super().__init__("Run Command & Automation")
+        super().__init__("Run A Script Across All Hosts")
 
     def build_action_tabs(self):
         tabs = QTabWidget()

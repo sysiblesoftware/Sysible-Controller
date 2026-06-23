@@ -41,7 +41,7 @@ class SystemAdministrationPage(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("System Administration")
-        self.resize(560, 760)
+        self.resize(840, 720)
 
         self.user_group_window = None
         self.health_window = None
@@ -79,7 +79,7 @@ class SystemAdministrationPage(QWidget):
         grid = QGridLayout()
         grid.setHorizontalSpacing(16)
         grid.setVerticalSpacing(16)
-        for col in range(2):
+        for col in range(3):
             grid.setColumnStretch(col, 1)
 
         cards = [
@@ -147,14 +147,14 @@ class SystemAdministrationPage(QWidget):
              "List and start/stop/restart Docker or Podman containers, view container logs and images, "
              "and manage libvirt virtual machines across managed hosts.",
              self.open_containers_vms, "fa5s.cube", "indigo"),
-            ("Run Command & Automation",
+            ("Run A Script Across All Hosts",
              "Run an ad-hoc command or multi-line script on every checked host at once - the "
              "general-purpose tool for automating repetitive tasks across the fleet.",
              self.open_automation, "fa5s.terminal", "slate"),
         ]
 
         for index, (card_title, description, handler, icon, color) in enumerate(cards):
-            row, col = divmod(index, 2)
+            row, col = divmod(index, 3)
             grid.addWidget(
                 DashboardCard(card_title, description, handler, icon, color),
                 row, col,

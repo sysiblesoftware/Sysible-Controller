@@ -137,15 +137,15 @@ REGISTRY = [
      "keywords": ["container", "docker", "podman", "container logs", "list containers",
                   "images", "virtual machine", "vm", "libvirt", "virsh", "kvm"]},
 
-    # ---- Run A Script Across All Hosts ----
-    {"title": "Run A Script Across All Hosts", "open": "open_system_admin", "sub_open": "open_automation",
+    # ---- Run A Script Across All Hosts - lives in Sysible Connect ----
+    {"title": "Run A Script Across All Hosts (Sysible Connect)", "open": "open_remote",
      "keywords": ["run command", "run script", "run a script", "run a command",
                   "ad hoc", "ad-hoc", "automate", "automation", "execute command",
                   "fleet command", "run on all hosts", "across all hosts",
                   "script on hosts", "repetitive task", "shell command"]},
 
-    # ---- Directory Services (AD / LDAP) - a tab within Security Administration ----
-    {"title": "Directory Services (AD / LDAP) - in Security Administration", "open": "open_system_admin", "sub_open": "open_security_admin",
+    # ---- Directory Services (AD / LDAP) ----
+    {"title": "Directory Services (AD / LDAP)", "open": "open_system_admin", "sub_open": "open_directory",
      "keywords": ["active directory", "ad", "join domain", "join active directory",
                   "realm", "realmd", "sssd", "ldap", "ldaps", "kerberos", "domain join",
                   "leave domain", "directory", "winbind", "add server to active directory"]},

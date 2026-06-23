@@ -523,7 +523,7 @@ sudo ./run_agent.sh</pre>
 <div class="page" id="remote">
 <h1 class="sec"><span class="tag">Section 8</span>Sysible Connect</h1>
 
-<p>Sysible Connect is the hands-on console for working directly on individual managed hosts — whether enrolled via the Sysible agent or connected directly over SSH. It is reached from the "Sysible Connect" tile on the Dashboard.</p>
+<p>Sysible Connect is the hands-on console for working directly on individual managed hosts — whether enrolled via the Sysible agent or connected directly over SSH. It is reached from the "Sysible Connect" tile on the Dashboard. A <strong>Run Script on All Hosts…</strong> button at the top opens the fleet script runner (documented under "Run A Script Across All Hosts" later in this section).</p>
 
 <figure class="mock">
   <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Sysible Connect</span></div>
@@ -671,7 +671,7 @@ sudo ./run_agent.sh</pre>
 <div class="page" id="sysadmin">
 <h1 class="sec"><span class="tag">Section 10</span>System Administration</h1>
 
-<p>The System Administration menu is the hub for day-to-day fleet management. Rather than one sprawling window, it opens a compact launcher with eighteen tiles, each opening its own dedicated window: <strong>User &amp; Group Administration</strong>, <strong>System Health &amp; Logs</strong>, <strong>Service Management</strong>, <strong>Environmental Policies</strong>, <strong>Cron &amp; Systemd Timers</strong>, <strong>Host Software Management</strong>, <strong>Repository Management</strong>, <strong>Network Management</strong>, <strong>File System Management</strong>, <strong>Storage Administration</strong>, <strong>Firewall Administration</strong>, <strong>Security Administration</strong>, <strong>Backup &amp; Recovery</strong>, <strong>System Boot &amp; Recovery</strong>, <strong>Time Synchronization</strong>, <strong>Certificate Management</strong>, <strong>Containers &amp; VMs</strong>, and <strong>Run A Script Across All Hosts</strong>.</p>
+<p>The System Administration menu is the hub for day-to-day fleet management. Rather than one sprawling window, it opens a compact launcher with eighteen tiles, each opening its own dedicated window: <strong>User &amp; Group Administration</strong>, <strong>System Health &amp; Logs</strong>, <strong>Service Management</strong>, <strong>Environmental Policies</strong>, <strong>Cron &amp; Systemd Timers</strong>, <strong>Host Software Management</strong>, <strong>Repository Management</strong>, <strong>Network Management</strong>, <strong>File System Management</strong>, <strong>Storage Administration</strong>, <strong>Firewall Administration</strong>, <strong>Security Administration</strong>, <strong>Backup &amp; Recovery</strong>, <strong>System Boot &amp; Recovery</strong>, <strong>Time Synchronization</strong>, <strong>Certificate Management</strong>, <strong>Containers &amp; VMs</strong>, and <strong>Directory Services (AD / LDAP)</strong>. (Running an ad-hoc script across hosts lives in <strong>Sysible Connect</strong>, not here.)</p>
 
 <h2>What ties the twelve tools together</h2>
 <ul>
@@ -1197,12 +1197,12 @@ sudo ./run_agent.sh</pre>
 <tr><td>List VMs / VM Action / VM Info</td><td>Lists libvirt domains, performs start / shutdown / reboot / suspend / resume / destroy, and shows <code>virsh dominfo</code> for a domain.</td></tr>
 </table>
 
-<h2 id="automation">Run A Script Across All Hosts</h2>
-<p>The general-purpose tool for ad-hoc tasks and automating repetitive work across the fleet. Enter a shell command or a multi-line script and run it on every checked host at once; each host's output and exit code come back in its own result tab with the usual green/red banner.</p>
+<h2 id="automation">Run A Script Across All Hosts (in Sysible Connect)</h2>
+<p>Opened from the <strong>Run Script on All Hosts…</strong> button at the top of <strong>Sysible Connect</strong> (Section 8). The general-purpose tool for ad-hoc tasks and automating repetitive work across the fleet: enter a shell command or a multi-line script and run it on every checked host at once; each host's output and exit code come back in its own result tab with the usual green/red banner.</p>
 <div class="warn"><b>Runs exactly what you enter</b>The command/script executes as root via the agent (or over SSH) on every checked host. A confirmation dialog shows the host count and a preview before anything runs, but there is no syntax checking - double-check destructive commands first.</div>
 
-<h2 id="directory">Directory Services (AD / LDAP) — Security Administration tab</h2>
-<p>Joins managed hosts to Active Directory and configures LDAP/LDAPS identity. This lives as the <strong>Directory (AD / LDAP)</strong> tab inside <strong>Security Administration</strong> (it's host authentication configuration), not a separate tile.</p>
+<h2 id="directory">Directory Services (AD / LDAP)</h2>
+<p>Its own System Administration tile. Joins managed hosts to Active Directory and configures LDAP/LDAPS identity. Two tabs: <strong>Active Directory</strong> and <strong>LDAP / LDAPS</strong>.</p>
 <table class="ref">
 <tr><th>Action</th><th>What it does</th></tr>
 <tr><td>Realm / Domain Status</td><td>Shows the joined realm (<code>realm list</code>), the SSSD service state, and the Kerberos default realm.</td></tr>

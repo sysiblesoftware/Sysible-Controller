@@ -21,6 +21,10 @@ class HomeWindow(QWidget):
     def __init__(self):
         super().__init__()
 
+        # Wide enough for the single row of tiles to breathe.
+        self.resize(1320, 540)
+        self.setMinimumWidth(900)
+
         outer = QVBoxLayout()
         outer.setContentsMargins(40, 32, 40, 32)
         outer.setSpacing(8)
@@ -113,8 +117,6 @@ class HomeWindow(QWidget):
         grid = QGridLayout()
         grid.setHorizontalSpacing(16)
         grid.setVerticalSpacing(16)
-        for col in range(2):
-            grid.setColumnStretch(col, 1)
 
         cards = [
             ("Sysible Controller Host Enrollment",
@@ -135,11 +137,13 @@ class HomeWindow(QWidget):
              self.open_system_admin, "fa5s.th-large", "amber"),
         ]
 
+        # Single row of tiles.
+        for col in range(len(cards)):
+            grid.setColumnStretch(col, 1)
         for index, (card_title, description, handler, icon, color) in enumerate(cards):
-            row, col = divmod(index, 2)
             grid.addWidget(
                 DashboardCard(card_title, description, handler, icon, color),
-                row, col,
+                0, index,
             )
 
         outer.addLayout(grid)

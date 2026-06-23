@@ -36,6 +36,15 @@ _CURSOR_START = (
     if hasattr(QTextCursor, "MoveOperation")
     else QTextCursor.Start
 )
+_HAS_MOVEOP = hasattr(QTextCursor, "MoveOperation")
+_SOB = QTextCursor.MoveOperation.StartOfBlock if _HAS_MOVEOP else QTextCursor.StartOfBlock
+_EOB = QTextCursor.MoveOperation.EndOfBlock if _HAS_MOVEOP else QTextCursor.EndOfBlock
+_MOVE_RIGHT = QTextCursor.MoveOperation.Right if _HAS_MOVEOP else QTextCursor.Right
+_KEEP_ANCHOR = (
+    QTextCursor.MoveMode.KeepAnchor
+    if hasattr(QTextCursor, "MoveMode")
+    else QTextCursor.KeepAnchor
+)
 
 # Standard 16-colour ANSI palette (xterm-ish): 0-7 normal, 8-15 bright.
 # Used to colourise SGR ("\x1b[...m") escape sequences in the live
@@ -395,9 +404,24 @@ class _LiveTerminalOutput(QTextEdit):
                     self.clear()
                     cursor = self.textCursor()
                     cursor.movePosition(_CURSOR_END)
+                elif kind == "el" and params in ("", "0"):
+                    # Erase line from cursor to end - the shell uses this
+                    # (with \r) to redraw the current line in place.
+                    e = QTextCursor(cursor)
+                    e.movePosition(_EOB, _KEEP_ANCHOR)
+                    e.removeSelectedText()
                 i += consumed
                 continue
             if ch == "\r":
+                # Carriage return: back to the start of the current line so
+                # what follows OVERWRITES it (not appends) - this is what
+                # stops a redrawn shell prompt from showing up twice.
+                cursor.movePosition(_SOB)
+                i += 1
+                continue
+            if ch == "\n":
+                cursor.movePosition(_CURSOR_END)
+                cursor.insertText("\n", self._char_format)
                 i += 1
                 continue
             if ch in ("\x08", "\x7f"):
@@ -405,9 +429,19 @@ class _LiveTerminalOutput(QTextEdit):
                 i += 1
                 continue
             j = i
-            while j < n and text[j] not in ("\x1b", "\r", "\x08", "\x7f"):
+            while j < n and text[j] not in ("\x1b", "\r", "\n", "\x08", "\x7f"):
                 j += 1
-            self._insert_run(cursor, text[i:j])
+            run = text[i:j]
+            # Overwrite any existing characters on the line under the cursor
+            # (replace mode), so an in-place redraw replaces rather than
+            # duplicates. Past the end of the line this is a plain append.
+            end = QTextCursor(cursor)
+            end.movePosition(_EOB)
+            ahead = end.position() - cursor.position()
+            if ahead > 0:
+                cursor.movePosition(_MOVE_RIGHT, _KEEP_ANCHOR, min(len(run), ahead))
+                cursor.removeSelectedText()
+            self._insert_run(cursor, run)
             i = j
         self.setTextCursor(cursor)
         self.ensureCursorVisible()
@@ -571,6 +605,8 @@ class _LiveTerminalOutput(QTextEdit):
                 return consumed, "sgr", params
             if final == "J":
                 return consumed, "ed", params
+            if final == "K":
+                return consumed, "el", params   # erase in line
             if final == "h":
                 return consumed, "sm", params   # set mode
             if final == "l":
@@ -1247,6 +1283,14 @@ class RemoteAdministrationPage(QWidget):
 
         main.addLayout(make_page_header("Sysible Connect"))
 
+        hdr = QHBoxLayout()
+        hdr.addStretch()
+        btn_script = QPushButton("Run Script on All Hosts…")
+        btn_script.setToolTip("Run an ad-hoc command or multi-line script across checked hosts.")
+        btn_script.clicked.connect(self.open_script_runner)
+        hdr.addWidget(btn_script)
+        main.addLayout(hdr)
+
         body = QHBoxLayout()
 
         # ---------------- LEFT: host list (consistent column) ----------------
@@ -1416,6 +1460,16 @@ class RemoteAdministrationPage(QWidget):
     # =====================================================
     # HOSTS
     # =====================================================
+    def open_script_runner(self):
+        """Open the 'run an ad-hoc command/script across checked hosts' tool
+        as a child window of Sysible Connect."""
+        from client.automation_page import AutomationPage
+        if getattr(self, "_script_window", None) is None:
+            self._script_window = AutomationPage()
+        self._script_window.show()
+        self._script_window.raise_()
+        self._script_window.activateWindow()
+
     def load_hosts(self):
         prev_label = self.active_label
 

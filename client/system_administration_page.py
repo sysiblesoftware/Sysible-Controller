@@ -21,7 +21,7 @@ from client.system_boot_recovery_page import SystemBootRecoveryPage
 from client.time_synchronization_page import TimeSynchronizationPage
 from client.certificate_management_page import CertificateManagementPage
 from client.containers_vms_page import ContainersVMsPage
-from client.automation_page import AutomationPage
+from client.directory_services_page import DirectoryServicesPage
 
 
 class SystemAdministrationPage(QWidget):
@@ -60,7 +60,7 @@ class SystemAdministrationPage(QWidget):
         self.timesync_window = None
         self.cert_mgmt_window = None
         self.containers_vms_window = None
-        self.automation_window = None
+        self.directory_window = None
 
         main = QVBoxLayout()
         self.setLayout(main)
@@ -147,10 +147,10 @@ class SystemAdministrationPage(QWidget):
              "List and start/stop/restart Docker or Podman containers, view container logs and images, "
              "and manage libvirt virtual machines across managed hosts.",
              self.open_containers_vms, "fa5s.cube", "indigo"),
-            ("Run A Script Across All Hosts",
-             "Run an ad-hoc command or multi-line script on every checked host at once - the "
-             "general-purpose tool for automating repetitive tasks across the fleet.",
-             self.open_automation, "fa5s.terminal", "slate"),
+            ("Directory Services (AD / LDAP)",
+             "Join hosts to Active Directory (realmd/SSSD), manage realm status and login permits, "
+             "enable home-dir creation, and configure/test LDAP and LDAPS.",
+             self.open_directory, "fa5s.users-cog", "sky"),
         ]
 
         for index, (card_title, description, handler, icon, color) in enumerate(cards):
@@ -286,9 +286,9 @@ class SystemAdministrationPage(QWidget):
         self.containers_vms_window.raise_()
         return self.containers_vms_window
 
-    def open_automation(self):
-        if self.automation_window is None:
-            self.automation_window = AutomationPage()
-        self.automation_window.show()
-        self.automation_window.raise_()
-        return self.automation_window
+    def open_directory(self):
+        if self.directory_window is None:
+            self.directory_window = DirectoryServicesPage()
+        self.directory_window.show()
+        self.directory_window.raise_()
+        return self.directory_window

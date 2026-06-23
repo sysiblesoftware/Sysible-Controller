@@ -21,9 +21,9 @@ class HomeWindow(QWidget):
     def __init__(self):
         super().__init__()
 
-        # Wide enough for the single row of tiles to breathe.
-        self.resize(1320, 540)
-        self.setMinimumWidth(900)
+        # A single column of tiles - narrower and taller.
+        self.resize(620, 780)
+        self.setMinimumWidth(440)
 
         outer = QVBoxLayout()
         outer.setContentsMargins(40, 32, 40, 32)
@@ -137,13 +137,12 @@ class HomeWindow(QWidget):
              self.open_system_admin, "fa5s.th-large", "amber"),
         ]
 
-        # Single row of tiles.
-        for col in range(len(cards)):
-            grid.setColumnStretch(col, 1)
+        # Single column of tiles.
+        grid.setColumnStretch(0, 1)
         for index, (card_title, description, handler, icon, color) in enumerate(cards):
             grid.addWidget(
                 DashboardCard(card_title, description, handler, icon, color),
-                0, index,
+                index, 0,
             )
 
         outer.addLayout(grid)

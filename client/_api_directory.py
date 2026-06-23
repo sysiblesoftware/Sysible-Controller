@@ -11,6 +11,7 @@ import shlex
 
 _DOMAIN_RE = re.compile(r"^[A-Za-z0-9.\-]+$")
 _PRINCIPAL_RE = re.compile(r"^[A-Za-z0-9 ._@\-]+$")
+_KRB_PRINCIPAL_RE = re.compile(r"^[A-Za-z0-9._/\-]+(@[A-Za-z0-9.\-]+)?$")
 _HOST_RE = re.compile(r"^[A-Za-z0-9.\-]+$")
 
 
@@ -26,6 +27,93 @@ _INSTALL_REALM = (
     "samba-client krb5-client; "
     "else echo 'No supported package manager found.' >&2; exit 1; fi"
 )
+
+
+def cmd_install_ad_dependencies() -> str:
+    """Install everything needed to join a host to Active Directory, without
+    joining yet (realmd, SSSD, adcli, Kerberos, samba tools, oddjob)."""
+    return (
+        _INSTALL_REALM +
+        " && echo 'Active Directory client dependencies installed "
+        "(realmd, SSSD, adcli, Kerberos, samba tools). You can now Join Domain.'"
+    )
+
+
+def cmd_install_ldap_dependencies() -> str:
+    """Install everything needed for LDAP/LDAPS client auth via SSSD."""
+    return (
+        "if command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; "
+        "apt-get install -y sssd sssd-tools libnss-sss libpam-sss ldap-utils oddjob oddjob-mkhomedir; "
+        "elif command -v dnf >/dev/null 2>&1; then dnf install -y sssd sssd-ldap openldap-clients oddjob oddjob-mkhomedir; "
+        "elif command -v yum >/dev/null 2>&1; then yum install -y sssd sssd-ldap openldap-clients oddjob oddjob-mkhomedir; "
+        "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install sssd sssd-ldap openldap2-client; "
+        "else echo 'No supported package manager found.' >&2; exit 1; fi; "
+        "echo 'LDAP client dependencies installed (SSSD, LDAP utils, PAM/NSS modules).'"
+    )
+
+
+def cmd_kerberos_status() -> str:
+    return (
+        "echo '== Cached tickets (klist) =='; klist 2>&1 || echo '(no credential cache, or klist not installed)'; echo; "
+        "echo '== Default realm =='; grep -i 'default_realm' /etc/krb5.conf 2>/dev/null || echo '(none configured)'; echo; "
+        "echo '== Host keytab (klist -k) =='; klist -k 2>/dev/null | head -n 20 || echo '(no /etc/krb5.keytab)'"
+    )
+
+
+def cmd_kerberos_destroy() -> str:
+    return (
+        "if command -v kdestroy >/dev/null 2>&1; then kdestroy && echo 'Destroyed cached Kerberos tickets.'; "
+        "else echo 'kdestroy is not installed (install the Kerberos client).' >&2; exit 1; fi"
+    )
+
+
+def cmd_kerberos_kinit(principal: str, password: str) -> str:
+    """Get a TGT for `principal` to verify Kerberos auth works. The password
+    is fed via a transient root-only file on stdin, never the command line."""
+    principal = (principal or "").strip()
+    if not principal or not _KRB_PRINCIPAL_RE.match(principal):
+        raise ValueError("Enter a principal, e.g. jdoe or jdoe@CORP.EXAMPLE.COM.")
+    if not password:
+        raise ValueError("Password is required to obtain a ticket.")
+    q_p, q_pass = shlex.quote(principal), shlex.quote(password)
+    return (
+        "if ! command -v kinit >/dev/null 2>&1; then echo 'kinit is not installed (install the Kerberos client).' >&2; exit 1; fi; "
+        "cred=$(mktemp) && chmod 600 \"$cred\"; "
+        f"printf '%s' {q_pass} > \"$cred\"; "
+        f"kinit {q_p} < \"$cred\"; rc=$?; rm -f \"$cred\"; "
+        f"if [ \"$rc\" -eq 0 ]; then echo 'Obtained a ticket for {principal}:'; klist; "
+        "else echo 'kinit failed - check the principal, password, realm, and that DNS/clock are in sync with the KDC.' >&2; exit \"$rc\"; fi"
+    )
+
+
+def cmd_kerberos_config(realm: str, kdc: str, admin_server: str = "") -> str:
+    """Write a basic /etc/krb5.conf pointing at a realm and KDC."""
+    realm = (realm or "").strip().upper()
+    kdc = (kdc or "").strip()
+    admin_server = (admin_server or "").strip() or kdc
+    if not _DOMAIN_RE.match(realm) or "." not in realm:
+        raise ValueError("Realm is required (e.g. CORP.EXAMPLE.COM).")
+    if not _HOST_RE.match(kdc):
+        raise ValueError("KDC must be a hostname or IP.")
+    if not _HOST_RE.match(admin_server):
+        raise ValueError("Admin server must be a hostname or IP.")
+    conf = (
+        "[libdefaults]\n"
+        f"    default_realm = {realm}\n"
+        "    dns_lookup_realm = false\n"
+        "    dns_lookup_kdc = true\n"
+        "    rdns = false\n\n"
+        "[realms]\n"
+        f"    {realm} = {{\n"
+        f"        kdc = {kdc}\n"
+        f"        admin_server = {admin_server}\n"
+        "    }\n"
+    )
+    return (
+        "[ -f /etc/krb5.conf ] && cp /etc/krb5.conf /etc/krb5.conf.sysible.bak; "
+        "cat > /etc/krb5.conf <<'SYS_KRB5'\n" + conf + "SYS_KRB5\n"
+        f"echo 'Wrote /etc/krb5.conf for realm {realm} (KDC {kdc}); a backup of any prior config is at /etc/krb5.conf.sysible.bak.'"
+    )
 
 
 def cmd_realm_status() -> str:

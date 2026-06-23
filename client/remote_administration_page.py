@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QPushButton, QLineEdit, QTextEdit, QComboBox, QInputDialog, QMessageBox,
-    QApplication, QFileDialog, QFrame,
+    QApplication, QFileDialog, QFrame, QGroupBox,
 )
 from PySide6.QtCore import Qt, QTimer, QObject, Signal
 from PySide6.QtGui import QFont, QFontMetrics, QKeySequence, QTextCursor, QColor, QTextCharFormat
@@ -1283,14 +1283,6 @@ class RemoteAdministrationPage(QWidget):
 
         main.addLayout(make_page_header("Sysible Connect"))
 
-        hdr = QHBoxLayout()
-        hdr.addStretch()
-        btn_script = QPushButton("Run Script on All Hosts…")
-        btn_script.setToolTip("Run an ad-hoc command or multi-line script across checked hosts.")
-        btn_script.clicked.connect(self.open_script_runner)
-        hdr.addWidget(btn_script)
-        main.addLayout(hdr)
-
         body = QHBoxLayout()
 
         # ---------------- LEFT: host list (consistent column) ----------------
@@ -1302,6 +1294,9 @@ class RemoteAdministrationPage(QWidget):
         btn_refresh = QPushButton("Refresh")
         btn_refresh.clicked.connect(self.load_hosts)
         btn_collapse_all, btn_expand_all = add_collapse_expand_buttons(self.host_list)
+        btn_script = QPushButton("Run Script on All Hosts…")
+        btn_script.setToolTip("Run an ad-hoc command or multi-line script across checked hosts.")
+        btn_script.clicked.connect(self.open_script_runner)
 
         host_panel = build_host_panel(
             "Managed Hosts (agent + SSH)",
@@ -1309,6 +1304,7 @@ class RemoteAdministrationPage(QWidget):
             [
                 [btn_refresh],
                 [btn_collapse_all, btn_expand_all],
+                [btn_script],
             ],
             width=340,  # wider so each host's IP fits next to it
         )
@@ -1346,32 +1342,35 @@ class RemoteAdministrationPage(QWidget):
         panel = QWidget()
         col = QVBoxLayout(panel)
         col.setContentsMargins(5, 0, 0, 0)
+        col.setSpacing(12)
 
-        self.active_host_label = QLabel("Viewing: (no host selected)")
+        # ---- selected host ----
+        sel_box = QGroupBox("Selected Host")
+        sel = QVBoxLayout(sel_box)
+
+        self.active_host_label = QLabel("(no host selected)")
         self.active_host_label.setStyleSheet("font-weight: bold;")
-        col.addWidget(self.active_host_label)
+        sel.addWidget(self.active_host_label)
 
         self.connection_label = QLabel("")
         self.connection_label.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
-        col.addWidget(self.connection_label)
+        sel.addWidget(self.connection_label)
 
         open_hint = QLabel("Double-click a host in the list to open its terminal in a new window.")
         theme.style_hint_label(open_hint)
-        col.addWidget(open_hint)
+        sel.addWidget(open_hint)
 
         detail_buttons = QHBoxLayout()
         self.remove_host_btn = QPushButton("Remove Host")
         self.remove_host_btn.clicked.connect(self.delete_host)
         detail_buttons.addWidget(self.remove_host_btn)
         detail_buttons.addStretch()
-        col.addLayout(detail_buttons)
-
-        col.addWidget(self._divider())
+        sel.addLayout(detail_buttons)
+        col.addWidget(sel_box)
 
         # ---- file transfer ----
-        file_label = QLabel("File Transfer (selected host)")
-        file_label.setStyleSheet("font-weight: bold;")
-        col.addWidget(file_label)
+        file_box = QGroupBox("File Transfer (selected host)")
+        col_file = QVBoxLayout(file_box)
 
         upload_row = QHBoxLayout()
         self.upload_local_path = QLineEdit()
@@ -1386,7 +1385,7 @@ class RemoteAdministrationPage(QWidget):
         upload_row.addWidget(browse_btn)
         upload_row.addWidget(self.upload_remote_path, 3)
         upload_row.addWidget(self.upload_btn)
-        col.addLayout(upload_row)
+        col_file.addLayout(upload_row)
 
         download_row = QHBoxLayout()
         self.download_remote_path = QLineEdit()
@@ -1395,7 +1394,7 @@ class RemoteAdministrationPage(QWidget):
         self.download_btn.clicked.connect(self.download_file)
         download_row.addWidget(self.download_remote_path, 3)
         download_row.addWidget(self.download_btn)
-        col.addLayout(download_row)
+        col_file.addLayout(download_row)
 
         self.file_status = QLabel(
             f"Agent-host transfers are limited to ~{api.AGENT_FILE_TRANSFER_LIMIT_BYTES // 1000} KB; "
@@ -1403,21 +1402,19 @@ class RemoteAdministrationPage(QWidget):
         )
         self.file_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
         self.file_status.setWordWrap(True)
-        col.addWidget(self.file_status)
-
-        col.addWidget(self._divider())
+        col_file.addWidget(self.file_status)
+        col.addWidget(file_box)
 
         # ---- connect a new SSH host ----
-        enroll_label = QLabel("SSH to a New Host (Not Yet Joined)")
-        enroll_label.setStyleSheet("font-weight: bold;")
-        col.addWidget(enroll_label)
+        enroll_box = QGroupBox("SSH to a New Host (Not Yet Joined)")
+        col_enroll = QVBoxLayout(enroll_box)
 
         enroll_hint = QLabel(
             "Only needed once per host. The password installs the controller key, then is "
             "discarded - after that the host appears in the list and connects with no password."
         )
         theme.style_hint_label(enroll_hint)
-        col.addWidget(enroll_hint)
+        col_enroll.addWidget(enroll_hint)
 
         enroll_row = QHBoxLayout()
         self.name_input = QLineEdit()
@@ -1438,7 +1435,7 @@ class RemoteAdministrationPage(QWidget):
         self.connect_env_combo.setMaximumWidth(150)
         for w in [self.name_input, self.ip_input, self.user_input, self.password_input, self.connect_env_combo]:
             enroll_row.addWidget(w)
-        col.addLayout(enroll_row)
+        col_enroll.addLayout(enroll_row)
 
         connect_buttons = QHBoxLayout()
         enroll_btn = QPushButton("Connect Host")
@@ -1448,13 +1445,15 @@ class RemoteAdministrationPage(QWidget):
         connect_buttons.addWidget(enroll_btn)
         connect_buttons.addWidget(show_key_btn)
         connect_buttons.addStretch()
-        col.addLayout(connect_buttons)
+        col_enroll.addLayout(connect_buttons)
 
         self.enroll_status = QLabel()
         self.enroll_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
         self.enroll_status.setWordWrap(True)
-        col.addWidget(self.enroll_status)
+        col_enroll.addWidget(self.enroll_status)
+        col.addWidget(enroll_box)
 
+        col.addStretch()
         return panel
 
     # =====================================================
@@ -1559,7 +1558,7 @@ class RemoteAdministrationPage(QWidget):
         self.active_kind = None
         self.active_id = None
         self.active_label = None
-        self.active_host_label.setText("Viewing: (no host selected)")
+        self.active_host_label.setText("(no host selected)")
         self.connection_label.setText("")
 
     def on_host_selected(self):
@@ -1573,7 +1572,7 @@ class RemoteAdministrationPage(QWidget):
         self.active_id = underlying["id"]
         self.active_label = entry["label"]
 
-        self.active_host_label.setText(f"Viewing: {entry['label']}  [{entry['type_text']}]")
+        self.active_host_label.setText(f"{entry['label']}  [{entry['type_text']}]")
 
         if entry["kind"] == "merged":
             self.connection_label.setText(

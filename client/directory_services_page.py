@@ -20,6 +20,7 @@ class DirectoryServicesPage(FleetToolPage):
         tabs = QTabWidget()
         tabs.addTab(self._ad_tab(), "Active Directory")
         tabs.addTab(self._ldap_tab(), "LDAP / LDAPS")
+        tabs.addTab(self._kerberos_tab(), "Kerberos")
         shrink_tabwidget_to_current_page(tabs, cap_height=True)
         return tabs
 
@@ -38,6 +39,11 @@ class DirectoryServicesPage(FleetToolPage):
 
         box, g = self.group("Status")
         row = QHBoxLayout()
+        b_install = QPushButton("Install AD Dependencies")
+        b_install.setStyleSheet("font-weight: bold;")
+        b_install.setToolTip("Install realmd, SSSD, adcli, Kerberos and samba tools needed to join AD.")
+        b_install.clicked.connect(lambda: self.run_command(api.cmd_install_ad_dependencies(), "Install AD Dependencies"))
+        row.addWidget(b_install)
         b = QPushButton("Realm / Domain Status")
         b.clicked.connect(lambda: self.run_command(api.cmd_realm_status(), "Realm Status"))
         row.addWidget(b)
@@ -125,6 +131,17 @@ class DirectoryServicesPage(FleetToolPage):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
+        boxd, gd = self.group("Dependencies")
+        drow = QHBoxLayout()
+        b_install = QPushButton("Install LDAP Dependencies")
+        b_install.setStyleSheet("font-weight: bold;")
+        b_install.setToolTip("Install SSSD, LDAP utils, and the PAM/NSS modules needed for LDAP/LDAPS auth.")
+        b_install.clicked.connect(lambda: self.run_command(api.cmd_install_ldap_dependencies(), "Install LDAP Dependencies"))
+        drow.addWidget(b_install)
+        drow.addStretch()
+        gd.addLayout(drow)
+        layout.addWidget(boxd)
+
         box, g = self.group("Test LDAPS Connectivity")
         row = QHBoxLayout()
         row.addWidget(QLabel("Server:"))
@@ -177,3 +194,70 @@ class DirectoryServicesPage(FleetToolPage):
         use_ldaps = self.ldap_scheme.currentText() == "ldaps"
         self.run_with("Configure LDAP Client", lambda: api.cmd_configure_ldap_client(
             self.ldap_server.text(), self.ldap_base.text(), use_ldaps))
+
+    # ---------------- Kerberos ----------------
+    def _kerberos_tab(self):
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(5, 5, 5, 5)
+
+        box, g = self.group("Tickets")
+        row = QHBoxLayout()
+        b1 = QPushButton("Kerberos Status")
+        b1.setToolTip("Cached tickets (klist), default realm, and host keytab.")
+        b1.clicked.connect(lambda: self.run_command(api.cmd_kerberos_status(), "Kerberos Status"))
+        row.addWidget(b1)
+        b2 = QPushButton("Destroy Tickets")
+        b2.clicked.connect(lambda: self.run_command(api.cmd_kerberos_destroy(), "Destroy Tickets"))
+        row.addWidget(b2)
+        row.addStretch()
+        g.addLayout(row)
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Principal:"))
+        self.krb_principal = QLineEdit()
+        self.krb_principal.setPlaceholderText("e.g. jdoe@CORP.EXAMPLE.COM")
+        row2.addWidget(self.krb_principal, 1)
+        row2.addWidget(QLabel("Password:"))
+        self.krb_password = QLineEdit()
+        self.krb_password.setEchoMode(QLineEdit.Password)
+        row2.addWidget(self.krb_password, 1)
+        b3 = QPushButton("Get Ticket (kinit)")
+        b3.clicked.connect(self.run_kinit)
+        row2.addWidget(b3)
+        g.addLayout(row2)
+        g.addWidget(self._hint("Get Ticket verifies Kerberos auth works for a principal. The password is fed "
+                               "to kinit via a transient root-only file, never the command line."))
+        layout.addWidget(box)
+
+        box2, g2 = self.group("Configure Kerberos (krb5.conf)")
+        row3 = QHBoxLayout()
+        row3.addWidget(QLabel("Realm:"))
+        self.krb_realm = QLineEdit()
+        self.krb_realm.setPlaceholderText("e.g. CORP.EXAMPLE.COM")
+        row3.addWidget(self.krb_realm, 1)
+        row3.addWidget(QLabel("KDC:"))
+        self.krb_kdc = QLineEdit()
+        self.krb_kdc.setPlaceholderText("e.g. dc01.corp.example.com")
+        row3.addWidget(self.krb_kdc, 1)
+        row3.addWidget(QLabel("Admin server:"))
+        self.krb_admin = QLineEdit()
+        self.krb_admin.setPlaceholderText("optional (defaults to KDC)")
+        row3.addWidget(self.krb_admin, 1)
+        b4 = QPushButton("Write krb5.conf")
+        b4.clicked.connect(self.run_kerberos_config)
+        row3.addWidget(b4)
+        g2.addLayout(row3)
+        g2.addWidget(self._hint("Writes /etc/krb5.conf for the realm/KDC (backing up any existing one). "
+                                "Install the Kerberos client first via the AD or LDAP dependency buttons."))
+        layout.addWidget(box2)
+
+        layout.addStretch()
+        return panel
+
+    def run_kinit(self):
+        self.run_with("Get Kerberos Ticket", lambda: api.cmd_kerberos_kinit(
+            self.krb_principal.text(), self.krb_password.text()))
+
+    def run_kerberos_config(self):
+        self.run_with("Configure Kerberos", lambda: api.cmd_kerberos_config(
+            self.krb_realm.text(), self.krb_kdc.text(), self.krb_admin.text()))

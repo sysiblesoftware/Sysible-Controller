@@ -19,7 +19,7 @@ class AutomationPage(FleetToolPage):
     def build_action_tabs(self):
         tabs = QTabWidget()
         tabs.addTab(self._run_tab(), "Run Command / Script")
-        shrink_tabwidget_to_current_page(tabs)
+        shrink_tabwidget_to_current_page(tabs, cap_height=True)
         return tabs
 
     def _run_tab(self):

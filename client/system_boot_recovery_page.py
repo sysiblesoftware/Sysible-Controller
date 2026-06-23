@@ -19,7 +19,7 @@ class SystemBootRecoveryPage(FleetToolPage):
         tabs = QTabWidget()
         tabs.addTab(self._boot_tab(), "Boot && GRUB")
         tabs.addTab(self._kernel_tab(), "Kernels")
-        shrink_tabwidget_to_current_page(tabs)
+        shrink_tabwidget_to_current_page(tabs, cap_height=True)
         return tabs
 
     @staticmethod

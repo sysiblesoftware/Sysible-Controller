@@ -104,7 +104,7 @@ class FileSystemManagementPage(QWidget):
         action_tabs.addTab(self._build_mount_tab(), "Mount and Filesystem")
         action_tabs.addTab(self._build_fstab_quota_tab(), "fstab and Quotas")
         action_tabs.addTab(self._build_archive_tab(), "Archive and Compress")
-        shrink_tabwidget_to_current_page(action_tabs)
+        shrink_tabwidget_to_current_page(action_tabs, cap_height=True)
         content_layout.addWidget(action_tabs)
 
         # ---------------------------------------------------------
@@ -140,6 +140,13 @@ class FileSystemManagementPage(QWidget):
         box = QGroupBox(title)
         lay = QVBoxLayout(box)
         return box, lay
+
+    @staticmethod
+    def _hint(text):
+        lbl = QLabel(text)
+        theme.style_hint_label(lbl)
+        lbl.setWordWrap(True)
+        return lbl
 
     def _build_dirs_files_tab(self):
         panel = QWidget()
@@ -383,9 +390,79 @@ class FileSystemManagementPage(QWidget):
         btn_unmount.clicked.connect(self.run_unmount_filesystem)
         unmount_row.addWidget(btn_unmount)
         _g1.addLayout(unmount_row)
-
-
         layout.addWidget(_box1)
+
+        # ---- Network mounts (NFS / CIFS) ----
+        _boxn, _gn = self._group("Network Mounts (NFS / CIFS)")
+
+        nfs_row = QHBoxLayout()
+        nfs_row.addWidget(QLabel("NFS server:"))
+        self.nfs_server_input = QLineEdit()
+        self.nfs_server_input.setPlaceholderText("e.g. nas01 or 10.0.0.5")
+        nfs_row.addWidget(self.nfs_server_input, 1)
+        nfs_row.addWidget(QLabel("Export:"))
+        self.nfs_export_input = QLineEdit()
+        self.nfs_export_input.setPlaceholderText("e.g. /exports/data")
+        nfs_row.addWidget(self.nfs_export_input, 1)
+        nfs_row.addWidget(QLabel("Mount point:"))
+        self.nfs_mount_input = QLineEdit()
+        self.nfs_mount_input.setPlaceholderText("e.g. /mnt/data")
+        nfs_row.addWidget(self.nfs_mount_input, 1)
+        _gn.addLayout(nfs_row)
+        nfs_row2 = QHBoxLayout()
+        nfs_row2.addWidget(QLabel("Options:"))
+        self.nfs_options_input = QLineEdit()
+        self.nfs_options_input.setPlaceholderText("optional, e.g. ro,vers=4")
+        nfs_row2.addWidget(self.nfs_options_input, 1)
+        self.nfs_persist_check = QCheckBox("Add to /etc/fstab")
+        nfs_row2.addWidget(self.nfs_persist_check)
+        btn_nfs = QPushButton("Mount NFS")
+        btn_nfs.clicked.connect(self.run_mount_nfs)
+        nfs_row2.addWidget(btn_nfs)
+        _gn.addLayout(nfs_row2)
+
+        cifs_row = QHBoxLayout()
+        cifs_row.addWidget(QLabel("CIFS server:"))
+        self.cifs_server_input = QLineEdit()
+        self.cifs_server_input.setPlaceholderText("e.g. winsrv or 10.0.0.6")
+        cifs_row.addWidget(self.cifs_server_input, 1)
+        cifs_row.addWidget(QLabel("Share:"))
+        self.cifs_share_input = QLineEdit()
+        self.cifs_share_input.setPlaceholderText("e.g. shared")
+        cifs_row.addWidget(self.cifs_share_input, 1)
+        cifs_row.addWidget(QLabel("Mount point:"))
+        self.cifs_mount_input = QLineEdit()
+        self.cifs_mount_input.setPlaceholderText("e.g. /mnt/share")
+        cifs_row.addWidget(self.cifs_mount_input, 1)
+        _gn.addLayout(cifs_row)
+        cifs_row2 = QHBoxLayout()
+        cifs_row2.addWidget(QLabel("Username:"))
+        self.cifs_user_input = QLineEdit()
+        self.cifs_user_input.setPlaceholderText("blank = guest")
+        self.cifs_user_input.setMaximumWidth(140)
+        cifs_row2.addWidget(self.cifs_user_input)
+        cifs_row2.addWidget(QLabel("Password:"))
+        self.cifs_pass_input = QLineEdit()
+        self.cifs_pass_input.setEchoMode(QLineEdit.Password)
+        self.cifs_pass_input.setMaximumWidth(140)
+        cifs_row2.addWidget(self.cifs_pass_input)
+        cifs_row2.addWidget(QLabel("Options:"))
+        self.cifs_options_input = QLineEdit()
+        self.cifs_options_input.setPlaceholderText("optional, e.g. vers=3.0")
+        cifs_row2.addWidget(self.cifs_options_input, 1)
+        self.cifs_persist_check = QCheckBox("Add to /etc/fstab")
+        cifs_row2.addWidget(self.cifs_persist_check)
+        btn_cifs = QPushButton("Mount CIFS")
+        btn_cifs.clicked.connect(self.run_mount_cifs)
+        cifs_row2.addWidget(btn_cifs)
+        _gn.addLayout(cifs_row2)
+        _gn.addWidget(self._hint(
+            "Mounts a network share immediately (and optionally persists it to /etc/fstab). "
+            "Needs the client tools on the host - nfs-common/nfs-utils for NFS, cifs-utils for CIFS - "
+            "install via Host Software Management if missing. CIFS credentials are written to a "
+            "root-only file, never the command line."
+        ))
+        layout.addWidget(_boxn)
 
         _box2, _g2 = self._group("Resize and Repair")
 
@@ -920,6 +997,31 @@ class FileSystemManagementPage(QWidget):
             QMessageBox.warning(self, "Invalid input", str(e))
             return
         self._run_fs_command(cmd, "Mount Filesystem")
+
+    def run_mount_nfs(self):
+        try:
+            cmd = api.cmd_mount_nfs(
+                self.nfs_server_input.text(), self.nfs_export_input.text(),
+                self.nfs_mount_input.text(), self.nfs_options_input.text(),
+                self.nfs_persist_check.isChecked(),
+            )
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid input", str(e))
+            return
+        self._run_fs_command(cmd, "Mount NFS")
+
+    def run_mount_cifs(self):
+        try:
+            cmd = api.cmd_mount_cifs(
+                self.cifs_server_input.text(), self.cifs_share_input.text(),
+                self.cifs_mount_input.text(), self.cifs_user_input.text(),
+                self.cifs_pass_input.text(), self.cifs_options_input.text(),
+                self.cifs_persist_check.isChecked(),
+            )
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid input", str(e))
+            return
+        self._run_fs_command(cmd, "Mount CIFS")
 
     def run_unmount_filesystem(self):
         target = self.unmount_target_input.text().strip()

@@ -21,7 +21,7 @@ class BackupRecoveryPage(FleetToolPage):
         tabs.addTab(self._files_tab(), "Files")
         tabs.addTab(self._snapshots_tab(), "Snapshots")
         tabs.addTab(self._schedule_dr_tab(), "Schedule && DR")
-        shrink_tabwidget_to_current_page(tabs)
+        shrink_tabwidget_to_current_page(tabs, cap_height=True)
         return tabs
 
     @staticmethod

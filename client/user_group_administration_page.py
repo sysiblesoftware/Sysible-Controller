@@ -322,7 +322,7 @@ class UserGroupAdministrationPage(QWidget):
         tabs.addTab(self._build_password_tab(), "Password")
         tabs.addTab(self._build_groups_tab(), "Groups")
         tabs.addTab(self._build_reports_tab(), "Reports")
-        shrink_tabwidget_to_current_page(tabs)
+        shrink_tabwidget_to_current_page(tabs, cap_height=True)
         # Kept as an attribute (not just a local) so the dashboard's
         # feature search bar (client/home.py / client/feature_search.py)
         # can jump straight to a specific tab - e.g. typing "create a

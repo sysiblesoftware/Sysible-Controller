@@ -38,12 +38,24 @@ Usage, right after every addTab() call on an action-tabs QTabWidget:
 from PySide6.QtWidgets import QSizePolicy
 
 
-def shrink_tabwidget_to_current_page(tab_widget):
+def shrink_tabwidget_to_current_page(tab_widget, cap_height=False):
     """Makes `tab_widget` size itself to its currently visible page
     instead of the tallest page in the stack. Safe to call once, right
     after all of a QTabWidget's tabs have been added - it wires up
     `currentChanged` itself, so later tab switches keep tracking the
-    new current page automatically."""
+    new current page automatically.
+
+    cap_height=True additionally caps the widget's maximum height to the
+    current page's preferred height (plus the tab bar). Use this for an
+    *action* tabs widget that sits above a stretchy results panel: the
+    size-policy trick alone sometimes still leaves the action tabs taller
+    than the visible page (a big block of dead space below short tabs),
+    and the hard cap removes it so the results panel claims that space.
+    Do NOT use it on a results tabs widget that is supposed to grow."""
+    if cap_height:
+        pol = tab_widget.sizePolicy()
+        pol.setVerticalPolicy(QSizePolicy.Maximum)
+        tab_widget.setSizePolicy(pol)
 
     def _apply(index):
         for i in range(tab_widget.count()):
@@ -56,6 +68,14 @@ def shrink_tabwidget_to_current_page(tab_widget):
             )
             page.setSizePolicy(policy)
         tab_widget.updateGeometry()
+        if cap_height:
+            page = tab_widget.widget(index)
+            if page is not None:
+                hint = page.sizeHint().height()
+                if hint > 0:
+                    bar = tab_widget.tabBar().sizeHint().height()
+                    # Small margin so word-wrapped hints aren't clipped.
+                    tab_widget.setMaximumHeight(hint + bar + 24)
 
     tab_widget.currentChanged.connect(_apply)
     _apply(tab_widget.currentIndex())

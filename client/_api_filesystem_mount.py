@@ -77,6 +77,84 @@ def cmd_unmount_filesystem(target: str, force: bool = False) -> str:
     return f"umount {flag}{shlex.quote(target)} 2>&1"
 
 
+_HOST_RE = re.compile(r"^[A-Za-z0-9.\-]+$")
+_SHARE_RE = re.compile(r"^[^\x00/]+$")
+
+
+def cmd_mount_nfs(server: str, export_path: str, mount_point: str,
+                  options: str = "", persist: bool = False) -> str:
+    """Mount an NFS export (server:/export) at `mount_point`, optionally
+    persisting it to /etc/fstab."""
+    server = (server or "").strip()
+    export_path = (export_path or "").strip()
+    mount_point = _validate_path(mount_point, "Mount point")
+    if not _HOST_RE.match(server):
+        raise ValueError("NFS server must be a hostname or IP.")
+    if not export_path.startswith("/"):
+        raise ValueError("NFS export path should start with '/' (e.g. /exports/data).")
+    opts = (options or "").strip() or "defaults"
+    src = f"{server}:{export_path}"
+    q_src, q_mnt, q_opts = shlex.quote(src), shlex.quote(mount_point), shlex.quote(opts)
+    cmd = (
+        "if ! command -v mount.nfs >/dev/null 2>&1 && ! ls /sbin/mount.nfs* >/dev/null 2>&1; then "
+        "echo 'NFS client not installed - install nfs-common (Debian/Ubuntu) or nfs-utils (RHEL/SUSE) first.' >&2; exit 1; fi; "
+        f"mkdir -p {q_mnt} && mount -t nfs -o {q_opts} {q_src} {q_mnt} && echo 'Mounted {src} at {mount_point}.'"
+    )
+    if persist:
+        fstab_line = f"{src} {mount_point} nfs {opts} 0 0"
+        cmd += (
+            f" && {{ grep -qsF {shlex.quote(mount_point + ' nfs')} /etc/fstab "
+            f"|| printf '%s\\n' {shlex.quote(fstab_line)} >> /etc/fstab; echo 'Persisted to /etc/fstab.'; }}"
+        )
+    return cmd
+
+
+def cmd_mount_cifs(server: str, share: str, mount_point: str, username: str = "",
+                   password: str = "", options: str = "", persist: bool = False) -> str:
+    """Mount a CIFS/SMB share (//server/share) at `mount_point`. Credentials
+    are written to a root-only file, never passed on the command line. With
+    persist, the credentials file is kept and referenced from /etc/fstab;
+    otherwise it's a temp file removed right after mounting."""
+    server = (server or "").strip()
+    share = (share or "").strip()
+    mount_point = _validate_path(mount_point, "Mount point")
+    username = (username or "").strip()
+    if not _HOST_RE.match(server):
+        raise ValueError("CIFS server must be a hostname or IP.")
+    if not _SHARE_RE.match(share):
+        raise ValueError("Share name is required (the part after //server/).")
+    unc = f"//{server}/{share}"
+    opts = (options or "").strip()
+    extra = f",{opts}" if opts else ""
+    q_unc, q_mnt = shlex.quote(unc), shlex.quote(mount_point)
+    q_user, q_pass = shlex.quote(username or "guest"), shlex.quote(password or "")
+    pre = (
+        "if ! command -v mount.cifs >/dev/null 2>&1 && ! ls /sbin/mount.cifs >/dev/null 2>&1; then "
+        "echo 'CIFS client not installed - install cifs-utils first.' >&2; exit 1; fi; "
+        f"mkdir -p {q_mnt}; "
+    )
+    if persist:
+        cred_path = f"/etc/sysible-cifs/{mount_point.strip('/').replace('/', '-') or 'root'}.cred"
+        q_cred = shlex.quote(cred_path)
+        fstab_line = f"{unc} {mount_point} cifs credentials={cred_path}{extra} 0 0"
+        return (
+            pre +
+            f"mkdir -p /etc/sysible-cifs && cred={q_cred}; "
+            f"printf 'username=%s\\npassword=%s\\n' {q_user} {q_pass} > \"$cred\" && chmod 600 \"$cred\"; "
+            f"mount -t cifs -o credentials=\"$cred\"{extra} {q_unc} {q_mnt} && "
+            f"echo 'Mounted {unc} at {mount_point}.' && "
+            f"{{ grep -qsF {shlex.quote(mount_point + ' cifs')} /etc/fstab "
+            f"|| printf '%s\\n' {shlex.quote(fstab_line)} >> /etc/fstab; echo 'Persisted to /etc/fstab.'; }}"
+        )
+    return (
+        pre +
+        "cred=$(mktemp) && chmod 600 \"$cred\"; "
+        f"printf 'username=%s\\npassword=%s\\n' {q_user} {q_pass} > \"$cred\"; "
+        f"mount -t cifs -o credentials=\"$cred\"{extra} {q_unc} {q_mnt}; rc=$?; rm -f \"$cred\"; "
+        f"if [ \"$rc\" -eq 0 ]; then echo 'Mounted {unc} at {mount_point}.'; else echo 'CIFS mount failed.' >&2; exit \"$rc\"; fi"
+    )
+
+
 # --- resize ----------------------------------------------------------------
 
 def cmd_resize_filesystem(target: str, new_size: str = "") -> str:

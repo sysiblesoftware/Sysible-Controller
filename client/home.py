@@ -123,8 +123,9 @@ class HomeWindow(QWidget):
             ("Sysible Controller Settings",
              "Manage dashboard administrators, their password policy, the controller's address/port, and the audit log.",
              self.open_admin_config, "fa5s.cog", "slate"),
-            ("Remote Host Administration",
-             "SSH and agent terminal access, plus environment tagging for managed hosts.",
+            ("Sysible Connect",
+             "Pop-out SSH/agent terminals with file upload &amp; download, search, font sizing, "
+             "and saved output, plus one-click SSH enrollment and environment tagging.",
              self.open_remote, "fa5s.terminal", "purple"),
             ("Webserver Portal Configuration",
              "Run the host-facing portal for agent downloads and file transfers.",

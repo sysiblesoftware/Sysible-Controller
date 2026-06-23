@@ -31,6 +31,11 @@ _CURSOR_END = (
     if hasattr(QTextCursor, "MoveOperation")
     else QTextCursor.End
 )
+_CURSOR_START = (
+    QTextCursor.MoveOperation.Start
+    if hasattr(QTextCursor, "MoveOperation")
+    else QTextCursor.Start
+)
 
 # Standard 16-colour ANSI palette (xterm-ish): 0-7 normal, 8-15 bright.
 # Used to colourise SGR ("\x1b[...m") escape sequences in the live
@@ -498,7 +503,20 @@ class _LiveTerminalOutput(QTextEdit):
         )
         self.setUpdatesEnabled(False)
         self.setHtml(html)
+        # Put the visible caret where the application's cursor actually is
+        # (vi's editing line, less's position, ...). Without this, setHtml
+        # leaves the caret/scroll at the end of the grid, so the view jumps
+        # to the blank bottom rows and you can't see the line you're typing.
+        # Each rendered row is `columns` chars plus one <br> separator.
+        try:
+            pos = screen.cursor.y * (screen.columns + 1) + screen.cursor.x
+            cur = self.textCursor()
+            cur.setPosition(min(pos, len(self.toPlainText())))
+            self.setTextCursor(cur)
+        except Exception:
+            pass
         self.setUpdatesEnabled(True)
+        self.ensureCursorVisible()
 
     def grid_size_for_viewport(self):
         """Compute the (cols, rows) that fit the current viewport at the
@@ -736,6 +754,34 @@ class TerminalPopout(QWidget):
             "}"
         )
         self.output.setMinimumHeight(280)
+        # ---- terminal toolbar (file transfer + view tools) ----
+        toolbar = QHBoxLayout()
+        btn_upload = QPushButton("Upload…")
+        btn_upload.setToolTip("Send a local file to this host over SSH.")
+        btn_upload.clicked.connect(self.upload_to_host)
+        btn_download = QPushButton("Download…")
+        btn_download.setToolTip("Fetch a file from this host over SSH.")
+        btn_download.clicked.connect(self.download_from_host)
+        btn_find = QPushButton("Find…")
+        btn_find.setToolTip("Search the terminal output.")
+        btn_find.clicked.connect(self.find_in_output)
+        btn_save = QPushButton("Save Output…")
+        btn_save.setToolTip("Save the terminal's text to a file.")
+        btn_save.clicked.connect(self.save_output)
+        btn_font_dec = QPushButton("A-")
+        btn_font_dec.setMaximumWidth(36)
+        btn_font_dec.clicked.connect(lambda: self.adjust_font(-1))
+        btn_font_inc = QPushButton("A+")
+        btn_font_inc.setMaximumWidth(36)
+        btn_font_inc.clicked.connect(lambda: self.adjust_font(1))
+        for b in (btn_upload, btn_download, btn_find, btn_save):
+            toolbar.addWidget(b)
+        toolbar.addStretch()
+        toolbar.addWidget(QLabel("Font:"))
+        toolbar.addWidget(btn_font_dec)
+        toolbar.addWidget(btn_font_inc)
+        layout.addLayout(toolbar)
+
         layout.addWidget(self.output, 1)
 
         self.ssh_hint = QLabel(
@@ -903,6 +949,83 @@ class TerminalPopout(QWidget):
         if self.active_kind == "ssh" and self._ssh_session_active:
             self._send_terminal_input("\x0c")
             self.output.setFocus()
+
+    # ---------------- terminal toolbar features ----------------
+    def _require_ssh(self):
+        if self.active_kind != "ssh":
+            QMessageBox.information(
+                self, "SSH connection required",
+                "File transfer uses the host's SSH connection. Switch the Connection "
+                "picker to SSH (or enroll this host over SSH) to transfer files.")
+            return False
+        return True
+
+    def upload_to_host(self):
+        if not self._require_ssh():
+            return
+        local, _ = QFileDialog.getOpenFileName(self, "Select a file to upload")
+        if not local:
+            return
+        remote, ok = QInputDialog.getText(
+            self, "Upload", "Remote destination path (file or directory):",
+            text=f"/tmp/{os.path.basename(local)}")
+        if not ok or not remote.strip():
+            return
+        try:
+            api.upload_file_ssh(self.active_id, local, remote.strip())
+            self.output.append_terminal_text(
+                f"\n[uploaded {os.path.basename(local)} -> {remote.strip()}]\n")
+        except Exception as e:
+            QMessageBox.critical(self, "Upload failed", str(e))
+
+    def download_from_host(self):
+        if not self._require_ssh():
+            return
+        remote, ok = QInputDialog.getText(self, "Download", "Remote file path to fetch:")
+        if not ok or not remote.strip():
+            return
+        local, _ = QFileDialog.getSaveFileName(
+            self, "Save downloaded file as", os.path.basename(remote.strip()))
+        if not local:
+            return
+        try:
+            api.download_file_ssh(self.active_id, remote.strip(), local)
+            self.output.append_terminal_text(f"\n[downloaded {remote.strip()} -> {local}]\n")
+        except Exception as e:
+            QMessageBox.critical(self, "Download failed", str(e))
+
+    def find_in_output(self):
+        text, ok = QInputDialog.getText(self, "Find in output", "Search for:")
+        if not ok or not text:
+            return
+        # Search forward from the current cursor; wrap to the top if not found.
+        if not self.output.find(text):
+            cur = self.output.textCursor()
+            cur.movePosition(_CURSOR_START)
+            self.output.setTextCursor(cur)
+            if not self.output.find(text):
+                QMessageBox.information(self, "Not found", f"'{text}' was not found in the output.")
+
+    def save_output(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save terminal output", "terminal-output.txt")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self.output.toPlainText())
+        except Exception as e:
+            QMessageBox.critical(self, "Save failed", str(e))
+
+    def adjust_font(self, delta):
+        font = self.output.font()
+        size = max(7, min(28, font.pointSize() + delta))
+        font.setPointSize(size)
+        self.output.setFont(font)
+        # Cell size changed, so re-measure and resize the remote pty/grid.
+        if self._ssh_session_active and self._session_id is not None:
+            cols, rows = self.output.grid_size_for_viewport()
+            self.output.resize_grid(cols, rows)
+            self._terminal_io.submit_resize(self._session_id, cols, rows)
 
     def _drain_read_results(self):
         """Pull any read results the worker threads have queued and handle
@@ -1104,7 +1227,7 @@ class RemoteAdministrationPage(QWidget):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("Remote Host Administration")
+        self.setWindowTitle("Sysible Connect")
         self.resize(1180, 760)
 
         self.environments = []
@@ -1122,7 +1245,7 @@ class RemoteAdministrationPage(QWidget):
         main = QVBoxLayout()
         self.setLayout(main)
 
-        main.addLayout(make_page_header("Remote Host Administration"))
+        main.addLayout(make_page_header("Sysible Connect"))
 
         body = QHBoxLayout()
 

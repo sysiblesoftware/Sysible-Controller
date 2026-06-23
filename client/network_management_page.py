@@ -109,7 +109,7 @@ class NetworkManagementPage(QWidget):
         action_tabs.addTab(self._build_dns_hostname_tab(), "DNS and Hostname")
         action_tabs.addTab(self._build_routing_tab(), "Gateway and Routing")
         action_tabs.addTab(self._build_advanced_tab(), "Bonding, Teaming, VLANs, Bridges")
-        shrink_tabwidget_to_current_page(action_tabs)
+        shrink_tabwidget_to_current_page(action_tabs, cap_height=True)
         content_layout.addWidget(action_tabs)
 
         # ---------------------------------------------------------

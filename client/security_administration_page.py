@@ -105,7 +105,7 @@ class SecurityAdministrationPage(QWidget):
         action_tabs.addTab(self._build_audit_logins_tab(), "Audit && Logins")
         action_tabs.addTab(self._build_updates_policy_tab(), "Updates && Policy")
         action_tabs.addTab(self._build_hardening_scans_tab(), "Hardening && Scans")
-        shrink_tabwidget_to_current_page(action_tabs)
+        shrink_tabwidget_to_current_page(action_tabs, cap_height=True)
         content_layout.addWidget(action_tabs)
 
         # =========================================================

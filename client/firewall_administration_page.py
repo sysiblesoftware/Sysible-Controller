@@ -99,7 +99,7 @@ class FirewallAdministrationPage(QWidget):
         action_tabs.addTab(self._build_rich_rules_tab(), "Rich Rules")
         action_tabs.addTab(self._build_nftables_tab(), "nftables")
         action_tabs.addTab(self._build_iptables_tab(), "iptables")
-        shrink_tabwidget_to_current_page(action_tabs)
+        shrink_tabwidget_to_current_page(action_tabs, cap_height=True)
         content_layout.addWidget(action_tabs)
 
         # =========================================================

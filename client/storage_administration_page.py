@@ -99,7 +99,7 @@ class StorageAdministrationPage(QWidget):
         action_tabs.addTab(self._build_lvm_tab(), "LVM")
         action_tabs.addTab(self._build_raid_tab(), "RAID")
         action_tabs.addTab(self._build_swap_tab(), "Swap")
-        shrink_tabwidget_to_current_page(action_tabs)
+        shrink_tabwidget_to_current_page(action_tabs, cap_height=True)
         content_layout.addWidget(action_tabs)
 
         # =========================================================

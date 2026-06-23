@@ -19,7 +19,7 @@ class TimeSynchronizationPage(FleetToolPage):
         tabs = QTabWidget()
         tabs.addTab(self._ntp_tab(), "NTP && Chrony")
         tabs.addTab(self._timezone_tab(), "Time Zone")
-        shrink_tabwidget_to_current_page(tabs)
+        shrink_tabwidget_to_current_page(tabs, cap_height=True)
         return tabs
 
     @staticmethod

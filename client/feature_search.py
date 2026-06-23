@@ -39,9 +39,11 @@ REGISTRY = [
                   "controller port", "change my password", "controller settings"]},
 
     # ---- Remote Host Administration ----
-    {"title": "Remote Host Administration", "open": "open_remote",
+    {"title": "Sysible Connect", "open": "open_remote",
      "keywords": ["ssh", "ssh terminal", "remote terminal", "console",
-                  "connect to host", "environment tag", "remote administration"]},
+                  "connect to host", "environment tag", "remote administration",
+                  "sysible connect", "upload to host", "download from host",
+                  "file transfer", "terminal"]},
 
     # ---- Webserver Portal Configuration ----
     {"title": "Webserver Portal Configuration", "open": "open_portal",

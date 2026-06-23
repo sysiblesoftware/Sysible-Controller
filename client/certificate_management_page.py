@@ -19,7 +19,7 @@ class CertificateManagementPage(FleetToolPage):
         tabs = QTabWidget()
         tabs.addTab(self._certs_tab(), "Certificates")
         tabs.addTab(self._tls_tab(), "Chain && TLS")
-        shrink_tabwidget_to_current_page(tabs)
+        shrink_tabwidget_to_current_page(tabs, cap_height=True)
         return tabs
 
     @staticmethod

@@ -19,7 +19,7 @@ class ContainersVMsPage(FleetToolPage):
         tabs = QTabWidget()
         tabs.addTab(self._containers_tab(), "Containers")
         tabs.addTab(self._vms_tab(), "Virtual Machines")
-        shrink_tabwidget_to_current_page(tabs)
+        shrink_tabwidget_to_current_page(tabs, cap_height=True)
         return tabs
 
     @staticmethod

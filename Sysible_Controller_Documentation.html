@@ -167,7 +167,7 @@
   <li><span class="num">5</span><a href="#cli">The sysible_controller Command Line</a></li>
   <li><span class="num">6</span><a href="#dashboard">The Dashboard</a></li>
   <li><span class="num">7</span><a href="#enrollment">Host Enrollment</a></li>
-  <li><span class="num">8</span><a href="#remote">Remote Host Administration</a></li>
+  <li><span class="num">8</span><a href="#remote">Sysible Connect</a></li>
   <li><span class="num">9</span><a href="#settings">Sysible Controller Settings</a>
     <ul class="sub">
       <li><a href="#settings-controller">Controller Configuration</a></li>
@@ -203,7 +203,7 @@
     <ul class="sub">
       <li><a href="#tasks-login">Logging in</a></li>
       <li><a href="#tasks-enrollment">Host Enrollment</a></li>
-      <li><a href="#tasks-remote">Remote Host Administration</a></li>
+      <li><a href="#tasks-remote">Sysible Connect</a></li>
       <li><a href="#tasks-settings">Sysible Controller Settings</a></li>
       <li><a href="#tasks-uga">User &amp; Group Administration</a></li>
       <li><a href="#tasks-health">System Health &amp; Logs</a></li>
@@ -398,7 +398,7 @@ sudo ./install_sysible.sh</pre>
 
     <!-- Row 2 -->
     <g><rect x="40" y="260" width="400" height="140" rx="10" fill="#262626" stroke="#3A3A3A"/>
-      <text x="58" y="294" font-family="-apple-system,Arial" font-size="14" font-weight="700" fill="#EAEAEA">Remote Host Administration</text>
+      <text x="58" y="294" font-family="-apple-system,Arial" font-size="14" font-weight="700" fill="#EAEAEA">Sysible Connect</text>
       <text x="58" y="318" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">SSH and agent terminal access, plus</text>
       <text x="58" y="334" font-family="-apple-system,Arial" font-size="11" fill="#9aa5b1">environment tagging for managed hosts.</text></g>
 
@@ -424,7 +424,7 @@ sudo ./install_sysible.sh</pre>
 <tr><th>Tile</th><th>What it's for</th></tr>
 <tr><td><strong>Sysible Controller Host Enrollment</strong></td><td>Bring new hosts under management using the lightweight agent; view and manage hosts already enrolled.</td></tr>
 <tr><td><strong>Sysible Controller Settings</strong></td><td>Configure the controller itself: the address/port baked into agent bundles, administrator accounts, their password policy, the audit log, and the License &amp; Version section.</td></tr>
-<tr><td><strong>Remote Host Administration</strong></td><td>Unified console for direct, hands-on work on individual hosts — live terminal, one-off commands, file transfer, and one-click SSH enrollment.</td></tr>
+<tr><td><strong>Sysible Connect</strong></td><td>Unified console for direct, hands-on work on individual hosts — live terminal, one-off commands, file transfer, and one-click SSH enrollment.</td></tr>
 <tr><td><strong>Webserver Portal Configuration</strong></td><td>Start/stop the optional host-facing portal, set its credentials and port, and manage the shared file pool.</td></tr>
 <tr><td><strong>System Administration</strong></td><td>Sub-menu of twelve fleet-wide operational tools — user/group accounts, health checks, services, environmental policies, scheduled tasks, package management, repositories, networking, the filesystem layer, block storage, the firewall, and host security/hardening.</td></tr>
 </table>
@@ -506,7 +506,7 @@ sudo ./run_agent.sh</pre>
 <div class="warn"><b>One bundle, one host</b>Each bundle's enrollment token is single-use — download a fresh bundle per host rather than reusing one zip on a second machine.</div>
 
 <h2>Environment tagging</h2>
-<p>Hosts can be organized into <strong>environments</strong> — labels such as "Production," "Staging," or "Development." Environments are entirely optional; an unassigned host is listed under an "Unassigned" heading. Select a host, use the <strong>Environment</strong> dropdown (choose <strong>"+ New environment..."</strong> to create one on the fly), and click <strong>Set Environment</strong> to apply it. The same environment list is shared elsewhere in the application, including Remote Host Administration's SSH-enrollment flow.</p>
+<p>Hosts can be organized into <strong>environments</strong> — labels such as "Production," "Staging," or "Development." Environments are entirely optional; an unassigned host is listed under an "Unassigned" heading. Select a host, use the <strong>Environment</strong> dropdown (choose <strong>"+ New environment..."</strong> to create one on the fly), and click <strong>Set Environment</strong> to apply it. The same environment list is shared elsewhere in the application, including Sysible Connect's SSH-enrollment flow.</p>
 
 <h2>The managed hosts list</h2>
 <p>The Enrolled Hosts list groups hosts under collapsible environment headers, with <strong>Collapse All</strong> / <strong>Expand All</strong> buttons for tidying a large fleet. Selecting a host populates a details panel with its Hostname, Host ID, Platform, Kernel, Status, and Environment. <strong>Refresh</strong> reloads the list and details from the controller.</p>
@@ -515,22 +515,22 @@ sudo ./run_agent.sh</pre>
 <p>Select a host and click <strong>Disenroll Host</strong>. If the host is online, Sysible first asks it to stop and remove its own systemd service. If it doesn't respond in time (typically because it's offline), the enrollment is removed from the controller's records regardless, but the agent software remains on that machine until someone runs <code>disenroll_agent.sh</code> on it directly.</p>
 <table class="ref">
 <tr><th>What disenrolling does</th><th>What it doesn't do</th></tr>
-<tr><td>Stops and removes the agent's systemd service; removes the host's enrollment record so it disappears from Host Enrollment and Remote Host Administration.</td><td>Leaves the installed agent files, pinned certificate, and local state directory on disk when torn down remotely — for full cleanup, run <code>disenroll_agent.sh</code> from the original bundle directly on the host.</td></tr>
+<tr><td>Stops and removes the agent's systemd service; removes the host's enrollment record so it disappears from Host Enrollment and Sysible Connect.</td><td>Leaves the installed agent files, pinned certificate, and local state directory on disk when torn down remotely — for full cleanup, run <code>disenroll_agent.sh</code> from the original bundle directly on the host.</td></tr>
 </table>
 </div>
 
 <!-- ===================== 8. REMOTE ADMINISTRATION ===================== -->
 <div class="page" id="remote">
-<h1 class="sec"><span class="tag">Section 8</span>Remote Host Administration</h1>
+<h1 class="sec"><span class="tag">Section 8</span>Sysible Connect</h1>
 
-<p>Remote Host Administration is the hands-on console for working directly on individual managed hosts — whether enrolled via the Sysible agent or connected directly over SSH. It is reached from the "Remote Host Administration" tile on the Dashboard.</p>
+<p>Sysible Connect is the hands-on console for working directly on individual managed hosts — whether enrolled via the Sysible agent or connected directly over SSH. It is reached from the "Sysible Connect" tile on the Dashboard.</p>
 
 <figure class="mock">
-  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Remote Host Administration</span></div>
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Sysible Connect</span></div>
   <svg viewBox="0 0 900 660" xmlns="http://www.w3.org/2000/svg">
     <rect width="900" height="660" fill="#1E1E1E"/>
     <rect x="30" y="22" width="26" height="26" rx="6" fill="#2f6fed"/>
-    <text x="70" y="40" font-family="-apple-system,Arial" font-size="17" font-weight="700" fill="#EAEAEA">Remote Host Administration</text>
+    <text x="70" y="40" font-family="-apple-system,Arial" font-size="17" font-weight="700" fill="#EAEAEA">Sysible Connect</text>
 
     <text x="40" y="80" font-family="-apple-system,Arial" font-size="12" font-weight="700" fill="#9aa5b1">MANAGED HOSTS</text>
     <rect x="40" y="88" width="820" height="100" rx="6" fill="#2B2B2B" stroke="#505050"/>
@@ -577,7 +577,7 @@ sudo ./run_agent.sh</pre>
     <rect x="767" y="608" width="80" height="22" rx="4" fill="#3C4B64" stroke="#506080"/><text x="807" y="623" font-size="10" fill="#fff" text-anchor="middle" font-family="-apple-system,Arial">Download…</text>
   </svg>
 </figure>
-<figcaption>Remote Host Administration — managed hosts (with IPs), one-click SSH enrollment, pop-out terminals, and file transfer.</figcaption>
+<figcaption>Sysible Connect — managed hosts (with IPs), one-click SSH enrollment, pop-out terminals, and file transfer.</figcaption>
 
 <h2>The merged hosts view</h2>
 <p>The <strong>Managed Hosts</strong> list runs down the left of the page and shows every host the controller knows about — agent-enrolled and SSH-connected alike — grouped by environment, with each host's <strong>connection type</strong> and <strong>IP address</strong> shown inline. A host enrolled both ways appears once, as a combined <strong>Agent + SSH</strong> entry, rather than twice. Buttons let you <strong>Refresh</strong>, <strong>Remove Host</strong>, and <strong>Show Sysible Controller Public Key</strong> (for installing the controller's key manually where the one-click flow isn't suitable).</p>
@@ -591,6 +591,7 @@ sudo ./run_agent.sh</pre>
 <p><strong>Double-click a host</strong> to open its terminal in its own window. The terminal is a pop-out (not docked in the page), so you can place it wherever you like, resize it freely, and keep several open side by side. You can open <strong>more than one session to the same host</strong> at once — each double-click opens a new, independent session, and repeated windows for the same host are numbered in their title bars.</p>
 <p>For a host that's enrolled both ways, a <strong>Connection</strong> picker at the top of the window switches between the <strong>SSH</strong> session and the <strong>Agent</strong> console; single-transport hosts show only what they have.</p>
 <p>On an <strong>SSH</strong> connection the terminal is a genuine PTY-backed interactive session. Full-screen, cursor-addressed programs — <code>vim</code>, <code>top</code>, <code>htop</code>, <code>less</code> — render correctly rather than spilling stray redraw lines, and the terminal <strong>resizes with the window</strong> so those programs use the whole panel. Output is colorized (ANSI colors are honored), and the <code>user@host</code> portion of the prompt is shown in <strong>green</strong>, turning <strong>red</strong> whenever you are <code>root</code> (including after <code>su</code> or <code>sudo -i</code>) as an at-a-glance privilege cue. Arrow keys, Tab, and Backspace all work, and pasting sends text straight into the session. Buttons provide <strong>Send Ctrl+C</strong> (a real interrupt signal), <strong>Clear</strong> (clears the pane and redraws the prompt), and <strong>Exit Session</strong> (closes the window and tears down the remote session).</p>
+<p>Each terminal window also has a toolbar with <strong>Upload…</strong> and <strong>Download…</strong> (transfer a file to or from that host over SSH), <strong>Find…</strong> (search the terminal output), <strong>Save Output…</strong> (write the terminal's text to a file), and <strong>A- / A+</strong> font-size controls (the remote pty is re-sized to match so full-screen apps still fill the panel).</p>
 <p>On an <strong>Agent</strong> connection there's no persistent shell, so true interactive sessions aren't possible. Instead, type a command in the bottom box and press Enter — it's queued for the agent to execute, with output, errors, and exit code returned once it reports back (typically a few seconds; a timeout is reported after about 30 seconds of silence). Command history is recalled with the Up/Down arrow keys.</p>
 
 <h2>File upload and download</h2>
@@ -931,6 +932,8 @@ sudo ./run_agent.sh</pre>
 <tr><th>Action</th><th>What it does</th></tr>
 <tr><td>Mount</td><td>Mounts a device or filesystem at a given mount point.</td></tr>
 <tr><td>Unmount</td><td>Unmounts a given mount point or device.</td></tr>
+<tr><td>Mount NFS</td><td>Mounts an NFS export (<code>server:/export</code>) at a mount point, optionally persisting it to <code>/etc/fstab</code>. Needs the NFS client (nfs-common / nfs-utils) on the host.</td></tr>
+<tr><td>Mount CIFS</td><td>Mounts a CIFS/SMB share (<code>//server/share</code>) at a mount point with optional username/password, optionally persisting to <code>/etc/fstab</code>. Credentials are written to a root-only file, never the command line. Needs cifs-utils on the host.</td></tr>
 <tr><td>Resize Filesystem</td><td>Grows or shrinks a filesystem to match its underlying device/partition, auto-detecting ext2/3/4, xfs, or btrfs.</td></tr>
 <tr><td>Repair Filesystem</td><td>Runs the filesystem-appropriate check/repair tool against an unmounted device.</td></tr>
 <tr><td>Check Disk Usage</td><td>The same <code>df</code>-style report as System Health &amp; Logs' Disk Usage.</td></tr>
@@ -1317,8 +1320,8 @@ sudo ./run_agent.sh</pre>
 <li>If the host is offline or doesn't respond in time, it is removed from the controller's records anyway, with a note that you should run <code>disenroll_agent.sh</code> on that host yourself later if you also want its local agent service cleaned up.</li>
 </ol>
 
-<h2 id="tasks-remote">Remote Host Administration</h2>
-<p>Dashboard tile: <strong>Remote Host Administration</strong>. See Section 8 for the terminal and file-transfer model.</p>
+<h2 id="tasks-remote">Sysible Connect</h2>
+<p>Dashboard tile: <strong>Sysible Connect</strong>. See Section 8 for the terminal and file-transfer model.</p>
 
 <h3>Connect to a new host over SSH</h3>
 <ol>

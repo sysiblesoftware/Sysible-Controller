@@ -12,13 +12,48 @@ live alongside version.py or be backed up with the rest of the
 controller's data.
 """
 
-from PySide6.QtCore import QSettings
-from PySide6.QtGui import QColor, QPalette
+import os
+import tempfile
+
+from PySide6.QtCore import QSettings, Qt
+from PySide6.QtGui import QColor, QPalette, QPixmap, QPainter, QPen
 from PySide6.QtWidgets import QApplication
 
 _SETTINGS_ORG = "Sysible"
 _SETTINGS_APP = "Controller"
 _MODE_KEY = "appearance/mode"
+
+_CHECK_ICON_PATH = None
+
+
+def _check_icon_qss_path():
+    """Generate (once) a small orange check-mark PNG and return its path in a
+    form usable inside a QSS ``url(...)``. This lets the host-list checkboxes
+    keep an always-orange-bordered box with a tick drawn *inside* when checked,
+    instead of filling solid (which hid the box). Returns "" if it can't be
+    generated yet (no QApplication), in which case the box just shows empty."""
+    global _CHECK_ICON_PATH
+    if _CHECK_ICON_PATH and os.path.exists(_CHECK_ICON_PATH):
+        return _CHECK_ICON_PATH.replace("\\", "/")
+    try:
+        pix = QPixmap(18, 18)
+        pix.fill(Qt.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor("#f5a623"))
+        pen.setWidth(2)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        p.drawLine(4, 9, 8, 13)
+        p.drawLine(8, 13, 14, 5)
+        p.end()
+        path = os.path.join(tempfile.gettempdir(), "sysible_host_check.png")
+        pix.save(path, "PNG")
+        _CHECK_ICON_PATH = path
+        return path.replace("\\", "/")
+    except Exception:
+        return ""
 
 ENTERPRISE_THEME = """
 QWidget {
@@ -112,15 +147,25 @@ QCheckBox::indicator:disabled {
    they fall back to the near-invisible default. A bright orange border
    makes them readable against the dark row background. */
 QListWidget::indicator, QListView::indicator, QTreeView::indicator {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
     border: 2px solid #f5a623;
     border-radius: 4px;
-    background: rgba(127,127,127,0.20);
+    background: rgba(245,166,35,0.10);
+}
+QListWidget::indicator:hover, QListView::indicator:hover, QTreeView::indicator:hover {
+    background: rgba(245,166,35,0.22);
 }
 QListWidget::indicator:checked, QListView::indicator:checked, QTreeView::indicator:checked {
-    background: #3ac95a;
-    border-color: #f5a623;
+    border: 2px solid #f5a623;
+    background: rgba(245,166,35,0.10);
+    image: url(__CHECK_ICON__);
+}
+/* Breathing room between rows so hosts don't look cramped when an
+   environment has several of them. */
+QListWidget::item, QListView::item {
+    padding-top: 5px;
+    padding-bottom: 5px;
 }
 
 QScrollBar:vertical {
@@ -267,15 +312,23 @@ QCheckBox::indicator:disabled {
 /* Host-list (and other checkable list) checkboxes - see the dark-theme
    note above. Orange border so the boxes stand out in the host list. */
 QListWidget::indicator, QListView::indicator, QTreeView::indicator {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
     border: 2px solid #e08900;
     border-radius: 4px;
     background: #ffffff;
 }
+QListWidget::indicator:hover, QListView::indicator:hover, QTreeView::indicator:hover {
+    background: #fff5e6;
+}
 QListWidget::indicator:checked, QListView::indicator:checked, QTreeView::indicator:checked {
-    background: #3ac95a;
-    border-color: #e08900;
+    border: 2px solid #e08900;
+    background: #ffffff;
+    image: url(__CHECK_ICON__);
+}
+QListWidget::item, QListView::item {
+    padding-top: 5px;
+    padding-bottom: 5px;
 }
 
 QScrollBar:vertical {
@@ -423,7 +476,10 @@ def get_theme_mode():
 
 
 def get_stylesheet(mode=None):
-    return DAYLIGHT_THEME if (mode or get_theme_mode()) == "light" else ENTERPRISE_THEME
+    base = DAYLIGHT_THEME if (mode or get_theme_mode()) == "light" else ENTERPRISE_THEME
+    # Inject the generated check-mark image path (or "" if unavailable) so the
+    # checked host-list boxes show a tick inside their orange border.
+    return base.replace("__CHECK_ICON__", _check_icon_qss_path())
 
 
 def build_palette(mode):

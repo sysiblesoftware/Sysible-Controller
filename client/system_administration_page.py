@@ -21,6 +21,7 @@ from client.time_synchronization_page import TimeSynchronizationPage
 from client.certificate_management_page import CertificateManagementPage
 from client.containers_vms_page import ContainersVMsPage
 from client.directory_services_page import DirectoryServicesPage
+from client.subscription_management_page import SubscriptionManagementPage
 
 
 class SystemAdministrationPage(QWidget):
@@ -59,6 +60,7 @@ class SystemAdministrationPage(QWidget):
         self.cert_mgmt_window = None
         self.containers_vms_window = None
         self.directory_window = None
+        self.subscription_window = None
 
         main = QVBoxLayout()
         self.setLayout(main)
@@ -158,6 +160,10 @@ class SystemAdministrationPage(QWidget):
              "Join hosts to Active Directory (realmd/SSSD), manage realm status and login permits, "
              "enable home-dir creation, and configure/test LDAP and LDAPS.",
              self.open_directory, "fa5s.users-cog", "sky"),
+            ("Subscription & Licensing",
+             "Register and manage commercial-distro subscriptions: Red Hat (subscription-manager), "
+             "Ubuntu Pro, and SUSE (SUSEConnect) — status, attach/enable, and repositories.",
+             self.open_subscriptions, "fa5s.id-card", "amber"),
         ]
 
         # Build every card once and keep it with a lowercase haystack
@@ -333,3 +339,10 @@ class SystemAdministrationPage(QWidget):
         self.directory_window.show()
         self.directory_window.raise_()
         return self.directory_window
+
+    def open_subscriptions(self):
+        if self.subscription_window is None:
+            self.subscription_window = SubscriptionManagementPage()
+        self.subscription_window.show()
+        self.subscription_window.raise_()
+        return self.subscription_window

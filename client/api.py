@@ -376,3 +376,4 @@ from client._api_timesync import *  # noqa: E402,F401,F403
 from client._api_certs import *  # noqa: E402,F401,F403
 from client._api_containers import *  # noqa: E402,F401,F403
 from client._api_directory import *  # noqa: E402,F401,F403
+from client._api_subscriptions import *  # noqa: E402,F401,F403

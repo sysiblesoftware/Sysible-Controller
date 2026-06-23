@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QMessageBox, QSystemTrayIcon, QMenu, QStyle,
 )
 from PySide6.QtGui import QAction, QIcon
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 
 from home import HomeWindow
 from theme import apply_theme
@@ -210,6 +210,19 @@ class MainWindow(QMainWindow):
 
 
 def main():
+
+    # High-DPI sharpness: on laptops/small screens running a fractional
+    # display scale (125%, 150%, ...), Qt's default rounds the scale factor
+    # and bitmap-scales the UI, which makes text and icons look soft/blurry.
+    # PassThrough honors the exact fractional factor so everything renders
+    # crisp at the real device pixel ratio. Must be set before QApplication
+    # is constructed. (High-DPI scaling itself is already on by default in Qt6.)
+    try:
+        QApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
+    except Exception:
+        pass
 
     app = QApplication(sys.argv)
 

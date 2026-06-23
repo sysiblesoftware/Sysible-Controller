@@ -150,6 +150,13 @@ REGISTRY = [
                   "realm", "realmd", "sssd", "ldap", "ldaps", "kerberos", "domain join",
                   "leave domain", "directory", "winbind", "add server to active directory"]},
 
+    # ---- Subscription & Licensing ----
+    {"title": "Subscription & Licensing", "open": "open_system_admin", "sub_open": "open_subscriptions",
+     "keywords": ["subscription", "license", "licensing", "register", "registration",
+                  "subscription-manager", "rhsm", "red hat subscription", "activation key",
+                  "ubuntu pro", "ua", "pro attach", "esm", "livepatch", "fips",
+                  "suseconnect", "scc", "suse register", "reg code", "entitlement", "attach"]},
+
     # ---- License & Version (now a section of Sysible Controller
     # Settings, not its own tile - see client/admin_configuration_page.py) ----
     {"title": "License & Version", "open": "open_admin_config",

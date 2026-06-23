@@ -1,10 +1,11 @@
+import html
 import re
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QMessageBox, QFrame, QCheckBox, QScrollArea, QListWidget, QListWidgetItem,
-    QTextEdit, QTabWidget,
+    QTextEdit, QTabWidget, QGroupBox,
 )
 
 from client import api
@@ -149,18 +150,20 @@ class EnvironmentalPoliciesPage(QWidget):
         layout.addWidget(hint)
 
         # -- Password --
-        layout.addWidget(QLabel("Password"))
-
+        pw_group = QGroupBox("Password")
+        pw_layout = QVBoxLayout(pw_group)
         pw_row1 = QHBoxLayout()
         pw_row1.addWidget(QLabel("Minimum length:"))
         self.pw_minlen_input = QLineEdit()
         self.pw_minlen_input.setMaximumWidth(60)
         pw_row1.addWidget(self.pw_minlen_input)
+        pw_row1.addSpacing(18)
         pw_row1.addWidget(QLabel("Retry attempts:"))
         self.pw_retry_input = QLineEdit()
         self.pw_retry_input.setMaximumWidth(60)
         pw_row1.addWidget(self.pw_retry_input)
-        layout.addLayout(pw_row1)
+        pw_row1.addStretch()
+        pw_layout.addLayout(pw_row1)
 
         pw_row2 = QHBoxLayout()
         self.pw_require_upper = QCheckBox("Require uppercase")
@@ -169,43 +172,47 @@ class EnvironmentalPoliciesPage(QWidget):
         self.pw_require_symbol = QCheckBox("Require symbol")
         for cb in (self.pw_require_upper, self.pw_require_lower, self.pw_require_digit, self.pw_require_symbol):
             pw_row2.addWidget(cb)
-        layout.addLayout(pw_row2)
+        pw_row2.addStretch()
+        pw_layout.addLayout(pw_row2)
+        layout.addWidget(pw_group)
 
         # -- Lockout --
-        layout.addWidget(QLabel("Lockout"))
-
-        lockout_row = QHBoxLayout()
+        lockout_group = QGroupBox("Lockout")
+        lockout_row = QHBoxLayout(lockout_group)
         lockout_row.addWidget(QLabel("Failed attempts before lock:"))
         self.lockout_deny_input = QLineEdit()
         self.lockout_deny_input.setMaximumWidth(60)
         lockout_row.addWidget(self.lockout_deny_input)
+        lockout_row.addSpacing(18)
         lockout_row.addWidget(QLabel("Unlock time (seconds, 0 = manual):"))
         self.lockout_unlock_input = QLineEdit()
         self.lockout_unlock_input.setMaximumWidth(80)
         lockout_row.addWidget(self.lockout_unlock_input)
-        layout.addLayout(lockout_row)
+        lockout_row.addStretch()
+        layout.addWidget(lockout_group)
 
         # -- Sudo --
-        layout.addWidget(QLabel("Sudo"))
-
-        sudo_row = QHBoxLayout()
+        sudo_group = QGroupBox("Sudo")
+        sudo_row = QHBoxLayout(sudo_group)
         sudo_row.addWidget(QLabel("Session timeout (minutes):"))
         self.sudo_timeout_input = QLineEdit()
         self.sudo_timeout_input.setMaximumWidth(60)
         sudo_row.addWidget(self.sudo_timeout_input)
+        sudo_row.addSpacing(18)
         self.sudo_require_password = QCheckBox("Require password for sudo")
         sudo_row.addWidget(self.sudo_require_password)
-        layout.addLayout(sudo_row)
+        sudo_row.addStretch()
+        layout.addWidget(sudo_group)
 
         # -- Umask --
-        layout.addWidget(QLabel("Umask"))
-
-        umask_row = QHBoxLayout()
+        umask_group = QGroupBox("Umask")
+        umask_row = QHBoxLayout(umask_group)
         umask_row.addWidget(QLabel("Default umask (octal, e.g. 027):"))
         self.umask_input = QLineEdit()
         self.umask_input.setMaximumWidth(60)
         umask_row.addWidget(self.umask_input)
-        layout.addLayout(umask_row)
+        umask_row.addStretch()
+        layout.addWidget(umask_group)
 
         buttons = QHBoxLayout()
         refresh_btn = QPushButton("Refresh")
@@ -325,8 +332,8 @@ class EnvironmentalPoliciesPage(QWidget):
         # just keeps the "which policies + push button" controls that act
         # on whatever's checked over there.
 
-        which_row = QHBoxLayout()
-        which_row.addWidget(QLabel("Push:"))
+        which_group = QGroupBox("Policies to push")
+        which_row = QHBoxLayout(which_group)
         self.push_password = QCheckBox("Password Quality")
         self.push_password.setChecked(True)
         self.push_lockout = QCheckBox("Lockout")
@@ -335,7 +342,8 @@ class EnvironmentalPoliciesPage(QWidget):
         self.push_umask = QCheckBox("Umask")
         for cb in (self.push_password, self.push_lockout, self.push_sudo, self.push_umask):
             which_row.addWidget(cb)
-        layout.addLayout(which_row)
+        which_row.addStretch()
+        layout.addWidget(which_group)
 
         self.push_btn = QPushButton("Push Selected Policies to Checked Hosts")
         self.push_btn.setStyleSheet("font-weight:bold;")
@@ -486,13 +494,31 @@ class EnvironmentalPoliciesPage(QWidget):
             text_edit.setPlainText("Waiting for this agent host to report back...")
             return
 
-        if data["stderr"] and not data["stdout"]:
-            text_edit.setPlainText(f"ERROR:\n{data['stderr']}")
+        # The policy push commands mostly succeed silently, so a banner
+        # makes the outcome clear at a glance (green = applied, red = failed).
+        code = data["code"]
+        if code is not None:
+            failed = code != 0
         else:
-            text = data["stdout"] or "(no output - command likely succeeded silently)"
-            if data["stderr"]:
-                text += f"\n\n--- stderr ---\n{data['stderr']}"
-            text_edit.setPlainText(text)
+            failed = bool(data["stderr"]) and not data["stdout"]
+
+        bg = STATUS_ERROR_COLOR if failed else STATUS_SUCCESS_COLOR
+        headline = "✗ Push failed" if failed else "✓ Policies applied"
+        if code is not None:
+            headline += f" (exit {code})"
+        banner = (
+            f'<div style="background-color:{bg}; color:#ffffff; font-weight:bold; '
+            f'padding:5px 10px; border-radius:4px; margin:0 0 6px 0;">{html.escape(headline)}</div>'
+        )
+
+        text = data["stdout"] or "(no output - command succeeded silently)"
+        if data["stderr"]:
+            text += f"\n\n--- stderr ---\n{data['stderr']}"
+        body = (
+            f'<pre style="font-family:monospace; white-space:pre-wrap; margin:0;">'
+            f'{html.escape(text)}</pre>'
+        )
+        text_edit.setHtml(banner + body)
 
     def _close_push_tab(self, index):
         bar = self.push_tabs.tabBar()

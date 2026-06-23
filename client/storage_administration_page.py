@@ -1,11 +1,12 @@
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton,
-    QLineEdit, QTextEdit, QMessageBox, QTabWidget, QComboBox, QCheckBox,
+    QLineEdit, QTextEdit, QMessageBox, QTabWidget, QComboBox, QCheckBox, QGroupBox,
 )
 from PySide6.QtCore import Qt, QTimer
 
 from client import api
+from client import result_banner
 from client import theme
 from client.events import bus
 from client.theme import STATUS_NEUTRAL_COLOR, STATUS_SUCCESS_COLOR, STATUS_ERROR_COLOR
@@ -129,15 +130,20 @@ class StorageAdministrationPage(QWidget):
     # =========================================================
     # ACTION PANEL BUILDERS (filled in below)
     # =========================================================
+    @staticmethod
+    def _group(title):
+        """A titled, bordered section box - replaces the bare bold-label
+        section headers so related controls read as a clear group."""
+        box = QGroupBox(title)
+        lay = QVBoxLayout(box)
+        return box, lay
+
     def _build_disks_tab(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        overview_title = QLabel("Overview and Health")
-        overview_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(overview_title)
-
+        box, g = self._group("Overview and Health")
         overview_row = QHBoxLayout()
         btn_list_disks = QPushButton("List Disks")
         btn_list_disks.clicked.connect(self.run_list_disks)
@@ -149,14 +155,14 @@ class StorageAdministrationPage(QWidget):
         btn_install_smartmontools.clicked.connect(self.run_install_smartmontools)
         overview_row.addWidget(btn_install_smartmontools)
         overview_row.addStretch()
-        layout.addLayout(overview_row)
+        g.addLayout(overview_row)
         smartmontools_hint = QLabel(
             "Monitor Disk Health and Check SMART Status need smartmontools (smartctl) - "
             "install it first if a host reports it missing."
         )
         theme.style_hint_label(smartmontools_hint)
         smartmontools_hint.setWordWrap(True)
-        layout.addWidget(smartmontools_hint)
+        g.addWidget(smartmontools_hint)
 
         smart_row = QHBoxLayout()
         smart_row.addWidget(QLabel("Device:"))
@@ -166,14 +172,10 @@ class StorageAdministrationPage(QWidget):
         btn_smart = QPushButton("Check SMART Status")
         btn_smart.clicked.connect(self.run_check_smart_status)
         smart_row.addWidget(btn_smart)
-        layout.addLayout(smart_row)
+        g.addLayout(smart_row)
+        layout.addWidget(box)
 
-        layout.addSpacing(14)
-
-        addremove_title = QLabel("Add and Remove Disks")
-        addremove_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(addremove_title)
-
+        box2, g2 = self._group("Add and Remove Disks")
         rescan_hint = QLabel(
             "After physically attaching a new SCSI/SATA/virtio disk, rescan to make it "
             "visible without rebooting. NVMe disks need no rescan - the kernel detects "
@@ -181,14 +183,14 @@ class StorageAdministrationPage(QWidget):
         )
         theme.style_hint_label(rescan_hint)
         rescan_hint.setWordWrap(True)
-        layout.addWidget(rescan_hint)
+        g2.addWidget(rescan_hint)
 
         rescan_row = QHBoxLayout()
         btn_rescan = QPushButton("Rescan / Detect New Disk")
         btn_rescan.clicked.connect(self.run_rescan_disks)
         rescan_row.addWidget(btn_rescan)
         rescan_row.addStretch()
-        layout.addLayout(rescan_row)
+        g2.addLayout(rescan_row)
 
         remove_row = QHBoxLayout()
         remove_row.addWidget(QLabel("Device:"))
@@ -198,7 +200,7 @@ class StorageAdministrationPage(QWidget):
         btn_remove_disk = QPushButton("Remove Disk")
         btn_remove_disk.clicked.connect(self.run_remove_disk)
         remove_row.addWidget(btn_remove_disk)
-        layout.addLayout(remove_row)
+        g2.addLayout(remove_row)
 
         remove_hint = QLabel(
             "Refuses if the disk is mounted, an active LVM physical volume, or a RAID "
@@ -207,7 +209,8 @@ class StorageAdministrationPage(QWidget):
         )
         theme.style_hint_label(remove_hint)
         remove_hint.setWordWrap(True)
-        layout.addWidget(remove_hint)
+        g2.addWidget(remove_hint)
+        layout.addWidget(box2)
 
         layout.addStretch()
         return panel
@@ -217,10 +220,7 @@ class StorageAdministrationPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        list_title = QLabel("Partition Table")
-        list_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(list_title)
-
+        box, g = self._group("Partitions")
         list_row = QHBoxLayout()
         list_row.addWidget(QLabel("Device (blank = overview of all disks):"))
         self.list_partitions_device_input = QLineEdit()
@@ -229,17 +229,13 @@ class StorageAdministrationPage(QWidget):
         btn_list_partitions = QPushButton("List Partitions")
         btn_list_partitions.clicked.connect(self.run_list_partitions)
         list_row.addWidget(btn_list_partitions)
-        layout.addLayout(list_row)
+        g.addLayout(list_row)
+        layout.addWidget(box)
 
-        layout.addSpacing(14)
-
-        table_title = QLabel("Partition Table")
-        table_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(table_title)
-
+        box2, g2 = self._group("Partition Table")
         table_hint = QLabel("DESTROYS any existing partition table (and the data it describes) on the device.")
         theme.style_hint_label(table_hint)
-        layout.addWidget(table_hint)
+        g2.addWidget(table_hint)
 
         table_row = QHBoxLayout()
         table_row.addWidget(QLabel("Device:"))
@@ -253,14 +249,10 @@ class StorageAdministrationPage(QWidget):
         btn_create_table = QPushButton("Create Partition Table")
         btn_create_table.clicked.connect(self.run_create_partition_table)
         table_row.addWidget(btn_create_table)
-        layout.addLayout(table_row)
+        g2.addLayout(table_row)
+        layout.addWidget(box2)
 
-        layout.addSpacing(14)
-
-        create_title = QLabel("Create Partition")
-        create_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(create_title)
-
+        box3, g3 = self._group("Create Partition")
         create_row1 = QHBoxLayout()
         create_row1.addWidget(QLabel("Device:"))
         self.create_part_device_input = QLineEdit()
@@ -270,7 +262,7 @@ class StorageAdministrationPage(QWidget):
         self.create_part_fstype_input = QLineEdit("ext4")
         self.create_part_fstype_input.setMaximumWidth(80)
         create_row1.addWidget(self.create_part_fstype_input)
-        layout.addLayout(create_row1)
+        g3.addLayout(create_row1)
 
         create_row2 = QHBoxLayout()
         create_row2.addWidget(QLabel("Start:"))
@@ -285,18 +277,14 @@ class StorageAdministrationPage(QWidget):
         btn_create_part.clicked.connect(self.run_create_partition)
         create_row2.addWidget(btn_create_part)
         create_row2.addStretch()
-        layout.addLayout(create_row2)
+        g3.addLayout(create_row2)
 
         create_hint = QLabel("Start/End accept parted's forms - percentages (0%, 100%) or absolute sizes (1MiB, 512GiB).")
         theme.style_hint_label(create_hint)
-        layout.addWidget(create_hint)
+        g3.addWidget(create_hint)
+        layout.addWidget(box3)
 
-        layout.addSpacing(14)
-
-        delresize_title = QLabel("Delete and Resize Partition")
-        delresize_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(delresize_title)
-
+        box4, g4 = self._group("Delete and Resize Partition")
         delete_row = QHBoxLayout()
         delete_row.addWidget(QLabel("Device:"))
         self.delete_part_device_input = QLineEdit()
@@ -309,7 +297,7 @@ class StorageAdministrationPage(QWidget):
         btn_delete_part = QPushButton("Delete Partition")
         btn_delete_part.clicked.connect(self.run_delete_partition)
         delete_row.addWidget(btn_delete_part)
-        layout.addLayout(delete_row)
+        g4.addLayout(delete_row)
 
         resize_row = QHBoxLayout()
         resize_row.addWidget(QLabel("Device:"))
@@ -328,7 +316,7 @@ class StorageAdministrationPage(QWidget):
         btn_resize_part = QPushButton("Resize Partition")
         btn_resize_part.clicked.connect(self.run_resize_partition)
         resize_row.addWidget(btn_resize_part)
-        layout.addLayout(resize_row)
+        g4.addLayout(resize_row)
 
         resize_hint = QLabel(
             "Resizes the partition table entry only - run Resize Filesystem (File System "
@@ -336,7 +324,8 @@ class StorageAdministrationPage(QWidget):
         )
         theme.style_hint_label(resize_hint)
         resize_hint.setWordWrap(True)
-        layout.addWidget(resize_hint)
+        g4.addWidget(resize_hint)
+        layout.addWidget(box4)
 
         layout.addStretch()
         return panel
@@ -346,13 +335,10 @@ class StorageAdministrationPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        title = QLabel("Format Filesystem")
-        title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(title)
-
+        box, g = self._group("Format Filesystem")
         hint = QLabel("Creates a brand-new filesystem on the device, destroying whatever was there before.")
         theme.style_hint_label(hint)
-        layout.addWidget(hint)
+        g.addWidget(hint)
 
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("Device:"))
@@ -363,7 +349,7 @@ class StorageAdministrationPage(QWidget):
         self.format_fstype_combo = QComboBox()
         self.format_fstype_combo.addItems(["ext4", "ext3", "ext2", "xfs", "btrfs", "vfat", "ntfs", "swap"])
         row1.addWidget(self.format_fstype_combo)
-        layout.addLayout(row1)
+        g.addLayout(row1)
 
         row2 = QHBoxLayout()
         row2.addWidget(QLabel("Label (optional):"))
@@ -375,7 +361,8 @@ class StorageAdministrationPage(QWidget):
         btn_format = QPushButton("Format Filesystem")
         btn_format.clicked.connect(self.run_format_filesystem)
         row2.addWidget(btn_format)
-        layout.addLayout(row2)
+        g.addLayout(row2)
+        layout.addWidget(box)
 
         layout.addStretch()
         return panel
@@ -385,10 +372,7 @@ class StorageAdministrationPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        pv_title = QLabel("Physical Volumes")
-        pv_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(pv_title)
-
+        box, g = self._group("Physical Volumes")
         pv_row = QHBoxLayout()
         pv_row.addWidget(QLabel("Device(s):"))
         self.create_pv_devices_input = QLineEdit()
@@ -400,14 +384,10 @@ class StorageAdministrationPage(QWidget):
         btn_list_pv = QPushButton("List Physical Volumes")
         btn_list_pv.clicked.connect(self.run_list_physical_volumes)
         pv_row.addWidget(btn_list_pv)
-        layout.addLayout(pv_row)
+        g.addLayout(pv_row)
+        layout.addWidget(box)
 
-        layout.addSpacing(14)
-
-        vg_title = QLabel("Volume Groups")
-        vg_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(vg_title)
-
+        box2, g2 = self._group("Volume Groups")
         vg_create_row = QHBoxLayout()
         vg_create_row.addWidget(QLabel("VG name:"))
         self.create_vg_name_input = QLineEdit()
@@ -423,7 +403,7 @@ class StorageAdministrationPage(QWidget):
         btn_list_vg = QPushButton("List Volume Groups")
         btn_list_vg.clicked.connect(self.run_list_volume_groups)
         vg_create_row.addWidget(btn_list_vg)
-        layout.addLayout(vg_create_row)
+        g2.addLayout(vg_create_row)
 
         vg_resize_row = QHBoxLayout()
         vg_resize_row.addWidget(QLabel("VG name:"))
@@ -440,19 +420,15 @@ class StorageAdministrationPage(QWidget):
         btn_reduce_vg = QPushButton("Reduce Volume Group")
         btn_reduce_vg.clicked.connect(self.run_reduce_volume_group)
         vg_resize_row.addWidget(btn_reduce_vg)
-        layout.addLayout(vg_resize_row)
+        g2.addLayout(vg_resize_row)
 
         vg_hint = QLabel("Reduce requires each device already be empty of logical-volume data (pvmove it off first).")
         theme.style_hint_label(vg_hint)
         vg_hint.setWordWrap(True)
-        layout.addWidget(vg_hint)
+        g2.addWidget(vg_hint)
+        layout.addWidget(box2)
 
-        layout.addSpacing(14)
-
-        lv_title = QLabel("Logical Volumes")
-        lv_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(lv_title)
-
+        box3, g3 = self._group("Logical Volumes")
         lv_create_row = QHBoxLayout()
         lv_create_row.addWidget(QLabel("VG name:"))
         self.create_lv_vg_input = QLineEdit()
@@ -472,7 +448,7 @@ class StorageAdministrationPage(QWidget):
         btn_list_lv = QPushButton("List Logical Volumes")
         btn_list_lv.clicked.connect(self.run_list_logical_volumes)
         lv_create_row.addWidget(btn_list_lv)
-        layout.addLayout(lv_create_row)
+        g3.addLayout(lv_create_row)
 
         lv_extend_row = QHBoxLayout()
         lv_extend_row.addWidget(QLabel("VG name:"))
@@ -493,7 +469,7 @@ class StorageAdministrationPage(QWidget):
         btn_extend_lv = QPushButton("Extend Logical Volume")
         btn_extend_lv.clicked.connect(self.run_extend_logical_volume)
         lv_extend_row.addWidget(btn_extend_lv)
-        layout.addLayout(lv_extend_row)
+        g3.addLayout(lv_extend_row)
 
         lv_reduce_row = QHBoxLayout()
         lv_reduce_row.addWidget(QLabel("VG name:"))
@@ -511,7 +487,7 @@ class StorageAdministrationPage(QWidget):
         btn_reduce_lv = QPushButton("Reduce Logical Volume")
         btn_reduce_lv.clicked.connect(self.run_reduce_logical_volume)
         lv_reduce_row.addWidget(btn_reduce_lv)
-        layout.addLayout(lv_reduce_row)
+        g3.addLayout(lv_reduce_row)
 
         lv_reduce_hint = QLabel(
             "ext2/3/4 is unmounted, fsck'd, and shrunk automatically. XFS cannot be shrunk "
@@ -519,7 +495,8 @@ class StorageAdministrationPage(QWidget):
         )
         theme.style_hint_label(lv_reduce_hint)
         lv_reduce_hint.setWordWrap(True)
-        layout.addWidget(lv_reduce_hint)
+        g3.addWidget(lv_reduce_hint)
+        layout.addWidget(box3)
 
         layout.addStretch()
         return panel
@@ -529,10 +506,7 @@ class StorageAdministrationPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        status_title = QLabel("RAID Arrays")
-        status_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(status_title)
-
+        box, g = self._group("RAID Arrays")
         status_row = QHBoxLayout()
         btn_list_raid = QPushButton("List RAID Arrays")
         btn_list_raid.clicked.connect(self.run_list_raid_arrays)
@@ -544,14 +518,10 @@ class StorageAdministrationPage(QWidget):
         btn_raid_status = QPushButton("RAID Status")
         btn_raid_status.clicked.connect(self.run_raid_status)
         status_row.addWidget(btn_raid_status)
-        layout.addLayout(status_row)
+        g.addLayout(status_row)
+        layout.addWidget(box)
 
-        layout.addSpacing(14)
-
-        create_title = QLabel("Configure RAID")
-        create_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(create_title)
-
+        box2, g2 = self._group("Configure RAID")
         create_row1 = QHBoxLayout()
         create_row1.addWidget(QLabel("RAID device:"))
         self.create_raid_device_input = QLineEdit()
@@ -562,7 +532,7 @@ class StorageAdministrationPage(QWidget):
         self.create_raid_level_combo.addItems(["0", "1", "4", "5", "6", "10"])
         self.create_raid_level_combo.setCurrentText("1")
         create_row1.addWidget(self.create_raid_level_combo)
-        layout.addLayout(create_row1)
+        g2.addLayout(create_row1)
 
         create_row2 = QHBoxLayout()
         create_row2.addWidget(QLabel("Member devices:"))
@@ -572,14 +542,10 @@ class StorageAdministrationPage(QWidget):
         btn_create_raid = QPushButton("Create RAID Array")
         btn_create_raid.clicked.connect(self.run_create_raid_array)
         create_row2.addWidget(btn_create_raid)
-        layout.addLayout(create_row2)
+        g2.addLayout(create_row2)
+        layout.addWidget(box2)
 
-        layout.addSpacing(14)
-
-        replace_title = QLabel("Replace Failed Disk")
-        replace_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(replace_title)
-
+        box3, g3 = self._group("Replace Failed Disk")
         replace_row1 = QHBoxLayout()
         replace_row1.addWidget(QLabel("RAID device:"))
         self.replace_raid_device_input = QLineEdit()
@@ -589,7 +555,7 @@ class StorageAdministrationPage(QWidget):
         self.replace_failed_device_input = QLineEdit()
         self.replace_failed_device_input.setPlaceholderText("e.g. /dev/sdb")
         replace_row1.addWidget(self.replace_failed_device_input, 1)
-        layout.addLayout(replace_row1)
+        g3.addLayout(replace_row1)
 
         replace_row2 = QHBoxLayout()
         replace_row2.addWidget(QLabel("Replacement device:"))
@@ -599,7 +565,8 @@ class StorageAdministrationPage(QWidget):
         btn_replace_disk = QPushButton("Replace Failed Disk")
         btn_replace_disk.clicked.connect(self.run_replace_failed_disk)
         replace_row2.addWidget(btn_replace_disk)
-        layout.addLayout(replace_row2)
+        g3.addLayout(replace_row2)
+        layout.addWidget(box3)
 
         layout.addStretch()
         return panel
@@ -609,19 +576,16 @@ class StorageAdministrationPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
+        box0, g0 = self._group("Active Swap")
         list_row = QHBoxLayout()
         btn_list_swap = QPushButton("List Swap")
         btn_list_swap.clicked.connect(self.run_list_swap)
         list_row.addWidget(btn_list_swap)
         list_row.addStretch()
-        layout.addLayout(list_row)
+        g0.addLayout(list_row)
+        layout.addWidget(box0)
 
-        layout.addSpacing(14)
-
-        file_title = QLabel("Swap File")
-        file_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(file_title)
-
+        box, g = self._group("Swap File")
         file_row = QHBoxLayout()
         file_row.addWidget(QLabel("Path:"))
         self.swap_file_path_input = QLineEdit()
@@ -638,14 +602,10 @@ class StorageAdministrationPage(QWidget):
         btn_create_swap_file = QPushButton("Create Swap File")
         btn_create_swap_file.clicked.connect(self.run_create_swap_file)
         file_row.addWidget(btn_create_swap_file)
-        layout.addLayout(file_row)
+        g.addLayout(file_row)
+        layout.addWidget(box)
 
-        layout.addSpacing(14)
-
-        resize_title = QLabel("Resize Swap File")
-        resize_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(resize_title)
-
+        box2, g2 = self._group("Resize Swap File")
         resize_row = QHBoxLayout()
         resize_row.addWidget(QLabel("Path:"))
         self.swap_resize_path_input = QLineEdit()
@@ -662,17 +622,13 @@ class StorageAdministrationPage(QWidget):
         btn_resize_swap_file = QPushButton("Resize Swap File")
         btn_resize_swap_file.clicked.connect(self.run_resize_swap_file)
         resize_row.addWidget(btn_resize_swap_file)
-        layout.addLayout(resize_row)
+        g2.addLayout(resize_row)
         resize_hint = QLabel("Only works on swap files (not partitions). Briefly disables swap on the file while resizing.")
         theme.style_hint_label(resize_hint)
-        layout.addWidget(resize_hint)
+        g2.addWidget(resize_hint)
+        layout.addWidget(box2)
 
-        layout.addSpacing(14)
-
-        part_title = QLabel("Swap Partition")
-        part_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(part_title)
-
+        box3, g3 = self._group("Swap Partition")
         part_row = QHBoxLayout()
         part_row.addWidget(QLabel("Device:"))
         self.swap_part_device_input = QLineEdit()
@@ -684,14 +640,10 @@ class StorageAdministrationPage(QWidget):
         btn_create_swap_part = QPushButton("Create Swap Partition")
         btn_create_swap_part.clicked.connect(self.run_create_swap_partition)
         part_row.addWidget(btn_create_swap_part)
-        layout.addLayout(part_row)
+        g3.addLayout(part_row)
+        layout.addWidget(box3)
 
-        layout.addSpacing(14)
-
-        disable_title = QLabel("Disable Swap")
-        disable_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(disable_title)
-
+        box4, g4 = self._group("Disable Swap")
         disable_row = QHBoxLayout()
         disable_row.addWidget(QLabel("Swap file or device:"))
         self.swap_disable_target_input = QLineEdit()
@@ -701,7 +653,8 @@ class StorageAdministrationPage(QWidget):
         btn_disable_swap = QPushButton("Disable Swap")
         btn_disable_swap.clicked.connect(self.run_disable_swap)
         disable_row.addWidget(btn_disable_swap)
-        layout.addLayout(disable_row)
+        g4.addLayout(disable_row)
+        layout.addWidget(box4)
 
         layout.addStretch()
         return panel
@@ -1205,13 +1158,9 @@ class StorageAdministrationPage(QWidget):
             text_edit.setPlainText("Waiting for this agent host to report back...")
             return
 
-        if data["stderr"] and not data["stdout"]:
-            text_edit.setPlainText(f"ERROR:\n{data['stderr']}")
-        else:
-            text = data["stdout"]
-            if data["stderr"]:
-                text += f"\n\n--- stderr ---\n{data['stderr']}"
-            text_edit.setPlainText(text)
+        label = getattr(self, "last_command_label", None) or "Action"
+        text_edit.setHtml(result_banner.result_html(
+            data, ok_label=f"{label} complete", fail_label=f"{label} failed"))
 
     def _close_storage_tab(self, index):
         bar = self.storage_tabs.tabBar()

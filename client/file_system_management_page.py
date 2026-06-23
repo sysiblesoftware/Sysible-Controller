@@ -1,11 +1,12 @@
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton,
-    QLineEdit, QTextEdit, QMessageBox, QTabWidget, QComboBox, QCheckBox,
+    QLineEdit, QTextEdit, QMessageBox, QGroupBox, QTabWidget, QComboBox, QCheckBox,
 )
 from PySide6.QtCore import Qt, QTimer
 
 from client import api
+from client import result_banner
 from client import theme
 from client.events import bus
 from client.theme import STATUS_NEUTRAL_COLOR, STATUS_SUCCESS_COLOR, STATUS_ERROR_COLOR
@@ -134,14 +135,18 @@ class FileSystemManagementPage(QWidget):
     # =========================================================
     # ACTION PANEL BUILDERS (filled in below)
     # =========================================================
+    @staticmethod
+    def _group(title):
+        box = QGroupBox(title)
+        lay = QVBoxLayout(box)
+        return box, lay
+
     def _build_dirs_files_tab(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        dir_title = QLabel("Directories")
-        dir_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(dir_title)
+        _box1, _g1 = self._group("Directories")
 
         create_row = QHBoxLayout()
         create_row.addWidget(QLabel("Path:"))
@@ -156,7 +161,7 @@ class FileSystemManagementPage(QWidget):
         btn_create_dir = QPushButton("Create Directory")
         btn_create_dir.clicked.connect(self.run_create_directory)
         create_row.addWidget(btn_create_dir)
-        layout.addLayout(create_row)
+        _g1.addLayout(create_row)
 
         remove_row = QHBoxLayout()
         remove_row.addWidget(QLabel("Path:"))
@@ -168,13 +173,12 @@ class FileSystemManagementPage(QWidget):
         btn_remove_dir = QPushButton("Remove Directory")
         btn_remove_dir.clicked.connect(self.run_remove_directory)
         remove_row.addWidget(btn_remove_dir)
-        layout.addLayout(remove_row)
+        _g1.addLayout(remove_row)
 
-        layout.addSpacing(14)
 
-        files_title = QLabel("Files")
-        files_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(files_title)
+        layout.addWidget(_box1)
+
+        _box2, _g2 = self._group("Files")
 
         hint = QLabel(
             "Copy/Move apply to a file or, with Copy's Recursive box checked, a whole "
@@ -183,7 +187,7 @@ class FileSystemManagementPage(QWidget):
         )
         theme.style_hint_label(hint)
         hint.setWordWrap(True)
-        layout.addWidget(hint)
+        _g2.addWidget(hint)
 
         copy_row = QHBoxLayout()
         copy_row.addWidget(QLabel("Source:"))
@@ -198,7 +202,7 @@ class FileSystemManagementPage(QWidget):
         btn_copy = QPushButton("Copy")
         btn_copy.clicked.connect(self.run_copy_file)
         copy_row.addWidget(btn_copy)
-        layout.addLayout(copy_row)
+        _g2.addLayout(copy_row)
 
         move_row = QHBoxLayout()
         move_row.addWidget(QLabel("Source:"))
@@ -210,7 +214,7 @@ class FileSystemManagementPage(QWidget):
         btn_move = QPushButton("Move")
         btn_move.clicked.connect(self.run_move_file)
         move_row.addWidget(btn_move)
-        layout.addLayout(move_row)
+        _g2.addLayout(move_row)
 
         rename_row = QHBoxLayout()
         rename_row.addWidget(QLabel("Path:"))
@@ -224,8 +228,9 @@ class FileSystemManagementPage(QWidget):
         btn_rename = QPushButton("Rename")
         btn_rename.clicked.connect(self.run_rename_file)
         rename_row.addWidget(btn_rename)
-        layout.addLayout(rename_row)
+        _g2.addLayout(rename_row)
 
+        layout.addWidget(_box2)
         layout.addStretch()
         return panel
 
@@ -234,9 +239,7 @@ class FileSystemManagementPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        own_title = QLabel("Ownership and Permissions")
-        own_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(own_title)
+        _box1, _g1 = self._group("Ownership and Permissions")
 
         chown_row = QHBoxLayout()
         chown_row.addWidget(QLabel("Path:"))
@@ -255,7 +258,7 @@ class FileSystemManagementPage(QWidget):
         btn_chown = QPushButton("Change Ownership")
         btn_chown.clicked.connect(self.run_change_ownership)
         chown_row.addWidget(btn_chown)
-        layout.addLayout(chown_row)
+        _g1.addLayout(chown_row)
 
         chmod_row = QHBoxLayout()
         chmod_row.addWidget(QLabel("Path:"))
@@ -271,17 +274,16 @@ class FileSystemManagementPage(QWidget):
         btn_chmod = QPushButton("Change Permissions")
         btn_chmod.clicked.connect(self.run_change_permissions)
         chmod_row.addWidget(btn_chmod)
-        layout.addLayout(chmod_row)
+        _g1.addLayout(chmod_row)
 
-        layout.addSpacing(14)
 
-        acl_title = QLabel("ACLs")
-        acl_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(acl_title)
+        layout.addWidget(_box1)
+
+        _box2, _g2 = self._group("ACLs")
 
         acl_hint = QLabel("Entries format: u:alice:rwx,g:devs:rx (comma-separated, no spaces).")
         theme.style_hint_label(acl_hint)
-        layout.addWidget(acl_hint)
+        _g2.addWidget(acl_hint)
 
         acl_row = QHBoxLayout()
         acl_row.addWidget(QLabel("Path:"))
@@ -299,13 +301,12 @@ class FileSystemManagementPage(QWidget):
         btn_show_acl = QPushButton("Show ACL")
         btn_show_acl.clicked.connect(self.run_show_acl)
         acl_row.addWidget(btn_show_acl)
-        layout.addLayout(acl_row)
+        _g2.addLayout(acl_row)
 
-        layout.addSpacing(14)
 
-        links_title = QLabel("Links")
-        links_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(links_title)
+        layout.addWidget(_box2)
+
+        _box3, _g3 = self._group("Links")
 
         symlink_row = QHBoxLayout()
         symlink_row.addWidget(QLabel("Target:"))
@@ -317,7 +318,7 @@ class FileSystemManagementPage(QWidget):
         btn_symlink = QPushButton("Create Symbolic Link")
         btn_symlink.clicked.connect(self.run_create_symlink)
         symlink_row.addWidget(btn_symlink)
-        layout.addLayout(symlink_row)
+        _g3.addLayout(symlink_row)
 
         hardlink_row = QHBoxLayout()
         hardlink_row.addWidget(QLabel("Target:"))
@@ -329,12 +330,13 @@ class FileSystemManagementPage(QWidget):
         btn_hardlink = QPushButton("Create Hard Link")
         btn_hardlink.clicked.connect(self.run_create_hardlink)
         hardlink_row.addWidget(btn_hardlink)
-        layout.addLayout(hardlink_row)
+        _g3.addLayout(hardlink_row)
 
         hardlink_hint = QLabel("Hard links require Target and Link path to be on the same filesystem.")
         theme.style_hint_label(hardlink_hint)
-        layout.addWidget(hardlink_hint)
+        _g3.addWidget(hardlink_hint)
 
+        layout.addWidget(_box3)
         layout.addStretch()
         return panel
 
@@ -343,9 +345,7 @@ class FileSystemManagementPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        mount_title = QLabel("Mount / Unmount")
-        mount_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(mount_title)
+        _box1, _g1 = self._group("Mount / Unmount")
 
         mount_row = QHBoxLayout()
         mount_row.addWidget(QLabel("Device:"))
@@ -359,7 +359,7 @@ class FileSystemManagementPage(QWidget):
         btn_mount = QPushButton("Mount")
         btn_mount.clicked.connect(self.run_mount_filesystem)
         mount_row.addWidget(btn_mount)
-        layout.addLayout(mount_row)
+        _g1.addLayout(mount_row)
 
         mount_opts_row = QHBoxLayout()
         mount_opts_row.addWidget(QLabel("Filesystem type (optional):"))
@@ -371,7 +371,7 @@ class FileSystemManagementPage(QWidget):
         self.mount_options_input = QLineEdit()
         self.mount_options_input.setPlaceholderText("e.g. ro,noatime")
         mount_opts_row.addWidget(self.mount_options_input, 1)
-        layout.addLayout(mount_opts_row)
+        _g1.addLayout(mount_opts_row)
 
         unmount_row = QHBoxLayout()
         unmount_row.addWidget(QLabel("Mount point or device:"))
@@ -382,13 +382,12 @@ class FileSystemManagementPage(QWidget):
         btn_unmount = QPushButton("Unmount")
         btn_unmount.clicked.connect(self.run_unmount_filesystem)
         unmount_row.addWidget(btn_unmount)
-        layout.addLayout(unmount_row)
+        _g1.addLayout(unmount_row)
 
-        layout.addSpacing(14)
 
-        resize_title = QLabel("Resize and Repair")
-        resize_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(resize_title)
+        layout.addWidget(_box1)
+
+        _box2, _g2 = self._group("Resize and Repair")
 
         resize_hint = QLabel(
             "Filesystem type is auto-detected (ext2/3/4, xfs, btrfs) and the matching "
@@ -397,7 +396,7 @@ class FileSystemManagementPage(QWidget):
         )
         theme.style_hint_label(resize_hint)
         resize_hint.setWordWrap(True)
-        layout.addWidget(resize_hint)
+        _g2.addWidget(resize_hint)
 
         resize_row = QHBoxLayout()
         resize_row.addWidget(QLabel("Device or mount point:"))
@@ -410,7 +409,7 @@ class FileSystemManagementPage(QWidget):
         btn_resize = QPushButton("Resize Filesystem")
         btn_resize.clicked.connect(self.run_resize_filesystem)
         resize_row.addWidget(btn_resize)
-        layout.addLayout(resize_row)
+        _g2.addLayout(resize_row)
 
         repair_row = QHBoxLayout()
         repair_row.addWidget(QLabel("Device:"))
@@ -423,17 +422,16 @@ class FileSystemManagementPage(QWidget):
         btn_repair = QPushButton("Repair Filesystem")
         btn_repair.clicked.connect(self.run_repair_filesystem)
         repair_row.addWidget(btn_repair)
-        layout.addLayout(repair_row)
+        _g2.addLayout(repair_row)
 
         repair_hint = QLabel("Refuses to run if the device is currently mounted - unmount it first.")
         theme.style_hint_label(repair_hint)
-        layout.addWidget(repair_hint)
+        _g2.addWidget(repair_hint)
 
-        layout.addSpacing(14)
 
-        usage_title = QLabel("Disk Usage")
-        usage_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(usage_title)
+        layout.addWidget(_box2)
+
+        _box3, _g3 = self._group("Disk Usage")
 
         usage_row = QHBoxLayout()
         btn_disk_usage = QPushButton("Check Disk Usage")
@@ -449,8 +447,9 @@ class FileSystemManagementPage(QWidget):
         btn_large_files = QPushButton("Find Large Files")
         btn_large_files.clicked.connect(self.run_find_large_files)
         usage_row.addWidget(btn_large_files)
-        layout.addLayout(usage_row)
+        _g3.addLayout(usage_row)
 
+        layout.addWidget(_box3)
         layout.addStretch()
         return panel
 
@@ -459,20 +458,18 @@ class FileSystemManagementPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        fstab_title = QLabel("/etc/fstab")
-        fstab_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(fstab_title)
+        _box1, _g1 = self._group("/etc/fstab")
 
         fstab_show_row = QHBoxLayout()
         btn_show_fstab = QPushButton("Show /etc/fstab")
         btn_show_fstab.clicked.connect(self.run_show_fstab)
         fstab_show_row.addWidget(btn_show_fstab)
         fstab_show_row.addStretch()
-        layout.addLayout(fstab_show_row)
+        _g1.addLayout(fstab_show_row)
 
         fstab_hint = QLabel("Add/Remove both back up /etc/fstab first (timestamped copy alongside it).")
         theme.style_hint_label(fstab_hint)
-        layout.addWidget(fstab_hint)
+        _g1.addWidget(fstab_hint)
 
         fstab_add_row1 = QHBoxLayout()
         fstab_add_row1.addWidget(QLabel("Device:"))
@@ -487,7 +484,7 @@ class FileSystemManagementPage(QWidget):
         self.fstab_fstype_input.setPlaceholderText("e.g. ext4")
         self.fstab_fstype_input.setMaximumWidth(80)
         fstab_add_row1.addWidget(self.fstab_fstype_input)
-        layout.addLayout(fstab_add_row1)
+        _g1.addLayout(fstab_add_row1)
 
         fstab_add_row2 = QHBoxLayout()
         fstab_add_row2.addWidget(QLabel("Options:"))
@@ -504,7 +501,7 @@ class FileSystemManagementPage(QWidget):
         btn_add_fstab = QPushButton("Add fstab Entry")
         btn_add_fstab.clicked.connect(self.run_add_fstab_entry)
         fstab_add_row2.addWidget(btn_add_fstab)
-        layout.addLayout(fstab_add_row2)
+        _g1.addLayout(fstab_add_row2)
 
         fstab_remove_row = QHBoxLayout()
         fstab_remove_row.addWidget(QLabel("Mount point to remove:"))
@@ -513,13 +510,12 @@ class FileSystemManagementPage(QWidget):
         btn_remove_fstab = QPushButton("Remove fstab Entry")
         btn_remove_fstab.clicked.connect(self.run_remove_fstab_entry)
         fstab_remove_row.addWidget(btn_remove_fstab)
-        layout.addLayout(fstab_remove_row)
+        _g1.addLayout(fstab_remove_row)
 
-        layout.addSpacing(14)
 
-        quota_title = QLabel("Quotas")
-        quota_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(quota_title)
+        layout.addWidget(_box1)
+
+        _box2, _g2 = self._group("Quotas")
 
         quota_enable_row = QHBoxLayout()
         quota_enable_row.addWidget(QLabel("Mount point:"))
@@ -534,7 +530,7 @@ class FileSystemManagementPage(QWidget):
         btn_show_quotas = QPushButton("Show Quotas")
         btn_show_quotas.clicked.connect(self.run_show_quotas)
         quota_enable_row.addWidget(btn_show_quotas)
-        layout.addLayout(quota_enable_row)
+        _g2.addLayout(quota_enable_row)
 
         quota_hint = QLabel(
             "Enable Quotas requires the filesystem already mounted with usrquota/grpquota "
@@ -542,7 +538,7 @@ class FileSystemManagementPage(QWidget):
         )
         theme.style_hint_label(quota_hint)
         quota_hint.setWordWrap(True)
-        layout.addWidget(quota_hint)
+        _g2.addWidget(quota_hint)
 
         quota_set_row1 = QHBoxLayout()
         quota_set_row1.addWidget(QLabel("Username:"))
@@ -551,7 +547,7 @@ class FileSystemManagementPage(QWidget):
         quota_set_row1.addWidget(QLabel("Mount point:"))
         self.quota_set_mount_point_input = QLineEdit()
         quota_set_row1.addWidget(self.quota_set_mount_point_input, 1)
-        layout.addLayout(quota_set_row1)
+        _g2.addLayout(quota_set_row1)
 
         quota_set_row2 = QHBoxLayout()
         quota_set_row2.addWidget(QLabel("Block soft (1K):"))
@@ -569,12 +565,13 @@ class FileSystemManagementPage(QWidget):
         btn_set_quota = QPushButton("Set User Quota")
         btn_set_quota.clicked.connect(self.run_set_user_quota)
         quota_set_row2.addWidget(btn_set_quota)
-        layout.addLayout(quota_set_row2)
+        _g2.addLayout(quota_set_row2)
 
         quota_set_hint = QLabel("0 means unlimited for a block or inode soft/hard pair.")
         theme.style_hint_label(quota_set_hint)
-        layout.addWidget(quota_set_hint)
+        _g2.addWidget(quota_set_hint)
 
+        layout.addWidget(_box2)
         layout.addStretch()
         return panel
 
@@ -583,9 +580,7 @@ class FileSystemManagementPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        archive_title = QLabel("Archive (tar)")
-        archive_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(archive_title)
+        _box1, _g1 = self._group("Archive (tar)")
 
         create_archive_row = QHBoxLayout()
         create_archive_row.addWidget(QLabel("Source path:"))
@@ -603,7 +598,7 @@ class FileSystemManagementPage(QWidget):
         btn_create_archive = QPushButton("Create Archive")
         btn_create_archive.clicked.connect(self.run_create_archive)
         create_archive_row.addWidget(btn_create_archive)
-        layout.addLayout(create_archive_row)
+        _g1.addLayout(create_archive_row)
 
         extract_row = QHBoxLayout()
         extract_row.addWidget(QLabel("Archive path:"))
@@ -615,17 +610,16 @@ class FileSystemManagementPage(QWidget):
         btn_extract = QPushButton("Extract Archive")
         btn_extract.clicked.connect(self.run_extract_archive)
         extract_row.addWidget(btn_extract)
-        layout.addLayout(extract_row)
+        _g1.addLayout(extract_row)
 
         extract_hint = QLabel("Extract auto-detects compression from the archive itself (.tar/.tar.gz/.tar.bz2/.tar.xz).")
         theme.style_hint_label(extract_hint)
-        layout.addWidget(extract_hint)
+        _g1.addWidget(extract_hint)
 
-        layout.addSpacing(14)
 
-        compress_title = QLabel("Compress (single file)")
-        compress_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(compress_title)
+        layout.addWidget(_box1)
+
+        _box2, _g2 = self._group("Compress (single file)")
 
         compress_hint = QLabel(
             "Distinct from Archive above, which bundles many files/a directory into one "
@@ -633,7 +627,7 @@ class FileSystemManagementPage(QWidget):
         )
         theme.style_hint_label(compress_hint)
         compress_hint.setWordWrap(True)
-        layout.addWidget(compress_hint)
+        _g2.addWidget(compress_hint)
 
         compress_row = QHBoxLayout()
         compress_row.addWidget(QLabel("File path:"))
@@ -649,7 +643,7 @@ class FileSystemManagementPage(QWidget):
         btn_compress = QPushButton("Compress")
         btn_compress.clicked.connect(self.run_compress_file)
         compress_row.addWidget(btn_compress)
-        layout.addLayout(compress_row)
+        _g2.addLayout(compress_row)
 
         decompress_row = QHBoxLayout()
         decompress_row.addWidget(QLabel("File path:"))
@@ -662,12 +656,13 @@ class FileSystemManagementPage(QWidget):
         btn_decompress = QPushButton("Decompress")
         btn_decompress.clicked.connect(self.run_decompress_file)
         decompress_row.addWidget(btn_decompress)
-        layout.addLayout(decompress_row)
+        _g2.addLayout(decompress_row)
 
         decompress_hint = QLabel("Method is auto-detected from the filename extension (.gz/.bz2/.xz/.zip).")
         theme.style_hint_label(decompress_hint)
-        layout.addWidget(decompress_hint)
+        _g2.addWidget(decompress_hint)
 
+        layout.addWidget(_box2)
         layout.addStretch()
         return panel
 
@@ -1159,13 +1154,9 @@ class FileSystemManagementPage(QWidget):
             text_edit.setPlainText("Waiting for this agent host to report back...")
             return
 
-        if data["stderr"] and not data["stdout"]:
-            text_edit.setPlainText(f"ERROR:\n{data['stderr']}")
-        else:
-            text = data["stdout"]
-            if data["stderr"]:
-                text += f"\n\n--- stderr ---\n{data['stderr']}"
-            text_edit.setPlainText(text)
+        label = getattr(self, "last_command_label", None) or "Action"
+        text_edit.setHtml(result_banner.result_html(
+            data, ok_label=f"{label} complete", fail_label=f"{label} failed"))
 
     def _close_fs_tab(self, index):
         bar = self.fs_tabs.tabBar()

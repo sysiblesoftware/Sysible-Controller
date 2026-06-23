@@ -85,6 +85,28 @@ QGroupBox::title {
     color: white;
 }
 
+QCheckBox {
+    spacing: 8px;
+}
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border: 1px solid #8a93a0;
+    border-radius: 4px;
+    background: rgba(127,127,127,0.15);
+}
+QCheckBox::indicator:hover {
+    border-color: #3ac95a;
+}
+QCheckBox::indicator:checked {
+    background: #3ac95a;
+    border-color: #2fae4b;
+}
+QCheckBox::indicator:disabled {
+    border-color: #555;
+    background: rgba(127,127,127,0.08);
+}
+
 QScrollBar:vertical {
     background: #1E1E1E;
     width: 13px;
@@ -202,6 +224,28 @@ QGroupBox {
 
 QGroupBox::title {
     color: #1F2430;
+}
+
+QCheckBox {
+    spacing: 8px;
+}
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border: 1px solid #9aa3b0;
+    border-radius: 4px;
+    background: #ffffff;
+}
+QCheckBox::indicator:hover {
+    border-color: #2fae4b;
+}
+QCheckBox::indicator:checked {
+    background: #3ac95a;
+    border-color: #2fae4b;
+}
+QCheckBox::indicator:disabled {
+    border-color: #cbd0d8;
+    background: #eef0f3;
 }
 
 QScrollBar:vertical {

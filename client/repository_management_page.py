@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 
 from client import api
+from client import result_banner
 from client import theme
 from client.events import bus
 from client.theme import STATUS_NEUTRAL_COLOR, STATUS_SUCCESS_COLOR, STATUS_ERROR_COLOR
@@ -510,6 +511,7 @@ class RepositoryManagementPage(QWidget):
         self._dispatch_repo_command(command, label, entries)
 
     def _dispatch_repo_command(self, command, label, entries):
+        self.last_command_label = label
         self.repo_results = {}
         self.repo_pending = {}
         self.repo_tabs.clear()
@@ -562,13 +564,9 @@ class RepositoryManagementPage(QWidget):
             text_edit.setPlainText("Waiting for this agent host to report back...")
             return
 
-        if data["stderr"] and not data["stdout"]:
-            text_edit.setPlainText(f"ERROR:\n{data['stderr']}")
-        else:
-            text = data["stdout"]
-            if data["stderr"]:
-                text += f"\n\n--- stderr ---\n{data['stderr']}"
-            text_edit.setPlainText(text)
+        label = getattr(self, "last_command_label", None) or "Action"
+        text_edit.setHtml(result_banner.result_html(
+            data, ok_label=f"{label} complete", fail_label=f"{label} failed"))
 
     def _close_repo_tab(self, index):
         bar = self.repo_tabs.tabBar()

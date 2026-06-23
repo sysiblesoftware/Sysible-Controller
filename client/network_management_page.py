@@ -1,11 +1,12 @@
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton,
-    QLineEdit, QTextEdit, QMessageBox, QTabWidget, QComboBox,
+    QLineEdit, QTextEdit, QMessageBox, QGroupBox, QTabWidget, QComboBox,
 )
 from PySide6.QtCore import Qt, QTimer
 
 from client import api
+from client import result_banner
 from client import theme
 from client.events import bus
 from client.theme import STATUS_NEUTRAL_COLOR, STATUS_SUCCESS_COLOR, STATUS_ERROR_COLOR
@@ -139,6 +140,12 @@ class NetworkManagementPage(QWidget):
     # =========================================================
     # ACTION PANEL BUILDERS
     # =========================================================
+    @staticmethod
+    def _group(title):
+        box = QGroupBox(title)
+        lay = QVBoxLayout(box)
+        return box, lay
+
     def _build_diagnostics_tab(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -311,7 +318,6 @@ class NetworkManagementPage(QWidget):
         dns_row.addWidget(btn_dns_apply)
         layout.addLayout(dns_row)
 
-        layout.addSpacing(14)
 
         host_row = QHBoxLayout()
         btn_show_hostname = QPushButton("Show Current Hostname")
@@ -388,9 +394,7 @@ class NetworkManagementPage(QWidget):
         warn.setWordWrap(True)
         layout.addWidget(warn)
 
-        bond_title = QLabel("Bonding")
-        bond_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(bond_title)
+        _box1, _g1 = self._group("Bonding")
         bond_row = QHBoxLayout()
         bond_row.addWidget(QLabel("Bond name:"))
         self.bond_name_input = QLineEdit("bond0")
@@ -410,13 +414,13 @@ class NetworkManagementPage(QWidget):
         btn_bond = QPushButton("Create Bond")
         btn_bond.clicked.connect(self.run_configure_bonding)
         bond_row.addWidget(btn_bond)
-        layout.addLayout(bond_row)
+        _g1.addLayout(bond_row)
 
         layout.addSpacing(12)
 
-        team_title = QLabel("Teaming")
-        team_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(team_title)
+        layout.addWidget(_box1)
+
+        _box2, _g2 = self._group("Teaming")
         team_row = QHBoxLayout()
         team_row.addWidget(QLabel("Team name:"))
         self.team_name_input = QLineEdit("team0")
@@ -435,13 +439,13 @@ class NetworkManagementPage(QWidget):
         btn_team = QPushButton("Create Team")
         btn_team.clicked.connect(self.run_configure_teaming)
         team_row.addWidget(btn_team)
-        layout.addLayout(team_row)
+        _g2.addLayout(team_row)
 
         layout.addSpacing(12)
 
-        vlan_title = QLabel("VLANs")
-        vlan_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(vlan_title)
+        layout.addWidget(_box2)
+
+        _box3, _g3 = self._group("VLANs")
         vlan_row = QHBoxLayout()
         vlan_row.addWidget(QLabel("Parent interface:"))
         self.vlan_parent_input = QLineEdit()
@@ -459,13 +463,13 @@ class NetworkManagementPage(QWidget):
         btn_vlan = QPushButton("Create VLAN")
         btn_vlan.clicked.connect(self.run_configure_vlan)
         vlan_row.addWidget(btn_vlan)
-        layout.addLayout(vlan_row)
+        _g3.addLayout(vlan_row)
 
         layout.addSpacing(12)
 
-        bridge_title = QLabel("Bridges")
-        bridge_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(bridge_title)
+        layout.addWidget(_box3)
+
+        _box4, _g4 = self._group("Bridges")
         bridge_row = QHBoxLayout()
         bridge_row.addWidget(QLabel("Bridge name:"))
         self.bridge_name_input = QLineEdit("br0")
@@ -478,8 +482,9 @@ class NetworkManagementPage(QWidget):
         btn_bridge = QPushButton("Create Bridge")
         btn_bridge.clicked.connect(self.run_configure_bridge)
         bridge_row.addWidget(btn_bridge)
-        layout.addLayout(bridge_row)
+        _g4.addLayout(bridge_row)
 
+        layout.addWidget(_box4)
         layout.addStretch()
         return panel
 
@@ -845,13 +850,9 @@ class NetworkManagementPage(QWidget):
             text_edit.setPlainText("Waiting for this agent host to report back...")
             return
 
-        if data["stderr"] and not data["stdout"]:
-            text_edit.setPlainText(f"ERROR:\n{data['stderr']}")
-        else:
-            text = data["stdout"]
-            if data["stderr"]:
-                text += f"\n\n--- stderr ---\n{data['stderr']}"
-            text_edit.setPlainText(text)
+        label = getattr(self, "last_command_label", None) or "Action"
+        text_edit.setHtml(result_banner.result_html(
+            data, ok_label=f"{label} complete", fail_label=f"{label} failed"))
 
     def _close_net_tab(self, index):
         bar = self.net_tabs.tabBar()

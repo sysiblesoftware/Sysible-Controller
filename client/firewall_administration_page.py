@@ -1,11 +1,12 @@
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton,
-    QLineEdit, QTextEdit, QMessageBox, QTabWidget, QComboBox, QCheckBox,
+    QLineEdit, QTextEdit, QMessageBox, QGroupBox, QTabWidget, QComboBox, QCheckBox,
 )
 from PySide6.QtCore import Qt, QTimer
 
 from client import api
+from client import result_banner
 from client import theme
 from client.events import bus
 from client.theme import STATUS_NEUTRAL_COLOR, STATUS_SUCCESS_COLOR, STATUS_ERROR_COLOR
@@ -129,14 +130,18 @@ class FirewallAdministrationPage(QWidget):
     # =========================================================
     # ACTION PANEL BUILDERS
     # =========================================================
+    @staticmethod
+    def _group(title):
+        box = QGroupBox(title)
+        lay = QVBoxLayout(box)
+        return box, lay
+
     def _build_firewalld_tab(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        status_title = QLabel("Service State")
-        status_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(status_title)
+        _box1, _g1 = self._group("Service State")
 
         status_row = QHBoxLayout()
         btn_status = QPushButton("Status")
@@ -152,13 +157,12 @@ class FirewallAdministrationPage(QWidget):
         btn_reload.clicked.connect(self.run_reload_firewalld)
         status_row.addWidget(btn_reload)
         status_row.addStretch()
-        layout.addLayout(status_row)
+        _g1.addLayout(status_row)
 
-        layout.addSpacing(14)
 
-        zone_title = QLabel("Default Zone")
-        zone_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(zone_title)
+        layout.addWidget(_box1)
+
+        _box2, _g2 = self._group("Default Zone")
 
         zone_row = QHBoxLayout()
         zone_row.addWidget(QLabel("Zone:"))
@@ -168,8 +172,9 @@ class FirewallAdministrationPage(QWidget):
         btn_set_default_zone = QPushButton("Set Default Zone")
         btn_set_default_zone.clicked.connect(self.run_set_default_zone)
         zone_row.addWidget(btn_set_default_zone)
-        layout.addLayout(zone_row)
+        _g2.addLayout(zone_row)
 
+        layout.addWidget(_box2)
         layout.addStretch()
         return panel
 
@@ -178,9 +183,7 @@ class FirewallAdministrationPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        list_title = QLabel("List")
-        list_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(list_title)
+        _box1, _g1 = self._group("List")
 
         list_row = QHBoxLayout()
         list_row.addWidget(QLabel("Zone (optional):"))
@@ -190,13 +193,12 @@ class FirewallAdministrationPage(QWidget):
         btn_list_ports = QPushButton("List Ports (and Zone Details)")
         btn_list_ports.clicked.connect(self.run_list_ports)
         list_row.addWidget(btn_list_ports)
-        layout.addLayout(list_row)
+        _g1.addLayout(list_row)
 
-        layout.addSpacing(14)
 
-        open_close_title = QLabel("Open / Close Port")
-        open_close_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(open_close_title)
+        layout.addWidget(_box1)
+
+        _box2, _g2 = self._group("Open / Close Port")
 
         port_row = QHBoxLayout()
         port_row.addWidget(QLabel("Port:"))
@@ -212,7 +214,7 @@ class FirewallAdministrationPage(QWidget):
         self.port_zone_input = QLineEdit()
         self.port_zone_input.setPlaceholderText("blank = default zone")
         port_row.addWidget(self.port_zone_input, 1)
-        layout.addLayout(port_row)
+        _g2.addLayout(port_row)
 
         port_row2 = QHBoxLayout()
         self.port_permanent_check = QCheckBox("Permanent (and reload)")
@@ -225,8 +227,9 @@ class FirewallAdministrationPage(QWidget):
         btn_close_port = QPushButton("Close Port")
         btn_close_port.clicked.connect(self.run_close_port)
         port_row2.addWidget(btn_close_port)
-        layout.addLayout(port_row2)
+        _g2.addLayout(port_row2)
 
+        layout.addWidget(_box2)
         layout.addStretch()
         return panel
 
@@ -242,11 +245,8 @@ class FirewallAdministrationPage(QWidget):
         list_row.addStretch()
         layout.addLayout(list_row)
 
-        layout.addSpacing(14)
 
-        manage_title = QLabel("Create / Delete Zone")
-        manage_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(manage_title)
+        _box1, _g1 = self._group("Create / Delete Zone")
 
         manage_row = QHBoxLayout()
         manage_row.addWidget(QLabel("Zone name:"))
@@ -259,13 +259,14 @@ class FirewallAdministrationPage(QWidget):
         btn_delete_zone = QPushButton("Delete Zone")
         btn_delete_zone.clicked.connect(self.run_delete_zone)
         manage_row.addWidget(btn_delete_zone)
-        layout.addLayout(manage_row)
+        _g1.addLayout(manage_row)
 
         manage_hint = QLabel("New zones are added permanently and firewalld is reloaded immediately so they show up right away.")
         theme.style_hint_label(manage_hint)
         manage_hint.setWordWrap(True)
-        layout.addWidget(manage_hint)
+        _g1.addWidget(manage_hint)
 
+        layout.addWidget(_box1)
         layout.addStretch()
         return panel
 
@@ -274,9 +275,7 @@ class FirewallAdministrationPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        list_title = QLabel("List")
-        list_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(list_title)
+        _box1, _g1 = self._group("List")
 
         list_row = QHBoxLayout()
         list_row.addWidget(QLabel("Zone (optional):"))
@@ -286,13 +285,12 @@ class FirewallAdministrationPage(QWidget):
         btn_list_rich = QPushButton("List Rich Rules")
         btn_list_rich.clicked.connect(self.run_list_rich_rules)
         list_row.addWidget(btn_list_rich)
-        layout.addLayout(list_row)
+        _g1.addLayout(list_row)
 
-        layout.addSpacing(14)
 
-        manage_title = QLabel("Add / Remove Rich Rule")
-        manage_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(manage_title)
+        layout.addWidget(_box1)
+
+        _box2, _g2 = self._group("Add / Remove Rich Rule")
 
         rule_row = QHBoxLayout()
         rule_row.addWidget(QLabel("Rule:"))
@@ -301,7 +299,7 @@ class FirewallAdministrationPage(QWidget):
             'e.g. rule family="ipv4" source address="192.168.0.0/24" service name="ssh" accept'
         )
         rule_row.addWidget(self.rich_rule_input, 1)
-        layout.addLayout(rule_row)
+        _g2.addLayout(rule_row)
 
         rule_row2 = QHBoxLayout()
         rule_row2.addWidget(QLabel("Zone (optional):"))
@@ -317,8 +315,9 @@ class FirewallAdministrationPage(QWidget):
         btn_remove_rich = QPushButton("Remove Rich Rule")
         btn_remove_rich.clicked.connect(self.run_remove_rich_rule)
         rule_row2.addWidget(btn_remove_rich)
-        layout.addLayout(rule_row2)
+        _g2.addLayout(rule_row2)
 
+        layout.addWidget(_box2)
         layout.addStretch()
         return panel
 
@@ -337,11 +336,8 @@ class FirewallAdministrationPage(QWidget):
         list_row.addWidget(btn_flush_ruleset)
         layout.addLayout(list_row)
 
-        layout.addSpacing(14)
 
-        common_title = QLabel("Table / Chain / Rule")
-        common_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(common_title)
+        _box1, _g1 = self._group("Table / Chain / Rule")
 
         common_row = QHBoxLayout()
         common_row.addWidget(QLabel("Family:"))
@@ -359,7 +355,7 @@ class FirewallAdministrationPage(QWidget):
         btn_add_table = QPushButton("Add Table")
         btn_add_table.clicked.connect(self.run_nft_add_table)
         common_row.addWidget(btn_add_table)
-        layout.addLayout(common_row)
+        _g1.addLayout(common_row)
 
         chain_row = QHBoxLayout()
         chain_row.addWidget(QLabel("Hook (blank = non-base chain):"))
@@ -377,7 +373,7 @@ class FirewallAdministrationPage(QWidget):
         btn_add_chain = QPushButton("Add Chain")
         btn_add_chain.clicked.connect(self.run_nft_add_chain)
         chain_row.addWidget(btn_add_chain)
-        layout.addLayout(chain_row)
+        _g1.addLayout(chain_row)
 
         rule_row = QHBoxLayout()
         rule_row.addWidget(QLabel("Rule:"))
@@ -387,7 +383,7 @@ class FirewallAdministrationPage(QWidget):
         btn_add_rule = QPushButton("Add Rule")
         btn_add_rule.clicked.connect(self.run_nft_add_rule)
         rule_row.addWidget(btn_add_rule)
-        layout.addLayout(rule_row)
+        _g1.addLayout(rule_row)
 
         delete_row = QHBoxLayout()
         delete_row.addWidget(QLabel("Rule handle (see List Ruleset -a output):"))
@@ -398,8 +394,9 @@ class FirewallAdministrationPage(QWidget):
         btn_delete_rule.clicked.connect(self.run_nft_delete_rule)
         delete_row.addWidget(btn_delete_rule)
         delete_row.addStretch()
-        layout.addLayout(delete_row)
+        _g1.addLayout(delete_row)
 
+        layout.addWidget(_box1)
         layout.addStretch()
         return panel
 
@@ -408,9 +405,7 @@ class FirewallAdministrationPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        list_title = QLabel("List")
-        list_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(list_title)
+        _box1, _g1 = self._group("List")
 
         list_row = QHBoxLayout()
         list_row.addWidget(QLabel("Table:"))
@@ -424,13 +419,12 @@ class FirewallAdministrationPage(QWidget):
         btn_persist = QPushButton("Persist Rules (Save)")
         btn_persist.clicked.connect(self.run_iptables_save_persist)
         list_row.addWidget(btn_persist)
-        layout.addLayout(list_row)
+        _g1.addLayout(list_row)
 
-        layout.addSpacing(14)
 
-        manage_title = QLabel("Add / Delete Rule")
-        manage_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(manage_title)
+        layout.addWidget(_box1)
+
+        _box2, _g2 = self._group("Add / Delete Rule")
 
         chain_row = QHBoxLayout()
         chain_row.addWidget(QLabel("Chain:"))
@@ -440,7 +434,7 @@ class FirewallAdministrationPage(QWidget):
         self.iptables_append_check = QCheckBox("Append (unchecked = insert at top)")
         self.iptables_append_check.setChecked(True)
         chain_row.addWidget(self.iptables_append_check)
-        layout.addLayout(chain_row)
+        _g2.addLayout(chain_row)
 
         rule_row = QHBoxLayout()
         rule_row.addWidget(QLabel("Rule:"))
@@ -450,7 +444,7 @@ class FirewallAdministrationPage(QWidget):
         btn_add_rule = QPushButton("Add Rule")
         btn_add_rule.clicked.connect(self.run_iptables_add_rule)
         rule_row.addWidget(btn_add_rule)
-        layout.addLayout(rule_row)
+        _g2.addLayout(rule_row)
 
         delete_row = QHBoxLayout()
         delete_row.addWidget(QLabel("Rule (or line #) to delete:"))
@@ -460,13 +454,12 @@ class FirewallAdministrationPage(QWidget):
         btn_delete_rule = QPushButton("Delete Rule")
         btn_delete_rule.clicked.connect(self.run_iptables_delete_rule)
         delete_row.addWidget(btn_delete_rule)
-        layout.addLayout(delete_row)
+        _g2.addLayout(delete_row)
 
-        layout.addSpacing(14)
 
-        flush_title = QLabel("Flush")
-        flush_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(flush_title)
+        layout.addWidget(_box2)
+
+        _box3, _g3 = self._group("Flush")
 
         flush_row = QHBoxLayout()
         flush_row.addWidget(QLabel("Chain (optional, blank = whole table):"))
@@ -475,8 +468,9 @@ class FirewallAdministrationPage(QWidget):
         btn_flush = QPushButton("Flush")
         btn_flush.clicked.connect(self.run_iptables_flush)
         flush_row.addWidget(btn_flush)
-        layout.addLayout(flush_row)
+        _g3.addLayout(flush_row)
 
+        layout.addWidget(_box3)
         layout.addStretch()
         return panel
 
@@ -895,13 +889,9 @@ class FirewallAdministrationPage(QWidget):
             text_edit.setPlainText("Waiting for this agent host to report back...")
             return
 
-        if data["stderr"] and not data["stdout"]:
-            text_edit.setPlainText(f"ERROR:\n{data['stderr']}")
-        else:
-            text = data["stdout"]
-            if data["stderr"]:
-                text += f"\n\n--- stderr ---\n{data['stderr']}"
-            text_edit.setPlainText(text)
+        label = getattr(self, "last_command_label", None) or "Action"
+        text_edit.setHtml(result_banner.result_html(
+            data, ok_label=f"{label} complete", fail_label=f"{label} failed"))
 
     def _close_firewall_tab(self, index):
         bar = self.firewall_tabs.tabBar()

@@ -1,11 +1,12 @@
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton,
-    QLineEdit, QTextEdit, QMessageBox, QTabWidget, QComboBox, QCheckBox,
+    QLineEdit, QTextEdit, QMessageBox, QTabWidget, QComboBox, QCheckBox, QGroupBox,
 )
 from PySide6.QtCore import Qt, QTimer
 
 from client import api
+from client import result_banner
 from client import theme
 from client.events import bus
 from client.theme import STATUS_NEUTRAL_COLOR, STATUS_SUCCESS_COLOR, STATUS_ERROR_COLOR
@@ -135,21 +136,25 @@ class SecurityAdministrationPage(QWidget):
     # =========================================================
     # ACTION PANEL BUILDERS
     # =========================================================
+    @staticmethod
+    def _group(title):
+        box = QGroupBox(title)
+        lay = QVBoxLayout(box)
+        return box, lay
+
     def _build_selinux_tab(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        mode_title = QLabel("Mode")
-        mode_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(mode_title)
+        _box1, _g1 = self._group("Mode")
 
         status_row = QHBoxLayout()
         btn_status = QPushButton("Status")
         btn_status.clicked.connect(self.run_selinux_status)
         status_row.addWidget(btn_status)
         status_row.addStretch()
-        layout.addLayout(status_row)
+        _g1.addLayout(status_row)
 
         runtime_row = QHBoxLayout()
         runtime_row.addWidget(QLabel("Runtime mode (reverts on reboot):"))
@@ -160,7 +165,7 @@ class SecurityAdministrationPage(QWidget):
         btn_set_runtime.clicked.connect(self.run_set_selinux_runtime_mode)
         runtime_row.addWidget(btn_set_runtime)
         runtime_row.addStretch()
-        layout.addLayout(runtime_row)
+        _g1.addLayout(runtime_row)
 
         persist_row = QHBoxLayout()
         persist_row.addWidget(QLabel("Persistent mode (survives reboot):"))
@@ -171,13 +176,12 @@ class SecurityAdministrationPage(QWidget):
         btn_set_persist.clicked.connect(self.run_set_selinux_persist_mode)
         persist_row.addWidget(btn_set_persist)
         persist_row.addStretch()
-        layout.addLayout(persist_row)
+        _g1.addLayout(persist_row)
 
-        layout.addSpacing(14)
 
-        bool_title = QLabel("Booleans")
-        bool_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(bool_title)
+        layout.addWidget(_box1)
+
+        _box2, _g2 = self._group("Booleans")
 
         bool_list_row = QHBoxLayout()
         bool_list_row.addWidget(QLabel("Filter (optional):"))
@@ -187,7 +191,7 @@ class SecurityAdministrationPage(QWidget):
         btn_list_bools = QPushButton("List Booleans")
         btn_list_bools.clicked.connect(self.run_list_selinux_booleans)
         bool_list_row.addWidget(btn_list_bools)
-        layout.addLayout(bool_list_row)
+        _g2.addLayout(bool_list_row)
 
         bool_set_row = QHBoxLayout()
         bool_set_row.addWidget(QLabel("Name:"))
@@ -202,13 +206,12 @@ class SecurityAdministrationPage(QWidget):
         btn_set_bool = QPushButton("Set Boolean")
         btn_set_bool.clicked.connect(self.run_set_selinux_boolean)
         bool_set_row.addWidget(btn_set_bool)
-        layout.addLayout(bool_set_row)
+        _g2.addLayout(bool_set_row)
 
-        layout.addSpacing(14)
 
-        denial_title = QLabel("Denials")
-        denial_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(denial_title)
+        layout.addWidget(_box2)
+
+        _box3, _g3 = self._group("Denials")
 
         denial_row = QHBoxLayout()
         denial_row.addWidget(QLabel("Lines:"))
@@ -225,13 +228,12 @@ class SecurityAdministrationPage(QWidget):
         btn_journal_denials.clicked.connect(self.run_selinux_journal_denials)
         denial_row.addWidget(btn_journal_denials)
         denial_row.addStretch()
-        layout.addLayout(denial_row)
+        _g3.addLayout(denial_row)
 
-        layout.addSpacing(14)
 
-        context_title = QLabel("File Contexts")
-        context_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(context_title)
+        layout.addWidget(_box3)
+
+        _box4, _g4 = self._group("File Contexts")
 
         context_row = QHBoxLayout()
         context_row.addWidget(QLabel("Path:"))
@@ -246,13 +248,12 @@ class SecurityAdministrationPage(QWidget):
         btn_restore_context = QPushButton("Restore Context")
         btn_restore_context.clicked.connect(self.run_selinux_restore_context)
         context_row.addWidget(btn_restore_context)
-        layout.addLayout(context_row)
+        _g4.addLayout(context_row)
 
-        layout.addSpacing(14)
 
-        policy_title = QLabel("Policies (file-context rules + module generation)")
-        policy_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(policy_title)
+        layout.addWidget(_box4)
+
+        _box5, _g5 = self._group("Policies (file-context rules + module generation)")
 
         fcontext_list_row = QHBoxLayout()
         fcontext_list_row.addWidget(QLabel("Filter (optional):"))
@@ -261,7 +262,7 @@ class SecurityAdministrationPage(QWidget):
         btn_list_fcontext = QPushButton("List File Context Rules")
         btn_list_fcontext.clicked.connect(self.run_list_selinux_fcontext)
         fcontext_list_row.addWidget(btn_list_fcontext)
-        layout.addLayout(fcontext_list_row)
+        _g5.addLayout(fcontext_list_row)
 
         fcontext_row = QHBoxLayout()
         fcontext_row.addWidget(QLabel("Path spec:"))
@@ -272,7 +273,7 @@ class SecurityAdministrationPage(QWidget):
         self.selinux_fcontext_type_input = QLineEdit()
         self.selinux_fcontext_type_input.setPlaceholderText("e.g. httpd_sys_content_t")
         fcontext_row.addWidget(self.selinux_fcontext_type_input, 1)
-        layout.addLayout(fcontext_row)
+        _g5.addLayout(fcontext_row)
 
         fcontext_row2 = QHBoxLayout()
         fcontext_row2.addStretch()
@@ -282,7 +283,7 @@ class SecurityAdministrationPage(QWidget):
         btn_remove_fcontext = QPushButton("Remove Rule")
         btn_remove_fcontext.clicked.connect(self.run_remove_selinux_fcontext)
         fcontext_row2.addWidget(btn_remove_fcontext)
-        layout.addLayout(fcontext_row2)
+        _g5.addLayout(fcontext_row2)
 
         module_row = QHBoxLayout()
         module_row.addWidget(QLabel("Module name:"))
@@ -292,13 +293,14 @@ class SecurityAdministrationPage(QWidget):
         btn_generate_policy = QPushButton("Generate Policy From Denials")
         btn_generate_policy.clicked.connect(self.run_generate_selinux_policy)
         module_row.addWidget(btn_generate_policy)
-        layout.addLayout(module_row)
+        _g5.addLayout(module_row)
 
         gen_hint = QLabel("Review denials first - this grants whatever the recent denials were asking for.")
         theme.style_hint_label(gen_hint)
         gen_hint.setWordWrap(True)
-        layout.addWidget(gen_hint)
+        _g5.addWidget(gen_hint)
 
+        layout.addWidget(_box5)
         layout.addStretch()
         return panel
 
@@ -307,9 +309,7 @@ class SecurityAdministrationPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        service_title = QLabel("Service")
-        service_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(service_title)
+        _box1, _g1 = self._group("Service")
 
         service_row = QHBoxLayout()
         btn_status = QPushButton("Status")
@@ -319,7 +319,7 @@ class SecurityAdministrationPage(QWidget):
         btn_reload.clicked.connect(self.run_sshd_reload)
         service_row.addWidget(btn_reload)
         service_row.addStretch()
-        layout.addLayout(service_row)
+        _g1.addLayout(service_row)
 
         effective_row = QHBoxLayout()
         effective_row.addWidget(QLabel("Directive (optional, blank = all):"))
@@ -329,13 +329,12 @@ class SecurityAdministrationPage(QWidget):
         btn_effective = QPushButton("Effective Config")
         btn_effective.clicked.connect(self.run_sshd_effective_config)
         effective_row.addWidget(btn_effective)
-        layout.addLayout(effective_row)
+        _g1.addLayout(effective_row)
 
-        layout.addSpacing(14)
 
-        option_title = QLabel("Set sshd_config Option")
-        option_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(option_title)
+        layout.addWidget(_box1)
+
+        _box2, _g2 = self._group("Set sshd_config Option")
 
         option_row = QHBoxLayout()
         option_row.addWidget(QLabel("Directive:"))
@@ -349,18 +348,17 @@ class SecurityAdministrationPage(QWidget):
         btn_set_option = QPushButton("Set Option")
         btn_set_option.clicked.connect(self.run_sshd_set_option)
         option_row.addWidget(btn_set_option)
-        layout.addLayout(option_row)
+        _g2.addLayout(option_row)
 
         option_hint = QLabel("Validated with sshd -t before being applied; reload sshd afterward to take effect.")
         theme.style_hint_label(option_hint)
         option_hint.setWordWrap(True)
-        layout.addWidget(option_hint)
+        _g2.addWidget(option_hint)
 
-        layout.addSpacing(14)
 
-        root_title = QLabel("Root Login")
-        root_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(root_title)
+        layout.addWidget(_box2)
+
+        _box3, _g3 = self._group("Root Login")
 
         root_row = QHBoxLayout()
         btn_disable_root = QPushButton("Disable Root Login")
@@ -370,13 +368,12 @@ class SecurityAdministrationPage(QWidget):
         btn_allow_root.clicked.connect(self.run_allow_root_login)
         root_row.addWidget(btn_allow_root)
         root_row.addStretch()
-        layout.addLayout(root_row)
+        _g3.addLayout(root_row)
 
-        layout.addSpacing(14)
 
-        keyauth_title = QLabel("Key-Based Authentication")
-        keyauth_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(keyauth_title)
+        layout.addWidget(_box3)
+
+        _box4, _g4 = self._group("Key-Based Authentication")
 
         keyauth_row = QHBoxLayout()
         btn_enable_pubkey = QPushButton("Enable Pubkey Auth")
@@ -391,7 +388,7 @@ class SecurityAdministrationPage(QWidget):
         btn_enable_password = QPushButton("Enable Password Auth")
         btn_enable_password.clicked.connect(self.run_enable_password_auth)
         keyauth_row.addWidget(btn_enable_password)
-        layout.addLayout(keyauth_row)
+        _g4.addLayout(keyauth_row)
 
         akeys_row = QHBoxLayout()
         akeys_row.addWidget(QLabel("User:"))
@@ -401,7 +398,7 @@ class SecurityAdministrationPage(QWidget):
         btn_list_keys = QPushButton("List Authorized Keys")
         btn_list_keys.clicked.connect(self.run_list_authorized_keys)
         akeys_row.addWidget(btn_list_keys)
-        layout.addLayout(akeys_row)
+        _g4.addLayout(akeys_row)
 
         install_row = QHBoxLayout()
         install_row.addWidget(QLabel("Public key:"))
@@ -411,13 +408,12 @@ class SecurityAdministrationPage(QWidget):
         btn_install_key = QPushButton("Install Key")
         btn_install_key.clicked.connect(self.run_install_authorized_key)
         install_row.addWidget(btn_install_key)
-        layout.addLayout(install_row)
+        _g4.addLayout(install_row)
 
-        layout.addSpacing(14)
 
-        rotate_title = QLabel("Rotate SSH Keys")
-        rotate_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(rotate_title)
+        layout.addWidget(_box4)
+
+        _box5, _g5 = self._group("Rotate SSH Keys")
 
         remove_row = QHBoxLayout()
         remove_row.addWidget(QLabel("Match text (key comment/fingerprint):"))
@@ -426,21 +422,22 @@ class SecurityAdministrationPage(QWidget):
         btn_remove_key = QPushButton("Remove Matching Key(s)")
         btn_remove_key.clicked.connect(self.run_remove_authorized_key)
         remove_row.addWidget(btn_remove_key)
-        layout.addLayout(remove_row)
+        _g5.addLayout(remove_row)
 
         hostkey_row = QHBoxLayout()
         btn_rotate_hostkeys = QPushButton("Rotate Host Keys")
         btn_rotate_hostkeys.clicked.connect(self.run_rotate_host_keys)
         hostkey_row.addWidget(btn_rotate_hostkeys)
         hostkey_row.addStretch()
-        layout.addLayout(hostkey_row)
+        _g5.addLayout(hostkey_row)
 
         rotate_hint = QLabel("Regenerates this host's SSH identity and restarts sshd - every client that has "
                               "connected before will see a \"host key changed\" warning.")
         theme.style_hint_label(rotate_hint)
         rotate_hint.setWordWrap(True)
-        layout.addWidget(rotate_hint)
+        _g5.addWidget(rotate_hint)
 
+        layout.addWidget(_box5)
         layout.addStretch()
         return panel
 
@@ -449,9 +446,7 @@ class SecurityAdministrationPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        audit_title = QLabel("Audit Logs")
-        audit_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(audit_title)
+        _box1, _g1 = self._group("Audit Logs")
 
         audit_row = QHBoxLayout()
         btn_auditd_status = QPushButton("Auditd Status")
@@ -465,7 +460,7 @@ class SecurityAdministrationPage(QWidget):
         btn_tail_audit.clicked.connect(self.run_tail_audit_log)
         audit_row.addWidget(btn_tail_audit)
         audit_row.addStretch()
-        layout.addLayout(audit_row)
+        _g1.addLayout(audit_row)
 
         search_row = QHBoxLayout()
         search_row.addWidget(QLabel("Search:"))
@@ -475,13 +470,12 @@ class SecurityAdministrationPage(QWidget):
         btn_search_audit = QPushButton("Search Audit Log")
         btn_search_audit.clicked.connect(self.run_search_audit_log)
         search_row.addWidget(btn_search_audit)
-        layout.addLayout(search_row)
+        _g1.addLayout(search_row)
 
-        layout.addSpacing(14)
 
-        logins_title = QLabel("Failed Logins")
-        logins_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(logins_title)
+        layout.addWidget(_box1)
+
+        _box2, _g2 = self._group("Failed Logins")
 
         logins_row = QHBoxLayout()
         logins_row.addWidget(QLabel("Lines:"))
@@ -498,15 +492,16 @@ class SecurityAdministrationPage(QWidget):
         btn_failed_summary = QPushButton("Failed Login Summary (by IP)")
         btn_failed_summary.clicked.connect(self.run_failed_login_summary)
         logins_row.addWidget(btn_failed_summary)
-        layout.addLayout(logins_row)
+        _g2.addLayout(logins_row)
 
         locked_row = QHBoxLayout()
         btn_locked_accounts = QPushButton("List Locked Accounts")
         btn_locked_accounts.clicked.connect(self.run_list_locked_accounts)
         locked_row.addWidget(btn_locked_accounts)
         locked_row.addStretch()
-        layout.addLayout(locked_row)
+        _g2.addLayout(locked_row)
 
+        layout.addWidget(_box2)
         layout.addStretch()
         return panel
 
@@ -515,9 +510,7 @@ class SecurityAdministrationPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        updates_title = QLabel("Security Updates")
-        updates_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(updates_title)
+        _box1, _g1 = self._group("Security Updates")
 
         updates_row = QHBoxLayout()
         btn_check_updates = QPushButton("Check for Updates")
@@ -527,20 +520,19 @@ class SecurityAdministrationPage(QWidget):
         btn_install_updates.clicked.connect(self.run_install_security_updates)
         updates_row.addWidget(btn_install_updates)
         updates_row.addStretch()
-        layout.addLayout(updates_row)
+        _g1.addLayout(updates_row)
 
-        layout.addSpacing(14)
 
-        policy_title = QLabel("Password Policy")
-        policy_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(policy_title)
+        layout.addWidget(_box1)
+
+        _box2, _g2 = self._group("Password Policy")
 
         policy_row = QHBoxLayout()
         btn_get_policy = QPushButton("Get Current Policy")
         btn_get_policy.clicked.connect(self.run_get_password_policy)
         policy_row.addWidget(btn_get_policy)
         policy_row.addStretch()
-        layout.addLayout(policy_row)
+        _g2.addLayout(policy_row)
 
         pwquality_row = QHBoxLayout()
         pwquality_row.addWidget(QLabel("pwquality option:"))
@@ -554,7 +546,7 @@ class SecurityAdministrationPage(QWidget):
         btn_set_pwquality = QPushButton("Set pwquality Option")
         btn_set_pwquality.clicked.connect(self.run_set_pwquality_option)
         pwquality_row.addWidget(btn_set_pwquality)
-        layout.addLayout(pwquality_row)
+        _g2.addLayout(pwquality_row)
 
         aging_row = QHBoxLayout()
         aging_row.addWidget(QLabel("Max days:"))
@@ -572,12 +564,12 @@ class SecurityAdministrationPage(QWidget):
         btn_set_aging = QPushButton("Set Password Aging")
         btn_set_aging.clicked.connect(self.run_set_password_aging)
         aging_row.addWidget(btn_set_aging)
-        layout.addLayout(aging_row)
+        _g2.addLayout(aging_row)
 
         aging_hint = QLabel("Leave a field blank to leave that setting untouched. Applies to new accounts only.")
         theme.style_hint_label(aging_hint)
         aging_hint.setWordWrap(True)
-        layout.addWidget(aging_hint)
+        _g2.addWidget(aging_hint)
 
         lockout_row = QHBoxLayout()
         lockout_row.addWidget(QLabel("Failed attempts:"))
@@ -591,8 +583,9 @@ class SecurityAdministrationPage(QWidget):
         btn_set_lockout = QPushButton("Set Account Lockout")
         btn_set_lockout.clicked.connect(self.run_set_account_lockout)
         lockout_row.addWidget(btn_set_lockout)
-        layout.addLayout(lockout_row)
+        _g2.addLayout(lockout_row)
 
+        layout.addWidget(_box2)
         layout.addStretch()
         return panel
 
@@ -601,9 +594,7 @@ class SecurityAdministrationPage(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        harden_title = QLabel("Harden System")
-        harden_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(harden_title)
+        _box1, _g1 = self._group("Harden System")
 
         harden_row = QHBoxLayout()
         btn_overview = QPushButton("Hardening Overview")
@@ -615,7 +606,7 @@ class SecurityAdministrationPage(QWidget):
         btn_disable_coredumps = QPushButton("Disable Core Dumps")
         btn_disable_coredumps.clicked.connect(self.run_disable_core_dumps)
         harden_row.addWidget(btn_disable_coredumps)
-        layout.addLayout(harden_row)
+        _g1.addLayout(harden_row)
 
         audit_row = QHBoxLayout()
         audit_row.addWidget(QLabel("Path:"))
@@ -627,13 +618,12 @@ class SecurityAdministrationPage(QWidget):
         btn_suid = QPushButton("List SUID Binaries")
         btn_suid.clicked.connect(self.run_list_suid_binaries)
         audit_row.addWidget(btn_suid)
-        layout.addLayout(audit_row)
+        _g1.addLayout(audit_row)
 
-        layout.addSpacing(14)
 
-        scans_title = QLabel("Vulnerability Scans")
-        scans_title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(scans_title)
+        layout.addWidget(_box1)
+
+        _box2, _g2 = self._group("Vulnerability Scans")
 
         scans_row = QHBoxLayout()
         btn_lynis_status = QPushButton("Lynis Status")
@@ -648,14 +638,15 @@ class SecurityAdministrationPage(QWidget):
         btn_run_rkhunter = QPushButton("Run rkhunter Scan")
         btn_run_rkhunter.clicked.connect(self.run_rkhunter_scan)
         scans_row.addWidget(btn_run_rkhunter)
-        layout.addLayout(scans_row)
+        _g2.addLayout(scans_row)
 
         scans_hint = QLabel("Scans can take several minutes per host; results appear in the tab below once each "
                              "host reports back.")
         theme.style_hint_label(scans_hint)
         scans_hint.setWordWrap(True)
-        layout.addWidget(scans_hint)
+        _g2.addWidget(scans_hint)
 
+        layout.addWidget(_box2)
         layout.addStretch()
         return panel
 
@@ -1193,13 +1184,9 @@ class SecurityAdministrationPage(QWidget):
             text_edit.setPlainText("Waiting for this agent host to report back...")
             return
 
-        if data["stderr"] and not data["stdout"]:
-            text_edit.setPlainText(f"ERROR:\n{data['stderr']}")
-        else:
-            text = data["stdout"]
-            if data["stderr"]:
-                text += f"\n\n--- stderr ---\n{data['stderr']}"
-            text_edit.setPlainText(text)
+        label = getattr(self, "last_command_label", None) or "Action"
+        text_edit.setHtml(result_banner.result_html(
+            data, ok_label=f"{label} complete", fail_label=f"{label} failed"))
 
     def _close_security_tab(self, index):
         bar = self.security_tabs.tabBar()

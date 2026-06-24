@@ -6,29 +6,35 @@ import { api } from "../api.js";
 // is registered under in webgui/actions.py. Tiles whose tool has no
 // registered actions yet render as "coming soon" and are disabled - as
 // actions are added server-side they light up automatically.
+// Each tile carries an accent `color`; the glyph is rendered in that color
+// on a faintly tinted chip (see the inline style below), matching the
+// desktop's colored tiles. Glyphs are chosen to be monochrome and a text
+// variation selector (︎) is appended to any with an emoji form so the
+// browser keeps them monochrome and our color actually applies (otherwise
+// e.g. a lock or gear renders as a fixed-color emoji).
 const TILES = [
-  { tool: "__terminal__", label: "Sysible Connect", icon: "▮", always: true,
+  { tool: "__terminal__", label: "Sysible Connect", icon: ">_", color: "#2ea0c9", always: true,
     desc: "Open a live SSH terminal to a host, in your browser." },
-  { tool: "__files__", label: "File Transfer", icon: "⇅", always: true,
+  { tool: "__files__", label: "File Transfer", icon: "⇅", color: "#13a89e", always: true,
     desc: "Upload files to a host or download files from it." },
-  { tool: "Run Command", icon: "»_", desc: "Run an arbitrary shell command across selected hosts." },
-  { tool: "User & Group Administration", icon: "◴", desc: "Create, lock, and manage users, shells, and groups." },
-  { tool: "Service Management", icon: "⚙", desc: "Start, stop, restart, and inspect systemd services." },
-  { tool: "System Health, Logs & Recovery", icon: "❤", desc: "Health checks, logs, boot & recovery." },
-  { tool: "Cron & Systemd Timers", icon: "◷", desc: "View and manage cron jobs and systemd timers." },
-  { tool: "Host Software Management", icon: "▤", desc: "Install, update, and remove packages." },
-  { tool: "Repository Management", icon: "▦", desc: "Manage package repositories." },
-  { tool: "Network Management", icon: "≋", desc: "Interfaces, routes, DNS, diagnostics." },
-  { tool: "File System Management", icon: "▣", desc: "Files, permissions, mounts, archives." },
-  { tool: "Storage Administration", icon: "⛁", desc: "Disks, partitions, LVM, RAID, SMART." },
-  { tool: "Firewall Administration", icon: "🜂", desc: "firewalld / nftables / iptables." },
-  { tool: "Security Administration", icon: "🔒", desc: "SELinux, auditing, hardening." },
-  { tool: "Backup & Recovery", icon: "🖫", desc: "Back up and restore host data." },
-  { tool: "Time Synchronization", icon: "◷", desc: "NTP/chrony and time zone." },
-  { tool: "Certificate Management", icon: "🎖", desc: "TLS certificates on managed hosts." },
-  { tool: "Containers & VMs", icon: "◰", desc: "Podman/Docker containers and libvirt VMs." },
-  { tool: "Directory Services (Active Directory / LDAP)", icon: "⛓", desc: "Join AD / LDAP." },
-  { tool: "Distro Subscription & Licensing", icon: "🎫", desc: "RHSM, Ubuntu Pro, SUSE SCC." },
+  { tool: "Run Command", icon: "❯", color: "#7c5cff", desc: "Run an arbitrary shell command across selected hosts." },
+  { tool: "User & Group Administration", icon: "◍", color: "#8b93a7", desc: "Create, lock, and manage users, shells, and groups." },
+  { tool: "Service Management", icon: "⚙︎", color: "#7c5cff", desc: "Start, stop, restart, and inspect systemd services." },
+  { tool: "System Health, Logs & Recovery", icon: "✚", color: "#d9544d", desc: "Health checks, logs, boot & recovery." },
+  { tool: "Cron & Systemd Timers", icon: "◷", color: "#f5a623", desc: "View and manage cron jobs and systemd timers." },
+  { tool: "Host Software Management", icon: "▤", color: "#2ea043", desc: "Install, update, and remove packages." },
+  { tool: "Repository Management", icon: "▦", color: "#3b82f6", desc: "Manage package repositories." },
+  { tool: "Network Management", icon: "≋", color: "#0ea5e9", desc: "Interfaces, routes, DNS, diagnostics." },
+  { tool: "File System Management", icon: "▣", color: "#0891b2", desc: "Files, permissions, mounts, archives." },
+  { tool: "Storage Administration", icon: "⛃", color: "#c08457", desc: "Disks, partitions, LVM, RAID, SMART." },
+  { tool: "Firewall Administration", icon: "⬣", color: "#e0563f", desc: "firewalld / nftables / iptables." },
+  { tool: "Security Administration", icon: "⚿", color: "#9aa3b2", desc: "SELinux, auditing, hardening." },
+  { tool: "Backup & Recovery", icon: "⤓", color: "#2ea043", desc: "Back up and restore host data." },
+  { tool: "Time Synchronization", icon: "◔", color: "#0ea5e9", desc: "NTP/chrony and time zone." },
+  { tool: "Certificate Management", icon: "❖", color: "#e0568b", desc: "TLS certificates on managed hosts." },
+  { tool: "Containers & VMs", icon: "◰", color: "#6366f1", desc: "Podman/Docker containers and libvirt VMs." },
+  { tool: "Directory Services (Active Directory / LDAP)", icon: "⧉", color: "#0ea5e9", desc: "Join AD / LDAP." },
+  { tool: "Distro Subscription & Licensing", icon: "✦", color: "#f5a623", desc: "RHSM, Ubuntu Pro, SUSE SCC." },
 ];
 
 export default function Dashboard({ onOpenTool }) {
@@ -57,7 +63,12 @@ export default function Dashboard({ onOpenTool }) {
               onClick={() => ready && onOpenTool(t.tool)}
               disabled={!ready}
             >
-              <span className="tile-icon">{t.icon}</span>
+              <span
+                className="tile-icon"
+                style={ready ? { color: t.color, background: t.color + "22" } : undefined}
+              >
+                {t.icon}
+              </span>
               <span className="tile-body">
                 <span className="tile-title">{t.label || t.tool}</span>
                 <span className="tile-desc">{t.desc}</span>

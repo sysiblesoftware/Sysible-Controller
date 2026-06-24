@@ -316,9 +316,17 @@ def init_db():
         must_change_password INTEGER DEFAULT 0,
         created REAL,
         created_by TEXT,
-        last_login REAL
+        last_login REAL,
+        role TEXT DEFAULT 'superuser'
     )
     """)
+
+    # Migration: add the role column to databases created before RBAC.
+    # Default 'superuser' so an existing single admin keeps full access
+    # rather than being silently downgraded and locked out of management.
+    cur.execute("PRAGMA table_info(administrators)")
+    if "role" not in {c[1] for c in cur.fetchall()}:
+        cur.execute("ALTER TABLE administrators ADD COLUMN role TEXT DEFAULT 'superuser'")
 
     # One-time migration + default-seed, run only while `administrators`
     # is still empty so this never re-fires (e.g. after an admin is
@@ -1202,7 +1210,7 @@ def list_administrators():
     cur = conn.cursor()
 
     cur.execute("""
-    SELECT username, must_change_password, created, created_by, last_login
+    SELECT username, must_change_password, created, created_by, last_login, role
     FROM administrators
     ORDER BY created ASC
     """)
@@ -1221,6 +1229,25 @@ def count_administrators():
     return count
 
 
+def count_administrators_by_role(role):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM administrators WHERE role=?", (role,))
+    count = cur.fetchone()[0]
+    conn.close()
+    return count
+
+
+def set_administrator_role(username, role):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("UPDATE administrators SET role=? WHERE username=?", (role, username))
+    conn.commit()
+    changed = cur.rowcount
+    conn.close()
+    return changed > 0
+
+
 def get_administrator(username):
     """Full row including password_hash/password_salt - used for
     login verification. Returns None if no such administrator."""
@@ -1235,17 +1262,19 @@ def get_administrator(username):
     return dict(row) if row else None
 
 
-def add_administrator(username, password_hash, password_salt, must_change_password=1, created_by=None):
+def add_administrator(username, password_hash, password_salt, must_change_password=1,
+                      created_by=None, role="superuser"):
     """Returns True on success, False if the username is already
-    taken."""
+    taken. role is 'superuser' or 'sysadmin'."""
     conn = _connect()
     cur = conn.cursor()
 
     try:
         cur.execute("""
-        INSERT INTO administrators (username, password_hash, password_salt, must_change_password, created, created_by)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """, (username, password_hash, password_salt, int(must_change_password), time.time(), created_by))
+        INSERT INTO administrators (username, password_hash, password_salt, must_change_password, created, created_by, role)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (username, password_hash, password_salt, int(must_change_password),
+              time.time(), created_by, role))
         conn.commit()
         return True
     except sqlite3.IntegrityError:

@@ -885,15 +885,18 @@ def admin_setup(body: AdminSetupRequest):
         raise HTTPException(status_code=400, detail=message)
 
     salt, password_hash = portal_auth.hash_password(body.password)
+    # The first account is always a superuser - someone has to be able to
+    # manage the controller, and there's no one to grant the role yet.
     created = add_administrator(
-        username, password_hash, salt, must_change_password=0, created_by="setup"
+        username, password_hash, salt, must_change_password=0, created_by="setup",
+        role="superuser",
     )
     if not created:
         raise HTTPException(status_code=409, detail="An administrator with that username already exists")
 
-    log_admin_audit("administrator_added", username, "first-run setup")
+    log_admin_audit("administrator_added", username, "first-run setup (superuser)")
 
-    return {"username": username, "status": "created"}
+    return {"username": username, "status": "created", "role": "superuser"}
 
 
 # Defense-in-depth brute-force throttle for the GUI admin login. This
@@ -970,6 +973,7 @@ def admin_login(body: AdminLoginRequest, request: Request):
     return {
         "status": "ok",
         "username": username,
+        "role": admin.get("role") or "superuser",
         "must_change_password": bool(admin["must_change_password"]),
     }
 
@@ -983,6 +987,8 @@ def list_administrators_route():
 
 @app.post("/admin/administrators", dependencies=[Depends(require_api_key)])
 def add_administrator_route(body: AddAdministratorRequest):
+    from backend.edition import enforce_role_limit
+    from backend.db import count_administrators_by_role
 
     username = body.username.strip()
 
@@ -992,21 +998,30 @@ def add_administrator_route(body: AddAdministratorRequest):
     if not body.password:
         raise HTTPException(status_code=400, detail="Password cannot be empty")
 
+    role = (body.role or "sysadmin").strip().lower()
+    if role not in ("superuser", "sysadmin"):
+        raise HTTPException(status_code=400, detail="Role must be 'superuser' or 'sysadmin'")
+
+    # Edition seat cap (Community: 2 superusers, 5 sysadmins).
+    enforce_role_limit(role, count_administrators_by_role(role))
+
     ok, message = validate_password_against_policy(body.password, get_admin_password_policy())
     if not ok:
         raise HTTPException(status_code=400, detail=message)
 
     salt, password_hash = portal_auth.hash_password(body.password)
     created = add_administrator(
-        username, password_hash, salt, must_change_password=1, created_by=body.actor or None
+        username, password_hash, salt, must_change_password=1,
+        created_by=body.actor or None, role=role,
     )
 
     if not created:
         raise HTTPException(status_code=409, detail="An administrator with that username already exists")
 
-    log_admin_audit("administrator_added", username, f"added by {body.actor}" if body.actor else "")
+    log_admin_audit("administrator_added", username,
+                    f"{role} added by {body.actor}" if body.actor else f"{role} added")
 
-    return {"username": username, "status": "added"}
+    return {"username": username, "status": "added", "role": role}
 
 
 @app.delete("/admin/administrators/{username}", dependencies=[Depends(require_api_key)])

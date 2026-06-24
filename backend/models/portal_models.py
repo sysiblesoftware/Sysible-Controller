@@ -47,6 +47,7 @@ class ChangeAdminCredentialsRequest(BaseModel):
 class AddAdministratorRequest(BaseModel):
     username: str
     password: str
+    role: str = "sysadmin"  # 'superuser' or 'sysadmin'
     actor: str = ""  # username of the administrator performing the add, for the audit log
 
 

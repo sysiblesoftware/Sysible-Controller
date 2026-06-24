@@ -16,6 +16,28 @@ from fastapi import HTTPException
 EDITION = "community"
 HOST_LIMIT = 10  # None == unlimited (Enterprise)
 
+# RBAC seat caps for the Community edition. Same honest-user caveat as
+# HOST_LIMIT: this is an open-source build, so these are limits an editor
+# could lift - real enforcement lives in Enterprise. None == unlimited.
+ROLE_LIMITS = {"superuser": 2, "sysadmin": 5}
+
+
+def enforce_role_limit(role, current_count):
+    """Raise HTTP 403 if adding another `role` would exceed its seat cap.
+    `current_count` is how many of that role already exist."""
+    limit = ROLE_LIMITS.get(role)
+    if limit is None:
+        return
+    if current_count >= limit:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Community edition allows at most {limit} {role} account(s) "
+                f"({current_count} already exist). Remove one first, or use the "
+                f"Enterprise edition for more."
+            ),
+        )
+
 
 def current_host_names():
     """The set of distinct managed-host names right now - agent hostnames
@@ -67,4 +89,5 @@ def edition_info():
         "edition": EDITION,
         "host_limit": HOST_LIMIT,
         "host_count": host_count(),
+        "role_limits": ROLE_LIMITS,
     }

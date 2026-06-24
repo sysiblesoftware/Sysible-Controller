@@ -316,6 +316,10 @@ _PRIV_ERROR_HINTS = (
     "you need to be root", "eperm", "eacces",
     "a password is required", "a terminal is required", "sudo:", "root privileges",
     "access denied", "not authorized", "requires root",
+    # polkit / D-Bus (systemctl, hostnamectl, timedatectl, etc. run as a
+    # non-root user answer this instead of a plain permission error):
+    "interactive authentication required", "authentication is required",
+    "authentication required", "not privileged", "rejected send message",
 )
 
 

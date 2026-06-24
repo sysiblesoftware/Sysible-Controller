@@ -337,9 +337,10 @@ def _local_user_exists(user):
         return False
 
 
-def _exec(argv, shell=False):
+def _exec(argv, shell=False, input_data=None):
     try:
-        proc = subprocess.run(argv, shell=shell, capture_output=True, text=True, timeout=300)
+        proc = subprocess.run(argv, shell=shell, capture_output=True, text=True,
+                              timeout=300, input=input_data)
         return {
             "stdout": _truncate(proc.stdout),
             "stderr": _truncate(proc.stderr),
@@ -351,12 +352,14 @@ def _exec(argv, shell=False):
         return {"stdout": "", "stderr": str(e), "returncode": -1}
 
 
-def _run_as_user(user, cmd):
+def _run_as_user(user, cmd, become_password=None):
     """RBAC: run `cmd` as local user `user`. Tried as that user first, so
     read-only commands work even for a user with no sudo; on a privilege
-    error it's retried once under that user's own `sudo -n`, so privileged
-    actions are permitted only as far as the host's sudoers allows the
-    user. runuser needs root; if the agent isn't root it prefixes sudo."""
+    error it's retried under that user's own sudo. Elevation uses `sudo -n`
+    (passwordless) unless a `become_password` was supplied for this task, in
+    which case it uses `sudo -S` and feeds the password on STDIN (never on
+    argv/env), for hosts that forbid NOPASSWD. runuser needs root; if the
+    agent isn't root it prefixes its own sudo."""
     if not _local_user_exists(user):
         return {
             "stdout": "",
@@ -373,33 +376,43 @@ def _run_as_user(user, cmd):
     if first["returncode"] == 0 or not _looks_like_privilege_error(first["stderr"]):
         return first
 
-    elevated = (["runuser", "-u", user, "--", "sudo", "-n", "bash", "-c", cmd] if root
-                else ["sudo", "-n", "runuser", "-u", user, "--", "sudo", "-n", "bash", "-c", cmd])
-    res = _exec(elevated)
-    # If elevation itself failed because the role user can't sudo without a
-    # password (or at all), the bare 'sudo: a password is required' is
-    # cryptic - explain that this is the RBAC model needing local sudo rights.
+    # Escalate. With a become-password use `sudo -S` (read password from
+    # stdin, empty prompt); otherwise `sudo -n` (passwordless).
+    if become_password:
+        inner = ["sudo", "-S", "-p", "", "bash", "-c", cmd]
+        stdin = become_password + "\n"
+    else:
+        inner = ["sudo", "-n", "bash", "-c", cmd]
+        stdin = None
+    elevated = (["runuser", "-u", user, "--"] + inner if root
+                else ["sudo", "-n", "runuser", "-u", user, "--"] + inner)
+    res = _exec(elevated, input_data=stdin)
+
     if res["returncode"] != 0:
         low = (res["stderr"] or "").lower()
-        if ("password is required" in low or "a terminal is required" in low
+        if become_password and ("try again" in low or "incorrect password" in low
+                                or "sorry" in low):
+            res["stderr"] = (res["stderr"].rstrip()
+                             + f"\n[sysible] sudo rejected the password for '{user}' on this host.")
+        elif not become_password and (
+                "password is required" in low or "a terminal is required" in low
                 or "no tty present" in low or "not allowed to execute" in low
                 or "not in the sudoers" in low):
             res["stderr"] = (res["stderr"].rstrip() + (
-                f"\n[sysible] This action needs root, but '{user}' can't run it via sudo "
-                f"on this host. Grant '{user}' passwordless sudo for it (an "
-                f"/etc/sudoers.d entry with NOPASSWD), per the RBAC model where each "
-                f"role runs under the host's own sudo policy."))
+                f"\n[sysible] This action needs root, but '{user}' can't run it via "
+                f"passwordless sudo here. Either grant '{user}' NOPASSWD sudo for it, or "
+                f"mark this host as 'password sudo' so Sysible supplies your sudo password."))
     return res
 
 
-def run_command(cmd, run_as=None):
+def run_command(cmd, run_as=None, become_password=None):
     # RBAC path: a task tagged with an initiating admin username runs as the
     # matching local user, gated by that host's sudo policy (see
     # _run_as_user). Without run_as it's an internal/controller task: a root
     # agent runs it directly; an unprivileged agent escalates via sudo -n
     # (the pre-RBAC behaviour, unchanged).
     if run_as:
-        return _run_as_user(run_as, cmd)
+        return _run_as_user(run_as, cmd, become_password=become_password)
     if os.geteuid() != 0:
         cmd = "sudo -n bash -c " + shlex.quote(cmd)
     return _exec(cmd, shell=True)
@@ -480,7 +493,8 @@ def loop(state):
                 print("[agent] running task", task_id)
 
                 try:
-                    result = run_command(task["command"], task.get("run_as"))
+                    result = run_command(task["command"], task.get("run_as"),
+                                         task.get("become_password"))
                     send_result(state, task_id, result)
                 except UnknownHostError:
                     raise

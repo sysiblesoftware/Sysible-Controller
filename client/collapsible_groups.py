@@ -35,7 +35,7 @@ helper (e.g. `_add_host_header`):
 """
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QListWidgetItem, QPushButton, QHBoxLayout
+from PySide6.QtWidgets import QListWidgetItem, QPushButton
 
 # Custom data roles, offset well clear of Qt.UserRole (which the host
 # pages already use to stash the host/agent dict on non-header rows).

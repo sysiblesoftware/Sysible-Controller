@@ -87,8 +87,6 @@ from backend.models.policy_models import (
     SetEnvironmentalPolicyRequest,
     SetAdminPasswordPolicyRequest,
 )
-from backend.routes.groups import router as groups_router
-from backend.routes.users import router as users_router
 from backend.remote_routes import router as remote_router
 from backend.remote_routes import (
     _ensure_controller_key,
@@ -102,8 +100,6 @@ from backend.remote_routes import (
 
 app = FastAPI(title="Sysible Controller")
 
-app.include_router(users_router, dependencies=[Depends(require_api_key)])
-app.include_router(groups_router, dependencies=[Depends(require_api_key)])
 app.include_router(remote_router, dependencies=[Depends(require_api_key)])
 
 

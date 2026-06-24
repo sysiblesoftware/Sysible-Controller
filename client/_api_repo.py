@@ -8,7 +8,6 @@ reliable to target), but uses the native `dnf/yum config-manager
 --add-repo <url>` on the RPM/dnf family instead of synthesizing a
 file.
 """
-import json
 import shlex
 
 from client._api_automation import _pkgmgr_dispatch, _validate_repo_alias

@@ -6,15 +6,9 @@ directly, so the API base URL and the admin API key are only
 configured in one spot.
 """
 
-import base64
 import contextlib
-import json
 import os
-import random
-import re
-import secrets
 import shlex
-import string
 from pathlib import Path
 from urllib.parse import quote
 

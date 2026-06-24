@@ -11,56 +11,11 @@ from pathlib import Path
 from client.api import _request, _download_binary
 
 
-def list_users():
-    return _request("GET", "/users")
-
-
-def get_user(username: str):
-    return _request("GET", f"/users/{username}")
-
-
-def get_user_sessions(username: str):
-    return _request("GET", f"/users/{username}/sessions")
-
-
-def create_user(username: str, password: str = "", shell: str = "/bin/bash"):
-    return _request("POST", "/users/", json={"username": username, "password": password, "shell": shell or "/bin/bash"})
-
-
-def delete_user(username: str):
-    return _request("DELETE", f"/users/{username}")
-
-
-def lock_user(username: str):
-    return _request("POST", f"/users/{username}/lock")
-
-
-def unlock_user(username: str):
-    return _request("POST", f"/users/{username}/unlock")
-
-
-def toggle_sudo(username: str):
-    return _request("POST", f"/users/{username}/sudo/toggle")
-
-
-def list_groups():
-    return _request("GET", "/groups/")
-
-
-def create_group(name: str):
-    return _request("POST", "/groups/", json={"name": name})
-
-
-def delete_group(name: str):
-    return _request("DELETE", f"/groups/{name}")
-
-
-def add_user_to_group(group: str, username: str):
-    return _request("POST", f"/groups/{group}/users/{username}")
-
-
-def remove_user_from_group(group: str, username: str):
-    return _request("DELETE", f"/groups/{group}/users/{username}")
+# NOTE: The local /users and /groups route wrappers that used to live here
+# were removed - they targeted OS users/groups on the *controller's own
+# machine* (backend/routes/users.py + groups.py), a model the app no longer
+# uses. All user/group management is now dispatched to enrolled remote hosts
+# via the cmd_* builders further down this file.
 
 
 def list_hosts():

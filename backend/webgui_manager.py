@@ -246,16 +246,41 @@ def start(port=None):
     if current["running"]:
         return current
 
-    diag = diagnostics()
-    blockers = [c for c in diag["checks"]
-                if not c["ok"] and c["name"] in ("Front end built", "Python dependencies", "Service code present")]
+    BLOCKER_NAMES = ("Front end built", "Python dependencies", "Service code present")
+
+    def _blockers():
+        return [c for c in diagnostics()["checks"]
+                if not c["ok"] and c["name"] in BLOCKER_NAMES]
+
+    blockers = _blockers()
+    install_log = None
     if blockers:
-        return {
-            "running": False, "port": None, "configured_port": DEFAULT_WEBGUI_PORT,
-            "scheme": _scheme(), "pid": None,
-            "error": "Can't start the Web GUI:\n- " + "\n- ".join(
-                f"{c['name']}: {c['detail']}" for c in blockers),
-        }
+        # Self-heal: build the front end / install the deps automatically so
+        # the admin only ever has to click Start. "Service code present" is
+        # the one thing we can't fix (the files just aren't there), so don't
+        # bother trying to install in that case.
+        if any(b["name"] == "Service code present" for b in blockers):
+            return {
+                "running": False, "port": None, "configured_port": DEFAULT_WEBGUI_PORT,
+                "scheme": _scheme(), "pid": None,
+                "error": "Can't start the Web GUI - service code is missing:\n- " +
+                         "\n- ".join(f"{c['name']}: {c['detail']}" for c in blockers),
+            }
+        install = install_dependencies()
+        install_log = install.get("steps")
+        blockers = _blockers()
+        if blockers:
+            detail = "\n- ".join(f"{c['name']}: {c['detail']}" for c in blockers)
+            failed = [s for s in (install_log or []) if not s["ok"]]
+            extra = ""
+            if failed:
+                extra = "\n\nSetup output:\n" + "\n".join(
+                    f"[{s['name']}]\n{s['output']}" for s in failed)
+            return {
+                "running": False, "port": None, "configured_port": DEFAULT_WEBGUI_PORT,
+                "scheme": _scheme(), "pid": None,
+                "error": "Couldn't prepare the Web GUI automatically:\n- " + detail + extra,
+            }
 
     port = port or DEFAULT_WEBGUI_PORT
     RUN_DIR.mkdir(parents=True, exist_ok=True)

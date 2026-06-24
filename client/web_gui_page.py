@@ -156,6 +156,12 @@ class WebGuiPage(QWidget):
     def start_service(self):
         self.start_btn.setEnabled(False)
         self.status_label.setText("Status: starting…")
+        # The first start may build the front end / install deps - say so,
+        # since it can take a minute or two before the service is up.
+        self.diag_view.setPlainText(
+            "Starting the Web GUI. If the front end isn't built yet this will "
+            "install dependencies and build it first — that can take a minute or "
+            "two on the first run. Please wait…")
         QApplication.processEvents()
         try:
             result = api.start_webgui()

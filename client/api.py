@@ -242,7 +242,9 @@ def install_webgui_dependencies():
 
 
 def start_webgui():
-    return _request("POST", "/webgui/start", timeout=20)
+    # Start may build the front end / install deps on first run, so allow
+    # plenty of time rather than timing out mid-build.
+    return _request("POST", "/webgui/start", timeout=900)
 
 
 def stop_webgui():

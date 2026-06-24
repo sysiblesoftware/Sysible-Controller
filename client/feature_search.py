@@ -150,8 +150,8 @@ REGISTRY = [
                   "realm", "realmd", "sssd", "ldap", "ldaps", "kerberos", "domain join",
                   "leave domain", "directory", "winbind", "add server to active directory"]},
 
-    # ---- Subscription & Licensing ----
-    {"title": "Subscription & Licensing", "open": "open_system_admin", "sub_open": "open_subscriptions",
+    # ---- Distro Subscription & Licensing ----
+    {"title": "Distro Subscription & Licensing", "open": "open_system_admin", "sub_open": "open_subscriptions",
      "keywords": ["subscription", "license", "licensing", "register", "registration",
                   "subscription-manager", "rhsm", "red hat subscription", "activation key",
                   "ubuntu pro", "ua", "pro attach", "esm", "livepatch", "fips",

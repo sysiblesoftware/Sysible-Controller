@@ -1,5 +1,7 @@
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QGridLayout, QLabel, QLineEdit
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QGridLayout, QLabel, QLineEdit, QScrollArea,
+)
 
 from client.dashboard_card import DashboardCard
 from client.branding import make_page_header
@@ -160,7 +162,7 @@ class SystemAdministrationPage(QWidget):
              "Join hosts to Active Directory (realmd/SSSD), manage realm status and login permits, "
              "enable home-dir creation, and configure/test LDAP and LDAPS.",
              self.open_directory, "fa5s.users-cog", "sky"),
-            ("Subscription & Licensing",
+            ("Distro Subscription & Licensing",
              "Register and manage commercial-distro subscriptions: Red Hat (subscription-manager), "
              "Ubuntu Pro, and SUSE (SUSEConnect) — status, attach/enable, and repositories.",
              self.open_subscriptions, "fa5s.id-card", "amber"),
@@ -174,14 +176,25 @@ class SystemAdministrationPage(QWidget):
             card = DashboardCard(card_title, description, handler, icon, color)
             self._tiles.append((card, f"{card_title} {description}".lower()))
 
-        main.addLayout(grid)
-        main.addStretch()
-
+        # The tiles live in a scroll area so the last row (e.g. Directory
+        # Services) is never cut off on a shorter screen - it scrolls instead.
         self._no_results = QLabel("No tools match your search.")
         self._no_results.setAlignment(Qt.AlignCenter)
         theme.style_hint_label(self._no_results)
         self._no_results.setVisible(False)
-        main.addWidget(self._no_results)
+
+        grid_container = QWidget()
+        grid_container_layout = QVBoxLayout(grid_container)
+        grid_container_layout.setContentsMargins(0, 0, 0, 0)
+        grid_container_layout.addLayout(grid)
+        grid_container_layout.addWidget(self._no_results)
+        grid_container_layout.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setWidget(grid_container)
+        main.addWidget(scroll, 1)
 
         self._relayout_tiles(self._tiles)
 

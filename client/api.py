@@ -104,6 +104,15 @@ def get_agents():
     return _request("GET", "/agents").get("agents", [])
 
 
+def get_edition():
+    """Edition + host-cap info, e.g. {"edition": "community", "host_limit": 10,
+    "host_count": 3}. host_limit is None on an unlimited build."""
+    try:
+        return _request("GET", "/edition")
+    except Exception:
+        return {"edition": "community", "host_limit": None, "host_count": 0}
+
+
 def disenroll_agent(host_id: str):
     return _request("DELETE", f"/agents/{host_id}")
 

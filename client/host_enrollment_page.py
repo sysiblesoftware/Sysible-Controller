@@ -61,6 +61,14 @@ class HostEnrollmentPage(QWidget):
         # =====================================================
         layout.addLayout(make_page_header("Sysible Controller Host Enrollment", font_size=22, logo_height=32))
 
+        # Community-edition host cap, shown so the limit is visible up front
+        # rather than only surfacing as an error when the (N+1)th host enrolls.
+        self.edition_label = QLabel("")
+        self.edition_label.setAlignment(Qt.AlignCenter)
+        theme.style_hint_label(self.edition_label)
+        layout.addWidget(self.edition_label)
+        self._refresh_edition_label()
+
         # =====================================================
         # AGENT BUNDLE
         # The bundle already bakes in a fresh one-time enrollment token
@@ -189,7 +197,26 @@ class HostEnrollmentPage(QWidget):
     # =====================================================
     # INVENTORY
     # =====================================================
+    def _refresh_edition_label(self):
+        try:
+            info = api.get_edition()
+        except Exception:
+            info = {}
+        limit = info.get("host_limit")
+        count = info.get("host_count", 0)
+        if limit is None:
+            self.edition_label.setText("")
+            self.edition_label.setVisible(False)
+            return
+        self.edition_label.setVisible(True)
+        at_cap = count >= limit
+        self.edition_label.setText(
+            f"Community edition — {count}/{limit} hosts used"
+            + ("  ·  limit reached; remove a host to enroll another" if at_cap else "")
+        )
+
     def refresh(self):
+        self._refresh_edition_label()
         previously_selected = self.selected_agent.get("host_id") if self.selected_agent else None
 
         try:

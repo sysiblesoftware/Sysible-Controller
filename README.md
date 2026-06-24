@@ -4,7 +4,7 @@
 
 Sysible Controller is a self-hosted infrastructure management console for Linux system administrators and engineers. One controller, installed on a single Linux machine, gives you a single point of control over an entire fleet of Linux hosts — user and group administration, health diagnostics, service control, scheduled jobs, package and repository management, networking, storage and filesystem management, firewall and security hardening, and a live remote terminal — whether each host runs Sysible's lightweight agent or is reached directly over SSH.
 
-![The Sysible Controller System Administration panel — seventeen fleet-wide tools, one click each](screenshot_system_administration.png)
+![The Sysible Controller System Administration panel — seventeen fleet-wide tools, one click each](docs/screenshots/screenshot_system_administration.png)
 
 > The **System Administration** panel: seventeen point-and-click tools — users and groups, health/logs/recovery, services, storage, networking, firewall, security, containers, directory services, and more — each acting across your whole fleet of agent and SSH hosts.
 
@@ -15,7 +15,7 @@ Sysible Controller is made up of two cooperating pieces:
 - A **FastAPI backend** that runs as a systemd service on the controller machine, holding the fleet's inventory, credentials, and task queue in a local SQLite database.
 - A **PySide6 desktop GUI** that an administrator runs to drive that backend over HTTPS.
 
-![The Sysible Controller dashboard with its task search box and tool tiles](screenshot_dashboard.png)
+![The Sysible Controller dashboard with its task search box and tool tiles](docs/screenshots/screenshot_dashboard.png)
 
 It manages target hosts through two interchangeable mechanisms, and a single fleet can mix both freely:
 

@@ -47,72 +47,72 @@ nav.toc a{color:var(--accent);text-decoration:none;display:block;padding:2px 0}
 </nav>
 <div class=note>Most tools share the same pattern: open the tool, check the hosts to act on in the <b>Target Hosts</b> list, then click an action — each host's result appears in its own tab with a green (success) or red (failure) banner.</div>
 <section class=sec id='dashboard'><h2>The Dashboard</h2>
-<div class=shot><img src='screenshot_dashboard.png' alt='The Dashboard screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_dashboard.png' alt='The Dashboard screenshot'></div>
 <ol class=how><li>Log in; you land on the Dashboard — a search box over five tiles.</li><li>Type a task like <i>create a user</i> or <i>open a firewall port</i> to jump straight to the right tool.</li><li>Or click a tile to open that tool in its own window.</li></ol></section>
 <section class=sec id='host_enrollment'><h2>Host Enrollment</h2>
-<div class=shot><img src='screenshot_host_enrollment.png' alt='Host Enrollment screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_host_enrollment.png' alt='Host Enrollment screenshot'></div>
 <ol class=how><li>Open <b>Sysible Controller Host Enrollment</b> from the Dashboard.</li><li>Set a default environment, then click <b>Download Agent Bundle</b> and install it on the target host.</li><li>Enrolled hosts appear in the list; use <b>Set Environment</b> or <b>Disenroll Host</b> to manage them.</li></ol></section>
 <section class=sec id='sysible_connect'><h2>Sysible Connect</h2>
-<div class=shot><img src='screenshot_sysible_connect.png' alt='Sysible Connect screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_sysible_connect.png' alt='Sysible Connect screenshot'></div>
 <ol class=how><li>Open <b>Sysible Connect</b>. Agent and SSH hosts share one list, each with its IP.</li><li><b>Double-click a host</b> to open a pop-out terminal; use its toolbar to upload/download files, find, or save output.</li><li>New SSH host? Fill <b>SSH to a New Host</b> and click <b>Connect Host</b> — the password is used once, then replaced by a key. Use <b>Run Script on All Hosts…</b> to run a command fleet-wide.</li></ol></section>
 <section class=sec id='sysible_connect_terminal'><h2>The Terminal</h2>
-<div class=shot><img src='screenshot_sysible_connect_terminal.png' alt='The Terminal screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_sysible_connect_terminal.png' alt='The Terminal screenshot'></div>
 <ol class=how><li>Each terminal is a real PTY — <code>vim</code>, <code>top</code>, and <code>less</code> render correctly.</li><li>The <code>user@host</code> prompt is green (red for root); the toolbar adds upload/download, find, save-output, and font sizing.</li><li>Open as many terminals as you like — sessions are independent, even multiple to the same host.</li></ol></section>
 <section class=sec id='user_group'><h2>User & Group Administration</h2>
-<div class=shot><img src='screenshot_user_group.png' alt='User & Group Administration screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_user_group.png' alt='User & Group Administration screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>User &amp; Group Administration</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Use the <b>Create User / Account / Password / Groups</b> tabs and click an action (e.g. <b>Create User</b>, <b>Lock</b>, <b>Toggle Sudo</b>). Each host's result opens in its own tab.</li></ol></section>
 <section class=sec id='health_logs'><h2>System Health, Logs & Recovery</h2>
-<div class=shot><img src='screenshot_health_logs.png' alt='System Health, Logs & Recovery screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_health_logs.png' alt='System Health, Logs & Recovery screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>System Health, Logs &amp; Recovery</b> (one window, two top-level tabs: <b>Health &amp; Logs</b> and <b>Boot &amp; Recovery</b>).</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>On <b>Health &amp; Logs</b>, click <b>Check Host Health</b> for a green/amber/red verdict, or use the Overview/Processes/Logs/Diagnostics tabs. On <b>Boot &amp; Recovery</b>, analyze boot failures, manage GRUB and kernels — with care.</li></ol></section>
 <section class=sec id='service'><h2>Service Management</h2>
-<div class=shot><img src='screenshot_service.png' alt='Service Management screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_service.png' alt='Service Management screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>Service Management</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Type a service name and click <b>Start</b>, <b>Stop</b>, <b>Restart</b>, <b>Enable At Boot</b>, <b>Status</b>, or <b>Logs</b>; <b>Troubleshoot</b> diagnoses failures.</li></ol></section>
 <section class=sec id='environmental_policies'><h2>Environmental Policies</h2>
-<div class=shot><img src='screenshot_environmental_policies.png' alt='Environmental Policies screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_environmental_policies.png' alt='Environmental Policies screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>Environmental Policies</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Set the password, lockout, sudo, and umask baseline, then click <b>Push Selected Policies to Checked Hosts</b>.</li></ol></section>
 <section class=sec id='cron_timers'><h2>Cron & Systemd Timers</h2>
-<div class=shot><img src='screenshot_cron_timers.png' alt='Cron & Systemd Timers screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_cron_timers.png' alt='Cron & Systemd Timers screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>Cron &amp; Systemd Timers</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Use <b>List Cron Jobs</b> / <b>Add Cron Job</b> (the schedule builder writes the syntax for you), or manage timers with <b>Create Timer</b>, <b>Start</b>, <b>Enable At Boot</b>.</li></ol></section>
 <section class=sec id='host_software'><h2>Host Software Management</h2>
-<div class=shot><img src='screenshot_host_software.png' alt='Host Software Management screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_host_software.png' alt='Host Software Management screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>Host Software Management</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Click <b>Detect Package Manager / OS</b>, then <b>Install</b>, <b>Remove</b>, <b>Update / Upgrade</b>, or <b>Query Package Info</b> — the same buttons work across apt/dnf/yum/zypper.</li></ol></section>
 <section class=sec id='repository'><h2>Repository Management</h2>
-<div class=shot><img src='screenshot_repository.png' alt='Repository Management screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_repository.png' alt='Repository Management screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>Repository Management</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Click <b>List Repositories</b>, then <b>Add Repository</b> (or <b>Add Repository to All Hosts</b>), <b>Enable</b>, <b>Disable</b>, or <b>Remove Repository</b>.</li></ol></section>
 <section class=sec id='network'><h2>Network Management</h2>
-<div class=shot><img src='screenshot_network.png' alt='Network Management screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_network.png' alt='Network Management screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>Network Management</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Start in <b>Diagnostics</b> (<b>Ping</b>, <b>Traceroute</b>, <b>Test DNS Resolution</b>); use the other tabs to configure addressing, DNS, routing, and bonds/VLANs/bridges.</li></ol></section>
 <section class=sec id='filesystem'><h2>File System Management</h2>
-<div class=shot><img src='screenshot_filesystem.png' alt='File System Management screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_filesystem.png' alt='File System Management screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>File System Management</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Start in <b>Directories and Files</b> — <b>List Directory</b> shows a path's contents; then create/copy/move/rename. Separate tabs cover permissions/links, <b>Mount / Unmount</b>, <b>Network Mounts (NFS/CIFS)</b>, <b>Resize &amp; Repair</b>, <b>Disk Usage</b>, fstab/quotas, and archives.</li></ol></section>
 <section class=sec id='storage'><h2>Storage Administration</h2>
-<div class=shot><img src='screenshot_storage.png' alt='Storage Administration screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_storage.png' alt='Storage Administration screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>Storage Administration</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Work through the tabs: <b>Disks</b> (and SMART), <b>Partitions</b>, <b>Format</b>, <b>LVM</b>, <b>RAID</b>, <b>Swap</b>. Enter a device like <code>/dev/sdb</code> and click the action.</li></ol></section>
 <section class=sec id='firewall'><h2>Firewall Administration</h2>
-<div class=shot><img src='screenshot_firewall.png' alt='Firewall Administration screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_firewall.png' alt='Firewall Administration screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>Firewall Administration</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Use <b>Firewalld</b>/<b>Ports</b> to <b>Open Port</b> / <b>Close Port</b> and <b>Reload</b>; <b>Zones</b>, <b>Rich Rules</b>, and raw <b>nftables</b>/<b>iptables</b> tabs are there for advanced rules.</li></ol></section>
 <section class=sec id='security'><h2>Security Administration</h2>
-<div class=shot><img src='screenshot_security.png' alt='Security Administration screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_security.png' alt='Security Administration screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>Security Administration</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Tabs: <b>SELinux</b>, <b>SSH</b> (harden + rotate keys), <b>Audit &amp; Logins</b>, <b>Updates &amp; Policy</b>, and <b>Hardening &amp; Scans</b> (Lynis/rkhunter).</li></ol></section>
 <section class=sec id='backup'><h2>Backup & Recovery</h2>
-<div class=shot><img src='screenshot_backup.png' alt='Backup & Recovery screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_backup.png' alt='Backup & Recovery screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>Backup &amp; Recovery</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Set a source and destination and click <b>Back Up</b>, then <b>Verify</b> or <b>Restore</b>; the other tabs cover LVM snapshots and scheduled/DR drills.</li></ol></section>
 <section class=sec id='timesync'><h2>Time Synchronization</h2>
-<div class=shot><img src='screenshot_timesync.png' alt='Time Synchronization screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_timesync.png' alt='Time Synchronization screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>Time Synchronization</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Click <b>Sync Status</b> / <b>Verify Synchronization</b>, then <b>Set NTP Servers</b> or <b>Set Time Zone</b> as needed.</li></ol></section>
 <section class=sec id='certs'><h2>Certificate Management</h2>
-<div class=shot><img src='screenshot_certs.png' alt='Certificate Management screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_certs.png' alt='Certificate Management screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>Certificate Management</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Click <b>Generate CSR</b>, <b>Install</b>, or <b>Check Expiry</b>; the <b>Chain &amp; TLS</b> tab verifies chains and troubleshoots endpoints.</li></ol></section>
 <section class=sec id='containers'><h2>Containers & VMs</h2>
-<div class=shot><img src='screenshot_containers.png' alt='Containers & VMs screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_containers.png' alt='Containers & VMs screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>Containers &amp; VMs</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Click <b>Detect Runtime</b>, then <b>List Containers</b>, <b>View Container Logs</b>, <b>Run</b>, or <b>Prune</b>; the <b>Virtual Machines</b> tab manages libvirt VMs.</li></ol></section>
 <section class=sec id='directory'><h2>Directory Services (Active Directory / LDAP)</h2>
-<div class=shot><img src='screenshot_directory.png' alt='Directory Services (Active Directory / LDAP) screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_directory.png' alt='Directory Services (Active Directory / LDAP) screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>Directory Services</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Click <b>Install AD Dependencies</b>, then <b>Join Domain</b> and <b>Permit Login</b>; the <b>LDAP / LDAPS</b> and <b>Kerberos</b> tabs configure and test identity.</li></ol></section>
 <section class=sec id='settings'><h2>Sysible Controller Settings</h2>
-<div class=shot><img src='screenshot_settings.png' alt='Sysible Controller Settings screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_settings.png' alt='Sysible Controller Settings screenshot'></div>
 <ol class=how><li>Open <b>Sysible Controller Settings</b> from the Dashboard.</li><li>Set the controller address/port, add or remove administrators, and tune the admin password policy.</li><li>Review the <b>Audit Log</b> and record a license key under <b>License &amp; Version</b>.</li></ol></section>
 <section class=sec id='portal'><h2>Webserver Portal</h2>
-<div class=shot><img src='screenshot_portal.png' alt='Webserver Portal screenshot'></div>
+<div class=shot><img src='docs/screenshots/screenshot_portal.png' alt='Webserver Portal screenshot'></div>
 <ol class=how><li>Open <b>Webserver Portal Configuration</b> from the Dashboard.</li><li>Set a port and credentials, then click <b>Start Portal</b>.</li><li>Share the URL with host operators; manage the shared file pool and review login history/sessions here.</li></ol></section>
 </div></body></html>

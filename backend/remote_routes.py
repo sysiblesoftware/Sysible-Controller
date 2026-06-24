@@ -295,6 +295,9 @@ def set_agent_ssh_state(host_id: str, value):
 # =========================================================
 @router.post("/hosts")
 def add_host(body: AddHostRequest):
+    from backend.edition import enforce_host_limit
+    enforce_host_limit(body.name)
+
     hosts = load_hosts()
 
     hosts[body.name] = {
@@ -348,6 +351,9 @@ def set_host_environment(name: str, body: SetEnvironmentRequest):
 # =========================================================
 @router.post("/enroll-ssh")
 def enroll_ssh(body: EnrollSSHRequest):
+    from backend.edition import enforce_host_limit
+    enforce_host_limit(body.name)
+
     public_key = _ensure_controller_key()
 
     if not _looks_like_ssh_public_key(public_key):

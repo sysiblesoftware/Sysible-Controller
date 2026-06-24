@@ -17,7 +17,7 @@ from client.fleet_tool_page import FleetToolPage
 
 class SubscriptionManagementPage(FleetToolPage):
     def __init__(self):
-        super().__init__("Subscription & Licensing Management")
+        super().__init__("Distro Subscription & Licensing")
 
     def build_action_tabs(self):
         tabs = QTabWidget()

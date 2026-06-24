@@ -254,6 +254,10 @@ def enroll(req: EnrollRequest):
 
     host_id = resolve_enroll_token_host(req.token, req.host_id)
 
+    # Community-edition host cap (no-op in an unlimited/Enterprise build).
+    from backend.edition import enforce_host_limit
+    enforce_host_limit(req.hostname or host_id)
+
     agent_secret = secrets.token_hex(24)
 
     create_or_update_agent(
@@ -387,6 +391,15 @@ def get_agent_results(
     return {
         "results": list_results(host_id, kind=kind, task_id=task_id)
     }
+
+
+# =========================================================
+# EDITION (host-cap info for the GUI to display)
+# =========================================================
+@app.get("/edition", dependencies=[Depends(require_api_key)])
+def get_edition():
+    from backend.edition import edition_info
+    return edition_info()
 
 
 # =========================================================

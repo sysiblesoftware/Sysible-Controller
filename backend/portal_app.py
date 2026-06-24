@@ -15,6 +15,8 @@ typing a username/password into a browser.
 import base64
 import html
 import secrets
+import threading
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -25,7 +27,28 @@ from backend.agent_bundle import build_agent_bundle, resolve_controller_addresse
 from backend.db import create_enroll_token, get_controller_config, get_portal_credentials, log_portal_event
 from backend import portal_auth, portal_files
 
-app = FastAPI(title="Sysible Webserver Portal")
+# Interactive docs/schema disabled - this is a public, host-facing portal,
+# so there's no reason to publish an API map. Readiness is probed via
+# /health, not openapi.json.
+app = FastAPI(title="Sysible Webserver Portal", docs_url=None, redoc_url=None, openapi_url=None)
+
+
+@app.middleware("http")
+async def _security_headers(request, call_next):
+    """Security response headers for the public-facing portal. CSP is
+    'self' (not 'none') because the portal serves its own HTML/CSS/logo.
+    HSTS is safe: the portal is launched with TLS (see portal_manager)."""
+    response = await call_next(request)
+    response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers.setdefault("Cache-Control", "no-store")
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+        "frame-ancestors 'none'; form-action 'self'"
+    )
+    return response
 
 SESSION_COOKIE = "sysible_portal_session"
 
@@ -169,6 +192,7 @@ async def logo():
 async def login_page(error: str = ""):
     messages = {
         "badlogin": "Invalid username or password.",
+        "throttled": "Too many failed login attempts. Please wait a few minutes and try again.",
         "notconfigured": "The portal has no login credentials configured yet - ask your admin to set them in Webserver Portal Configuration.",
         "expired": "Your session expired - please log in again.",
     }
@@ -188,6 +212,52 @@ async def login_page(error: str = ""):
     return _page(body, messages.get(error, ""))
 
 
+# ---------------------------------------------------------------------------
+# Brute-force throttling for the public portal login.
+# The portal is the one password login reachable without already holding a
+# secret, so it's the real guessing surface. Track failures per client IP in
+# memory; after LOGIN_MAX_FAILURES within LOGIN_WINDOW_S, lock that IP out for
+# LOGIN_LOCKOUT_S. In-memory (not the DB) on purpose: it's per-process, resets
+# on restart, and never persists anything tied to a password attempt.
+# ---------------------------------------------------------------------------
+LOGIN_MAX_FAILURES = 5
+LOGIN_WINDOW_S = 15 * 60
+LOGIN_LOCKOUT_S = 15 * 60
+_login_state = {}            # ip -> {"fails": [timestamps], "until": lock_expiry}
+_login_lock = threading.Lock()
+
+
+def _login_locked_for(ip):
+    """Seconds remaining on this IP's lockout, or 0 if not locked."""
+    if not ip:
+        return 0
+    with _login_lock:
+        st = _login_state.get(ip)
+        if not st:
+            return 0
+        remaining = st.get("until", 0) - time.time()
+        return int(remaining) if remaining > 0 else 0
+
+
+def _record_login_failure(ip):
+    if not ip:
+        return
+    now = time.time()
+    with _login_lock:
+        st = _login_state.setdefault(ip, {"fails": [], "until": 0})
+        st["fails"] = [t for t in st["fails"] if now - t < LOGIN_WINDOW_S]
+        st["fails"].append(now)
+        if len(st["fails"]) >= LOGIN_MAX_FAILURES:
+            st["until"] = now + LOGIN_LOCKOUT_S
+            st["fails"] = []
+
+
+def _clear_login_failures(ip):
+    if ip:
+        with _login_lock:
+            _login_state.pop(ip, None)
+
+
 @app.post("/login")
 async def login(request: Request, username: str = Form(...), password: str = Form(...), cli: int = 0):
     # Logged either way (success or failure) so the Webserver Portal
@@ -200,6 +270,15 @@ async def login(request: Request, username: str = Form(...), password: str = For
     # of browser-style 303 redirects that a script can't tell apart from
     # success.
     ip = request.client.host if request.client else ""
+
+    locked = _login_locked_for(ip)
+    if locked:
+        log_portal_event("login_throttled", username, ip)
+        msg = (f"Too many failed login attempts. Try again in about "
+               f"{max(1, locked // 60)} minute(s).")
+        if cli:
+            return Response(msg + "\n", status_code=429, media_type="text/plain")
+        return RedirectResponse("/?error=throttled", status_code=303)
 
     creds = get_portal_credentials()
 
@@ -217,6 +296,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
     )
 
     if not valid:
+        _record_login_failure(ip)
         log_portal_event("login_failed", username, ip)
         if cli:
             return Response(
@@ -226,6 +306,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
             )
         return RedirectResponse("/?error=badlogin", status_code=303)
 
+    _clear_login_failures(ip)
     log_portal_event("login_success", username, ip)
     token = portal_auth.create_session(ip)
 
@@ -234,7 +315,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
     else:
         response = RedirectResponse("/files", status_code=303)
     response.set_cookie(
-        SESSION_COOKIE, token, httponly=True, secure=True,
+        SESSION_COOKIE, token, httponly=True, secure=True, samesite="strict",
         max_age=portal_auth.SESSION_TTL_SECONDS,
     )
 

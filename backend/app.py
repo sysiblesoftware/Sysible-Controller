@@ -98,7 +98,29 @@ from backend.remote_routes import (
     AGENT_SSH_MARKER,
 )
 
-app = FastAPI(title="Sysible Controller")
+# docs_url/redoc_url disabled: the interactive Swagger/ReDoc consoles are
+# an unauthenticated map of the whole API (and a ready-made request
+# builder) for anyone who can reach the port. openapi_url is kept because
+# `sysible_controller`'s readiness self-check fetches /openapi.json to
+# confirm the running process is current code.
+app = FastAPI(title="Sysible Controller", docs_url=None, redoc_url=None)
+
+
+@app.middleware("http")
+async def _security_headers(request, call_next):
+    """Defense-in-depth response headers. The API is HTTPS-only (uvicorn
+    is launched with a cert), so HSTS is safe to assert; the rest harden
+    against sniffing/clickjacking/referrer leakage and tell caches never
+    to store API responses (which can carry host data and tokens)."""
+    response = await call_next(request)
+    response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+    return response
+
 
 app.include_router(remote_router, dependencies=[Depends(require_api_key)])
 

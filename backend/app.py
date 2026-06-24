@@ -4,6 +4,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 import json
 import secrets
+import threading
 import time
 
 from backend.agent_bundle import build_agent_bundle, detect_local_ips, resolve_controller_addresses
@@ -895,8 +896,60 @@ def admin_setup(body: AdminSetupRequest):
     return {"username": username, "status": "created"}
 
 
+# Defense-in-depth brute-force throttle for the GUI admin login. This
+# endpoint is already behind the API key (so it isn't a remote guessing
+# target without that secret), but a lenient per-IP lockout adds a second
+# layer at no real usability cost. In-memory: per-process, resets on
+# restart, never persists anything about an attempt.
+_ADMIN_LOGIN_MAX_FAILURES = 10
+_ADMIN_LOGIN_WINDOW_S = 15 * 60
+_ADMIN_LOGIN_LOCKOUT_S = 10 * 60
+_admin_login_state = {}
+_admin_login_lock = threading.Lock()
+
+
+def _admin_login_locked_for(ip):
+    if not ip:
+        return 0
+    with _admin_login_lock:
+        st = _admin_login_state.get(ip)
+        if not st:
+            return 0
+        remaining = st.get("until", 0) - time.time()
+        return int(remaining) if remaining > 0 else 0
+
+
+def _admin_login_record_failure(ip):
+    if not ip:
+        return
+    now = time.time()
+    with _admin_login_lock:
+        st = _admin_login_state.setdefault(ip, {"fails": [], "until": 0})
+        st["fails"] = [t for t in st["fails"] if now - t < _ADMIN_LOGIN_WINDOW_S]
+        st["fails"].append(now)
+        if len(st["fails"]) >= _ADMIN_LOGIN_MAX_FAILURES:
+            st["until"] = now + _ADMIN_LOGIN_LOCKOUT_S
+            st["fails"] = []
+
+
+def _admin_login_clear(ip):
+    if ip:
+        with _admin_login_lock:
+            _admin_login_state.pop(ip, None)
+
+
 @app.post("/admin/login", dependencies=[Depends(require_api_key)])
-def admin_login(body: AdminLoginRequest):
+def admin_login(body: AdminLoginRequest, request: Request):
+
+    ip = request.client.host if request.client else ""
+
+    locked = _admin_login_locked_for(ip)
+    if locked:
+        log_admin_audit("login_throttled", body.username.strip(), f"locked {locked}s")
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed attempts. Try again in about {max(1, locked // 60)} minute(s).",
+        )
 
     username = body.username.strip()
     admin = get_administrator(username)
@@ -906,9 +959,11 @@ def admin_login(body: AdminLoginRequest):
     )
 
     if not valid:
+        _admin_login_record_failure(ip)
         log_admin_audit("login_failed", username, "Invalid username or password")
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
+    _admin_login_clear(ip)
     record_administrator_login(username)
     log_admin_audit("login_success", username, "")
 

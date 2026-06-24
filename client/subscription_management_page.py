@@ -56,8 +56,74 @@ class SubscriptionManagementPage(FleetToolPage):
             "vendor tool as it requires; prefer RHSM activation keys where you can."
         ))
         layout.addWidget(box)
+
+        # ---- Register ALL selected hosts at once ----
+        # Each checked host auto-detects its own subscription tool and
+        # registers with the matching vendor using whichever credentials
+        # are filled in below. Register five RHEL boxes with one click by
+        # checking them all and filling just the Red Hat fields; mixed
+        # fleets work too (hosts of a vendor you left blank are skipped).
+        boxr, gr = self.group("Register All Selected Hosts (auto-detect vendor)")
+        gr.addWidget(self._hint(
+            "Registers every checked host with its own subscription system. Fill in only "
+            "the vendors you have: Red Hat (org + activation key, or username + password), "
+            "Ubuntu Pro (token), and/or SUSE (reg-code). Dispatched across all checked hosts "
+            "at once — e.g. select five RHEL servers and register them together."
+        ))
+        ra = QHBoxLayout()
+        ra.addWidget(QLabel("RHSM Org:"))
+        self.ra_org = QLineEdit(); self.ra_org.setPlaceholderText("org ID")
+        ra.addWidget(self.ra_org, 1)
+        ra.addWidget(QLabel("Activation Key:"))
+        self.ra_ak = QLineEdit(); self.ra_ak.setPlaceholderText("activation key (preferred)")
+        ra.addWidget(self.ra_ak, 1)
+        gr.addLayout(ra)
+        rb = QHBoxLayout()
+        rb.addWidget(QLabel("RHSM User:"))
+        self.ra_user = QLineEdit(); self.ra_user.setPlaceholderText("Red Hat login (optional)")
+        rb.addWidget(self.ra_user, 1)
+        rb.addWidget(QLabel("Password:"))
+        self.ra_pass = QLineEdit(); self.ra_pass.setEchoMode(QLineEdit.Password)
+        rb.addWidget(self.ra_pass, 1)
+        self.ra_auto = QCheckBox("Auto-attach"); self.ra_auto.setChecked(True)
+        rb.addWidget(self.ra_auto)
+        gr.addLayout(rb)
+        rc = QHBoxLayout()
+        rc.addWidget(QLabel("Ubuntu Pro Token:"))
+        self.ra_pro = QLineEdit(); self.ra_pro.setEchoMode(QLineEdit.Password)
+        self.ra_pro.setPlaceholderText("ubuntu.com/pro/dashboard")
+        rc.addWidget(self.ra_pro, 1)
+        rc.addWidget(QLabel("SUSE Reg-Code:"))
+        self.ra_suse = QLineEdit(); self.ra_suse.setEchoMode(QLineEdit.Password)
+        self.ra_suse.setPlaceholderText("scc.suse.com")
+        rc.addWidget(self.ra_suse, 1)
+        rc.addWidget(QLabel("SUSE Email:"))
+        self.ra_suse_email = QLineEdit(); self.ra_suse_email.setPlaceholderText("optional")
+        rc.addWidget(self.ra_suse_email, 1)
+        gr.addLayout(rc)
+        rd = QHBoxLayout()
+        rd.addStretch()
+        b_all = QPushButton("Register All Selected Hosts")
+        b_all.setStyleSheet("font-weight: bold;")
+        b_all.clicked.connect(self.run_register_all)
+        rd.addWidget(b_all)
+        gr.addLayout(rd)
+        layout.addWidget(boxr)
+
         layout.addStretch()
         return panel
+
+    def run_register_all(self):
+        try:
+            cmd = api.cmd_subscription_register_all(
+                self.ra_org.text(), self.ra_ak.text(),
+                self.ra_user.text(), self.ra_pass.text(), self.ra_auto.isChecked(),
+                self.ra_pro.text(), self.ra_suse.text(), self.ra_suse_email.text(),
+            )
+        except ValueError as e:
+            self.status_label.setText(str(e))
+            return
+        self.run_command(cmd, "Register All (auto-detect)")
 
     # ---------------- Red Hat ----------------
     def _redhat_tab(self):

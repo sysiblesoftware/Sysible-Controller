@@ -37,6 +37,77 @@ def cmd_subscription_detect() -> str:
     )
 
 
+def cmd_subscription_register_all(org: str = "", activationkey: str = "",
+                                  username: str = "", password: str = "",
+                                  auto_attach: bool = True, pro_token: str = "",
+                                  suse_regcode: str = "", suse_email: str = "") -> str:
+    """One 'register' that works across a whole fleet at once: each host
+    detects its own subscription tooling and registers with the matching
+    vendor using whichever credentials were supplied - RHSM (org +
+    activation key, or username + password) on Red Hat-family hosts,
+    Ubuntu Pro (token) on Ubuntu, SUSEConnect (reg-code) on SLES.
+
+    Dispatched across every selected host like any other action, so
+    checking five RHEL boxes and clicking once registers all five. Hosts
+    of a vendor you didn't provide credentials for report a clear 'skipping'
+    message instead of failing silently, which also makes it safe to fire
+    across a mixed-distro fleet. Same secret-on-argv caveat as the
+    individual register commands applies (prefer RHSM activation keys)."""
+    org = (org or "").strip()
+    ak = (activationkey or "").strip()
+    username = (username or "").strip()
+    pro_token = (pro_token or "").strip()
+    suse_regcode = (suse_regcode or "").strip()
+    suse_email = (suse_email or "").strip()
+    auto = " --auto-attach" if auto_attach else ""
+
+    if not (ak or username or pro_token or suse_regcode):
+        raise ValueError(
+            "Provide credentials for at least one vendor: RHSM (org + activation key, "
+            "or username + password), an Ubuntu Pro token, or a SUSE registration code."
+        )
+
+    # Red Hat branch
+    if ak:
+        if not org:
+            raise ValueError("An Organization (org ID) is required when using an RHSM activation key.")
+        rhsm = ("echo '== Red Hat (RHSM) =='; subscription-manager register "
+                f"--org {shlex.quote(org)} --activationkey {shlex.quote(ak)}{auto} 2>&1")
+    elif username:
+        if not password:
+            raise ValueError("A password is required when registering RHSM with a username.")
+        org_arg = f" --org {shlex.quote(org)}" if org else ""
+        rhsm = ("echo '== Red Hat (RHSM) =='; subscription-manager register "
+                f"--username {shlex.quote(username)} --password {shlex.quote(password)}"
+                f"{org_arg}{auto} 2>&1")
+    else:
+        rhsm = ("echo 'Red Hat-family host detected, but no RHSM credentials were provided "
+                "(org + activation key, or username + password). Skipping.' >&2; exit 1")
+
+    # Ubuntu branch
+    if pro_token:
+        pro = f"echo '== Ubuntu Pro =='; pro attach {shlex.quote(pro_token)} 2>&1"
+    else:
+        pro = ("echo 'Ubuntu host detected, but no Ubuntu Pro token was provided. "
+               "Skipping.' >&2; exit 1")
+
+    # SUSE branch
+    if suse_regcode:
+        email_arg = f" -e {shlex.quote(suse_email)}" if suse_email else ""
+        suse = f"echo '== SUSE (SCC) =='; SUSEConnect -r {shlex.quote(suse_regcode)}{email_arg} 2>&1"
+    else:
+        suse = ("echo 'SUSE / SLES host detected, but no SUSE registration code was provided. "
+                "Skipping.' >&2; exit 1")
+
+    return (
+        "if command -v subscription-manager >/dev/null 2>&1; then " + rhsm + "; "
+        "elif command -v pro >/dev/null 2>&1; then " + pro + "; "
+        "elif command -v SUSEConnect >/dev/null 2>&1; then " + suse + "; "
+        "else echo 'No supported subscription tool (subscription-manager / pro / "
+        "SUSEConnect) found on this host.' >&2; exit 1; fi"
+    )
+
+
 # ===========================================================
 # Red Hat family - subscription-manager (RHSM)
 # ===========================================================

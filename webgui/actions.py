@@ -581,6 +581,23 @@ _register(Action(name="backup_verify", tool="Backup & Recovery", label="Verify b
 # ---- Tool: Distro Subscription & Licensing ---------------------------
 _register(Action(name="sub_detect", tool="Distro Subscription & Licensing",
     label="Detect subscription system", params=[], build=lambda p: api.cmd_subscription_detect()))
+_register(Action(name="sub_register_all", tool="Distro Subscription & Licensing",
+    label="Register ALL selected hosts (auto-detect vendor)",
+    description="Registers every selected host with its own subscription system "
+                "(RHSM / Ubuntu Pro / SUSE) using whichever credentials you provide. "
+                "Ideal for registering a fleet of RHEL servers in one click; safe "
+                "across mixed distros (hosts you didn't supply creds for are skipped).",
+    params=[Param("org", "RHSM organization", required=False),
+            Param("activationkey", "RHSM activation key", required=False),
+            Param("username", "RHSM username", required=False),
+            Param("password", "RHSM password", type="password", required=False),
+            Param("auto_attach", "RHSM auto-attach", type="checkbox", default=True, required=False),
+            Param("pro_token", "Ubuntu Pro token", type="password", required=False),
+            Param("suse_regcode", "SUSE registration code", type="password", required=False),
+            Param("suse_email", "SUSE email", required=False)],
+    build=lambda p: api.cmd_subscription_register_all(
+        _s(p, "org"), _s(p, "activationkey"), _s(p, "username"), _s(p, "password"),
+        _b(p, "auto_attach", True), _s(p, "pro_token"), _s(p, "suse_regcode"), _s(p, "suse_email"))))
 _register(Action(name="sub_rhsm_status", tool="Distro Subscription & Licensing",
     label="Red Hat (RHSM) status", params=[], build=lambda p: api.cmd_rhsm_status()))
 _register(Action(name="sub_rhsm_register", tool="Distro Subscription & Licensing",

@@ -1451,6 +1451,11 @@ class RemoteAdministrationPage(QWidget):
         btn_script.setToolTip("Run an ad-hoc command or multi-line script across checked hosts.")
         btn_script.clicked.connect(self.open_script_runner)
 
+        btn_rdp = QPushButton("RDP to Address…")
+        btn_rdp.setToolTip("Open an RDP session to any address (e.g. a Windows server), "
+                           "or right-click an enrolled host to RDP to it.")
+        btn_rdp.clicked.connect(lambda: self._open_rdp(""))
+
         self.checkin_label = QLabel("")
         theme.style_hint_label(self.checkin_label)
 
@@ -1762,6 +1767,11 @@ class RemoteAdministrationPage(QWidget):
         current = entry.get("environment") or ""
 
         menu = QMenu(self)
+        act_rdp = menu.addAction(f"Open RDP to “{entry['label']}”…")
+        act_rdp.triggered.connect(
+            lambda _checked=False, e=entry: self._open_rdp(self._rdp_default_host(e))
+        )
+        menu.addSeparator()
         sub = menu.addMenu(f"Assign “{entry['label']}” to environment")
         for env in self.environments:
             act = sub.addAction(env)
@@ -1783,6 +1793,24 @@ class RemoteAdministrationPage(QWidget):
             lambda _checked=False, e=entry: self._assign_new_environment(e)
         )
         menu.exec(self.host_list.viewport().mapToGlobal(pos))
+
+    @staticmethod
+    def _rdp_default_host(entry):
+        """Best-guess RDP target for an enrolled host: its address (IP/host),
+        falling back to its label. The dialog lets the operator edit it."""
+        if entry.get("kind") == "merged":
+            sub = entry.get("agent_entry") or entry.get("ssh_entry") or {}
+            addr = sub.get("address", "")
+        else:
+            addr = entry.get("address", "")
+        addr = (addr or "").split()[0] if addr else ""
+        if "@" in addr:
+            addr = addr.split("@", 1)[1]
+        return addr or entry.get("label", "")
+
+    def _open_rdp(self, host):
+        from client.rdp_dialog import RdpConnectDialog
+        RdpConnectDialog(host=host, parent=self).exec()
 
     def _assign_new_environment(self, entry):
         name, ok = QInputDialog.getText(self, "New environment", "Environment name:")

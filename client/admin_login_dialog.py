@@ -106,7 +106,7 @@ class AdminLoginDialog(QDialog):
 
         layout.addLayout(buttons_row)
 
-        self.password_input.setFocus()
+        self.username_input.setFocus()
 
         # Populated on a successful login - see _attempt_login below.
         # self.password is kept (in memory only, never logged) purely

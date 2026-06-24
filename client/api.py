@@ -242,6 +242,15 @@ def set_environmental_policy(policy: dict):
     return _request("POST", "/environmental-policy", json=policy)
 
 
+def get_activity_log(limit: int = 200, since_id: int = 0):
+    return _request("GET", "/activity-log",
+                    params={"limit": limit, "since_id": since_id}).get("entries", [])
+
+
+def get_controller_log(lines: int = 400):
+    return _request("GET", "/controller-log", params={"lines": lines}).get("log", "")
+
+
 def get_portal_status():
     return _request("GET", "/portal/status")
 

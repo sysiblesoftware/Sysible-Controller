@@ -8,6 +8,7 @@ from client.branding import make_page_header
 from client import theme
 from client.user_group_administration_page import UserGroupAdministrationPage
 from client.system_health_recovery_page import SystemHealthRecoveryPage
+from client.live_log_page import LiveLogPage
 from client.service_management_page import ServiceManagementPage
 from client.environmental_policies_page import EnvironmentalPoliciesPage
 from client.cron_systemd_timers_page import CronSystemdTimersPage
@@ -47,6 +48,7 @@ class SystemAdministrationPage(QWidget):
 
         self.user_group_window = None
         self.diagnostics_window = None
+        self.live_log_window = None
         self.service_window = None
         self.environmental_policies_window = None
         self.cron_timers_window = None
@@ -104,6 +106,9 @@ class SystemAdministrationPage(QWidget):
              "Disk usage, memory/CPU, failed services, logs, and process tools, plus boot/GRUB "
              "and kernel recovery — across agent and SSH hosts.",
              self.open_system_diagnostics, "fa5s.heartbeat", "green"),
+            ("Live Activity &amp; Logs",
+             "Live, attributed feed of who did what across the fleet, plus the controller's own log.",
+             self.open_live_log, "fa5s.stream", "sky"),
             ("Service Management",
              "Start, stop, restart, enable/disable, and troubleshoot systemd services, or create and configure new ones.",
              self.open_service_management, "fa5s.cogs", "purple"),
@@ -237,6 +242,13 @@ class SystemAdministrationPage(QWidget):
         self.diagnostics_window.show()
         self.diagnostics_window.raise_()
         return self.diagnostics_window
+
+    def open_live_log(self):
+        if self.live_log_window is None:
+            self.live_log_window = LiveLogPage()
+        self.live_log_window.show()
+        self.live_log_window.raise_()
+        return self.live_log_window
 
     def open_health_logs(self):
         # Kept so the dashboard feature search ("disk usage", "tail logs", ...)

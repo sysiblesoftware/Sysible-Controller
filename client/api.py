@@ -106,11 +106,13 @@ def get_agents():
 
 def get_edition():
     """Edition + host-cap info, e.g. {"edition": "community", "host_limit": 10,
-    "host_count": 3}. host_limit is None on an unlimited build."""
+    "host_count": 3}. host_limit is None on an unlimited (Enterprise) build.
+    On error returns {} (not a host_limit of None) so callers can tell
+    "backend didn't answer" apart from "explicitly unlimited"."""
     try:
         return _request("GET", "/edition")
     except Exception:
-        return {"edition": "community", "host_limit": None, "host_count": 0}
+        return {}
 
 
 def disenroll_agent(host_id: str):

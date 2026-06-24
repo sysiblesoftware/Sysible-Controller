@@ -182,25 +182,37 @@ class HomeWindow(QWidget):
         )
 
     def _refresh_edition_badge(self):
-        """Show 'Community Edition · N/limit hosts' in the header. Hidden on an
-        unlimited (Enterprise) build, where host_limit comes back as None."""
+        """Show a 'Community Edition' badge in the header. This is the Community
+        build, so the badge is shown by default; the live host count is appended
+        when the backend answers. Only an *explicit* unlimited signal from the
+        backend (host_limit is None) hides it - a missing/failed /edition call
+        (e.g. older backend) still shows the edition, just without the count."""
         try:
             info = api.get_edition()
         except Exception:
             info = {}
-        limit = info.get("host_limit")
-        if limit is None:
+
+        # "host_limit" present and explicitly None => unlimited/Enterprise build.
+        if "host_limit" in info and info["host_limit"] is None:
             self.edition_badge.setVisible(False)
             return
-        count = info.get("host_count", 0)
-        self.edition_badge.setText(f"Community Edition · {count}/{limit} hosts")
+
+        limit = info.get("host_limit")
+        count = info.get("host_count")
+        text = "Community Edition"
+        if isinstance(limit, int) and isinstance(count, int):
+            text += f" · {count}/{limit} hosts"
+        elif isinstance(limit, int):
+            text += f" · up to {limit} hosts"
+
+        self.edition_badge.setText(text)
         self.edition_badge.setStyleSheet(
             "background-color:#f5a623; color:#1b1b1b; font-weight:bold; "
             "padding:4px 12px; border-radius:11px; font-size:11px;"
         )
         self.edition_badge.setToolTip(
-            f"This is the Community edition — up to {limit} managed hosts. "
-            "Contact Sysible for an Enterprise edition to manage more."
+            "This is the Community edition. Contact Sysible for an Enterprise "
+            "edition to manage more hosts."
         )
         self.edition_badge.setVisible(True)
 

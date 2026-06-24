@@ -352,9 +352,23 @@ def cmd_unlock_user(username: str) -> str:
 
 
 def cmd_set_sudo(username: str, enable: bool) -> str:
+    u = shlex.quote(username)
+    # The sudo-granting group differs by distro: 'sudo' on Debian/Ubuntu,
+    # 'wheel' on RHEL/Fedora/SUSE. Detect by package manager (apt => sudo,
+    # otherwise wheel), the same family split used elsewhere. Removal uses
+    # gpasswd -d, which is portable (deluser is Debian-only).
+    detect = "if command -v apt-get >/dev/null 2>&1; then grp=sudo; else grp=wheel; fi"
     if enable:
-        return f"usermod -aG sudo {shlex.quote(username)}"
-    return f"deluser {shlex.quote(username)} sudo"
+        return (
+            f"{detect}; "
+            f'if ! getent group "$grp" >/dev/null 2>&1; then '
+            f'echo "sudo group \'$grp\' does not exist on this host." >&2; exit 1; fi; '
+            f'usermod -aG "$grp" {u} && echo "Granted sudo to {username} (added to group $grp)."'
+        )
+    return (
+        f"{detect}; "
+        f'gpasswd -d {u} "$grp" 2>&1 && echo "Revoked sudo from {username} (removed from group $grp)."'
+    )
 
 
 def cmd_set_password(username: str, password: str) -> str:

@@ -375,7 +375,21 @@ def _run_as_user(user, cmd):
 
     elevated = (["runuser", "-u", user, "--", "sudo", "-n", "bash", "-c", cmd] if root
                 else ["sudo", "-n", "runuser", "-u", user, "--", "sudo", "-n", "bash", "-c", cmd])
-    return _exec(elevated)
+    res = _exec(elevated)
+    # If elevation itself failed because the role user can't sudo without a
+    # password (or at all), the bare 'sudo: a password is required' is
+    # cryptic - explain that this is the RBAC model needing local sudo rights.
+    if res["returncode"] != 0:
+        low = (res["stderr"] or "").lower()
+        if ("password is required" in low or "a terminal is required" in low
+                or "no tty present" in low or "not allowed to execute" in low
+                or "not in the sudoers" in low):
+            res["stderr"] = (res["stderr"].rstrip() + (
+                f"\n[sysible] This action needs root, but '{user}' can't run it via sudo "
+                f"on this host. Grant '{user}' passwordless sudo for it (an "
+                f"/etc/sudoers.d entry with NOPASSWD), per the RBAC model where each "
+                f"role runs under the host's own sudo policy."))
+    return res
 
 
 def run_command(cmd, run_as=None):

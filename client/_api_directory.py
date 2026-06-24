@@ -172,11 +172,27 @@ def cmd_kerberos_config(realm: str, kdc: str, admin_server: str = "") -> str:
 
 
 def cmd_realm_status() -> str:
+    # Reports joined state and frames SSSD's status against it: SSSD is
+    # *expected* to be stopped until a successful join (realm join writes
+    # /etc/sssd/sssd.conf and starts it), so a bare "not running" reads like
+    # a failure when it usually isn't.
     return (
-        "if command -v realm >/dev/null 2>&1; then echo '== realm list =='; realm list || echo '(not joined to any domain)'; "
-        "else echo 'realmd is not installed - use \"Join Active Directory\" (it installs the tooling).'; fi; "
-        "echo; echo '== SSSD service =='; systemctl is-active sssd 2>/dev/null || echo 'sssd not running'; "
-        "echo; echo '== Kerberos default realm =='; grep -i '^\\s*default_realm' /etc/krb5.conf 2>/dev/null || echo '(none configured)'"
+        'joined=0; '
+        'if command -v realm >/dev/null 2>&1; then echo "== realm list =="; '
+        '  rl=$(realm list 2>/dev/null); '
+        '  if [ -n "$rl" ]; then echo "$rl"; joined=1; else echo "(not joined to any domain yet)"; fi; '
+        'else echo "realmd is not installed - use Prepare Host for AD Join."; fi; '
+        'echo; echo "== SSSD service =="; '
+        'state=$(systemctl is-active sssd 2>/dev/null); [ -n "$state" ] || state=unknown; echo "$state"; '
+        'if [ "$state" != "active" ]; then '
+        '  if [ "$joined" = "1" ]; then '
+        '    echo "WARNING: this host is joined but SSSD is not running - directory logins will fail. Start it with: systemctl enable --now sssd."; '
+        '  else '
+        '    echo "This is expected: SSSD has no config and stays stopped until a successful domain join (the join writes /etc/sssd/sssd.conf and starts it)."; '
+        '  fi; '
+        'fi; '
+        'echo; echo "== Kerberos default realm =="; '
+        'grep -i "^[[:space:]]*default_realm" /etc/krb5.conf 2>/dev/null || echo "(none configured)"'
     )
 
 

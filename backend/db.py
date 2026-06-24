@@ -67,7 +67,8 @@ def init_db():
         status TEXT,
         last_seen REAL,
         agent_secret TEXT,
-        ip TEXT
+        ip TEXT,
+        requires_sudo_password INTEGER DEFAULT 0
     )
     """)
 
@@ -94,6 +95,16 @@ def init_db():
     # no other reliable way to learn a NATed/multi-homed agent's LAN IP.
     try:
         cur.execute("ALTER TABLE agents ADD COLUMN ip TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+    # Migration: per-host sudo mode. 0 = NOPASSWD (agent uses `sudo -n`,
+    # default); 1 = the host forbids passwordless sudo, so the GUI supplies
+    # the operator's sudo password for dispatched commands and the agent
+    # elevates with `sudo -S`. Admin-set, like environment - never reset by a
+    # re-enroll/heartbeat.
+    try:
+        cur.execute("ALTER TABLE agents ADD COLUMN requires_sudo_password INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
         pass
 
@@ -580,7 +591,8 @@ def list_agents():
     cur = conn.cursor()
 
     cur.execute("""
-    SELECT host_id, hostname, platform, kernel, status, last_seen, environment, ip
+    SELECT host_id, hostname, platform, kernel, status, last_seen, environment, ip,
+           requires_sudo_password
     FROM agents
     ORDER BY hostname
     """)
@@ -590,6 +602,17 @@ def list_agents():
     conn.close()
 
     return [dict(row) for row in rows]
+
+
+def set_agent_sudo_password_required(host_id, required):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("UPDATE agents SET requires_sudo_password=? WHERE host_id=?",
+                (1 if required else 0, host_id))
+    conn.commit()
+    changed = cur.rowcount
+    conn.close()
+    return changed > 0
 
 
 def delete_agent(host_id):

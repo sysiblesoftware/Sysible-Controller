@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 import json
 import secrets
@@ -64,6 +64,7 @@ from backend.db import (
     log_activity,
     get_activity_log,
     get_agent_hostname,
+    set_agent_sudo_password_required,
 )
 from backend import portal_auth, portal_files, portal_manager, tls_manager
 from backend.policy import validate_password_against_policy
@@ -357,6 +358,37 @@ def heartbeat(req: HeartbeatRequest):
 # =========================================================
 # TASK QUEUE
 # =========================================================
+# Become-passwords (sudo passwords for password-sudo hosts) are held ONLY in
+# this process's memory, keyed by task id, and never written to the DB or
+# logged. They're handed to the host's authenticated agent exactly once when
+# it polls for the task, then deleted; a TTL sweep drops any that were never
+# collected (e.g. an offline host) so a password can't linger.
+_PENDING_BECOME = {}            # task_id -> {"password": str, "expiry": float}
+_PENDING_BECOME_LOCK = threading.Lock()
+_BECOME_TTL_S = 300
+
+
+def _sweep_become(now=None):
+    now = now or time.time()
+    with _PENDING_BECOME_LOCK:
+        for tid in [t for t, v in _PENDING_BECOME.items() if v["expiry"] < now]:
+            _PENDING_BECOME.pop(tid, None)
+
+
+def _store_become(task_id, password):
+    if not password:
+        return
+    _sweep_become()
+    with _PENDING_BECOME_LOCK:
+        _PENDING_BECOME[task_id] = {"password": password, "expiry": time.time() + _BECOME_TTL_S}
+
+
+def _take_become(task_id):
+    with _PENDING_BECOME_LOCK:
+        rec = _PENDING_BECOME.pop(task_id, None)
+    return rec["password"] if rec else None
+
+
 @app.post("/agents/{host_id}/tasks", dependencies=[Depends(require_api_key)])
 def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
 
@@ -378,6 +410,11 @@ def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
         run_as = admin["username"]
 
     task_id = queue_task(host_id, body.command, body.kind, run_as=run_as)
+
+    # Become-password (for password-sudo hosts): RAM only, keyed to this task,
+    # delivered to the agent on its next poll. Never stored in the DB/log.
+    if run_as and body.become_password:
+        _store_become(task_id, body.become_password)
 
     # Activity feed: record who did what, where. Only for admin-initiated
     # tasks (run_as set) - internal/controller tasks (SSH auto-enroll, user
@@ -405,9 +442,16 @@ def poll_agent_tasks(host_id: str, agent_secret: str):
 
     verify_agent(host_id, agent_secret)
 
-    return {
-        "tasks": fetch_pending_tasks(host_id)
-    }
+    tasks = fetch_pending_tasks(host_id)
+    # Attach any RAM-held become-password to its task, exactly once. Only this
+    # host's authenticated agent reaches here (verify_agent above), so a
+    # password for host X is only ever handed to host X.
+    for t in tasks:
+        pw = _take_become(t.get("id"))
+        if pw is not None:
+            t["become_password"] = pw
+
+    return {"tasks": tasks}
 
 
 @app.post("/agents/{host_id}/tasks/result")
@@ -559,6 +603,19 @@ def set_agent_environment_route(host_id: str, body: SetEnvironmentRequest):
         "host_id": host_id,
         "environment": body.environment
     }
+
+
+@app.post("/agents/{host_id}/sudo-password-required",
+          dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def set_agent_sudo_password_required_route(host_id: str, body: dict = Body(...)):
+    """Mark whether this host forbids passwordless sudo. When required, the
+    GUI supplies the operator's sudo password for dispatched commands and the
+    agent elevates with `sudo -S`; when not, the agent uses `sudo -n`."""
+    if not agent_exists(host_id):
+        raise HTTPException(status_code=404, detail="Unknown host_id")
+    required = bool(body.get("required"))
+    set_agent_sudo_password_required(host_id, required)
+    return {"host_id": host_id, "requires_sudo_password": required}
 
 
 # =========================================================

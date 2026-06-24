@@ -33,6 +33,7 @@ class TaskCreateRequest(BaseModel):
     command: str
     kind: str = "command"
     description: Optional[str] = None  # human label for the activity log
+    become_password: Optional[str] = None  # held in RAM only, never persisted
 
 
 class TaskResultRequest(BaseModel):

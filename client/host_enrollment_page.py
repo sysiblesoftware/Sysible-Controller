@@ -147,6 +147,29 @@ class HostEnrollmentPage(QWidget):
 
         layout.addLayout(env_row)
 
+        # --- Sudo mode (passwordless vs password-sudo) ---
+        sudo_row = QHBoxLayout()
+        sudo_row.addWidget(QLabel("Sudo on selected host(s):"))
+        btn_pw_sudo = QPushButton("Requires Password")
+        btn_pw_sudo.setToolTip(
+            "Mark the selected host(s) as forbidding passwordless sudo. Dispatched "
+            "commands will then supply your stored sudo password (agent uses 'sudo -S').")
+        btn_pw_sudo.clicked.connect(lambda: self.set_sudo_mode(True))
+        sudo_row.addWidget(btn_pw_sudo)
+        btn_nopw_sudo = QPushButton("Passwordless (NOPASSWD)")
+        btn_nopw_sudo.setToolTip(
+            "Mark the selected host(s) as allowing passwordless sudo (agent uses 'sudo -n'). Default.")
+        btn_nopw_sudo.clicked.connect(lambda: self.set_sudo_mode(False))
+        sudo_row.addWidget(btn_nopw_sudo)
+        btn_set_pw = QPushButton("Set My Sudo Password…")
+        btn_set_pw.setToolTip(
+            "Store (encrypted, on this machine) the sudo password used for password-sudo "
+            "hosts. The same password the terminal's 'Send sudo password' button uses.")
+        btn_set_pw.clicked.connect(self.set_become_password)
+        sudo_row.addWidget(btn_set_pw)
+        sudo_row.addStretch()
+        layout.addLayout(sudo_row)
+
         # =====================================================
         # BUTTONS
         # =====================================================
@@ -362,6 +385,9 @@ class HostEnrollmentPage(QWidget):
         text += f"Kernel: {agent.get('kernel')}\n"
         text += f"Status: {agent.get('status')}\n"
         text += f"Environment: {agent.get('environment') or '(unassigned)'}\n"
+        text += ("Sudo: requires password (sudo -S)\n"
+                 if agent.get("requires_sudo_password")
+                 else "Sudo: passwordless (sudo -n)\n")
 
         self.details.setPlainText(text)
 
@@ -370,6 +396,46 @@ class HostEnrollmentPage(QWidget):
     # =====================================================
     # SET ENVIRONMENT
     # =====================================================
+    def set_sudo_mode(self, requires_password):
+        agents = self._selected_agents()
+        if not agents:
+            QMessageBox.information(self, "No host selected", "Select one or more hosts first.")
+            return
+        failures = []
+        for agent in agents:
+            try:
+                api.set_sudo_password_required(agent["host_id"], requires_password)
+            except Exception as e:
+                failures.append(f"{agent.get('hostname') or agent['host_id']}: {e}")
+        self.refresh()
+        if failures:
+            QMessageBox.critical(self, "Some hosts failed", "\n".join(failures))
+        elif requires_password:
+            QMessageBox.information(
+                self, "Password sudo",
+                f"{len(agents)} host(s) set to require a sudo password. Make sure you've "
+                "stored your sudo password (Set My Sudo Password…) so dispatched commands "
+                "can elevate.")
+
+    def set_become_password(self):
+        from client import become_credentials
+        from PySide6.QtWidgets import QInputDialog, QLineEdit
+        if not become_credentials.encryption_available():
+            QMessageBox.warning(self, "Unavailable",
+                                "The encryption library isn't available, so a sudo password "
+                                "can't be stored securely on this machine.")
+            return
+        text, ok = QInputDialog.getText(
+            self, "Set sudo password",
+            "Your sudo password for password-sudo hosts (stored encrypted on this machine, "
+            "as the fleet default):", QLineEdit.Password)
+        if not ok:
+            return
+        become_credentials.set_password(text, host="*")
+        QMessageBox.information(
+            self, "Saved",
+            "Sudo password stored (encrypted)." if text else "Stored sudo password cleared.")
+
     def _selected_agents(self):
         """Every selected host row (skips environment header rows). Falls
         back to self.selected_agent if the list reports nothing selected."""

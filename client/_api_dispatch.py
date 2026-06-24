@@ -124,6 +124,9 @@ def list_merged_hosts(agent_only=True):
             # tell the operator when a host can't get a real terminal
             # because no SSH server is running on it.
             "ssh_terminal_state": a.get("ssh_terminal_state"),
+            # Host forbids passwordless sudo: dispatch supplies the operator's
+            # sudo password (the agent then uses `sudo -S`). See run_on_entry.
+            "requires_sudo_password": bool(a.get("requires_sudo_password")),
         })
 
     try:
@@ -163,9 +166,22 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
     """
     entry = _underlying_entry(entry)
 
+    # For a host flagged 'password sudo', supply the operator's stored sudo
+    # password so the agent can elevate via `sudo -S` (no NOPASSWD needed).
+    # Looked up per host with a global fallback; None for NOPASSWD hosts, so
+    # the password is never sent to a host that doesn't need it.
+    become_password = None
+    if entry.get("requires_sudo_password"):
+        try:
+            from client import become_credentials
+            become_password = become_credentials.get_password(entry.get("label", ""))
+        except Exception:
+            become_password = None
+
     if entry["kind"] == "ssh":
         try:
-            result = exec_remote(entry["id"], command, description=description)
+            result = exec_remote(entry["id"], command, description=description,
+                                 become_password=become_password)
             return {
                 "sync": True,
                 "stdout": result.get("stdout", ""),
@@ -176,7 +192,8 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
         except Exception as e:
             return {"sync": True, "stdout": "", "stderr": "", "code": None, "error": str(e)}
 
-    task_ids = queue_command_on_hosts([entry["id"]], command, kind=kind, description=description)
+    task_ids = queue_command_on_hosts([entry["id"]], command, kind=kind,
+                                      description=description, become_password=become_password)
     task_id = task_ids.get(entry["id"])
     return {
         "sync": False,

@@ -40,10 +40,12 @@ def set_host_environment(name: str, environment: str):
     return _request("POST", f"/remote/hosts/{name}/environment", json={"environment": environment})
 
 
-def exec_remote(name: str, cmd: str, description: str = None):
+def exec_remote(name: str, cmd: str, description: str = None, become_password: str = None):
     body = {"cmd": cmd}
     if description:
         body["description"] = description
+    if become_password:
+        body["become_password"] = become_password
     return _request("POST", f"/remote/hosts/{name}/exec", json=body)
 
 
@@ -175,10 +177,13 @@ def poll_agent_download(host_id: str, task_id, save_path):
     return {"error": None}
 
 
-def queue_command_on_hosts(host_ids, command: str, kind: str = "command", description: str = None):
+def queue_command_on_hosts(host_ids, command: str, kind: str = "command",
+                           description: str = None, become_password: str = None):
     body_base = {"command": command, "kind": kind}
     if description:
         body_base["description"] = description
+    if become_password:
+        body_base["become_password"] = become_password
     task_ids = {}
     for host_id in host_ids:
         try:

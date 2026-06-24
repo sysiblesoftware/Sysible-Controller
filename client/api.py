@@ -242,6 +242,11 @@ def set_environmental_policy(policy: dict):
     return _request("POST", "/environmental-policy", json=policy)
 
 
+def set_sudo_password_required(host_id: str, required: bool):
+    return _request("POST", f"/agents/{host_id}/sudo-password-required",
+                    json={"required": bool(required)})
+
+
 def get_activity_log(limit: int = 200, since_id: int = 0):
     return _request("GET", "/activity-log",
                     params={"limit": limit, "since_id": since_id}).get("entries", [])

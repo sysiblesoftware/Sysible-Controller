@@ -329,7 +329,7 @@ def heartbeat(req: HeartbeatRequest):
 
     verify_agent(req.host_id, req.agent_secret)
 
-    update_agent_heartbeat(req.host_id, req.ip)
+    update_agent_heartbeat(req.host_id, req.ip, req.hostname)
 
     # Catch up already-enrolled agents that predate SSH auto-enrollment.
     # Heartbeats are frequent, so gate on the cheap state read first:

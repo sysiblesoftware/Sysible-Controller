@@ -438,6 +438,11 @@ def heartbeat(state):
                 # DHCP-reassigned IP keeps the controller's Address
                 # column accurate without needing a full re-enroll.
                 "ip": _local_ip(),
+                # Likewise re-read each heartbeat so a hostname change
+                # (e.g. via Set Hostname) shows up in the inventory
+                # without re-enrolling. gethostname() reflects the new
+                # name immediately after hostnamectl set-hostname.
+                "hostname": socket.gethostname(),
             },
             timeout=10,
         )

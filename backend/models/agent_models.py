@@ -16,6 +16,7 @@ class HeartbeatRequest(BaseModel):
     host_id: str
     agent_secret: str
     ip: Optional[str] = None
+    hostname: Optional[str] = None
 
 
 class SelfDisenrollRequest(BaseModel):

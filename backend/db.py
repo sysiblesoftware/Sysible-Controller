@@ -514,25 +514,29 @@ def create_or_update_agent(
     conn.close()
 
 
-def update_agent_heartbeat(host_id, ip=None):
+def update_agent_heartbeat(host_id, ip=None, hostname=None):
     conn = _connect()
     cur = conn.cursor()
 
-    # ip is optional on heartbeat (older agent builds won't send it) -
-    # COALESCE keeps whatever IP was last reported instead of blanking
-    # it out when an old agent's heartbeat omits the field.
+    # ip/hostname are optional on heartbeat (older agent builds won't send
+    # them) - COALESCE keeps whatever was last reported instead of blanking
+    # it when an old agent's heartbeat omits the field. A newer agent re-sends
+    # both every heartbeat, so a changed hostname (Set Hostname) or a
+    # DHCP-reassigned IP updates the inventory without a re-enroll.
     cur.execute("""
     UPDATE agents
     SET
         status=?,
         last_seen=?,
-        ip=COALESCE(?, ip)
+        ip=COALESCE(?, ip),
+        hostname=COALESCE(?, hostname)
     WHERE host_id=?
     """,
     (
         "online",
         time.time(),
         ip,
+        hostname,
         host_id
     ))
 

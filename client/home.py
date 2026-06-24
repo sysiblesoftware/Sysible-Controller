@@ -13,7 +13,7 @@ from client.webserver_portal_page import WebserverPortalPage
 from client.system_administration_page import SystemAdministrationPage
 from client.branding import LOGO_PATH
 from client.theme_toggle import ThemeToggle
-from client import feature_search, theme
+from client import feature_search, theme, api
 
 
 class HomeWindow(QWidget):
@@ -55,6 +55,14 @@ class HomeWindow(QWidget):
 
         header_row.addLayout(header_text)
         header_row.addStretch()
+
+        # Edition badge - shows "Community Edition · N/10 hosts" so the host
+        # cap is visible at a glance from the main screen, not just on the
+        # Host Enrollment page. Hidden on an unlimited (Enterprise) build.
+        self.edition_badge = QLabel()
+        self.edition_badge.setVisible(False)
+        header_row.addWidget(self.edition_badge)
+        self._refresh_edition_badge()
 
         # Dark/light mode switch - lives here rather than buried in
         # Sysible Controller Settings since it's a personal display
@@ -172,6 +180,29 @@ class HomeWindow(QWidget):
         self.subtitle_label.setStyleSheet(
             f"font-size:11px; color:{subtitle_color};"
         )
+
+    def _refresh_edition_badge(self):
+        """Show 'Community Edition · N/limit hosts' in the header. Hidden on an
+        unlimited (Enterprise) build, where host_limit comes back as None."""
+        try:
+            info = api.get_edition()
+        except Exception:
+            info = {}
+        limit = info.get("host_limit")
+        if limit is None:
+            self.edition_badge.setVisible(False)
+            return
+        count = info.get("host_count", 0)
+        self.edition_badge.setText(f"Community Edition · {count}/{limit} hosts")
+        self.edition_badge.setStyleSheet(
+            "background-color:#f5a623; color:#1b1b1b; font-weight:bold; "
+            "padding:4px 12px; border-radius:11px; font-size:11px;"
+        )
+        self.edition_badge.setToolTip(
+            f"This is the Community edition — up to {limit} managed hosts. "
+            "Contact Sysible for an Enterprise edition to manage more."
+        )
+        self.edition_badge.setVisible(True)
 
     def open_hosts(self):
         if self.host_window is None:

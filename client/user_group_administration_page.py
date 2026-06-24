@@ -4,7 +4,8 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton,
     QLineEdit, QTextEdit, QComboBox, QMessageBox,
-    QDialog, QScrollArea, QTabWidget, QDateEdit, QApplication
+    QDialog, QScrollArea, QTabWidget, QDateEdit, QApplication,
+    QSizePolicy,
 )
 from PySide6.QtCore import Qt, QTimer, QDate
 from PySide6.QtGui import QColor
@@ -323,7 +324,15 @@ class UserGroupAdministrationPage(QWidget):
         tabs.addTab(self._build_password_tab(), "Password")
         tabs.addTab(self._build_groups_tab(), "Groups")
         tabs.addTab(self._build_reports_tab(), "Reports")
-        shrink_tabwidget_to_current_page(tabs, cap_height=True)
+        # Per-page sizing so the stack tracks the visible tab, but NO height
+        # cap here: unlike the System Administration tool pages, this right
+        # column has no results panel below the tabs (just a one-line status
+        # label), so there's nothing for a cap to free up space for. Capping
+        # to the current page's sizeHint under-measured the taller tabs
+        # (Account), giving them a scrollbar *and* a block of dead space below.
+        # Letting the tab widget expand to fill the column fixes both.
+        shrink_tabwidget_to_current_page(tabs)
+        tabs.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         # Kept as an attribute (not just a local) so the dashboard's
         # feature search bar (client/home.py / client/feature_search.py)
         # can jump straight to a specific tab - e.g. typing "create a
@@ -338,10 +347,10 @@ class UserGroupAdministrationPage(QWidget):
         right = QVBoxLayout()
         right.addWidget(tabs)
         right.addWidget(self.dispatch_status)
-        # The action tabs hug the current tab's content (cap_height), so any
-        # leftover height in this column collects here as a single clean
-        # stretch at the bottom rather than padding out the tab area itself.
-        right.addStretch()
+        # No trailing stretch: the tab widget is set to Expanding above and
+        # claims the column's leftover height itself, so there's no empty
+        # block below it. (A stretch here would fight the expanding tabs for
+        # that space and reintroduce the dead gap.)
 
         split.addLayout(right, 3)
         return panel

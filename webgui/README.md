@@ -153,9 +153,22 @@ to the browser rather than dispatching a malformed command.
 > "Set password aging" and the Security "Set default password aging"
 > actions are correct.
 
+## Sysible Connect (browser terminal)
+
+The **Sysible Connect** dashboard tile opens a live SSH terminal in the
+browser (xterm.js). The BFF exposes a `/api/terminal/ws` websocket that
+bridges the controller's poll-based SSH PTY API to a stream: a background
+task polls the controller for output and pushes it to the browser, while
+keystrokes and resizes flow the other way. It's gated by the same login
+session, so the controller API key never reaches the browser. Terminals
+are SSH-based, so the host picker lists SSH and agent+SSH (merged) hosts.
+
+The dev proxy forwards websockets; behind a reverse proxy, make sure
+websocket upgrade headers are passed through for `/api/terminal/ws`
+(nginx: `proxy_set_header Upgrade $http_upgrade; proxy_set_header
+Connection "upgrade";`).
+
 ## Not yet included
 
-- **Sysible Connect terminal** (browser SSH/agent shells) — deferred; it
-  needs an xterm.js + websocket PTY bridge and is a phase of its own.
 - File upload/download tools (the `python-multipart` dep is already
   listed for when they land).

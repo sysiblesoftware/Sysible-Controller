@@ -523,6 +523,17 @@ def update_agent_heartbeat(host_id, ip=None, hostname=None):
     # it when an old agent's heartbeat omits the field. A newer agent re-sends
     # both every heartbeat, so a changed hostname (Set Hostname) or a
     # DHCP-reassigned IP updates the inventory without a re-enroll.
+    #
+    # NOTE (rename caveats - REJOIN required for these): this only updates
+    # the AGENT inventory row. Two things do NOT follow a hostname change and
+    # must be re-done after a rename:
+    #   * SSH enrollment - the SSH/merged host record is keyed by the old
+    #     hostname (see backend/remote_routes.py), so re-enroll the host over
+    #     SSH to pick up the new name.
+    #   * AD/realm membership - the host's AD computer account is the old
+    #     name; rejoin the domain (realm leave + Join again, ideally set the
+    #     hostname BEFORE joining).
+    # Automating these on rename is a future improvement.
     cur.execute("""
     UPDATE agents
     SET

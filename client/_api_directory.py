@@ -195,14 +195,30 @@ def cmd_join_ad(domain: str, admin_user: str, password: str, computer_ou: str = 
         raise ValueError("The joining account's password is required.")
     q_dom, q_user, q_pass = shlex.quote(domain), shlex.quote(admin_user), shlex.quote(password)
     ou = f"--computer-ou={shlex.quote(computer_ou)} " if computer_ou else ""
+    # A discovery pre-check turns realmd's opaque "No such realm found" into
+    # an actionable diagnosis (which DNS servers the host uses, the domain
+    # SRV lookup, and the .local/mDNS trap) before we ever try to join.
     return (
-        _INSTALL_REALM + "; "
-        "cred=$(mktemp) && chmod 600 \"$cred\"; "
+        f"dom={q_dom}; "
+        + _INSTALL_REALM + "; "
+        'echo "== Discovering $dom =="; '
+        'if ! realm discover "$dom" 2>&1; then '
+        '  echo "" >&2; '
+        '  echo "Realm discovery failed: this host cannot locate $dom via DNS, so a join cannot proceed." >&2; '
+        '  echo "DNS servers this host is using:" >&2; '
+        '  { resolvectl status 2>/dev/null | grep -i "DNS Server" || grep -i "^nameserver" /etc/resolv.conf; } >&2; '
+        '  echo "AD SRV record lookup (_ldap._tcp.$dom):" >&2; '
+        '  { host -t SRV _ldap._tcp."$dom" 2>&1 || nslookup -type=SRV _ldap._tcp."$dom" 2>&1 || echo "(no host/nslookup tool installed)"; } >&2; '
+        '  case "$dom" in *.local) echo "NOTE: a .local domain is normally resolved by mDNS/Avahi, NOT your AD DNS - this by itself causes the No such realm found error. Point this host DNS at the AD domain controller, and/or stop mDNS handling .local, then retry." >&2;; esac; '
+        '  echo "Fix: set this host DNS to the AD domain controller(s), confirm the clock is in sync with the DC, then retry." >&2; '
+        '  exit 1; '
+        'fi; '
+        'cred=$(mktemp) && chmod 600 "$cred"; '
         f"printf '%s' {q_pass} > \"$cred\"; "
-        f"realm join {ou}-U {q_user} {q_dom} < \"$cred\"; rc=$?; rm -f \"$cred\"; "
-        "systemctl enable --now oddjobd 2>/dev/null || true; "
-        f"if [ \"$rc\" -eq 0 ]; then echo 'Joined {domain}.'; realm list; "
-        "else echo 'Join failed - check the domain name, credentials, DNS resolution of the domain, and that the host clock is in sync with the DC.' >&2; exit \"$rc\"; fi"
+        f'realm join {ou}-U {q_user} "$dom" < "$cred"; rc=$?; rm -f "$cred"; '
+        'systemctl enable --now oddjobd 2>/dev/null || true; '
+        'if [ "$rc" -eq 0 ]; then echo "Joined $dom."; realm list; '
+        'else echo "Join failed (the domain was discoverable, so check the join account and password, the Computer OU, and that the host clock is in sync with the DC)." >&2; exit "$rc"; fi'
     )
 
 

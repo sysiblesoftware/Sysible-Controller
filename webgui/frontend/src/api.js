@@ -35,4 +35,25 @@ export const api = {
   tools: () => req("GET", "/tools"),
   runTool: (action, targets, params) =>
     req("POST", `/tool/${action}`, { targets, params }),
+
+  // File transfer is multipart / binary, so it doesn't go through req().
+  uploadFile: async (host, remotePath, file) => {
+    const fd = new FormData();
+    fd.append("host", host);
+    fd.append("remote_path", remotePath);
+    fd.append("file", file);
+    const res = await fetch("/api/files/upload", {
+      method: "POST",
+      credentials: "same-origin",
+      body: fd,
+    });
+    let data = null;
+    try { data = await res.json(); } catch (_) {}
+    if (!res.ok) throw new Error((data && data.detail) || res.statusText);
+    return data;
+  },
+
+  // Returns the URL to GET; the browser handles the download via an <a>.
+  downloadUrl: (host, path) =>
+    `/api/files/download?host=${encodeURIComponent(host)}&path=${encodeURIComponent(path)}`,
 };

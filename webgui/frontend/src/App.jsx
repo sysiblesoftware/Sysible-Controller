@@ -4,6 +4,7 @@ import Login from "./pages/Login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import ToolPage from "./pages/ToolPage.jsx";
 import TerminalPage from "./pages/Terminal.jsx";
+import FilesPage from "./pages/Files.jsx";
 import EditionBadge from "./components/EditionBadge.jsx";
 
 // Lightweight state-based router: the app only has two "screens"
@@ -21,8 +22,11 @@ export default function App() {
     return <Login />;
   }
 
-  const openTool = (tool) =>
-    setView(tool === "__terminal__" ? { name: "terminal" } : { name: "tool", tool });
+  const openTool = (tool) => {
+    if (tool === "__terminal__") return setView({ name: "terminal" });
+    if (tool === "__files__") return setView({ name: "files" });
+    setView({ name: "tool", tool });
+  };
   const goHome = () => setView({ name: "dashboard" });
 
   return (
@@ -47,6 +51,7 @@ export default function App() {
           <ToolPage tool={view.tool} onBack={goHome} />
         )}
         {view.name === "terminal" && <TerminalPage onBack={goHome} />}
+        {view.name === "files" && <FilesPage onBack={goHome} />}
       </main>
     </div>
   );

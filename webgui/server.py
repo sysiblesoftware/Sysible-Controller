@@ -44,6 +44,7 @@ import asyncio
 import os
 import secrets
 import sys
+import tempfile
 from pathlib import Path
 
 # Make the repo root importable so `import client.*` works whether this
@@ -52,10 +53,14 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from fastapi import FastAPI, HTTPException, Request, Depends, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI, HTTPException, Request, Depends, WebSocket, WebSocketDisconnect,
+    UploadFile, File, Form,
+)
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 from starlette.middleware.sessions import SessionMiddleware
 
 from client import api
@@ -266,6 +271,65 @@ def _normalize(label, r):
         "stderr": r.get("stderr", ""),
         "code": code,
     }
+
+
+# ----------------------------------------------------------------------
+# File transfer (Sysible Connect) - browser <-> host over SSH
+# ----------------------------------------------------------------------
+# Reuses the desktop client's SSH transfer helpers. Upload: the browser's
+# multipart file is spooled to a temp file, pushed with upload_file_ssh,
+# then the temp file is removed. Download: download_file_ssh writes to a
+# temp file which is streamed back as an attachment and cleaned up after.
+@app.post("/api/files/upload")
+async def files_upload(
+    host: str = Form(...),
+    remote_path: str = Form(...),
+    file: UploadFile = File(...),
+    user: str = Depends(require_login),
+):
+    tmp = Path(tempfile.mkdtemp(prefix="sysible-up-")) / (file.filename or "upload.bin")
+    try:
+        data = await file.read()
+        tmp.write_bytes(data)
+        try:
+            result = await asyncio.to_thread(api.upload_file_ssh, host, str(tmp), remote_path)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Upload failed: {e}")
+        return {"host": host, "remote_path": remote_path,
+                "filename": file.filename, "bytes": len(data), "result": result}
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+            tmp.parent.rmdir()
+        except Exception:
+            pass
+
+
+@app.get("/api/files/download")
+async def files_download(host: str, path: str, user: str = Depends(require_login)):
+    tmpdir = Path(tempfile.mkdtemp(prefix="sysible-dn-"))
+    filename = os.path.basename(path.rstrip("/")) or "download.bin"
+    dest = tmpdir / filename
+    try:
+        await asyncio.to_thread(api.download_file_ssh, host, path, str(dest))
+    except Exception as e:
+        try:
+            dest.unlink(missing_ok=True)
+            tmpdir.rmdir()
+        except Exception:
+            pass
+        raise HTTPException(status_code=502, detail=f"Download failed: {e}")
+
+    def _cleanup():
+        try:
+            dest.unlink(missing_ok=True)
+            tmpdir.rmdir()
+        except Exception:
+            pass
+
+    return FileResponse(str(dest), filename=filename,
+                        media_type="application/octet-stream",
+                        background=BackgroundTask(_cleanup))
 
 
 # ----------------------------------------------------------------------

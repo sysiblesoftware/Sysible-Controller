@@ -9,6 +9,8 @@ import { api } from "../api.js";
 const TILES = [
   { tool: "__terminal__", label: "Sysible Connect", icon: "▮", always: true,
     desc: "Open a live SSH terminal to a host, in your browser." },
+  { tool: "__files__", label: "File Transfer", icon: "⇅", always: true,
+    desc: "Upload files to a host or download files from it." },
   { tool: "Run Command", icon: "»_", desc: "Run an arbitrary shell command across selected hosts." },
   { tool: "User & Group Administration", icon: "◴", desc: "Create, lock, and manage users, shells, and groups." },
   { tool: "Service Management", icon: "⚙", desc: "Start, stop, restart, and inspect systemd services." },

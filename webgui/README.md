@@ -168,7 +168,16 @@ websocket upgrade headers are passed through for `/api/terminal/ws`
 (nginx: `proxy_set_header Upgrade $http_upgrade; proxy_set_header
 Connection "upgrade";`).
 
-## Not yet included
+## File transfer
 
-- File upload/download tools (the `python-multipart` dep is already
-  listed for when they land).
+The **File Transfer** dashboard tile uploads a local file to a host path
+or downloads a file from a host, reusing the desktop client's SSH
+transfer. Uploads are spooled to a server-side temp file and pushed with
+`upload_file_ssh`; downloads are fetched with `download_file_ssh` and
+streamed back to the browser as an attachment (temp files are cleaned up
+either way). SSH-based, so the host picker lists SSH and agent+SSH hosts.
+
+## Parity status
+
+The browser GUI now covers the full desktop surface: all 18 tool tiles
+(every `cmd_*` builder), the Sysible Connect terminal, and file transfer.

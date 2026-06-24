@@ -61,7 +61,13 @@ class WebGuiPage(QWidget):
         self.stop_btn.clicked.connect(self.stop_service)
         self.copy_btn = QPushButton("Copy URL")
         self.copy_btn.clicked.connect(self.copy_url)
-        for b in (self.refresh_btn, self.start_btn, self.stop_btn, self.copy_btn):
+        self.install_btn = QPushButton("Install Dependencies")
+        self.install_btn.setToolTip(
+            "Install the Python dependencies and build the browser front end. "
+            "Use this if the installer didn't set them up (see Diagnostics below).")
+        self.install_btn.clicked.connect(self.install_dependencies)
+        for b in (self.refresh_btn, self.start_btn, self.stop_btn, self.copy_btn,
+                  self.install_btn):
             buttons.addWidget(b)
         buttons.addStretch()
         layout.addLayout(buttons)
@@ -160,6 +166,38 @@ class WebGuiPage(QWidget):
         if result.get("error"):
             self.diag_view.setPlainText(result["error"])
         self.refresh()
+
+    def install_dependencies(self):
+        self.install_btn.setEnabled(False)
+        self.install_btn.setText("Installing…")
+        self.diag_view.setPlainText(
+            "Installing dependencies and building the front end — this can take a "
+            "minute or two (npm install is the slow part). Please wait…")
+        QApplication.processEvents()
+        try:
+            result = api.install_webgui_dependencies()
+        except Exception as e:
+            self.diag_view.setPlainText(
+                f"Install failed: {e}\n\nIf this timed out, the build may still be "
+                "running on the controller — click Refresh shortly.")
+            self.install_btn.setEnabled(True)
+            self.install_btn.setText("Install Dependencies")
+            return
+
+        lines = ["Installed:" if result.get("ok") else "Finished with problems:"]
+        for s in result.get("steps", []):
+            lines.append(f"\n[{'OK' if s['ok'] else '!!'}] {s['name']}")
+            if s.get("output"):
+                lines.append(s["output"])
+        self.diag_view.setPlainText("\n".join(lines))
+        self.install_btn.setEnabled(True)
+        self.install_btn.setText("Install Dependencies")
+        # Re-read status/diagnostics (don't clobber the install log just shown).
+        try:
+            st = api.get_webgui_status()
+            self._set_status(st.get("running"), st.get("port"), st.get("scheme", "http"))
+        except Exception:
+            pass
 
     def stop_service(self):
         try:

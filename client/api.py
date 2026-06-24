@@ -236,6 +236,11 @@ def get_webgui_diagnostics():
     return _request("GET", "/webgui/diagnostics")
 
 
+def install_webgui_dependencies():
+    # pip + npm install/build can take a while - give it room.
+    return _request("POST", "/webgui/install", timeout=900)
+
+
 def start_webgui():
     return _request("POST", "/webgui/start", timeout=20)
 

@@ -737,6 +737,11 @@ def get_webgui_diagnostics_route():
     return webgui_manager.diagnostics()
 
 
+@app.post("/webgui/install", dependencies=[Depends(require_api_key)])
+def install_webgui_route():
+    return webgui_manager.install_dependencies()
+
+
 @app.post("/webgui/start", dependencies=[Depends(require_api_key)])
 def start_webgui_route():
     return webgui_manager.start()

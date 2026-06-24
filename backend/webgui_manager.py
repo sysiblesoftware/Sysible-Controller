@@ -17,6 +17,7 @@ run/webgui.secret so restarts don't log everyone out.
 """
 import os
 import secrets
+import shutil
 import signal
 import ssl
 import subprocess
@@ -164,6 +165,64 @@ def diagnostics():
     })
 
     return {"checks": checks, "all_ok": all(c["ok"] for c in checks if c["name"] != "TLS certificate")}
+
+
+def install_dependencies():
+    """Install/build everything the Web GUI needs, from the dashboard, for
+    admins who didn't (or couldn't) run install_sysible.sh: the Python
+    service deps into this interpreter's environment, and the React front
+    end via npm. Each step's combined output is returned so the GUI can
+    show exactly what happened (and any failure). Idempotent - safe to
+    re-run; pip is a no-op when satisfied and the npm build just rebuilds."""
+    steps = []
+
+    # 1) Python dependencies (webgui/requirements.txt) into this venv.
+    req = PROJECT_ROOT / "webgui" / "requirements.txt"
+    if req.exists():
+        steps.append(_run_step(
+            "Install Python dependencies (pip)",
+            [sys.executable, "-m", "pip", "install", "-r", str(req)],
+            cwd=PROJECT_ROOT, timeout=300,
+        ))
+    else:
+        steps.append({"name": "Install Python dependencies (pip)", "ok": False,
+                      "output": f"{req} not found"})
+
+    # 2) Front end (npm install + build), if Node is available.
+    frontend = PROJECT_ROOT / "webgui" / "frontend"
+    if frontend.exists():
+        npm = shutil.which("npm")
+        if not npm:
+            steps.append({
+                "name": "Build front end (npm)", "ok": False,
+                "output": ("Node.js / npm is not installed on the controller. Install "
+                           "Node.js 18+ (e.g. your distro's nodejs package), then run "
+                           "this again."),
+            })
+        else:
+            inst = _run_step("npm install", [npm, "install", "--no-audit", "--no-fund"],
+                             cwd=frontend, timeout=600)
+            steps.append(inst)
+            if inst["ok"]:
+                steps.append(_run_step("npm run build", [npm, "run", "build"],
+                                       cwd=frontend, timeout=600))
+
+    return {"ok": all(s["ok"] for s in steps), "steps": steps,
+            "diagnostics": diagnostics()}
+
+
+def _run_step(name, cmd, cwd, timeout):
+    try:
+        proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True,
+                              timeout=timeout)
+        out = (proc.stdout or "") + (proc.stderr or "")
+        # Keep the tail - npm output can be huge.
+        out = "\n".join(out.splitlines()[-40:])
+        return {"name": name, "ok": proc.returncode == 0, "output": out.strip()}
+    except subprocess.TimeoutExpired:
+        return {"name": name, "ok": False, "output": f"Timed out after {timeout}s."}
+    except Exception as e:
+        return {"name": name, "ok": False, "output": str(e)}
 
 
 def status():

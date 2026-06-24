@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QMessageBox,
     QFileDialog,
+    QAbstractItemView,
 )
 
 from client import api
@@ -103,6 +104,9 @@ class HostEnrollmentPage(QWidget):
         # LIST
         # =====================================================
         self.agent_list = QListWidget()
+        # Multi-select so several hosts can be assigned to one environment at
+        # once (Ctrl/Shift-click). Single selection still works as before.
+        self.agent_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.agent_list.itemSelectionChanged.connect(self.load_details)
         connect_group_toggle(self.agent_list)
 
@@ -135,6 +139,9 @@ class HostEnrollmentPage(QWidget):
         env_row.addWidget(self.env_combo)
 
         self.set_env_btn = QPushButton("Set Environment")
+        self.set_env_btn.setToolTip(
+            "Assign the chosen environment to every selected host "
+            "(Ctrl/Shift-click to select several).")
         self.set_env_btn.clicked.connect(self.set_environment)
         env_row.addWidget(self.set_env_btn)
 
@@ -344,7 +351,11 @@ class HostEnrollmentPage(QWidget):
 
         self.selected_agent = agent
 
+        selected = self._selected_agents()
         text = ""
+        if len(selected) > 1:
+            text += (f"{len(selected)} hosts selected — Set Environment will apply to all "
+                     f"of them.\n\nDetails (last selected):\n")
         text += f"Hostname: {agent.get('hostname')}\n"
         text += f"Host ID: {agent.get('host_id')}\n"
         text += f"Platform: {agent.get('platform')}\n"
@@ -359,23 +370,42 @@ class HostEnrollmentPage(QWidget):
     # =====================================================
     # SET ENVIRONMENT
     # =====================================================
+    def _selected_agents(self):
+        """Every selected host row (skips environment header rows). Falls
+        back to self.selected_agent if the list reports nothing selected."""
+        agents = []
+        for item in self.agent_list.selectedItems():
+            agent = item.data(Qt.UserRole)
+            if agent is not None:
+                agents.append(agent)
+        if not agents and self.selected_agent:
+            agents = [self.selected_agent]
+        return agents
+
     def set_environment(self):
-        if not self.selected_agent:
-            QMessageBox.information(self, "No host selected", "Select a host first.")
+        agents = self._selected_agents()
+        if not agents:
+            QMessageBox.information(self, "No host selected", "Select one or more hosts first.")
             return
 
         env = self.env_combo.currentText()
-
         if env == _NEW_ENV_OPTION:
             return
 
-        host_id = self.selected_agent["host_id"]
+        failures = []
+        for agent in agents:
+            try:
+                api.set_agent_environment(agent["host_id"], env)
+            except Exception as e:
+                failures.append(f"{agent.get('hostname') or agent['host_id']}: {e}")
 
-        try:
-            api.set_agent_environment(host_id, env)
-            self.refresh()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+        self.refresh()
+
+        if failures:
+            QMessageBox.critical(
+                self, "Some hosts failed",
+                f"Set environment failed for {len(failures)} of {len(agents)} host(s):\n\n"
+                + "\n".join(failures))
 
     # =====================================================
     # DISENROLL

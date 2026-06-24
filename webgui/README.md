@@ -115,17 +115,33 @@ Param types the form supports: `text`, `password`, `number`, `select`
 
 ### Current coverage
 
-Seeded as a representative vertical slice that proves the pattern
-end-to-end:
+All 18 desktop tiles are wired (~136 actions). Each maps to the existing
+`cmd_*` builder, so the web action runs the identical shell command the
+desktop tool would. Highlights:
 
-- **Run Command** — arbitrary shell across selected hosts.
-- **Service Management** — list / list running / status / start / stop /
-  restart.
-- **User & Group Administration** — create / delete / lock / unlock /
-  set shell / list groups & members.
+- **Run Command**, **Service Management**, **User & Group Administration**
+- **Host Software Management** (install/update/remove/search/query/clean)
+- **Repository Management**, **Cron & Systemd Timers**
+- **Network Management** (ip/devices/routes/ping/traceroute/dns/mtu/routes)
+- **Storage Administration** (disks/partitions/SMART/LVM/RAID/swap/format,
+  plus install buttons for smartmontools/LVM/mdadm)
+- **Firewall Administration** (firewalld/nft/iptables, list ALL ports,
+  install firewalld/ufw)
+- **Security Administration** (SELinux/sshd/audit/updates/hardening/
+  rkhunter/lynis)
+- **File System Management** (dir/copy/move/chmod/chown/archive/fstab/
+  NFS+CIFS mount)
+- **System Health, Logs & Recovery** (health/disk/mem-cpu/logs/kernel/
+  boot/kernels/support bundle)
+- **Time Synchronization**, **Certificate Management**, **Containers & VMs**
+- **Directory Services** (AD join/leave, realm/Kerberos status)
+- **Backup & Recovery**, **Distro Subscription & Licensing** (RHSM/Pro/SCC)
 
-The remaining desktop tiles appear on the dashboard as "soon" and are
-the same shape to fill in.
+Builders validate their own input, so bad parameters return a clean 400
+to the browser rather than dispatching a malformed command. Deeper/rarer
+desktop actions (e.g. multi-field static-IP, bond/bridge/VLAN, custom
+systemd unit creation) are the same one-line `Action` shape to add as
+needed.
 
 ## Not yet included
 

@@ -8,7 +8,7 @@ import threading
 import time
 
 from backend.agent_bundle import build_agent_bundle, detect_local_ips, resolve_controller_addresses
-from backend.auth import require_api_key
+from backend.auth import require_api_key, require_superuser
 from backend.db import (
     create_enroll_token,
     validate_enroll_token,
@@ -144,7 +144,7 @@ def verify_agent(host_id: str, agent_secret: str):
 # =========================================================
 # SERVER TOKEN GENERATION (admin-only: localhost + API key)
 # =========================================================
-@app.post("/admin/enroll-token/generate", dependencies=[Depends(require_api_key)])
+@app.post("/admin/enroll-token/generate", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 async def generate_token(request: Request):
 
     client_ip = request.client.host
@@ -458,7 +458,7 @@ def get_agents():
 # =========================================================
 # DISENROLL
 # =========================================================
-@app.delete("/agents/{host_id}", dependencies=[Depends(require_api_key)])
+@app.delete("/agents/{host_id}", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def remove_agent(host_id: str):
 
     delete_agent(host_id)
@@ -498,7 +498,7 @@ def self_disenroll(host_id: str, req: SelfDisenrollRequest):
 # in the GUI across Host Enrollment / User Administration / Remote
 # Administration)
 # =========================================================
-@app.post("/agents/{host_id}/environment", dependencies=[Depends(require_api_key)])
+@app.post("/agents/{host_id}/environment", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def set_agent_environment_route(host_id: str, body: SetEnvironmentRequest):
 
     if not agent_exists(host_id):
@@ -524,7 +524,7 @@ def get_environments():
     }
 
 
-@app.post("/environments", dependencies=[Depends(require_api_key)])
+@app.post("/environments", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def add_environment(body: CreateEnvironmentRequest):
 
     name = body.name.strip()
@@ -539,7 +539,7 @@ def add_environment(body: CreateEnvironmentRequest):
     }
 
 
-@app.delete("/environments/{name}", dependencies=[Depends(require_api_key)])
+@app.delete("/environments/{name}", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def remove_environment(name: str):
 
     delete_environment(name)
@@ -560,7 +560,7 @@ def get_controller_config_route():
     return get_controller_config()
 
 
-@app.post("/controller-config", dependencies=[Depends(require_api_key)])
+@app.post("/controller-config", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def set_controller_config_route(body: SetControllerConfigRequest):
 
     hostname = body.hostname.strip()
@@ -599,7 +599,7 @@ def get_license_config_route():
     return get_license_config()
 
 
-@app.post("/license-config", dependencies=[Depends(require_api_key)])
+@app.post("/license-config", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def set_license_config_route(body: SetLicenseKeyRequest):
 
     return set_license_config(body.license_key.strip())
@@ -734,7 +734,7 @@ def get_environmental_policy_route():
     return get_environmental_policy()
 
 
-@app.post("/environmental-policy", dependencies=[Depends(require_api_key)])
+@app.post("/environmental-policy", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def set_environmental_policy_route(body: SetEnvironmentalPolicyRequest):
 
     policy = body.model_dump()
@@ -1010,7 +1010,7 @@ def list_administrators_route():
     return {"administrators": list_administrators()}
 
 
-@app.post("/admin/administrators", dependencies=[Depends(require_api_key)])
+@app.post("/admin/administrators", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def add_administrator_route(body: AddAdministratorRequest):
     from backend.edition import enforce_role_limit
     from backend.db import count_administrators_by_role
@@ -1049,7 +1049,7 @@ def add_administrator_route(body: AddAdministratorRequest):
     return {"username": username, "status": "added", "role": role}
 
 
-@app.delete("/admin/administrators/{username}", dependencies=[Depends(require_api_key)])
+@app.delete("/admin/administrators/{username}", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def remove_administrator_route(username: str, actor: str = ""):
 
     if get_administrator(username) is None:
@@ -1156,7 +1156,7 @@ def get_admin_password_policy_route():
     return get_admin_password_policy()
 
 
-@app.post("/admin/password-policy", dependencies=[Depends(require_api_key)])
+@app.post("/admin/password-policy", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def set_admin_password_policy_route(body: SetAdminPasswordPolicyRequest):
 
     policy = body.model_dump()

@@ -305,10 +305,10 @@ def list_administrators():
     return _request("GET", "/admin/administrators").get("administrators", [])
 
 
-def add_administrator(username: str, password: str, actor: str = ""):
+def add_administrator(username: str, password: str, actor: str = "", role: str = "sysadmin"):
     return _request(
         "POST", "/admin/administrators",
-        json={"username": username, "password": password, "actor": actor},
+        json={"username": username, "password": password, "actor": actor, "role": role},
     )
 
 

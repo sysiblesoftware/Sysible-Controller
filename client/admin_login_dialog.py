@@ -142,7 +142,8 @@ class AdminLoginDialog(QDialog):
 
         self.username = result.get("username", username)
         self.password = password
+        self.role = result.get("role")
         self.must_change_password = bool(result.get("must_change_password"))
-        session.set_current_admin(self.username)
+        session.set_current_admin(self.username, self.role)
 
         self.accept()

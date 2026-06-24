@@ -13,7 +13,7 @@ from client.webserver_portal_page import WebserverPortalPage
 from client.system_administration_page import SystemAdministrationPage
 from client.branding import LOGO_PATH
 from client.theme_toggle import ThemeToggle
-from client import feature_search, theme, api
+from client import feature_search, theme, api, session
 
 
 class HomeWindow(QWidget):
@@ -126,32 +126,44 @@ class HomeWindow(QWidget):
         grid.setHorizontalSpacing(16)
         grid.setVerticalSpacing(16)
 
+        # The last field is superuser_only: tiles that manage the
+        # controller itself (enroll/remove hosts, administrators + config,
+        # the host-facing portal) are hidden from sysadmins, who can run
+        # tools on hosts but not change the controller. The backend gates
+        # these regardless (require_superuser); this just keeps a sysadmin's
+        # dashboard from showing tiles whose pages would only 403.
         cards = [
             ("Sysible Controller Host Enrollment",
              "Download the agent bundle and manage the enrolled host fleet.",
-             self.open_hosts, "fa5s.server", "teal"),
+             self.open_hosts, "fa5s.server", "teal", True),
             ("Sysible Controller Settings",
              "Manage dashboard administrators, their password policy, the controller's address/port, and the audit log.",
-             self.open_admin_config, "fa5s.cog", "slate"),
+             self.open_admin_config, "fa5s.cog", "slate", True),
             ("Sysible Connect",
              "Pop-out SSH/agent terminals with file upload &amp; download, search, font sizing, "
              "and saved output, plus one-click SSH enrollment and environment tagging.",
-             self.open_remote, "fa5s.terminal", "purple"),
+             self.open_remote, "fa5s.terminal", "purple", False),
             ("Webserver Portal Configuration",
              "Run the host-facing portal for agent downloads and file transfers.",
-             self.open_portal, "fa5s.globe", "coral"),
+             self.open_portal, "fa5s.globe", "coral", True),
             ("System Administration",
              "User & group administration and system health/log checks across agent and SSH hosts.",
-             self.open_system_admin, "fa5s.th-large", "amber"),
+             self.open_system_admin, "fa5s.th-large", "amber", False),
         ]
+
+        superuser = session.is_superuser()
 
         # Single column of tiles.
         grid.setColumnStretch(0, 1)
-        for index, (card_title, description, handler, icon, color) in enumerate(cards):
+        row = 0
+        for card_title, description, handler, icon, color, superuser_only in cards:
+            if superuser_only and not superuser:
+                continue
             grid.addWidget(
                 DashboardCard(card_title, description, handler, icon, color),
-                index, 0,
+                row, 0,
             )
+            row += 1
 
         outer.addLayout(grid)
         outer.addStretch()

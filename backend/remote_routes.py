@@ -33,8 +33,10 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
+
+from backend.auth import require_superuser
 
 from backend.models.remote_models import (
     AddHostRequest,
@@ -293,7 +295,7 @@ def set_agent_ssh_state(host_id: str, value):
 # =========================================================
 # HOST MANAGEMENT
 # =========================================================
-@router.post("/hosts")
+@router.post("/hosts", dependencies=[Depends(require_superuser)])
 def add_host(body: AddHostRequest):
     from backend.edition import enforce_host_limit
     enforce_host_limit(body.name)
@@ -317,7 +319,7 @@ def list_hosts():
     return load_hosts()
 
 
-@router.delete("/hosts/{name}")
+@router.delete("/hosts/{name}", dependencies=[Depends(require_superuser)])
 def delete_host(name: str):
     hosts = load_hosts()
     hosts.pop(name, None)
@@ -325,7 +327,7 @@ def delete_host(name: str):
     return {"deleted": True}
 
 
-@router.post("/hosts/{name}/environment")
+@router.post("/hosts/{name}/environment", dependencies=[Depends(require_superuser)])
 def set_host_environment(name: str, body: SetEnvironmentRequest):
     """Re-tag an already-connected SSH host's environment without
     re-running the connect flow - mirrors POST /agents/{host_id}/environment
@@ -349,7 +351,7 @@ def set_host_environment(name: str, body: SetEnvironmentRequest):
 # install the controller's public key, then discarded. After this
 # the host is reachable by exec_remote() with no further setup.
 # =========================================================
-@router.post("/enroll-ssh")
+@router.post("/enroll-ssh", dependencies=[Depends(require_superuser)])
 def enroll_ssh(body: EnrollSSHRequest):
     from backend.edition import enforce_host_limit
     enforce_host_limit(body.name)

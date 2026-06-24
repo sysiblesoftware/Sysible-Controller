@@ -638,6 +638,20 @@ class AdminConfigurationPage(QWidget):
         add_pass_row.addWidget(self.add_password_input)
         layout.addLayout(add_pass_row)
 
+        # Role. Superuser = full controller management; sysadmin = run tools
+        # on hosts only (and on a host, runs as their matching local user,
+        # gated by that host's sudo policy). Community caps: 2 superusers,
+        # 5 sysadmins - the backend enforces both.
+        add_role_row = QHBoxLayout()
+        add_role_row.addWidget(QLabel("Role:"))
+        self.add_role_combo = QComboBox()
+        self.add_role_combo.addItem("Sysadmin (run tools on hosts)", "sysadmin")
+        self.add_role_combo.addItem("Superuser (full controller management)", "superuser")
+        self.add_role_combo.setMaximumWidth(320)
+        add_role_row.addWidget(self.add_role_combo)
+        add_role_row.addStretch()
+        layout.addLayout(add_role_row)
+
         self.add_admin_btn = QPushButton("Add Administrator")
         self.add_admin_btn.clicked.connect(self.add_administrator)
         layout.addWidget(self.add_admin_btn)
@@ -720,8 +734,10 @@ class AdminConfigurationPage(QWidget):
             QMessageBox.warning(self, "Missing field", "Temporary password is required.")
             return
 
+        role = self.add_role_combo.currentData()
         try:
-            api.add_administrator(username, password, actor=session.get_current_admin() or "")
+            api.add_administrator(username, password,
+                                  actor=session.get_current_admin() or "", role=role)
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
             return

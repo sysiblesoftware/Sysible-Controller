@@ -66,3 +66,24 @@ def require_api_key(x_api_key: str = Header(default=None, alias="X-API-Key")):
 
     if not x_api_key or not secrets.compare_digest(x_api_key, _API_KEY):
         raise HTTPException(status_code=401, detail="Missing or invalid API key")
+
+
+def require_superuser(x_admin_token: str = Header(default=None, alias="X-Sysible-Admin-Token")):
+    """RBAC gate for superuser-only actions (managing admins, enrolling/
+    removing hosts, controller config). Enforced via the caller's login
+    token: a sysadmin token is rejected 403. A request with NO token is
+    allowed through - that's first-run bootstrap (no admin exists yet) or a
+    direct API-key caller, which is already root-equivalent within the
+    controller's trust boundary. The hard, unspoofable control is on-host
+    (run-as-user + local sudo); this is controller-side separation of duties.
+
+    db is imported lazily to avoid an import cycle (db has no dependency on
+    auth, but importing it at module load would still couple the two)."""
+    if not x_admin_token:
+        return
+    from backend.db import resolve_admin_token
+    admin = resolve_admin_token(x_admin_token)
+    if not admin:
+        raise HTTPException(status_code=401, detail="Invalid or expired admin token")
+    if admin.get("role") != "superuser":
+        raise HTTPException(status_code=403, detail="This action requires a superuser account.")

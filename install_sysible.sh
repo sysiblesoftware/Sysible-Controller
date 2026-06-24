@@ -139,36 +139,7 @@ source "$VENV/bin/activate"
 pip install --upgrade pip
 pip install -r "$BASE/requirements.txt"
 
-# Web GUI service dependencies (the browser-based front end - see webgui/).
-# Kept in its own requirements file; harmless if already satisfied above.
-if [ -f "$BASE/webgui/requirements.txt" ]; then
-  pip install -r "$BASE/webgui/requirements.txt"
-fi
-
 chmod +x "$BASE/sysible_controller"
-
-# =========================================================
-# BUILD THE WEB GUI FRONT END
-# The browser-based controller (webgui/) is a React app that must be
-# built into static files the service can serve. This needs Node.js;
-# it's optional - the controller and desktop app work without it, and
-# the dashboard's "Browser Access" tile will report "front end not built"
-# with this exact remedy until it's done. Build is skipped (with a clear
-# note) when npm isn't installed, so the installer never hard-fails on a
-# controller that doesn't need the browser UI.
-# =========================================================
-if [ -d "$BASE/webgui/frontend" ]; then
-  if command -v npm >/dev/null 2>&1; then
-    echo "Building the Web GUI front end (npm)..."
-    ( cd "$BASE/webgui/frontend" && npm install --no-audit --no-fund && npm run build ) \
-      && echo "Web GUI front end built." \
-      || echo "WARNING: Web GUI front end build failed - the browser UI won't start until it's built (cd webgui/frontend && npm install && npm run build)."
-  else
-    echo "NOTE: Node.js/npm not found - skipping Web GUI front-end build."
-    echo "      To enable browser access later: install Node.js 18+, then run"
-    echo "      'cd $BASE/webgui/frontend && npm install && npm run build'."
-  fi
-fi
 
 # =========================================================
 # PROVISION THE TLS CERTIFICATE

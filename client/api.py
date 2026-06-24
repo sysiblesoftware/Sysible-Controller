@@ -228,29 +228,6 @@ def set_environmental_policy(policy: dict):
     return _request("POST", "/environmental-policy", json=policy)
 
 
-def get_webgui_status():
-    return _request("GET", "/webgui/status")
-
-
-def get_webgui_diagnostics():
-    return _request("GET", "/webgui/diagnostics")
-
-
-def install_webgui_dependencies():
-    # pip + npm install/build can take a while - give it room.
-    return _request("POST", "/webgui/install", timeout=900)
-
-
-def start_webgui():
-    # Start may build the front end / install deps on first run, so allow
-    # plenty of time rather than timing out mid-build.
-    return _request("POST", "/webgui/start", timeout=900)
-
-
-def stop_webgui():
-    return _request("POST", "/webgui/stop")
-
-
 def get_portal_status():
     return _request("GET", "/portal/status")
 

@@ -10,7 +10,6 @@ from client.host_enrollment_page import HostEnrollmentPage
 from client.admin_configuration_page import AdminConfigurationPage
 from client.remote_administration_page import RemoteAdministrationPage
 from client.webserver_portal_page import WebserverPortalPage
-from client.web_gui_page import WebGuiPage
 from client.system_administration_page import SystemAdministrationPage
 from client.branding import LOGO_PATH
 from client.theme_toggle import ThemeToggle
@@ -141,10 +140,6 @@ class HomeWindow(QWidget):
             ("Webserver Portal Configuration",
              "Run the host-facing portal for agent downloads and file transfers.",
              self.open_portal, "fa5s.globe", "coral"),
-            ("Browser Access (Web GUI)",
-             "Start the browser-based controller for Windows and other machines, "
-             "see its URL, and diagnose start-up problems.",
-             self.open_web_gui, "fa5s.window-maximize", "sky"),
             ("System Administration",
              "User & group administration and system health/log checks across agent and SSH hosts.",
              self.open_system_admin, "fa5s.th-large", "amber"),
@@ -166,7 +161,6 @@ class HomeWindow(QWidget):
         self.admin_config_window = None
         self.remote_window = None
         self.portal_window = None
-        self.web_gui_window = None
         self.system_admin_window = None
 
     def _apply_header_theme(self):
@@ -249,13 +243,6 @@ class HomeWindow(QWidget):
         self.portal_window.show()
         self.portal_window.raise_()
         return self.portal_window
-
-    def open_web_gui(self):
-        if self.web_gui_window is None:
-            self.web_gui_window = WebGuiPage()
-        self.web_gui_window.show()
-        self.web_gui_window.raise_()
-        return self.web_gui_window
 
     def open_system_admin(self):
         if self.system_admin_window is None:

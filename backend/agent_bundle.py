@@ -89,6 +89,29 @@ _AGENT_INSTALL_DIR = "/opt/sysible-agent"
 _SERVICE_NAME = "sysible-agent"
 _SERVICE_UNIT_PATH = f"/etc/systemd/system/{_SERVICE_NAME}.service"
 
+# Robustly install the agent's Python deps on the target host. Some hosts
+# ship Python 3 without pip; the package to install is `python3-pip` (NOT
+# `pip3`, which isn't a package name on any distro). We also use
+# `python3 -m pip` rather than the `pip3` wrapper, since the wrapper isn't
+# always on PATH even when pip is installed. Each package-manager line is
+# `|| true`-guarded so it can't trip `set -e`; the guarded final install
+# (and ensurepip fallback) is what actually has to succeed.
+_PIP_INSTALL_BLOCK = """if ! python3 -m pip --version >/dev/null 2>&1; then
+  echo "pip not found - installing python3-pip via the host package manager..."
+  if command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update -y || true; apt-get install -y python3-pip || true;
+  elif command -v dnf >/dev/null 2>&1; then dnf install -y python3-pip || true;
+  elif command -v yum >/dev/null 2>&1; then yum install -y python3-pip || true;
+  elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install python3-pip || true;
+  else echo "No supported package manager found to install python3-pip." >&2; fi
+fi
+if ! python3 -m pip --version >/dev/null 2>&1; then
+  python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
+fi
+if ! python3 -m pip install -r ./requirements.txt; then
+  echo "pip install failed - retrying with --break-system-packages (newer Debian/Ubuntu blocks system-wide installs by default, PEP 668)..."
+  python3 -m pip install --break-system-packages -r ./requirements.txt
+fi"""
+
 # The exact fragment in host_agent/agent.py whose default we patch
 # below - kept as one constant so the patch and the loud failure if it
 # stops matching live next to each other. Was the whole
@@ -164,7 +187,8 @@ def _run_script(include_cert: bool) -> str:
 # want managed by Sysible. Installs the agent as a systemd service
 # ({_SERVICE_NAME}) that runs in the background, restarts itself on
 # crash/reboot, and logs to the journal instead of this terminal.
-# Requires Python 3, pip3, and systemd - everything else (see
+# Requires Python 3 and systemd - pip is installed automatically (via the
+# host's python3-pip package) if missing, and everything else (see
 # requirements.txt) is installed automatically below.
 #
 # Must be run as root: it writes the controller cert to
@@ -206,10 +230,7 @@ chmod 600 {_AGENT_INSTALL_DIR}/sysible_agent.env
 # $HOME being set the way an interactive sudo shell sets it is one more
 # thing that could silently not line up.
 echo "Installing Python dependencies (./requirements.txt)..."
-if ! pip3 install -r ./requirements.txt; then
-  echo "pip3 install failed - retrying with --break-system-packages (newer Debian/Ubuntu blocks system-wide installs by default, PEP 668)..."
-  pip3 install --break-system-packages -r ./requirements.txt
-fi
+{_PIP_INSTALL_BLOCK}
 
 if [[ "$AGENT_USER" != "root" ]]; then
   echo "Configuring the agent to run as non-root user '$AGENT_USER' with passwordless sudo..."
@@ -298,10 +319,7 @@ fi
 # --------------------------------------------------------
 if [[ -f "$STATE_FILE" ]]; then
   echo "Notifying controller..."
-  if ! pip3 install -r ./requirements.txt; then
-    echo "pip3 install failed - retrying with --break-system-packages (newer Debian/Ubuntu blocks system-wide installs by default, PEP 668)..."
-    pip3 install --break-system-packages -r ./requirements.txt
-  fi
+{_PIP_INSTALL_BLOCK}
   python3 - "$STATE_FILE" "$ENV_FILE" "$CERT_FILE" <<'PYEOF'
 import json
 import os

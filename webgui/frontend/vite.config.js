@@ -12,6 +12,7 @@ export default defineConfig({
       "/api": {
         target: process.env.SYSIBLE_WEBGUI_API || "http://localhost:8800",
         changeOrigin: true,
+        ws: true, // proxy the Sysible Connect terminal websocket too
       },
     },
   },

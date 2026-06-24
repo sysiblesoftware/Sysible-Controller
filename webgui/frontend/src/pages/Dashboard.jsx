@@ -7,6 +7,8 @@ import { api } from "../api.js";
 // registered actions yet render as "coming soon" and are disabled - as
 // actions are added server-side they light up automatically.
 const TILES = [
+  { tool: "__terminal__", label: "Sysible Connect", icon: "▮", always: true,
+    desc: "Open a live SSH terminal to a host, in your browser." },
   { tool: "Run Command", icon: "»_", desc: "Run an arbitrary shell command across selected hosts." },
   { tool: "User & Group Administration", icon: "◴", desc: "Create, lock, and manage users, shells, and groups." },
   { tool: "Service Management", icon: "⚙", desc: "Start, stop, restart, and inspect systemd services." },
@@ -45,7 +47,7 @@ export default function Dashboard({ onOpenTool }) {
       </p>
       <div className="tile-grid">
         {TILES.map((t) => {
-          const ready = available && available.has(t.tool);
+          const ready = t.always || (available && available.has(t.tool));
           return (
             <button
               key={t.tool}
@@ -55,7 +57,7 @@ export default function Dashboard({ onOpenTool }) {
             >
               <span className="tile-icon">{t.icon}</span>
               <span className="tile-body">
-                <span className="tile-title">{t.tool}</span>
+                <span className="tile-title">{t.label || t.tool}</span>
                 <span className="tile-desc">{t.desc}</span>
               </span>
               {!ready && <span className="tile-soon">soon</span>}

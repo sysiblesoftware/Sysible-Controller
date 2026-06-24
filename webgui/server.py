@@ -40,6 +40,7 @@ Run:
 Serve the built SPA (frontend/dist) from the same service, or put both
 behind a TLS-terminating reverse proxy. See README.md.
 """
+import asyncio
 import os
 import secrets
 import sys
@@ -51,7 +52,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -265,6 +266,113 @@ def _normalize(label, r):
         "stderr": r.get("stderr", ""),
         "code": code,
     }
+
+
+# ----------------------------------------------------------------------
+# Sysible Connect - browser terminal over a websocket
+# ----------------------------------------------------------------------
+# The controller exposes an SSH PTY as a poll-based HTTP API (open ->
+# read/write/resize -> close) via client.api. xterm.js in the browser
+# wants a stream, so this websocket bridges the two: a background task
+# polls read_terminal() and pushes output frames to the browser, while
+# inbound frames are written/resized/closed straight through. All
+# client.api calls are blocking (requests), so they run in threads to
+# keep the event loop free.
+#
+# Wire protocol (JSON text frames):
+#   server -> browser: {"t":"ready"} | {"t":"o","d":<output>} | {"t":"closed"} | {"t":"error","d":msg}
+#   browser -> server: {"t":"open","host":<id>,"cols":N,"rows":N}
+#                      {"t":"i","d":<keystrokes>} | {"t":"r","cols":N,"rows":N}
+@app.websocket("/api/terminal/ws")
+async def terminal_ws(ws: WebSocket):
+    # Auth: SessionMiddleware populates the websocket scope's session the
+    # same way it does for HTTP, so the login cookie gates this too.
+    if not ws.scope.get("session", {}).get("user"):
+        await ws.close(code=1008)
+        return
+    await ws.accept()
+
+    session_id = None
+    reader = None
+    try:
+        # First frame must open a terminal on a chosen host.
+        first = await ws.receive_json()
+        if first.get("t") != "open" or not first.get("host"):
+            await ws.send_json({"t": "error", "d": "expected open frame with host"})
+            await ws.close()
+            return
+        host = first["host"]
+        try:
+            opened = await asyncio.to_thread(api.open_terminal, host)
+            session_id = opened["session_id"]
+        except Exception as e:
+            await ws.send_json({"t": "error", "d": f"could not open terminal: {e}"})
+            await ws.close()
+            return
+
+        # Initial size, if provided.
+        if first.get("cols") and first.get("rows"):
+            try:
+                await asyncio.to_thread(api.resize_terminal, session_id,
+                                        int(first["cols"]), int(first["rows"]))
+            except Exception:
+                pass
+        await ws.send_json({"t": "ready"})
+
+        async def pump_output():
+            """Poll the controller for new PTY output and push it to the
+            browser. Light idle backoff keeps latency low while typing
+            without busy-spinning an idle shell."""
+            idle = 0
+            while True:
+                try:
+                    res = await asyncio.to_thread(api.read_terminal, session_id)
+                except Exception as e:
+                    await ws.send_json({"t": "error", "d": str(e)})
+                    return
+                data = res.get("data", "")
+                if data:
+                    await ws.send_json({"t": "o", "d": data})
+                    idle = 0
+                else:
+                    idle = min(idle + 1, 6)
+                if res.get("closed"):
+                    await ws.send_json({"t": "closed"})
+                    return
+                await asyncio.sleep(0.03 + idle * 0.02)   # 30ms..150ms
+
+        async def pump_input():
+            """Keystrokes / resize from the browser -> host."""
+            while True:
+                msg = await ws.receive_json()
+                t = msg.get("t")
+                if t == "i":
+                    await asyncio.to_thread(api.write_terminal, session_id, msg.get("d", ""))
+                elif t == "r" and msg.get("cols") and msg.get("rows"):
+                    await asyncio.to_thread(api.resize_terminal, session_id,
+                                            int(msg["cols"]), int(msg["rows"]))
+
+        reader = asyncio.create_task(pump_output())
+        writer = asyncio.create_task(pump_input())
+        # Whichever finishes first (shell exits / output side closes, or the
+        # browser disconnects) ends the session; cancel the other.
+        done, pending = await asyncio.wait(
+            {reader, writer}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        if reader is not None:
+            reader.cancel()
+        if session_id is not None:
+            try:
+                await asyncio.to_thread(api.close_terminal, session_id)
+            except Exception:
+                pass
 
 
 # ----------------------------------------------------------------------

@@ -242,7 +242,9 @@ def _consume_ssh_enable_result(host_id, result_str):
 
 
 @app.post("/agents/enroll")
-async def enroll(req: EnrollRequest):
+def enroll(req: EnrollRequest):
+    # Plain `def` (threadpooled) for the same reason as heartbeat below: the
+    # body is all blocking DB/token work and shouldn't occupy the event loop.
 
     if not validate_enroll_token(req.token):
         raise HTTPException(
@@ -290,7 +292,14 @@ async def enroll(req: EnrollRequest):
 # HEARTBEAT (agent-facing: authenticated by per-host secret)
 # =========================================================
 @app.post("/agents/heartbeat")
-async def heartbeat(req: HeartbeatRequest):
+def heartbeat(req: HeartbeatRequest):
+    # Plain `def` (not async) on purpose: the body does blocking SQLite work
+    # (verify, update_agent_heartbeat) and FastAPI runs sync handlers in a
+    # threadpool. As an `async def` it ran on the single event loop, so every
+    # agent's heartbeat - the most frequent request in the system, once per
+    # SYSIBLE_POLL_INTERVAL per host - serialized through one thread and
+    # became the throughput ceiling for large fleets. Threadpooling lets many
+    # heartbeats land concurrently.
 
     verify_agent(req.host_id, req.agent_secret)
 

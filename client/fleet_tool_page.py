@@ -13,7 +13,9 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QListWidget,
     QListWidgetItem, QTextEdit, QTabWidget, QGroupBox, QMessageBox,
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QThread, Signal
+
+from concurrent.futures import ThreadPoolExecutor
 
 from client import api
 from client import result_banner
@@ -30,9 +32,44 @@ from client.host_panel import build_host_panel
 HOST_REFRESH_MS = 10000
 POLL_MS = 2000
 
+# Cap on how many hosts a single fleet action dials out to at once. SSH hosts
+# run synchronously (the controller opens the connection), so without this a
+# fleet-wide action against a large host list would fire them strictly one
+# after another; doing them in parallel turns an N-host SSH action from
+# "N round-trips back to back" into "ceil(N / DISPATCH_WORKERS) waves".
+DISPATCH_WORKERS = 16
+
 
 def _entry_key(entry):
     return (entry["kind"], entry["id"])
+
+
+class _DispatchWorker(QThread):
+    """Runs api.run_on_entry() for every checked host off the GUI thread and
+    in parallel, so SSH hosts (which resolve synchronously) don't dial out one
+    at a time and freeze the UI. Emits an ordered list of (key, entry, result)
+    once every host has been contacted; the GUI thread then builds the tabs."""
+
+    done = Signal(object)
+
+    def __init__(self, entries, command):
+        super().__init__()
+        self._entries = entries
+        self._command = command
+
+    def run(self):
+        def work(entry):
+            try:
+                return _entry_key(entry), entry, api.run_on_entry(entry, self._command)
+            except Exception as e:  # never let one host kill the whole batch
+                return _entry_key(entry), entry, {
+                    "sync": True, "stdout": "", "stderr": str(e),
+                    "code": None, "error": str(e),
+                }
+        workers = max(1, min(DISPATCH_WORKERS, len(self._entries)))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            results = list(ex.map(work, self._entries))  # preserves input order
+        self.done.emit(results)
 
 
 class FleetToolPage(QWidget):
@@ -195,9 +232,27 @@ class FleetToolPage(QWidget):
         self.results = {}
         self.pending = {}
         self.tabs.clear()
-        for entry in entries:
-            key = _entry_key(entry)
-            result = api.run_on_entry(entry, command)
+        self.status_label.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
+        self.status_label.setText(f"Running '{label}' on {len(entries)} host(s)...")
+
+        # Dial every host in parallel off the GUI thread (see _DispatchWorker),
+        # then build the result tabs back here on the main thread.
+        if not hasattr(self, "_dispatch_workers"):
+            self._dispatch_workers = []
+        worker = _DispatchWorker(entries, command)
+        worker.done.connect(lambda res, lbl=label: self._on_dispatch_done(res, lbl))
+        # Keep a reference until the thread fully finishes so it isn't garbage
+        # collected mid-run if another action is launched right after.
+        self._dispatch_workers.append(worker)
+        worker.finished.connect(lambda w=worker: self._dispatch_workers.remove(w)
+                                if w in self._dispatch_workers else None)
+        worker.start()
+
+    def _on_dispatch_done(self, dispatched, label):
+        # Ignore stale results if another action was launched after this one.
+        if label != self.last_command_label:
+            return
+        for key, entry, result in dispatched:
             if result["sync"]:
                 self.results[key] = {
                     "label": entry["label"], "stdout": result["stdout"],
@@ -216,8 +271,6 @@ class FleetToolPage(QWidget):
                 }
                 self.pending[key] = (entry, result["task_id"])
             self._add_tab(key)
-        self.status_label.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
-        self.status_label.setText(f"Running '{label}' on {len(entries)} host(s)...")
         if self.tabs.count() > 0:
             self.tabs.setCurrentIndex(0)
         if self.pending:

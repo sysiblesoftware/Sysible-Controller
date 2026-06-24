@@ -321,6 +321,34 @@ def cmd_uptime() -> str:
     return "uptime"
 
 
+# ---- Fleet power / agent control (used by Sysible Connect buttons) ----
+# These are privileged; under RBAC they run as the operator's matching
+# local user and elevate via that host's sudo policy (the agent retries
+# under sudo on a privilege error). `shutdown` schedules with init and
+# returns right away, so the host can report the result before it goes
+# down.
+def cmd_reboot_host() -> str:
+    # No 2>&1: a privilege failure must stay on stderr so the agent's
+    # run-as-user path recognizes it and retries under the host's sudo.
+    return "shutdown -r +0 || systemctl reboot"
+
+
+def cmd_poweroff_host() -> str:
+    return "shutdown -P +0 || systemctl poweroff"
+
+
+def cmd_restart_agent() -> str:
+    """Restart the Sysible agent service. Launched detached via systemd-run
+    so it survives the agent process (its own parent) being stopped, and
+    the host reconnects on the new agent's first heartbeat. Only meaningful
+    on agent hosts; SSH-only hosts have no such service and will report
+    that."""
+    return (
+        "systemd-run --collect --unit=sysible-agent-restart systemctl restart sysible-agent "
+        "&& echo 'Agent restart dispatched (detached); this host will reconnect shortly.'"
+    )
+
+
 def cmd_health_check() -> str:
     """A single combined command that has the *host itself* score a few
     signals (disk usage, failed systemd units, load average relative to

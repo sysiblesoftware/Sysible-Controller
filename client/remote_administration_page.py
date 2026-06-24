@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QPushButton, QLineEdit, QTextEdit, QComboBox, QInputDialog, QMessageBox,
-    QApplication, QFileDialog, QFrame, QGroupBox, QMenu,
+    QApplication, QFileDialog, QFrame, QGroupBox, QMenu, QDialog,
 )
 from PySide6.QtCore import Qt, QTimer, QObject, Signal, QThread
 from PySide6.QtGui import (
@@ -815,6 +815,63 @@ class _CheckInWorker(QThread):
         self.done.emit(results)
 
 
+class _FleetCommandWorker(QThread):
+    """Runs one command across every given host off the GUI thread and emits
+    a list of per-host {label, ok, output}. Agent tasks are polled to
+    completion (bounded) - for reboot/power-off/agent-restart the host often
+    goes down before reporting, which surfaces as a clear 'timed out' note
+    rather than a hang."""
+
+    done = Signal(list)
+
+    def __init__(self, entries, command, kind="command", poll_seconds=25):
+        super().__init__()
+        self._entries = entries
+        self._command = command
+        self._kind = kind
+        self._poll_seconds = poll_seconds
+
+    @staticmethod
+    def _normalize(label, r):
+        code = r.get("code")
+        out = (r.get("stdout", "") or "")
+        if r.get("stderr"):
+            out = (out + "\n" + r["stderr"]).strip()
+        ok = (code == 0) if code is not None else (not r.get("stderr"))
+        return {"label": label, "ok": ok, "output": out.strip() or "(no output)"}
+
+    def run(self):
+        results = []
+        for entry in self._entries:
+            label = entry["label"]
+            try:
+                outcome = api.run_on_entry(entry, self._command, kind=self._kind)
+            except Exception as e:
+                results.append({"label": label, "ok": False, "output": str(e)})
+                continue
+            if outcome.get("error"):
+                results.append({"label": label, "ok": False, "output": outcome["error"]})
+                continue
+            if outcome.get("sync"):
+                results.append(self._normalize(label, outcome))
+                continue
+            task_id = outcome.get("task_id")
+            polled = None
+            deadline = time.time() + self._poll_seconds
+            while time.time() < deadline:
+                polled = api.poll_entry_result(entry, task_id)
+                if polled is not None:
+                    break
+                time.sleep(1.0)
+            if polled is None:
+                results.append({"label": label, "ok": False,
+                                "output": "timed out waiting for the agent "
+                                          "(expected if the host is rebooting / the agent is restarting)"})
+            else:
+                results.append(self._normalize(label, polled))
+        self.done.emit(results)
+
+
 # =====================================================================
 # PER-HOST TERMINAL POPOUT
 # =====================================================================
@@ -1456,6 +1513,23 @@ class RemoteAdministrationPage(QWidget):
                            "or right-click an enrolled host to RDP to it.")
         btn_rdp.clicked.connect(lambda: self._open_rdp(""))
 
+        # Fleet power / agent control - act on every host in the list.
+        self.btn_restart_agent = QPushButton("Restart Agent on All Hosts")
+        self.btn_restart_agent.setToolTip("Restart the Sysible agent service on every agent host "
+                                          "(detached; each host reconnects shortly).")
+        self.btn_restart_agent.clicked.connect(
+            lambda: self._fleet_action(api.cmd_restart_agent(), "restart the agent on", danger=False))
+        self.btn_reboot_all = QPushButton("Reboot All Hosts")
+        self.btn_reboot_all.setToolTip("Reboot every host in the list.")
+        self.btn_reboot_all.clicked.connect(
+            lambda: self._fleet_action(api.cmd_reboot_host(), "REBOOT", danger=True))
+        self.btn_poweroff_all = QPushButton("Power Off All Hosts")
+        self.btn_poweroff_all.setToolTip("Shut down and power off every host in the list.")
+        self.btn_poweroff_all.clicked.connect(
+            lambda: self._fleet_action(api.cmd_poweroff_host(), "POWER OFF", danger=True))
+        for b in (self.btn_reboot_all, self.btn_poweroff_all):
+            b.setStyleSheet("color:#f0c0bc;")
+
         self.checkin_label = QLabel("")
         theme.style_hint_label(self.checkin_label)
 
@@ -1465,7 +1539,9 @@ class RemoteAdministrationPage(QWidget):
             [
                 [btn_refresh, self.btn_checkin],
                 [btn_collapse_all, btn_expand_all],
-                [btn_script],
+                [btn_script, btn_rdp],
+                [self.btn_restart_agent],
+                [self.btn_reboot_all, self.btn_poweroff_all],
             ],
             extra_widgets=[self.checkin_label],
             width=340,  # wider so each host's IP fits next to it
@@ -1724,6 +1800,65 @@ class RemoteAdministrationPage(QWidget):
     # =====================================================
     # CHECK-IN / PING
     # =====================================================
+    # ---------------- fleet power / agent control ----------------
+    def _fleet_action(self, command, verb, danger=True):
+        """Run `command` on every host in the list after confirming. `verb`
+        is shown in the prompt (e.g. 'REBOOT', 'restart the agent on')."""
+        if getattr(self, "_fleet_worker", None) is not None and self._fleet_worker.isRunning():
+            QMessageBox.information(self, "Busy", "A fleet action is already running.")
+            return
+        entries = []
+        for i in range(self.host_list.count()):
+            entry = self.host_list.item(i).data(Qt.UserRole)
+            if entry is not None:
+                entries.append(entry)
+        if not entries:
+            QMessageBox.information(self, "No hosts", "There are no hosts in the list.")
+            return
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning if danger else QMessageBox.Question)
+        box.setWindowTitle("Confirm fleet action")
+        box.setText(f"This will {verb} all {len(entries)} host(s) in the list.")
+        if danger:
+            box.setInformativeText("This is disruptive and affects every listed host. Continue?")
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        box.setDefaultButton(QMessageBox.No)
+        if box.exec() != QMessageBox.Yes:
+            return
+
+        for b in (self.btn_restart_agent, self.btn_reboot_all, self.btn_poweroff_all):
+            b.setEnabled(False)
+        self.checkin_label.setText(f"Dispatching to {len(entries)} host(s)…")
+        self._fleet_worker = _FleetCommandWorker(entries, command)
+        self._fleet_worker.done.connect(self._on_fleet_done)
+        self._fleet_worker.start()
+
+    def _on_fleet_done(self, results):
+        for b in (self.btn_restart_agent, self.btn_reboot_all, self.btn_poweroff_all):
+            b.setEnabled(True)
+        ok = sum(1 for r in results if r["ok"])
+        self.checkin_label.setText(f"Done: {ok}/{len(results)} host(s) succeeded.")
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Fleet action results")
+        dlg.resize(560, 420)
+        v = QVBoxLayout(dlg)
+        v.addWidget(QLabel(f"{ok} of {len(results)} host(s) reported success."))
+        view = QTextEdit()
+        view.setReadOnly(True)
+        view.setStyleSheet("font-family: monospace;")
+        lines = []
+        for r in results:
+            mark = "[ OK ]" if r["ok"] else "[FAIL]"
+            lines.append(f"{mark}  {r['label']}\n        " + r["output"].replace("\n", "\n        "))
+        view.setPlainText("\n\n".join(lines))
+        v.addWidget(view)
+        close = QPushButton("Close")
+        close.clicked.connect(dlg.accept)
+        v.addWidget(close)
+        dlg.exec()
+
     def check_in_hosts(self):
         """Probe every host in the list and show a status dot next to each:
         agent hosts are judged by how recently they last checked in

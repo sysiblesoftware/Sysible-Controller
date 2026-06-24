@@ -115,9 +115,10 @@ Param types the form supports: `text`, `password`, `number`, `select`
 
 ### Current coverage
 
-All 18 desktop tiles are wired (~136 actions). Each maps to the existing
-`cmd_*` builder, so the web action runs the identical shell command the
-desktop tool would. Highlights:
+**Full parity: all 18 desktop tiles, 321 actions, every one of the 319
+`cmd_*` builders wired (100%).** Each action maps to the existing `cmd_*`
+builder, so the web action runs the identical shell command the desktop
+tool would. Highlights:
 
 - **Run Command**, **Service Management**, **User & Group Administration**
 - **Host Software Management** (install/update/remove/search/query/clean)
@@ -137,11 +138,20 @@ desktop tool would. Highlights:
 - **Directory Services** (AD join/leave, realm/Kerberos status)
 - **Backup & Recovery**, **Distro Subscription & Licensing** (RHSM/Pro/SCC)
 
+This includes the deeper actions too: multi-field static-IP / bond /
+team / VLAN / bridge, custom systemd unit + timer creation, full LVM /
+RAID / swap lifecycle, SELinux fcontext + boolean management, sshd
+hardening + authorized-key management, fstab + quota management, and the
+RHSM / Ubuntu Pro / SUSE subscription lifecycles.
+
 Builders validate their own input, so bad parameters return a clean 400
-to the browser rather than dispatching a malformed command. Deeper/rarer
-desktop actions (e.g. multi-field static-IP, bond/bridge/VLAN, custom
-systemd unit creation) are the same one-line `Action` shape to add as
-needed.
+to the browser rather than dispatching a malformed command.
+
+> Note: one builder name (`cmd_set_password_aging`) exists in two
+> modules — a per-user version and a host-default version. The web
+> service calls each from its specific module so both the User & Group
+> "Set password aging" and the Security "Set default password aging"
+> actions are correct.
 
 ## Not yet included
 

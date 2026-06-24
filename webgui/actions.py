@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from client import api  # cmd_* builders are re-exported on client.api
+from client import _api_users  # for the one cmd_* name that collides on `api`
 
 
 @dataclass
@@ -597,6 +598,682 @@ _register(Action(name="sub_suse_register", tool="Distro Subscription & Licensing
     label="SUSE register",
     params=[Param("regcode", "Reg code", type="password"), Param("email", "Email", required=False)],
     build=lambda p: api.cmd_suse_register(_s(p, "regcode"), _s(p, "email"))))
+
+
+def _io(params, key):
+    """Optional int: blank/None -> None (so the builder keeps its default),
+    otherwise the int. Used by the policy setters whose args default to
+    None meaning 'leave this field unchanged'."""
+    v = params.get(key, "")
+    if v is None or str(v).strip() == "":
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+# ======================================================================
+# FULL-PARITY ACTIONS - the remaining cmd_* builders, one Action each.
+# ======================================================================
+
+# ---- User & Group Administration (advanced) --------------------------
+_register(Action(name="user_set_password", tool="User & Group Administration",
+    label="Set password", params=[Param("username", "Username"),
+                                  Param("password", "Password", type="password")],
+    build=lambda p: api.cmd_set_password(_s(p, "username"), _s(p, "password"))))
+_register(Action(name="user_set_sudo", tool="User & Group Administration",
+    label="Set sudo access", params=[Param("username", "Username"),
+        Param("enable", "Grant sudo", type="checkbox", default=True, required=False)],
+    build=lambda p: api.cmd_set_sudo(_s(p, "username"), _b(p, "enable", True))))
+_register(Action(name="user_set_comment", tool="User & Group Administration",
+    label="Set full name (GECOS)", params=[Param("username", "Username"),
+                                           Param("comment", "Full name / comment")],
+    build=lambda p: api.cmd_set_user_comment(_s(p, "username"), _s(p, "comment"))))
+_register(Action(name="user_force_reset", tool="User & Group Administration",
+    label="Force password reset", params=[Param("username", "Username")],
+    build=lambda p: api.cmd_force_password_reset(_s(p, "username"))))
+_register(Action(name="user_kill_sessions", tool="User & Group Administration",
+    label="Kill user sessions", danger=True, params=[Param("username", "Username")],
+    build=lambda p: api.cmd_kill_user_sessions(_s(p, "username"))))
+_register(Action(name="user_set_expiration", tool="User & Group Administration",
+    label="Set account expiration", params=[Param("username", "Username"),
+        Param("expire_date", "Expire date", required=False, help="YYYY-MM-DD, blank to clear")],
+    build=lambda p: api.cmd_set_account_expiration(_s(p, "username"), _s(p, "expire_date"))))
+_register(Action(name="user_set_aging", tool="User & Group Administration",
+    label="Set password aging", params=[Param("username", "Username"),
+        Param("max_days", "Max days", type="number", required=False),
+        Param("min_days", "Min days", type="number", required=False),
+        Param("warn_days", "Warn days", type="number", required=False)],
+    build=lambda p: _api_users.cmd_set_password_aging(_s(p, "username"), _io(p, "max_days"),
+                                                      _io(p, "min_days"), _io(p, "warn_days"))))
+_register(Action(name="group_create", tool="User & Group Administration",
+    label="Create group", params=[Param("name", "Group name")],
+    build=lambda p: api.cmd_create_group(_s(p, "name"))))
+_register(Action(name="group_delete", tool="User & Group Administration",
+    label="Delete group", danger=True, params=[Param("name", "Group name")],
+    build=lambda p: api.cmd_delete_group(_s(p, "name"))))
+_register(Action(name="group_add_user", tool="User & Group Administration",
+    label="Add user to group", params=[Param("group", "Group"), Param("username", "Username")],
+    build=lambda p: api.cmd_add_user_to_group(_s(p, "group"), _s(p, "username"))))
+_register(Action(name="group_remove_user", tool="User & Group Administration",
+    label="Remove user from group", params=[Param("group", "Group"), Param("username", "Username")],
+    build=lambda p: api.cmd_remove_user_from_group(_s(p, "group"), _s(p, "username"))))
+_register(Action(name="user_audit_privileged", tool="User & Group Administration",
+    label="Audit privileged users", params=[], build=lambda p: api.cmd_audit_privileged_users()))
+_register(Action(name="user_list_usernames", tool="User & Group Administration",
+    label="List usernames", params=[], build=lambda p: api.cmd_list_usernames()))
+_register(Action(name="policy_pwquality", tool="User & Group Administration",
+    label="Set password quality policy", params=[
+        Param("minlen", "Min length", type="number", required=False),
+        Param("retry", "Retries", type="number", required=False),
+        Param("dcredit", "Digit credit", type="number", required=False),
+        Param("ucredit", "Upper credit", type="number", required=False),
+        Param("lcredit", "Lower credit", type="number", required=False),
+        Param("ocredit", "Other credit", type="number", required=False)],
+    build=lambda p: api.cmd_set_password_quality_policy(_io(p, "minlen"), _io(p, "retry"),
+        _io(p, "dcredit"), _io(p, "ucredit"), _io(p, "lcredit"), _io(p, "ocredit"))))
+_register(Action(name="policy_lockout", tool="User & Group Administration",
+    label="Set account lockout policy", params=[
+        Param("deny", "Failed attempts", type="number", required=False),
+        Param("unlock_time", "Unlock seconds", type="number", required=False)],
+    build=lambda p: api.cmd_set_account_lockout_policy(_io(p, "deny"), _io(p, "unlock_time"))))
+_register(Action(name="policy_umask", tool="User & Group Administration",
+    label="Set umask policy", params=[Param("value", "umask", default="027")],
+    build=lambda p: api.cmd_set_umask_policy(_s(p, "value", "027"))))
+_register(Action(name="policy_sudo", tool="User & Group Administration",
+    label="Set sudo policy", params=[
+        Param("timestamp_timeout", "Timestamp timeout (min)", type="number", required=False),
+        Param("require_password", "Password requirement", type="select",
+              options=["unchanged", "require", "nopasswd"], default="unchanged"),
+        Param("group", "Sudo group", default="sudo", required=False)],
+    build=lambda p: api.cmd_set_sudo_policy(_io(p, "timestamp_timeout"),
+        (None if _s(p, "require_password", "unchanged") == "unchanged"
+         else _s(p, "require_password") == "require"),
+        _s(p, "group", "sudo") or "sudo")))
+
+# ---- Service Management (advanced + process control) -----------------
+for _tn, _fn, _lbl in [
+        ("svc_reload", "cmd_service_reload", "Reload service"),
+        ("svc_enable", "cmd_service_enable", "Enable service"),
+        ("svc_disable", "cmd_service_disable", "Disable service"),
+        ("svc_troubleshoot", "cmd_troubleshoot_service", "Troubleshoot service"),
+        ("svc_dependencies", "cmd_service_dependencies", "Service dependencies")]:
+    _register(Action(name=_tn, tool="Service Management", label=_lbl,
+        params=[Param("name", "Service name")],
+        build=(lambda fn: (lambda p: getattr(api, fn)(_s(p, "name"))))(_fn)))
+_register(Action(name="svc_logs", tool="Service Management", label="Service logs",
+    params=[Param("name", "Service name"),
+            Param("lines", "Lines", type="number", default="200", required=False)],
+    build=lambda p: api.cmd_service_logs(_s(p, "name"), _i(p, "lines", 200))))
+_register(Action(name="svc_set_deps", tool="Service Management", label="Set service dependencies",
+    params=[Param("name", "Service"), Param("after", "After", required=False),
+            Param("requires", "Requires", required=False), Param("wants", "Wants", required=False)],
+    build=lambda p: api.cmd_set_service_dependencies(_s(p, "name"), _s(p, "after"),
+                                                     _s(p, "requires"), _s(p, "wants"))))
+_register(Action(name="svc_create", tool="Service Management", label="Create systemd service",
+    params=[Param("name", "Unit name"), Param("description", "Description", required=False),
+            Param("exec_start", "ExecStart"),
+            Param("working_directory", "Working dir", required=False),
+            Param("run_as_user", "Run as user", default="root", required=False),
+            Param("restart_policy", "Restart", type="select",
+                  options=["on-failure", "always", "no", "on-abnormal"], default="on-failure"),
+            Param("after", "After", default="network.target", required=False),
+            Param("enable_now", "Enable now", type="checkbox", default=True, required=False)],
+    build=lambda p: api.cmd_create_systemd_service(_s(p, "name"), _s(p, "description"),
+        _s(p, "exec_start"), _s(p, "working_directory"), _s(p, "run_as_user", "root") or "root",
+        _s(p, "restart_policy", "on-failure"), _s(p, "after", "network.target") or "network.target",
+        _b(p, "enable_now", True))))
+_register(Action(name="proc_high_load", tool="Service Management", label="Investigate high load",
+    params=[], build=lambda p: api.cmd_investigate_high_load()))
+_register(Action(name="proc_zombies", tool="Service Management", label="Zombie processes",
+    params=[], build=lambda p: api.cmd_zombie_processes()))
+_register(Action(name="proc_kill", tool="Service Management", label="Kill process", danger=True,
+    params=[Param("pid", "PID", type="number"),
+            Param("signal", "Signal", type="select", options=["TERM", "KILL", "HUP", "INT"], default="TERM")],
+    build=lambda p: api.cmd_kill_process(_i(p, "pid"), _s(p, "signal", "TERM"))))
+_register(Action(name="proc_renice", tool="Service Management", label="Renice process",
+    params=[Param("pid", "PID", type="number"), Param("niceness", "Niceness", type="number", default="0")],
+    build=lambda p: api.cmd_renice_process(_i(p, "pid"), _i(p, "niceness", 0))))
+_register(Action(name="proc_restart", tool="Service Management", label="Restart process (by PID)",
+    params=[Param("pid", "PID", type="number")],
+    build=lambda p: api.cmd_restart_process(_i(p, "pid"))))
+
+# ---- Host Software Management (advanced) ------------------------------
+_register(Action(name="pkg_verify", tool="Host Software Management", label="Verify package",
+    params=[Param("name", "Package name")], build=lambda p: api.cmd_verify_package(_s(p, "name"))))
+_register(Action(name="pkg_install_local", tool="Host Software Management",
+    label="Install local package (path on host)",
+    params=[Param("remote_path", "Path on host", help="e.g. /tmp/foo.rpm")],
+    build=lambda p: api.cmd_install_local_package(_s(p, "remote_path"))))
+_register(Action(name="pkg_detect_env", tool="Host Software Management",
+    label="Detect host package environment", params=[],
+    build=lambda p: api.cmd_detect_host_environment()))
+
+# ---- Repository Management (advanced) ---------------------------------
+_register(Action(name="repo_create", tool="Repository Management", label="Create repository (full)",
+    params=[Param("alias", "Alias / id"), Param("baseurl", "Base URL"),
+            Param("name", "Display name", required=False),
+            Param("gpgcheck", "GPG check", type="checkbox", default=True, required=False),
+            Param("gpgkey", "GPG key URL", required=False),
+            Param("distribution", "Distribution (deb)", required=False),
+            Param("components", "Components (deb)", required=False)],
+    build=lambda p: api.cmd_create_repository(_s(p, "alias"), _s(p, "baseurl"), _s(p, "name"),
+        _b(p, "gpgcheck", True), _s(p, "gpgkey"), _s(p, "distribution"), _s(p, "components"))))
+
+# ---- Cron & Systemd Timers (advanced) --------------------------------
+_register(Action(name="timer_create", tool="Cron & Systemd Timers", label="Create systemd timer",
+    params=[Param("name", "Timer name"), Param("exec_start", "ExecStart command"),
+            Param("on_calendar", "OnCalendar", required=False, help="e.g. *-*-* 02:00:00"),
+            Param("on_boot_sec", "OnBootSec", required=False),
+            Param("on_unit_active_sec", "OnUnitActiveSec", required=False),
+            Param("description", "Description", required=False),
+            Param("run_as_user", "Run as user", default="root", required=False),
+            Param("enable_now", "Enable now", type="checkbox", default=True, required=False)],
+    build=lambda p: api.cmd_create_systemd_timer(_s(p, "name"), _s(p, "exec_start"),
+        _s(p, "on_calendar"), _s(p, "on_boot_sec"), _s(p, "on_unit_active_sec"),
+        _s(p, "description"), _s(p, "run_as_user", "root") or "root", _b(p, "enable_now", True))))
+_register(Action(name="timer_delete", tool="Cron & Systemd Timers", label="Delete timer",
+    danger=True, params=[Param("name", "Timer name"),
+        Param("delete_service", "Also delete service unit", type="checkbox", default=True, required=False)],
+    build=lambda p: api.cmd_delete_timer(_s(p, "name"), _b(p, "delete_service", True))))
+
+# ---- Network Management (advanced) -----------------------------------
+_register(Action(name="net_set_hostname", tool="Network Management", label="Set hostname",
+    params=[Param("new_hostname", "Hostname")],
+    build=lambda p: api.cmd_set_hostname(_s(p, "new_hostname"))))
+_register(Action(name="net_set_gateway", tool="Network Management", label="Set gateway",
+    params=[Param("connection", "Connection"), Param("gateway", "Gateway")],
+    build=lambda p: api.cmd_set_gateway(_s(p, "connection"), _s(p, "gateway"))))
+_register(Action(name="net_set_dns", tool="Network Management", label="Set DNS servers",
+    params=[Param("connection", "Connection"), Param("dns_servers", "DNS servers", help="space-separated")],
+    build=lambda p: api.cmd_set_dns(_s(p, "connection"), _s(p, "dns_servers"))))
+_register(Action(name="net_static_ip", tool="Network Management", label="Configure static IP",
+    params=[Param("connection", "Connection"), Param("ip_cidr", "IP/CIDR", help="e.g. 10.0.0.5/24"),
+            Param("gateway", "Gateway", required=False), Param("dns", "DNS", required=False)],
+    build=lambda p: api.cmd_configure_static_ip(_s(p, "connection"), _s(p, "ip_cidr"),
+                                                _s(p, "gateway"), _s(p, "dns"))))
+_register(Action(name="net_dhcp", tool="Network Management", label="Configure DHCP",
+    params=[Param("connection", "Connection")],
+    build=lambda p: api.cmd_configure_dhcp(_s(p, "connection"))))
+_register(Action(name="net_bond", tool="Network Management", label="Configure bonding",
+    params=[Param("bond_name", "Bond name"),
+            Param("mode", "Mode", type="select",
+                  options=["active-backup", "balance-rr", "802.3ad", "balance-xor"], default="active-backup"),
+            Param("slave_ifaces", "Slave interfaces", help="space-separated")],
+    build=lambda p: api.cmd_configure_bonding(_s(p, "bond_name"), _s(p, "mode", "active-backup"),
+                                              _s(p, "slave_ifaces"))))
+_register(Action(name="net_team", tool="Network Management", label="Configure teaming",
+    params=[Param("team_name", "Team name"),
+            Param("runner", "Runner", type="select",
+                  options=["activebackup", "roundrobin", "lacp", "loadbalance"], default="activebackup"),
+            Param("slave_ifaces", "Slave interfaces", help="space-separated")],
+    build=lambda p: api.cmd_configure_teaming(_s(p, "team_name"), _s(p, "runner", "activebackup"),
+                                              _s(p, "slave_ifaces"))))
+_register(Action(name="net_vlan", tool="Network Management", label="Configure VLAN",
+    params=[Param("parent_iface", "Parent interface"), Param("vlan_id", "VLAN ID", type="number"),
+            Param("vlan_name", "VLAN name", required=False)],
+    build=lambda p: api.cmd_configure_vlan(_s(p, "parent_iface"), _i(p, "vlan_id"), _s(p, "vlan_name"))))
+_register(Action(name="net_bridge", tool="Network Management", label="Configure bridge",
+    params=[Param("bridge_name", "Bridge name"),
+            Param("slave_ifaces", "Slave interfaces", help="space-separated")],
+    build=lambda p: api.cmd_configure_bridge(_s(p, "bridge_name"), _s(p, "slave_ifaces"))))
+_register(Action(name="net_monitor_ports", tool="Network Management", label="Monitor ports",
+    params=[], build=lambda p: api.cmd_monitor_ports()))
+_register(Action(name="net_tcpdump", tool="Network Management", label="Packet capture (tcpdump)",
+    params=[Param("iface", "Interface", required=False), Param("count", "Packets", type="number", default="50", required=False),
+            Param("timeout_s", "Timeout (s)", type="number", default="10", required=False),
+            Param("filter_expr", "Filter", required=False)],
+    build=lambda p: api.cmd_tcpdump_capture(_s(p, "iface"), _i(p, "count", 50),
+                                            _i(p, "timeout_s", 10), _s(p, "filter_expr"))))
+
+# ---- Storage Administration (advanced) -------------------------------
+_register(Action(name="stor_remove_disk", tool="Storage Administration", label="Remove disk",
+    danger=True, params=[Param("device", "Device")],
+    build=lambda p: api.cmd_remove_disk(_s(p, "device"))))
+_register(Action(name="stor_disk_health", tool="Storage Administration", label="Monitor disk health",
+    params=[], build=lambda p: api.cmd_monitor_disk_health()))
+_register(Action(name="stor_part_table", tool="Storage Administration", label="Create partition table",
+    danger=True, params=[Param("device", "Device"),
+        Param("label_type", "Label", type="select", options=["gpt", "msdos"], default="gpt")],
+    build=lambda p: api.cmd_create_partition_table(_s(p, "device"), _s(p, "label_type", "gpt"))))
+_register(Action(name="stor_part_create", tool="Storage Administration", label="Create partition",
+    params=[Param("device", "Device"),
+            Param("fs_type", "Filesystem", type="select", options=["ext4", "xfs", "btrfs", "vfat"], default="ext4"),
+            Param("start", "Start", default="0%", required=False), Param("end", "End", default="100%", required=False)],
+    build=lambda p: api.cmd_create_partition(_s(p, "device"), _s(p, "fs_type", "ext4"),
+                                             _s(p, "start", "0%") or "0%", _s(p, "end", "100%") or "100%")))
+_register(Action(name="stor_part_delete", tool="Storage Administration", label="Delete partition",
+    danger=True, params=[Param("device", "Device"), Param("part_number", "Partition #", type="number")],
+    build=lambda p: api.cmd_delete_partition(_s(p, "device"), _i(p, "part_number"))))
+_register(Action(name="stor_part_resize", tool="Storage Administration", label="Resize partition",
+    params=[Param("device", "Device"), Param("part_number", "Partition #", type="number"),
+            Param("end", "New end", help="e.g. 100%")],
+    build=lambda p: api.cmd_resize_partition(_s(p, "device"), _i(p, "part_number"), _s(p, "end"))))
+_register(Action(name="stor_pv_create", tool="Storage Administration", label="Create physical volume(s)",
+    params=[Param("devices", "Devices", help="space-separated")],
+    build=lambda p: api.cmd_create_physical_volume(_s(p, "devices"))))
+_register(Action(name="stor_vg_create", tool="Storage Administration", label="Create volume group",
+    params=[Param("vg_name", "VG name"), Param("devices", "Devices", help="space-separated")],
+    build=lambda p: api.cmd_create_volume_group(_s(p, "vg_name"), _s(p, "devices"))))
+_register(Action(name="stor_vg_extend", tool="Storage Administration", label="Extend volume group",
+    params=[Param("vg_name", "VG name"), Param("devices", "Devices")],
+    build=lambda p: api.cmd_extend_volume_group(_s(p, "vg_name"), _s(p, "devices"))))
+_register(Action(name="stor_vg_reduce", tool="Storage Administration", label="Reduce volume group",
+    danger=True, params=[Param("vg_name", "VG name"), Param("devices", "Devices")],
+    build=lambda p: api.cmd_reduce_volume_group(_s(p, "vg_name"), _s(p, "devices"))))
+_register(Action(name="stor_lv_extend", tool="Storage Administration", label="Extend logical volume",
+    params=[Param("vg_name", "VG name"), Param("lv_name", "LV name"), Param("new_size", "New size"),
+            Param("resize_fs", "Resize filesystem", type="checkbox", default=True, required=False)],
+    build=lambda p: api.cmd_extend_logical_volume(_s(p, "vg_name"), _s(p, "lv_name"),
+                                                  _s(p, "new_size"), _b(p, "resize_fs", True))))
+_register(Action(name="stor_lv_reduce", tool="Storage Administration", label="Reduce logical volume",
+    danger=True, params=[Param("vg_name", "VG name"), Param("lv_name", "LV name"), Param("new_size", "New size")],
+    build=lambda p: api.cmd_reduce_logical_volume(_s(p, "vg_name"), _s(p, "lv_name"), _s(p, "new_size"))))
+_register(Action(name="stor_raid_create", tool="Storage Administration", label="Create RAID array",
+    params=[Param("raid_device", "md device", help="e.g. /dev/md0"),
+            Param("level", "Level", type="select", options=["0", "1", "5", "6", "10"], default="1"),
+            Param("devices", "Devices", help="space-separated")],
+    build=lambda p: api.cmd_create_raid_array(_s(p, "raid_device"), _s(p, "level", "1"), _s(p, "devices"))))
+_register(Action(name="stor_raid_status", tool="Storage Administration", label="RAID status",
+    params=[Param("raid_device", "md device", required=False)],
+    build=lambda p: api.cmd_raid_status(_s(p, "raid_device"))))
+_register(Action(name="stor_raid_replace", tool="Storage Administration", label="Replace failed RAID disk",
+    params=[Param("raid_device", "md device"), Param("failed_device", "Failed device"),
+            Param("new_device", "New device")],
+    build=lambda p: api.cmd_replace_failed_disk(_s(p, "raid_device"), _s(p, "failed_device"), _s(p, "new_device"))))
+_register(Action(name="stor_swap_file", tool="Storage Administration", label="Create swap file",
+    params=[Param("path", "Path", default="/swapfile"), Param("size_mb", "Size (MB)", type="number", default="1024"),
+            Param("persist", "Persist in fstab", type="checkbox", default=True, required=False)],
+    build=lambda p: api.cmd_create_swap_file(_s(p, "path", "/swapfile") or "/swapfile",
+                                             _i(p, "size_mb", 1024), _b(p, "persist", True))))
+_register(Action(name="stor_swap_resize", tool="Storage Administration", label="Resize swap file",
+    params=[Param("path", "Path", default="/swapfile"), Param("size_mb", "Size (MB)", type="number", default="2048"),
+            Param("persist", "Persist in fstab", type="checkbox", default=True, required=False)],
+    build=lambda p: api.cmd_resize_swap_file(_s(p, "path", "/swapfile") or "/swapfile",
+                                             _i(p, "size_mb", 2048), _b(p, "persist", True))))
+_register(Action(name="stor_swap_partition", tool="Storage Administration", label="Create swap partition",
+    params=[Param("device", "Device"), Param("persist", "Persist in fstab", type="checkbox", default=True, required=False)],
+    build=lambda p: api.cmd_create_swap_partition(_s(p, "device"), _b(p, "persist", True))))
+_register(Action(name="stor_swap_disable", tool="Storage Administration", label="Disable swap",
+    params=[Param("target", "Target", help="path or device"),
+            Param("remove_fstab", "Remove fstab entry", type="checkbox", default=False, required=False)],
+    build=lambda p: api.cmd_disable_swap(_s(p, "target"), _b(p, "remove_fstab"))))
+
+# ---- Firewall Administration (advanced) ------------------------------
+_register(Action(name="fw_set_enabled", tool="Firewall Administration", label="Enable/disable firewalld",
+    params=[Param("enabled", "Enabled", type="checkbox", default=True, required=False)],
+    build=lambda p: api.cmd_set_firewalld_enabled(_b(p, "enabled", True))))
+_register(Action(name="fw_set_default_zone", tool="Firewall Administration", label="Set default zone",
+    params=[Param("zone", "Zone")], build=lambda p: api.cmd_set_default_zone(_s(p, "zone"))))
+_register(Action(name="fw_create_zone", tool="Firewall Administration", label="Create zone",
+    params=[Param("zone_name", "Zone name")], build=lambda p: api.cmd_create_zone(_s(p, "zone_name"))))
+_register(Action(name="fw_delete_zone", tool="Firewall Administration", label="Delete zone",
+    danger=True, params=[Param("zone_name", "Zone name")],
+    build=lambda p: api.cmd_delete_zone(_s(p, "zone_name"))))
+_register(Action(name="fw_list_rich", tool="Firewall Administration", label="List rich rules",
+    params=[Param("zone", "Zone", required=False)], build=lambda p: api.cmd_list_rich_rules(_s(p, "zone"))))
+_register(Action(name="fw_add_rich", tool="Firewall Administration", label="Add rich rule",
+    params=[Param("rule", "Rich rule"), Param("zone", "Zone", required=False)],
+    build=lambda p: api.cmd_add_rich_rule(_s(p, "rule"), _s(p, "zone"))))
+_register(Action(name="fw_remove_rich", tool="Firewall Administration", label="Remove rich rule",
+    danger=True, params=[Param("rule", "Rich rule"), Param("zone", "Zone", required=False)],
+    build=lambda p: api.cmd_remove_rich_rule(_s(p, "rule"), _s(p, "zone"))))
+_register(Action(name="fw_nft_add_table", tool="Firewall Administration", label="nft: add table",
+    params=[Param("family", "Family", type="select", options=["inet", "ip", "ip6", "arp", "bridge"], default="inet"),
+            Param("table", "Table")],
+    build=lambda p: api.cmd_nft_add_table(_s(p, "family", "inet"), _s(p, "table"))))
+_register(Action(name="fw_nft_add_chain", tool="Firewall Administration", label="nft: add chain",
+    params=[Param("family", "Family", type="select", options=["inet", "ip", "ip6"], default="inet"),
+            Param("table", "Table"), Param("chain", "Chain"),
+            Param("hook", "Hook", required=False), Param("priority", "Priority", default="0", required=False),
+            Param("policy", "Policy", type="select", options=["accept", "drop"], default="accept")],
+    build=lambda p: api.cmd_nft_add_chain(_s(p, "family", "inet"), _s(p, "table"), _s(p, "chain"),
+        _s(p, "hook"), _s(p, "priority", "0") or "0", _s(p, "policy", "accept"))))
+_register(Action(name="fw_nft_add_rule", tool="Firewall Administration", label="nft: add rule",
+    params=[Param("family", "Family", default="inet"), Param("table", "Table"),
+            Param("chain", "Chain"), Param("rule_spec", "Rule spec")],
+    build=lambda p: api.cmd_nft_add_rule(_s(p, "family", "inet"), _s(p, "table"),
+                                         _s(p, "chain"), _s(p, "rule_spec"))))
+_register(Action(name="fw_nft_delete_rule", tool="Firewall Administration", label="nft: delete rule",
+    danger=True, params=[Param("family", "Family", default="inet"), Param("table", "Table"),
+            Param("chain", "Chain"), Param("handle", "Handle")],
+    build=lambda p: api.cmd_nft_delete_rule(_s(p, "family", "inet"), _s(p, "table"),
+                                            _s(p, "chain"), _s(p, "handle"))))
+_register(Action(name="fw_iptables_add", tool="Firewall Administration", label="iptables: add rule",
+    params=[Param("table", "Table", default="filter"), Param("chain", "Chain"), Param("rule_spec", "Rule spec")],
+    build=lambda p: api.cmd_iptables_add_rule(_s(p, "table", "filter") or "filter",
+                                              _s(p, "chain"), _s(p, "rule_spec"))))
+_register(Action(name="fw_iptables_delete", tool="Firewall Administration", label="iptables: delete rule",
+    danger=True, params=[Param("table", "Table", default="filter"), Param("chain", "Chain"),
+                         Param("rule_spec_or_number", "Rule spec or number")],
+    build=lambda p: api.cmd_iptables_delete_rule(_s(p, "table", "filter") or "filter",
+                                                 _s(p, "chain"), _s(p, "rule_spec_or_number"))))
+_register(Action(name="fw_iptables_save", tool="Firewall Administration", label="iptables: save/persist",
+    params=[], build=lambda p: api.cmd_iptables_save_persist()))
+_register(Action(name="fw_iptables_flush", tool="Firewall Administration", label="iptables: flush",
+    danger=True, params=[Param("table", "Table", default="filter", required=False),
+                         Param("chain", "Chain", required=False, help="blank = whole table")],
+    build=lambda p: api.cmd_iptables_flush(_s(p, "table", "filter") or "filter", _s(p, "chain"))))
+_register(Action(name="fw_nft_flush", tool="Firewall Administration", label="nft: flush ruleset",
+    danger=True, params=[], build=lambda p: api.cmd_nft_flush_ruleset()))
+
+# ---- Security Administration (advanced) ------------------------------
+_register(Action(name="sec_set_selinux_config", tool="Security Administration",
+    label="Set SELinux config mode (persistent)",
+    params=[Param("mode", "Mode", type="select", options=["enforcing", "permissive", "disabled"], default="enforcing")],
+    build=lambda p: api.cmd_set_selinux_config_mode(_s(p, "mode", "enforcing"))))
+_register(Action(name="sec_selinux_booleans", tool="Security Administration", label="List SELinux booleans",
+    params=[Param("filter_text", "Filter", required=False)],
+    build=lambda p: api.cmd_selinux_list_booleans(_s(p, "filter_text"))))
+_register(Action(name="sec_selinux_set_bool", tool="Security Administration", label="Set SELinux boolean",
+    params=[Param("name", "Boolean"), Param("enabled", "On", type="checkbox", default=True, required=False),
+            Param("permanent", "Permanent", type="checkbox", default=True, required=False)],
+    build=lambda p: api.cmd_set_selinux_boolean(_s(p, "name"), _b(p, "enabled", True), _b(p, "permanent", True))))
+_register(Action(name="sec_selinux_denials", tool="Security Administration", label="Recent SELinux denials",
+    params=[Param("lines", "Lines", type="number", default="50", required=False)],
+    build=lambda p: api.cmd_selinux_recent_denials(_i(p, "lines", 50))))
+_register(Action(name="sec_selinux_explain", tool="Security Administration", label="Explain SELinux denials",
+    params=[Param("lines", "Lines", type="number", default="50", required=False)],
+    build=lambda p: api.cmd_selinux_explain_denials(_i(p, "lines", 50))))
+_register(Action(name="sec_selinux_journal", tool="Security Administration", label="SELinux journal denials",
+    params=[Param("lines", "Lines", type="number", default="50", required=False)],
+    build=lambda p: api.cmd_selinux_journal_denials(_i(p, "lines", 50))))
+_register(Action(name="sec_selinux_getctx", tool="Security Administration", label="Get SELinux context",
+    params=[Param("path", "Path")], build=lambda p: api.cmd_selinux_get_context(_s(p, "path"))))
+_register(Action(name="sec_selinux_restorectx", tool="Security Administration", label="Restore SELinux context",
+    params=[Param("path", "Path"), Param("recursive", "Recursive", type="checkbox", default=False, required=False)],
+    build=lambda p: api.cmd_selinux_restore_context(_s(p, "path"), _b(p, "recursive"))))
+_register(Action(name="sec_selinux_list_fctx", tool="Security Administration", label="List file contexts",
+    params=[Param("pattern", "Pattern", required=False)],
+    build=lambda p: api.cmd_selinux_list_fcontext(_s(p, "pattern"))))
+_register(Action(name="sec_selinux_add_fctx", tool="Security Administration", label="Add file context",
+    params=[Param("path_regex", "Path regex"), Param("file_type", "Type", help="e.g. httpd_sys_content_t")],
+    build=lambda p: api.cmd_selinux_add_fcontext(_s(p, "path_regex"), _s(p, "file_type"))))
+_register(Action(name="sec_selinux_rm_fctx", tool="Security Administration", label="Remove file context",
+    danger=True, params=[Param("path_regex", "Path regex"), Param("file_type", "Type")],
+    build=lambda p: api.cmd_selinux_remove_fcontext(_s(p, "path_regex"), _s(p, "file_type"))))
+_register(Action(name="sec_selinux_gen_policy", tool="Security Administration", label="Generate policy from denials",
+    params=[Param("module_name", "Module name")],
+    build=lambda p: api.cmd_selinux_generate_policy_from_denials(_s(p, "module_name"))))
+_register(Action(name="sec_sshd_get", tool="Security Administration", label="Get effective sshd config",
+    params=[Param("key", "Option", required=False)],
+    build=lambda p: api.cmd_sshd_get_effective_config(_s(p, "key"))))
+_register(Action(name="sec_sshd_reload", tool="Security Administration", label="Reload sshd",
+    params=[], build=lambda p: api.cmd_sshd_reload()))
+_register(Action(name="sec_set_root_login", tool="Security Administration", label="Set root SSH login",
+    params=[Param("allow", "Allow root login", type="checkbox", default=False, required=False)],
+    build=lambda p: api.cmd_set_root_login(_b(p, "allow"))))
+_register(Action(name="sec_set_pubkey_auth", tool="Security Administration", label="Set pubkey auth",
+    params=[Param("enabled", "Enabled", type="checkbox", default=True, required=False)],
+    build=lambda p: api.cmd_set_pubkey_auth(_b(p, "enabled", True))))
+_register(Action(name="sec_set_password_auth", tool="Security Administration", label="Set password auth",
+    params=[Param("enabled", "Enabled", type="checkbox", default=False, required=False)],
+    build=lambda p: api.cmd_set_password_auth(_b(p, "enabled"))))
+_register(Action(name="sec_list_authkeys", tool="Security Administration", label="List authorized keys",
+    params=[Param("user", "User")], build=lambda p: api.cmd_list_authorized_keys(_s(p, "user"))))
+_register(Action(name="sec_install_authkey", tool="Security Administration", label="Install authorized key",
+    params=[Param("user", "User"), Param("public_key", "Public key")],
+    build=lambda p: api.cmd_install_authorized_key(_s(p, "user"), _s(p, "public_key"))))
+_register(Action(name="sec_remove_authkey", tool="Security Administration", label="Remove authorized key",
+    danger=True, params=[Param("user", "User"), Param("match_text", "Match text")],
+    build=lambda p: api.cmd_remove_authorized_key(_s(p, "user"), _s(p, "match_text"))))
+_register(Action(name="sec_rotate_hostkeys", tool="Security Administration", label="Rotate SSH host keys",
+    danger=True, params=[], build=lambda p: api.cmd_rotate_host_keys()))
+_register(Action(name="sec_auditd_status", tool="Security Administration", label="auditd status",
+    params=[], build=lambda p: api.cmd_auditd_status()))
+_register(Action(name="sec_audit_tail", tool="Security Administration", label="Tail audit log",
+    params=[Param("lines", "Lines", type="number", default="200", required=False)],
+    build=lambda p: api.cmd_tail_audit_log(_i(p, "lines", 200))))
+_register(Action(name="sec_audit_search", tool="Security Administration", label="Search audit log",
+    params=[Param("query", "Query"), Param("lines", "Lines", type="number", default="200", required=False)],
+    build=lambda p: api.cmd_search_audit_log(_s(p, "query"), _i(p, "lines", 200))))
+_register(Action(name="sec_failed_summary", tool="Security Administration", label="Failed login summary",
+    params=[Param("top_n", "Top N", type="number", default="20", required=False)],
+    build=lambda p: api.cmd_failed_login_summary(_i(p, "top_n", 20))))
+_register(Action(name="sec_pw_policy", tool="Security Administration", label="Show password policy",
+    params=[], build=lambda p: api.cmd_get_password_policy()))
+_register(Action(name="sec_set_pwquality", tool="Security Administration", label="Set pwquality option",
+    params=[Param("key", "Option"), Param("value", "Value")],
+    build=lambda p: api.cmd_set_pwquality_option(_s(p, "key"), _s(p, "value"))))
+_register(Action(name="sec_set_aging", tool="Security Administration", label="Set default password aging",
+    params=[Param("max_days", "Max days", type="number", required=False),
+            Param("min_days", "Min days", type="number", required=False),
+            Param("warn_days", "Warn days", type="number", required=False)],
+    build=lambda p: api.cmd_set_password_aging(_io(p, "max_days"), _io(p, "min_days"), _io(p, "warn_days"))))
+_register(Action(name="sec_set_lockout", tool="Security Administration", label="Set account lockout",
+    params=[Param("attempts", "Attempts", type="number", default="5"),
+            Param("unlock_seconds", "Unlock seconds", type="number", default="900")],
+    build=lambda p: api.cmd_set_account_lockout(_i(p, "attempts", 5), _i(p, "unlock_seconds", 900))))
+_register(Action(name="sec_sysctl_harden", tool="Security Administration", label="Apply sysctl hardening",
+    params=[], build=lambda p: api.cmd_apply_sysctl_hardening()))
+_register(Action(name="sec_disable_coredumps", tool="Security Administration", label="Disable core dumps",
+    params=[], build=lambda p: api.cmd_disable_core_dumps()))
+_register(Action(name="sec_world_writable", tool="Security Administration", label="List world-writable files",
+    params=[Param("path", "Path", default="/etc", required=False)],
+    build=lambda p: api.cmd_list_world_writable_files(_s(p, "path", "/etc") or "/etc")))
+_register(Action(name="sec_suid", tool="Security Administration", label="List SUID binaries",
+    params=[Param("path", "Path", default="/", required=False)],
+    build=lambda p: api.cmd_list_suid_binaries(_s(p, "path", "/") or "/")))
+_register(Action(name="sec_lynis_status", tool="Security Administration", label="Lynis status",
+    params=[], build=lambda p: api.cmd_lynis_status()))
+_register(Action(name="sec_run_lynis", tool="Security Administration", label="Run Lynis scan",
+    params=[], build=lambda p: api.cmd_run_lynis_scan()))
+_register(Action(name="sec_run_rkhunter", tool="Security Administration", label="Run rkhunter scan",
+    params=[], build=lambda p: api.cmd_run_rkhunter_scan()))
+
+# ---- File System Management (advanced) -------------------------------
+_register(Action(name="fs_rename", tool="File System Management", label="Rename",
+    params=[Param("path", "Path"), Param("new_name", "New name")],
+    build=lambda p: api.cmd_rename_file(_s(p, "path"), _s(p, "new_name"))))
+_register(Action(name="fs_symlink", tool="File System Management", label="Create symlink",
+    params=[Param("target", "Target"), Param("link_path", "Link path")],
+    build=lambda p: api.cmd_create_symlink(_s(p, "target"), _s(p, "link_path"))))
+_register(Action(name="fs_hardlink", tool="File System Management", label="Create hardlink",
+    params=[Param("target", "Target"), Param("link_path", "Link path")],
+    build=lambda p: api.cmd_create_hardlink(_s(p, "target"), _s(p, "link_path"))))
+_register(Action(name="fs_show_acl", tool="File System Management", label="Show ACL",
+    params=[Param("path", "Path")], build=lambda p: api.cmd_show_acl(_s(p, "path"))))
+_register(Action(name="fs_set_acl", tool="File System Management", label="Set ACL",
+    params=[Param("path", "Path"), Param("acl_entries", "ACL entries", help="e.g. u:bob:rwx"),
+            Param("recursive", "Recursive", type="checkbox", default=False, required=False)],
+    build=lambda p: api.cmd_set_acl(_s(p, "path"), _s(p, "acl_entries"), _b(p, "recursive"))))
+_register(Action(name="fs_extract", tool="File System Management", label="Extract archive",
+    params=[Param("archive_path", "Archive"), Param("destination_dir", "Destination dir")],
+    build=lambda p: api.cmd_extract_archive(_s(p, "archive_path"), _s(p, "destination_dir"))))
+_register(Action(name="fs_compress", tool="File System Management", label="Compress file",
+    params=[Param("path", "Path"),
+            Param("method", "Method", type="select", options=["gzip", "bzip2", "xz"], default="gzip"),
+            Param("keep_original", "Keep original", type="checkbox", default=True, required=False)],
+    build=lambda p: api.cmd_compress_file(_s(p, "path"), _s(p, "method", "gzip"), _b(p, "keep_original", True))))
+_register(Action(name="fs_decompress", tool="File System Management", label="Decompress file",
+    params=[Param("path", "Path"), Param("keep_original", "Keep original", type="checkbox", default=True, required=False)],
+    build=lambda p: api.cmd_decompress_file(_s(p, "path"), _b(p, "keep_original", True))))
+_register(Action(name="fs_mount", tool="File System Management", label="Mount filesystem",
+    params=[Param("device", "Device"), Param("mount_point", "Mount point"),
+            Param("fstype", "FS type", required=False), Param("options", "Options", required=False)],
+    build=lambda p: api.cmd_mount_filesystem(_s(p, "device"), _s(p, "mount_point"),
+                                             _s(p, "fstype"), _s(p, "options"))))
+_register(Action(name="fs_unmount", tool="File System Management", label="Unmount",
+    params=[Param("target", "Target"), Param("force", "Force", type="checkbox", default=False, required=False)],
+    build=lambda p: api.cmd_unmount_filesystem(_s(p, "target"), _b(p, "force"))))
+_register(Action(name="fs_add_fstab", tool="File System Management", label="Add fstab entry",
+    params=[Param("device", "Device"), Param("mount_point", "Mount point"), Param("fstype", "FS type"),
+            Param("options", "Options", default="defaults", required=False),
+            Param("dump", "dump", type="number", default="0", required=False),
+            Param("pass_num", "pass", type="number", default="0", required=False)],
+    build=lambda p: api.cmd_add_fstab_entry(_s(p, "device"), _s(p, "mount_point"), _s(p, "fstype"),
+        _s(p, "options", "defaults") or "defaults", _i(p, "dump", 0), _i(p, "pass_num", 0))))
+_register(Action(name="fs_remove_fstab", tool="File System Management", label="Remove fstab entry",
+    danger=True, params=[Param("mount_point", "Mount point")],
+    build=lambda p: api.cmd_remove_fstab_entry(_s(p, "mount_point"))))
+_register(Action(name="fs_resize", tool="File System Management", label="Resize filesystem",
+    params=[Param("target", "Target"), Param("new_size", "New size", required=False, help="blank = grow to max")],
+    build=lambda p: api.cmd_resize_filesystem(_s(p, "target"), _s(p, "new_size"))))
+_register(Action(name="fs_repair", tool="File System Management", label="Repair filesystem",
+    danger=True, params=[Param("device", "Device")],
+    build=lambda p: api.cmd_repair_filesystem(_s(p, "device"))))
+_register(Action(name="fs_show_quotas", tool="File System Management", label="Show quotas",
+    params=[Param("mount_point", "Mount point", required=False)],
+    build=lambda p: api.cmd_show_quotas(_s(p, "mount_point"))))
+_register(Action(name="fs_enable_quotas", tool="File System Management", label="Enable quotas",
+    params=[Param("mount_point", "Mount point")],
+    build=lambda p: api.cmd_enable_quotas(_s(p, "mount_point"))))
+_register(Action(name="fs_set_quota", tool="File System Management", label="Set user quota",
+    params=[Param("username", "User"), Param("mount_point", "Mount point"),
+            Param("block_soft", "Block soft (KB)", type="number"), Param("block_hard", "Block hard (KB)", type="number"),
+            Param("inode_soft", "Inode soft", type="number", default="0", required=False),
+            Param("inode_hard", "Inode hard", type="number", default="0", required=False)],
+    build=lambda p: api.cmd_set_user_quota(_s(p, "username"), _s(p, "mount_point"),
+        _i(p, "block_soft"), _i(p, "block_hard"), _i(p, "inode_soft", 0), _i(p, "inode_hard", 0))))
+
+# ---- System Health, Logs & Recovery (advanced) -----------------------
+_register(Action(name="health_large_files", tool="System Health, Logs & Recovery", label="Find large files",
+    params=[Param("path", "Path", default="/", required=False),
+            Param("top_n", "Count", type="number", default="20", required=False)],
+    build=lambda p: api.cmd_find_large_files(_s(p, "path", "/") or "/", _i(p, "top_n", 20))))
+_register(Action(name="health_journal", tool="System Health, Logs & Recovery", label="Analyze journal logs",
+    params=[Param("priority", "Priority", required=False, help="e.g. err"),
+            Param("lines", "Lines", type="number", default="200", required=False)],
+    build=lambda p: api.cmd_analyze_journal_logs(_s(p, "priority"), _i(p, "lines", 200))))
+_register(Action(name="health_app_errors", tool="System Health, Logs & Recovery", label="Trace application errors",
+    params=[Param("unit", "Unit", required=False), Param("lines", "Lines", type="number", default="200", required=False)],
+    build=lambda p: api.cmd_trace_application_errors(_s(p, "unit"), _i(p, "lines", 200))))
+_register(Action(name="health_crashes", tool="System Health, Logs & Recovery", label="Investigate crashes",
+    params=[], build=lambda p: api.cmd_investigate_crashes()))
+_register(Action(name="health_mem_issues", tool="System Health, Logs & Recovery", label="Troubleshoot memory issues",
+    params=[], build=lambda p: api.cmd_troubleshoot_memory_issues()))
+_register(Action(name="health_cpu_bottleneck", tool="System Health, Logs & Recovery", label="Analyze CPU bottlenecks",
+    params=[], build=lambda p: api.cmd_analyze_cpu_bottlenecks()))
+_register(Action(name="health_audit_logs", tool="System Health, Logs & Recovery", label="Review audit logs",
+    params=[Param("lines", "Lines", type="number", default="200", required=False)],
+    build=lambda p: api.cmd_review_audit_logs(_i(p, "lines", 200))))
+_register(Action(name="health_sos_report", tool="System Health, Logs & Recovery", label="Generate sos report",
+    params=[], build=lambda p: api.cmd_generate_sos_report()))
+_register(Action(name="health_install_sos", tool="System Health, Logs & Recovery", label="Install sos",
+    params=[], build=lambda p: api.cmd_install_sos()))
+_register(Action(name="health_install_auditd", tool="System Health, Logs & Recovery", label="Install auditd",
+    params=[], build=lambda p: api.cmd_install_auditd()))
+# Boot & recovery
+_register(Action(name="boot_analyze", tool="System Health, Logs & Recovery", label="Analyze boot failures",
+    params=[], build=lambda p: api.cmd_analyze_boot_failures()))
+_register(Action(name="boot_set_grub_default", tool="System Health, Logs & Recovery", label="Set GRUB default",
+    params=[Param("entry", "Entry")], build=lambda p: api.cmd_set_grub_default(_s(p, "entry"))))
+_register(Action(name="boot_set_grub_timeout", tool="System Health, Logs & Recovery", label="Set GRUB timeout",
+    params=[Param("seconds", "Seconds", type="number", default="5")],
+    build=lambda p: api.cmd_set_grub_timeout(_s(p, "seconds", "5"))))
+_register(Action(name="boot_rebuild_grub", tool="System Health, Logs & Recovery", label="Rebuild GRUB",
+    danger=True, params=[], build=lambda p: api.cmd_rebuild_grub()))
+_register(Action(name="boot_set_target", tool="System Health, Logs & Recovery", label="Set boot target",
+    params=[Param("target", "Target", type="select",
+                  options=["multi-user", "graphical", "rescue", "emergency"], default="multi-user")],
+    build=lambda p: api.cmd_set_boot_target(_s(p, "target", "multi-user"))))
+_register(Action(name="boot_set_cmdline", tool="System Health, Logs & Recovery", label="Set kernel cmdline",
+    params=[Param("params", "Parameters")], build=lambda p: api.cmd_set_kernel_cmdline(_s(p, "params"))))
+_register(Action(name="boot_regen_initramfs", tool="System Health, Logs & Recovery", label="Regenerate initramfs",
+    danger=True, params=[], build=lambda p: api.cmd_regenerate_initramfs()))
+_register(Action(name="boot_remove_kernels", tool="System Health, Logs & Recovery", label="Remove old kernels",
+    danger=True, params=[Param("keep", "Keep N", type="number", default="2", required=False)],
+    build=lambda p: api.cmd_remove_old_kernels(_s(p, "keep", "2") or "2")))
+
+# ---- Time Synchronization (advanced) ---------------------------------
+_register(Action(name="time_configure_chrony", tool="Time Synchronization", label="Configure chrony",
+    params=[], build=lambda p: api.cmd_configure_chrony()))
+_register(Action(name="time_troubleshoot", tool="Time Synchronization", label="Troubleshoot drift",
+    params=[], build=lambda p: api.cmd_troubleshoot_drift()))
+
+# ---- Certificate Management (advanced) -------------------------------
+_register(Action(name="cert_install", tool="Certificate Management", label="Install certificate",
+    params=[Param("cert_src", "Cert path on host"), Param("key_src", "Key path on host")],
+    build=lambda p: api.cmd_install_certificate(_s(p, "cert_src"), _s(p, "key_src"))))
+_register(Action(name="cert_renew_certbot", tool="Certificate Management", label="Renew (certbot)",
+    params=[Param("domain", "Domain", required=False)],
+    build=lambda p: api.cmd_renew_certbot(_s(p, "domain"))))
+_register(Action(name="cert_verify_chain", tool="Certificate Management", label="Verify chain",
+    params=[Param("cert_path", "Cert path"), Param("chain_path", "Chain path", required=False)],
+    build=lambda p: api.cmd_verify_chain(_s(p, "cert_path"), _s(p, "chain_path"))))
+
+# ---- Containers & VMs (advanced) -------------------------------------
+_register(Action(name="vm_action", tool="Containers & VMs", label="VM action",
+    params=[Param("action", "Action", type="select",
+                  options=["start", "shutdown", "destroy", "reboot", "suspend", "resume"], default="start"),
+            Param("name", "VM name")],
+    build=lambda p: api.cmd_vm_action(_s(p, "action", "start"), _s(p, "name"))))
+_register(Action(name="vm_info", tool="Containers & VMs", label="VM info",
+    params=[Param("name", "VM name")], build=lambda p: api.cmd_vm_info(_s(p, "name"))))
+
+# ---- Directory Services (advanced) -----------------------------------
+_register(Action(name="dir_install_ldap", tool="Directory Services (Active Directory / LDAP)",
+    label="Install LDAP dependencies", params=[], build=lambda p: api.cmd_install_ldap_dependencies()))
+_register(Action(name="dir_krb_config", tool="Directory Services (Active Directory / LDAP)",
+    label="Configure Kerberos", params=[Param("realm", "Realm"), Param("kdc", "KDC"),
+        Param("admin_server", "Admin server", required=False)],
+    build=lambda p: api.cmd_kerberos_config(_s(p, "realm"), _s(p, "kdc"), _s(p, "admin_server"))))
+_register(Action(name="dir_krb_kinit", tool="Directory Services (Active Directory / LDAP)",
+    label="Kerberos kinit", params=[Param("principal", "Principal"), Param("password", "Password", type="password")],
+    build=lambda p: api.cmd_kerberos_kinit(_s(p, "principal"), _s(p, "password"))))
+_register(Action(name="dir_krb_destroy", tool="Directory Services (Active Directory / LDAP)",
+    label="Kerberos destroy tickets", params=[], build=lambda p: api.cmd_kerberos_destroy()))
+_register(Action(name="dir_realm_permit", tool="Directory Services (Active Directory / LDAP)",
+    label="Realm permit", params=[Param("principal", "Principal"),
+        Param("is_group", "Is group", type="checkbox", default=False, required=False)],
+    build=lambda p: api.cmd_realm_permit(_s(p, "principal"), _b(p, "is_group"))))
+_register(Action(name="dir_mkhomedir", tool="Directory Services (Active Directory / LDAP)",
+    label="Enable mkhomedir", params=[], build=lambda p: api.cmd_enable_mkhomedir()))
+_register(Action(name="dir_test_ldaps", tool="Directory Services (Active Directory / LDAP)",
+    label="Test LDAPS", params=[Param("server", "Server"), Param("port", "Port", default="636", required=False),
+        Param("base_dn", "Base DN", required=False)],
+    build=lambda p: api.cmd_test_ldaps(_s(p, "server"), _s(p, "port", "636") or "636", _s(p, "base_dn"))))
+_register(Action(name="dir_config_ldap_client", tool="Directory Services (Active Directory / LDAP)",
+    label="Configure LDAP client", params=[Param("server", "Server"), Param("base_dn", "Base DN"),
+        Param("use_ldaps", "Use LDAPS", type="checkbox", default=True, required=False)],
+    build=lambda p: api.cmd_configure_ldap_client(_s(p, "server"), _s(p, "base_dn"), _b(p, "use_ldaps", True))))
+
+# ---- Backup & Recovery (advanced) ------------------------------------
+_register(Action(name="backup_schedule", tool="Backup & Recovery", label="Configure backup schedule",
+    params=[Param("source", "Source"), Param("dest_dir", "Destination dir"),
+            Param("cron_expr", "Cron schedule", help="e.g. 0 2 * * *")],
+    build=lambda p: api.cmd_configure_backup_schedule(_s(p, "source"), _s(p, "dest_dir"), _s(p, "cron_expr"))))
+_register(Action(name="backup_snapshot", tool="Backup & Recovery", label="Create LVM snapshot",
+    params=[Param("vg", "Volume group"), Param("lv", "Logical volume"),
+            Param("snap_name", "Snapshot name"), Param("size", "Size", help="e.g. 1G")],
+    build=lambda p: api.cmd_create_snapshot(_s(p, "vg"), _s(p, "lv"), _s(p, "snap_name"), _s(p, "size"))))
+_register(Action(name="backup_restore_snapshot", tool="Backup & Recovery", label="Restore LVM snapshot",
+    danger=True, params=[Param("vg", "Volume group"), Param("snap_name", "Snapshot name")],
+    build=lambda p: api.cmd_restore_snapshot(_s(p, "vg"), _s(p, "snap_name"))))
+_register(Action(name="backup_recover_deleted", tool="Backup & Recovery", label="Recover deleted files",
+    params=[Param("device", "Device")], build=lambda p: api.cmd_recover_deleted(_s(p, "device"))))
+_register(Action(name="backup_test_dr", tool="Backup & Recovery", label="Test disaster recovery",
+    params=[Param("dest_dir", "Destination dir")],
+    build=lambda p: api.cmd_test_disaster_recovery(_s(p, "dest_dir"))))
+
+# ---- Distro Subscription & Licensing (advanced) ----------------------
+_register(Action(name="sub_rhsm_auto_attach", tool="Distro Subscription & Licensing",
+    label="RHSM auto-attach", params=[], build=lambda p: api.cmd_rhsm_auto_attach()))
+_register(Action(name="sub_rhsm_refresh", tool="Distro Subscription & Licensing",
+    label="RHSM refresh", params=[], build=lambda p: api.cmd_rhsm_refresh()))
+_register(Action(name="sub_rhsm_consumed", tool="Distro Subscription & Licensing",
+    label="RHSM list consumed", params=[], build=lambda p: api.cmd_rhsm_list_consumed()))
+_register(Action(name="sub_rhsm_available", tool="Distro Subscription & Licensing",
+    label="RHSM list available", params=[], build=lambda p: api.cmd_rhsm_list_available()))
+_register(Action(name="sub_rhsm_repos", tool="Distro Subscription & Licensing",
+    label="RHSM repos", params=[], build=lambda p: api.cmd_rhsm_repos()))
+_register(Action(name="sub_rhsm_unregister", tool="Distro Subscription & Licensing",
+    label="RHSM unregister", danger=True, params=[], build=lambda p: api.cmd_rhsm_unregister()))
+_register(Action(name="sub_pro_detach", tool="Distro Subscription & Licensing",
+    label="Ubuntu Pro detach", danger=True, params=[], build=lambda p: api.cmd_pro_detach()))
+_register(Action(name="sub_pro_enable", tool="Distro Subscription & Licensing",
+    label="Ubuntu Pro enable service", params=[Param("service", "Service", help="e.g. esm-infra")],
+    build=lambda p: api.cmd_pro_enable(_s(p, "service"))))
+_register(Action(name="sub_pro_disable", tool="Distro Subscription & Licensing",
+    label="Ubuntu Pro disable service", params=[Param("service", "Service")],
+    build=lambda p: api.cmd_pro_disable(_s(p, "service"))))
+_register(Action(name="sub_pro_refresh", tool="Distro Subscription & Licensing",
+    label="Ubuntu Pro refresh", params=[], build=lambda p: api.cmd_pro_refresh()))
+_register(Action(name="sub_suse_extensions", tool="Distro Subscription & Licensing",
+    label="SUSE list extensions", params=[], build=lambda p: api.cmd_suse_list_extensions()))
+_register(Action(name="sub_suse_deregister", tool="Distro Subscription & Licensing",
+    label="SUSE deregister", danger=True, params=[], build=lambda p: api.cmd_suse_deregister()))
 
 
 # ----------------------------------------------------------------------

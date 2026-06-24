@@ -962,13 +962,19 @@ class TerminalPopout(QWidget):
         btn_save = QPushButton("Save Output…")
         btn_save.setToolTip("Save the terminal's text to a file.")
         btn_save.clicked.connect(self.save_output)
+        btn_sudo = QPushButton("Send sudo password")
+        btn_sudo.setToolTip(
+            "Type your stored sudo password at a password prompt (so you don't need "
+            "passwordless sudo). The password is stored encrypted on this machine; "
+            "click to set it the first time.")
+        btn_sudo.clicked.connect(self.send_sudo_password)
         btn_font_dec = QPushButton("A-")
         btn_font_dec.setMaximumWidth(36)
         btn_font_dec.clicked.connect(lambda: self.adjust_font(-1))
         btn_font_inc = QPushButton("A+")
         btn_font_inc.setMaximumWidth(36)
         btn_font_inc.clicked.connect(lambda: self.adjust_font(1))
-        for b in (btn_upload, btn_download, btn_find, btn_save):
+        for b in (btn_upload, btn_download, btn_find, btn_save, btn_sudo):
             toolbar.addWidget(b)
         toolbar.addStretch()
         toolbar.addWidget(QLabel("Font:"))
@@ -1155,6 +1161,45 @@ class TerminalPopout(QWidget):
     def _send_terminal_input(self, data):
         if self._session_id is not None:
             self._terminal_io.submit_write(self._session_id, data)
+
+    def send_sudo_password(self):
+        """Type the operator's stored sudo password at a password prompt -
+        an alternative to passwordless sudo for hardened environments. The
+        password is stored encrypted on this machine (become_credentials);
+        the first click prompts to set it. Sent followed by Enter."""
+        from client import become_credentials
+        from PySide6.QtWidgets import QInputDialog, QLineEdit
+
+        host = self.entry.get("label", "")
+        password = become_credentials.get_password(host)
+
+        if not password:
+            if not become_credentials.encryption_available():
+                QMessageBox.warning(
+                    self, "Unavailable",
+                    "The encryption library isn't available, so a sudo password can't "
+                    "be stored securely on this machine.")
+                return
+            text, ok = QInputDialog.getText(
+                self, "Set sudo password",
+                f"Sudo password for this session (stored encrypted on this machine; "
+                f"used for {host or 'this host'} and as the fleet default):",
+                QLineEdit.Password)
+            if not ok or not text:
+                return
+            scope_global = QMessageBox.question(
+                self, "Scope",
+                "Use this password for ALL hosts (fleet default)?\n\n"
+                "Yes = store as the global default.\nNo = store for this host only.",
+                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes
+            become_credentials.set_password(text, host="*" if scope_global else host)
+            password = text
+
+        if self._session_id is None:
+            QMessageBox.information(self, "No terminal", "Open a terminal first.")
+            return
+        self._send_terminal_input(password + "\n")
+        self.output.setFocus()
 
     def send_interrupt(self):
         if self.active_kind == "ssh" and self.output.on_key_data is not None:

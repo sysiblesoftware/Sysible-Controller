@@ -228,6 +228,22 @@ def set_environmental_policy(policy: dict):
     return _request("POST", "/environmental-policy", json=policy)
 
 
+def get_webgui_status():
+    return _request("GET", "/webgui/status")
+
+
+def get_webgui_diagnostics():
+    return _request("GET", "/webgui/diagnostics")
+
+
+def start_webgui():
+    return _request("POST", "/webgui/start", timeout=20)
+
+
+def stop_webgui():
+    return _request("POST", "/webgui/stop")
+
+
 def get_portal_status():
     return _request("GET", "/portal/status")
 

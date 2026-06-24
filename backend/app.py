@@ -58,7 +58,7 @@ from backend.db import (
     get_admin_password_policy,
     set_admin_password_policy,
 )
-from backend import portal_auth, portal_files, portal_manager, tls_manager
+from backend import portal_auth, portal_files, portal_manager, tls_manager, webgui_manager
 from backend.policy import validate_password_against_policy
 from backend.models.agent_models import (
     EnrollRequest,
@@ -722,6 +722,29 @@ def get_portal_status_route():
     status["last_login"] = last_login
 
     return status
+
+
+# ----- Web GUI (browser-based front end) management -----
+# Mirrors the portal: start/stop/status/diagnostics for the separate
+# webgui service - see backend/webgui_manager.py.
+@app.get("/webgui/status", dependencies=[Depends(require_api_key)])
+def get_webgui_status_route():
+    return webgui_manager.status()
+
+
+@app.get("/webgui/diagnostics", dependencies=[Depends(require_api_key)])
+def get_webgui_diagnostics_route():
+    return webgui_manager.diagnostics()
+
+
+@app.post("/webgui/start", dependencies=[Depends(require_api_key)])
+def start_webgui_route():
+    return webgui_manager.start()
+
+
+@app.post("/webgui/stop", dependencies=[Depends(require_api_key)])
+def stop_webgui_route():
+    return webgui_manager.stop()
 
 
 @app.post("/portal/start", dependencies=[Depends(require_api_key)])

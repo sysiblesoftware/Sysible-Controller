@@ -120,6 +120,13 @@ def login(body: LoginRequest, request: Request):
     }
 
 
+@app.get("/api/health")
+def health():
+    """Unauthenticated liveness probe used by the controller's
+    webgui_manager to confirm the service actually came up."""
+    return {"status": "ok"}
+
+
 @app.post("/api/logout")
 def logout(request: Request):
     request.session.clear()

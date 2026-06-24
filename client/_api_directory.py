@@ -39,6 +39,61 @@ def cmd_install_ad_dependencies() -> str:
     )
 
 
+def cmd_prepare_ad_join(domain: str = "") -> str:
+    """One-click 'prepare host for AD domain join': installs the client
+    packages AND turns on the prerequisites that installing alone leaves
+    off - time synchronization (Kerberos rejects a skewed clock), the
+    message bus + oddjobd, and automatic home-dir creation on first login -
+    then prints a readiness check. SSSD itself is intentionally left
+    stopped: it has no config until `realm join` writes one and starts it.
+    If a domain is given, also runs `realm discover` as a DNS/reachability
+    pre-flight."""
+    domain = (domain or "").strip()
+    if domain and not _DOMAIN_RE.match(domain):
+        raise ValueError("Enter a valid AD domain (e.g. corp.example.com).")
+
+    discover = ""
+    if domain:
+        dq = shlex.quote(domain)
+        discover = (
+            "echo; echo '== Domain discovery (realm discover) =='; "
+            f"realm discover {dq} 2>&1 || echo 'Could not discover {domain} - point this "
+            "host'\\''s DNS at the AD domain controllers and confirm the domain is reachable.'; "
+        )
+
+    return (
+        "set +e; "
+        "echo '== 1/5 Installing AD client packages =='; "
+        + _INSTALL_REALM + " || { echo 'Package install failed.' >&2; exit 1; }; "
+        "echo 'Packages installed.'; "
+        "echo; echo '== 2/5 Enabling time synchronization (Kerberos needs an accurate clock) =='; "
+        "if systemctl enable --now chronyd 2>/dev/null || systemctl enable --now chrony 2>/dev/null; then "
+        "echo 'chrony enabled and started.'; "
+        "else timedatectl set-ntp true 2>/dev/null; "
+        "systemctl enable --now systemd-timesyncd 2>/dev/null && echo 'systemd-timesyncd enabled.' "
+        "|| echo 'Could not enable a time-sync service - make sure this host'\\''s clock is accurate.'; fi; "
+        "echo; echo '== 3/5 Starting message bus + oddjob =='; "
+        "systemctl enable --now dbus 2>/dev/null || systemctl enable --now messagebus 2>/dev/null || true; "
+        "systemctl enable --now oddjobd 2>/dev/null && echo 'oddjobd enabled and started.' "
+        "|| echo 'oddjobd not started (install/start it if home-dir creation is needed).'; "
+        "echo; echo '== 4/5 Enabling automatic home-dir creation on first login =='; "
+        "if command -v authselect >/dev/null 2>&1; then "
+        "authselect enable-feature with-mkhomedir 2>&1 && echo 'mkhomedir enabled (authselect).'; "
+        "elif command -v pam-auth-update >/dev/null 2>&1; then "
+        "pam-auth-update --enable mkhomedir 2>/dev/null && echo 'mkhomedir enabled (pam-auth-update).' "
+        "|| echo 'Enable \"Create home directory on login\" via pam-auth-update.'; "
+        "else echo 'oddjobd started; enable pam_mkhomedir in your PAM stack if home dirs are needed.'; fi; "
+        "echo; echo '== 5/5 Readiness check =='; "
+        "for t in realm adcli klist; do if command -v \"$t\" >/dev/null 2>&1; then echo \"  $t: present\"; "
+        "else echo \"  $t: MISSING\"; fi; done; "
+        "if [ -x /usr/sbin/sssd ] || [ -x /sbin/sssd ] || command -v sssd >/dev/null 2>&1; then "
+        "echo '  sssd: installed (will start on join)'; else echo '  sssd: MISSING'; fi; "
+        "echo '  time sync:'; timedatectl 2>/dev/null | grep -iE 'synchronized|NTP service' | sed 's/^/   /' || true; "
+        + discover +
+        "echo; echo 'Host prepared. Next: Join AD Domain with your domain and an account permitted to join computers.'"
+    )
+
+
 def cmd_install_ldap_dependencies() -> str:
     """Install everything needed for LDAP/LDAPS client auth via SSSD."""
     return (

@@ -39,9 +39,18 @@ class DirectoryServicesPage(FleetToolPage):
 
         box, g = self.group("Status")
         row = QHBoxLayout()
-        b_install = QPushButton("Install AD Dependencies")
-        b_install.setStyleSheet("font-weight: bold;")
-        b_install.setToolTip("Install realmd, SSSD, adcli, Kerberos and samba tools needed to join AD.")
+        b_prepare = QPushButton("Prepare Host for AD Join")
+        b_prepare.setStyleSheet("font-weight: bold;")
+        b_prepare.setToolTip(
+            "One click: install the AD client tooling AND turn on the prerequisites "
+            "that installing alone leaves off - time sync (Kerberos needs an accurate "
+            "clock), dbus + oddjobd, and automatic home-dir creation - then run a "
+            "readiness check. Uses the domain below (if entered) for a discovery pre-flight. "
+            "SSSD itself starts when you Join Domain.")
+        b_prepare.clicked.connect(self.run_prepare_ad)
+        row.addWidget(b_prepare)
+        b_install = QPushButton("Install Dependencies Only")
+        b_install.setToolTip("Just install realmd, SSSD, adcli, Kerberos and samba tools (no service setup).")
         b_install.clicked.connect(lambda: self.run_command(api.cmd_install_ad_dependencies(), "Install AD Dependencies"))
         row.addWidget(b_install)
         b = QPushButton("Realm / Domain Status")
@@ -113,6 +122,12 @@ class DirectoryServicesPage(FleetToolPage):
 
         layout.addStretch()
         return panel
+
+    def run_prepare_ad(self):
+        # Uses the domain from the Join section (if entered) for the
+        # discovery pre-flight; otherwise prepares without it.
+        self.run_with("Prepare Host for AD Join",
+                      lambda: api.cmd_prepare_ad_join(self.ad_domain.text()))
 
     def run_join_ad(self):
         self.run_with("Join Active Directory", lambda: api.cmd_join_ad(

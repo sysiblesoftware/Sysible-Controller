@@ -45,9 +45,23 @@ def _load_api_key():
 
 _API_KEY = _load_api_key()
 
+# RBAC identity token, set after admin_login(). Sent on every request so the
+# controller can attribute actions to this admin and tag dispatched tasks
+# with an unforgeable initiating username (the agent then runs commands as
+# the matching local user). Process-local; cleared on logout.
+_ADMIN_TOKEN = None
+
+
+def set_admin_token(token):
+    global _ADMIN_TOKEN
+    _ADMIN_TOKEN = token
+
 
 def _headers():
-    return {"X-API-Key": _API_KEY} if _API_KEY else {}
+    h = {"X-API-Key": _API_KEY} if _API_KEY else {}
+    if _ADMIN_TOKEN:
+        h["X-Sysible-Admin-Token"] = _ADMIN_TOKEN
+    return h
 
 
 _SESSION = requests.Session()
@@ -279,7 +293,12 @@ def admin_setup(username: str, password: str):
 
 
 def admin_login(username: str, password: str):
-    return _request("POST", "/admin/login", json={"username": username, "password": password})
+    result = _request("POST", "/admin/login", json={"username": username, "password": password})
+    # Capture the RBAC identity token so every subsequent request is
+    # attributed to this admin (and dispatched tasks run as their local user).
+    if isinstance(result, dict) and result.get("token"):
+        set_admin_token(result["token"])
+    return result
 
 
 def list_administrators():

@@ -411,13 +411,21 @@ def init_db():
         kind TEXT DEFAULT 'command',
         status TEXT DEFAULT 'pending',
         created REAL,
-        dispatched REAL
+        dispatched REAL,
+        run_as TEXT
     )
     """)
 
     # Migration for databases created before kind existed.
     try:
         cur.execute("ALTER TABLE agent_tasks ADD COLUMN kind TEXT DEFAULT 'command'")
+    except sqlite3.OperationalError:
+        pass
+
+    # Migration: run_as carries the RBAC local-user a task runs as on the
+    # host (None == run as the agent itself, i.e. root / internal tasks).
+    try:
+        cur.execute("ALTER TABLE agent_tasks ADD COLUMN run_as TEXT")
     except sqlite3.OperationalError:
         pass
 
@@ -431,6 +439,22 @@ def init_db():
         host_id TEXT,
         result TEXT,
         completed REAL
+    )
+    """)
+
+    # -----------------------------------------------------
+    # Admin login tokens (RBAC). Issued at /admin/login, bound to a
+    # username + role, used to attribute API actions to a specific admin
+    # so dispatch can tag tasks with an UNFORGEABLE initiating username
+    # (a sysadmin can only hold a token for the identity they logged in
+    # as). Short-lived; resolve_admin_token() drops expired ones.
+    # -----------------------------------------------------
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS admin_tokens (
+        token TEXT PRIMARY KEY,
+        username TEXT,
+        role TEXT,
+        expiry REAL
     )
     """)
 
@@ -1248,6 +1272,49 @@ def set_administrator_role(username, role):
     return changed > 0
 
 
+# --- Admin login tokens (RBAC identity) ---
+def create_admin_token(token, username, role, expiry):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO admin_tokens (token, username, role, expiry) VALUES (?, ?, ?, ?)",
+        (token, username, role, expiry),
+    )
+    conn.commit()
+    conn.close()
+
+
+def resolve_admin_token(token):
+    """Return {'username','role'} for a valid, unexpired token, else None.
+    Expired tokens are deleted as a side effect."""
+    if not token:
+        return None
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT username, role, expiry FROM admin_tokens WHERE token=?", (token,))
+    row = cur.fetchone()
+    result = None
+    if row:
+        if (row["expiry"] or 0) >= time.time():
+            result = {"username": row["username"], "role": row["role"]}
+        else:
+            cur.execute("DELETE FROM admin_tokens WHERE token=?", (token,))
+            conn.commit()
+    conn.close()
+    return result
+
+
+def delete_admin_token(token):
+    if not token:
+        return
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM admin_tokens WHERE token=?", (token,))
+    conn.commit()
+    conn.close()
+
+
 def get_administrator(username):
     """Full row including password_hash/password_salt - used for
     login verification. Returns None if no such administrator."""
@@ -1374,15 +1441,15 @@ def get_admin_audit_log(limit=200):
 # =========================================================
 # AGENT TASKS (command queue)
 # =========================================================
-def queue_task(host_id, command, kind="command"):
+def queue_task(host_id, command, kind="command", run_as=None):
     conn = _connect()
     cur = conn.cursor()
 
     cur.execute("""
-    INSERT INTO agent_tasks (host_id, command, kind, status, created)
-    VALUES (?, ?, ?, 'pending', ?)
+    INSERT INTO agent_tasks (host_id, command, kind, status, created, run_as)
+    VALUES (?, ?, ?, 'pending', ?, ?)
     """,
-    (host_id, command, kind, time.time()))
+    (host_id, command, kind, time.time(), run_as))
 
     task_id = cur.lastrowid
 
@@ -1401,7 +1468,7 @@ def fetch_pending_tasks(host_id):
     cur = conn.cursor()
 
     cur.execute("""
-    SELECT id, command, kind
+    SELECT id, command, kind, run_as
     FROM agent_tasks
     WHERE host_id=? AND status='pending'
     ORDER BY created

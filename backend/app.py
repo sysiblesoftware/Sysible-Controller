@@ -58,6 +58,9 @@ from backend.db import (
     set_environmental_policy,
     get_admin_password_policy,
     set_admin_password_policy,
+    create_admin_token,
+    resolve_admin_token,
+    delete_admin_token,
 )
 from backend import portal_auth, portal_files, portal_manager, tls_manager
 from backend.policy import validate_password_against_policy
@@ -352,12 +355,26 @@ def heartbeat(req: HeartbeatRequest):
 # TASK QUEUE
 # =========================================================
 @app.post("/agents/{host_id}/tasks", dependencies=[Depends(require_api_key)])
-def queue_agent_task(host_id: str, body: TaskCreateRequest):
+def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
 
     if not agent_exists(host_id):
         raise HTTPException(status_code=404, detail="Unknown host_id")
 
-    task_id = queue_task(host_id, body.command, body.kind)
+    # RBAC: tag the task with the initiating admin's username, taken from
+    # their login token (NOT from any client-supplied field), so the agent
+    # runs the command as that matching local user under the host's own
+    # sudo policy. A present-but-invalid/expired token is rejected. No token
+    # at all => an internal/controller-issued task (e.g. SSH auto-enroll,
+    # user sync) that runs as the agent itself (root).
+    run_as = None
+    token = request.headers.get("X-Sysible-Admin-Token")
+    if token:
+        admin = resolve_admin_token(token)
+        if not admin:
+            raise HTTPException(status_code=401, detail="Invalid or expired admin token")
+        run_as = admin["username"]
+
+    task_id = queue_task(host_id, body.command, body.kind, run_as=run_as)
 
     return {
         "task_id": task_id,
@@ -970,10 +987,18 @@ def admin_login(body: AdminLoginRequest, request: Request):
     record_administrator_login(username)
     log_admin_audit("login_success", username, "")
 
+    # Issue an identity token bound to this admin. The client sends it back
+    # on subsequent requests so dispatch can tag tasks with an unforgeable
+    # initiating username (see queue_agent_task). 12-hour lifetime.
+    role = admin.get("role") or "superuser"
+    token = secrets.token_hex(32)
+    create_admin_token(token, username, role, time.time() + 12 * 60 * 60)
+
     return {
         "status": "ok",
         "username": username,
-        "role": admin.get("role") or "superuser",
+        "role": role,
+        "token": token,
         "must_change_password": bool(admin["must_change_password"]),
     }
 

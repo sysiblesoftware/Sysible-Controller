@@ -310,24 +310,32 @@ def _truncate(s):
     return s[:MAX_OUTPUT_BYTES] + f"\n...[truncated, {len(s) - MAX_OUTPUT_BYTES} more bytes]"
 
 
-def run_command(cmd):
-    # The controller's command builders assume root. When the agent is
-    # installed unprivileged (systemd User= a non-root account, see
-    # run_agent.sh --unprivileged), escalate each command through
-    # passwordless sudo so those same commands still work. `sudo -n`
-    # never prompts: if sudo isn't configured for this account it fails
-    # fast with a clear stderr rather than hanging. A root agent (the
-    # default) runs the command directly, exactly as before.
-    if os.geteuid() != 0:
-        cmd = "sudo -n bash -c " + shlex.quote(cmd)
+_PRIV_ERROR_HINTS = (
+    "permission denied", "operation not permitted", "must be root",
+    "must be run as root", "are not allowed", "not permitted", "only root",
+    "you need to be root", "eperm", "eacces",
+    "a password is required", "a terminal is required", "sudo:", "root privileges",
+    "access denied", "not authorized", "requires root",
+)
+
+
+def _looks_like_privilege_error(stderr):
+    s = (stderr or "").lower()
+    return any(h in s for h in _PRIV_ERROR_HINTS)
+
+
+def _local_user_exists(user):
     try:
-        proc = subprocess.run(
-            cmd,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
+        import pwd
+        pwd.getpwnam(user)
+        return True
+    except (KeyError, ImportError):
+        return False
+
+
+def _exec(argv, shell=False):
+    try:
+        proc = subprocess.run(argv, shell=shell, capture_output=True, text=True, timeout=300)
         return {
             "stdout": _truncate(proc.stdout),
             "stderr": _truncate(proc.stderr),
@@ -337,6 +345,46 @@ def run_command(cmd):
         return {"stdout": "", "stderr": "command timed out", "returncode": -1}
     except Exception as e:
         return {"stdout": "", "stderr": str(e), "returncode": -1}
+
+
+def _run_as_user(user, cmd):
+    """RBAC: run `cmd` as local user `user`. Tried as that user first, so
+    read-only commands work even for a user with no sudo; on a privilege
+    error it's retried once under that user's own `sudo -n`, so privileged
+    actions are permitted only as far as the host's sudoers allows the
+    user. runuser needs root; if the agent isn't root it prefixes sudo."""
+    if not _local_user_exists(user):
+        return {
+            "stdout": "",
+            "stderr": (f"RBAC: local user '{user}' does not exist on this host, so the "
+                       f"command cannot be run as that role. Create the user (with the "
+                       f"sudo policy you want) on this host."),
+            "returncode": 126,
+        }
+
+    root = os.geteuid() == 0
+    plain = (["runuser", "-u", user, "--", "bash", "-c", cmd] if root
+             else ["sudo", "-n", "runuser", "-u", user, "--", "bash", "-c", cmd])
+    first = _exec(plain)
+    if first["returncode"] == 0 or not _looks_like_privilege_error(first["stderr"]):
+        return first
+
+    elevated = (["runuser", "-u", user, "--", "sudo", "-n", "bash", "-c", cmd] if root
+                else ["sudo", "-n", "runuser", "-u", user, "--", "sudo", "-n", "bash", "-c", cmd])
+    return _exec(elevated)
+
+
+def run_command(cmd, run_as=None):
+    # RBAC path: a task tagged with an initiating admin username runs as the
+    # matching local user, gated by that host's sudo policy (see
+    # _run_as_user). Without run_as it's an internal/controller task: a root
+    # agent runs it directly; an unprivileged agent escalates via sudo -n
+    # (the pre-RBAC behaviour, unchanged).
+    if run_as:
+        return _run_as_user(run_as, cmd)
+    if os.geteuid() != 0:
+        cmd = "sudo -n bash -c " + shlex.quote(cmd)
+    return _exec(cmd, shell=True)
 
 
 def send_result(state, task_id, result):
@@ -409,7 +457,7 @@ def loop(state):
                 print("[agent] running task", task_id)
 
                 try:
-                    result = run_command(task["command"])
+                    result = run_command(task["command"], task.get("run_as"))
                     send_result(state, task_id, result)
                 except UnknownHostError:
                     raise

@@ -484,12 +484,26 @@ def _become_user_command(ssh_user: str, target: str) -> str:
     dispatched commands run. From a root SSH session this is runuser (no
     password); from a non-root session it's that user's sudo. If `target`
     doesn't exist on the host, it falls back to a normal shell with a note
-    rather than killing the session."""
+    rather than killing the session.
+
+    The inner setup (run AS the target) gives the shell a valid HOME (the
+    user's real home, or /tmp if it has none - many AD/role accounts don't),
+    a UTF-8 locale (so readline is 8-bit clean and typed characters don't
+    render as replacement boxes), and TERM, then exec's an interactive bash.
+    This also avoids `runuser -l`'s noisy "cannot change directory to
+    /home/<user>" warning when the home is missing."""
     t = shlex.quote(target)
+    inner = (
+        f'h=$(getent passwd {t} | cut -d: -f6); [ -n "$h" ] && [ -d "$h" ] || h=/tmp; '
+        'cd "$h" 2>/dev/null || cd /tmp; export HOME="$h"; '
+        'export TERM="${TERM:-xterm}"; export LANG="${LANG:-C.UTF-8}"; '
+        'export LC_ALL="${LC_ALL:-$LANG}"; exec bash -i'
+    )
+    inner_q = shlex.quote(inner)
     if ssh_user == "root":
-        switch = f"exec runuser -l {t}"
+        switch = f"exec runuser -u {t} -- /bin/sh -c {inner_q}"
     else:
-        switch = f"exec sudo -u {t} -i"
+        switch = f"exec sudo -u {t} /bin/sh -c {inner_q}"
     return (
         f"if id {t} >/dev/null 2>&1; then {switch}; "
         f"else echo '[sysible] user {target} does not exist on this host - opening a "

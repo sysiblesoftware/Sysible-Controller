@@ -14,3 +14,7 @@ portal_files/
 .vscode/
 .idea/
 .DS_Store
+
+# Runtime state (PID/port/secret) and logs - never commit
+run/
+logs/

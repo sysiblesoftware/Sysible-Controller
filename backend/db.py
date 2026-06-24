@@ -121,9 +121,17 @@ def init_db():
     cur.execute("""
     CREATE TABLE IF NOT EXISTS environments (
         name TEXT PRIMARY KEY,
-        created REAL
+        created REAL,
+        requires_sudo_password INTEGER DEFAULT 0
     )
     """)
+
+    # Migration: per-environment sudo default that hosts inherit when
+    # assigned to the environment (see set_agent_environment).
+    try:
+        cur.execute("ALTER TABLE environments ADD COLUMN requires_sudo_password INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
 
     cur.execute("SELECT COUNT(*) FROM environments")
     if cur.fetchone()[0] == 0:
@@ -677,6 +685,17 @@ def set_agent_environment(host_id, environment):
 
     updated = cur.rowcount > 0
 
+    # Inherit the environment's sudo default: assigning a host to an
+    # environment applies that environment's requires_sudo_password so new
+    # hosts dropped into a password-sudo environment pick it up automatically.
+    # (Per-host can still be overridden afterward.)
+    if environment:
+        cur.execute("SELECT requires_sudo_password FROM environments WHERE name=?", (environment,))
+        row = cur.fetchone()
+        if row is not None:
+            cur.execute("UPDATE agents SET requires_sudo_password=? WHERE host_id=?",
+                        (1 if row[0] else 0, host_id))
+
     conn.commit()
     conn.close()
 
@@ -697,6 +716,28 @@ def list_environments():
     conn.close()
 
     return names
+
+
+def list_environment_sudo_defaults():
+    """{environment name: bool} - the per-environment 'requires password
+    sudo' default that hosts inherit on assignment."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT name, requires_sudo_password FROM environments")
+    out = {name: bool(flag) for name, flag in cur.fetchall()}
+    conn.close()
+    return out
+
+
+def set_environment_sudo_default(name, required):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("UPDATE environments SET requires_sudo_password=? WHERE name=?",
+                (1 if required else 0, name))
+    conn.commit()
+    changed = cur.rowcount
+    conn.close()
+    return changed > 0
 
 
 def create_environment(name):

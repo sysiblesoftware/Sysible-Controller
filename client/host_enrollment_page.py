@@ -170,6 +170,22 @@ class HostEnrollmentPage(QWidget):
         sudo_row.addStretch()
         layout.addLayout(sudo_row)
 
+        # Per-environment default: hosts inherit this when assigned to the
+        # environment chosen in the combo above.
+        env_default_row = QHBoxLayout()
+        self.env_sudo_label = QLabel("")
+        theme.style_hint_label(self.env_sudo_label)
+        env_default_row.addWidget(self.env_sudo_label)
+        env_default_row.addStretch()
+        btn_env_default = QPushButton("Set Environment's Sudo Default…")
+        btn_env_default.setToolTip(
+            "Set whether the environment selected above defaults to password-sudo. Hosts "
+            "inherit it when assigned to that environment.")
+        btn_env_default.clicked.connect(self.set_environment_sudo_default)
+        env_default_row.addWidget(btn_env_default)
+        layout.addLayout(env_default_row)
+        self.env_combo.currentTextChanged.connect(self._update_env_sudo_label)
+
         # =====================================================
         # BUTTONS
         # =====================================================
@@ -255,12 +271,18 @@ class HostEnrollmentPage(QWidget):
             self.environments = []
 
         try:
+            self._env_sudo_defaults = api.get_environment_sudo_defaults()
+        except Exception:
+            self._env_sudo_defaults = {}
+
+        try:
             self.agents = api.get_agents()
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
             return
 
         self._populate_combo()
+        self._update_env_sudo_label()
         self._populate_list()
 
         current_ids = {a.get("host_id") for a in self.agents}
@@ -416,6 +438,37 @@ class HostEnrollmentPage(QWidget):
                 f"{len(agents)} host(s) set to require a sudo password. Make sure you've "
                 "stored your sudo password (Set My Sudo Password…) so dispatched commands "
                 "can elevate.")
+
+    def _update_env_sudo_label(self):
+        env = self.env_combo.currentText()
+        if not env or env == _NEW_ENV_OPTION:
+            self.env_sudo_label.setText("")
+            return
+        required = getattr(self, "_env_sudo_defaults", {}).get(env, False)
+        self.env_sudo_label.setText(
+            f"Environment '{env}' default: "
+            + ("requires sudo password" if required else "passwordless sudo"))
+
+    def set_environment_sudo_default(self):
+        env = self.env_combo.currentText()
+        if not env or env == _NEW_ENV_OPTION:
+            QMessageBox.information(self, "No environment", "Choose an environment first.")
+            return
+        reply = QMessageBox.question(
+            self, "Environment sudo default",
+            f"Should hosts in '{env}' default to REQUIRING a sudo password?\n\n"
+            "Yes = password-sudo (agent uses 'sudo -S').\n"
+            "No = passwordless (NOPASSWD, 'sudo -n').\n\n"
+            "Hosts inherit this when assigned to the environment.",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+        if reply == QMessageBox.Cancel:
+            return
+        try:
+            api.set_environment_sudo_default(env, reply == QMessageBox.Yes)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+            return
+        self.refresh()
 
     def set_become_password(self):
         from client import become_credentials

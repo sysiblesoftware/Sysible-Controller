@@ -247,6 +247,15 @@ def set_sudo_password_required(host_id: str, required: bool):
                     json={"required": bool(required)})
 
 
+def get_environment_sudo_defaults():
+    return _request("GET", "/environments/sudo-defaults").get("defaults", {})
+
+
+def set_environment_sudo_default(name: str, required: bool):
+    return _request("POST", f"/environments/{name}/sudo-default",
+                    json={"required": bool(required)})
+
+
 def get_activity_log(limit: int = 200, since_id: int = 0):
     return _request("GET", "/activity-log",
                     params={"limit": limit, "since_id": since_id}).get("entries", [])

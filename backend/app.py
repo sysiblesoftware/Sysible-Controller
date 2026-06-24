@@ -29,6 +29,8 @@ from backend.db import (
     create_environment,
     delete_environment,
     set_agent_environment,
+    list_environment_sudo_defaults,
+    set_environment_sudo_default,
     get_controller_config,
     set_controller_config,
     get_license_config,
@@ -628,6 +630,21 @@ def get_environments():
     return {
         "environments": list_environments()
     }
+
+
+@app.get("/environments/sudo-defaults", dependencies=[Depends(require_api_key)])
+def get_environment_sudo_defaults():
+    """{environment: bool} - which environments default to password-sudo, so
+    hosts assigned to them inherit it."""
+    return {"defaults": list_environment_sudo_defaults()}
+
+
+@app.post("/environments/{name}/sudo-default",
+          dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def set_environment_sudo_default_route(name: str, body: dict = Body(...)):
+    required = bool(body.get("required"))
+    set_environment_sudo_default(name, required)
+    return {"environment": name, "requires_sudo_password": required}
 
 
 @app.post("/environments", dependencies=[Depends(require_api_key), Depends(require_superuser)])

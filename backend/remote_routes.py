@@ -33,7 +33,7 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
 from backend.auth import require_superuser
@@ -471,8 +471,38 @@ def exec_remote(name: str, body: ExecRequest):
 # one-shot exec above, so sudo password prompts, vim, top, and other
 # interactive programs all work as they would in a real terminal)
 # =========================================================
+def _become_user_command(ssh_user: str, target: str) -> str:
+    """Shell command that turns the SSH login shell into an interactive
+    shell for `target` (the controller admin's username), so the terminal
+    runs as that user with their own host sudo rights - matching how
+    dispatched commands run. From a root SSH session this is runuser (no
+    password); from a non-root session it's that user's sudo. If `target`
+    doesn't exist on the host, it falls back to a normal shell with a note
+    rather than killing the session."""
+    t = shlex.quote(target)
+    if ssh_user == "root":
+        switch = f"exec runuser -l {t}"
+    else:
+        switch = f"exec sudo -u {t} -i"
+    return (
+        f"if id {t} >/dev/null 2>&1; then {switch}; "
+        f"else echo '[sysible] user {target} does not exist on this host - opening a "
+        f"normal shell instead.'; exec bash -l 2>/dev/null || exec sh; fi"
+    )
+
+
+def _resolve_admin_username(request: Request):
+    """The logged-in admin's username from their token, or None."""
+    token = request.headers.get("X-Sysible-Admin-Token")
+    if not token:
+        return None
+    from backend.db import resolve_admin_token
+    admin = resolve_admin_token(token)
+    return admin["username"] if admin else None
+
+
 @router.post("/hosts/{name}/terminal/open")
-def open_terminal(name: str):
+def open_terminal(name: str, request: Request):
     hosts = load_hosts()
 
     if name not in hosts:
@@ -493,6 +523,16 @@ def open_terminal(name: str):
 
     host = hosts[name]
     key_path = host.get("key_path") or str(CONTROLLER_KEY_PATH)
+    ssh_user = host.get("user", "root")
+
+    # Run the terminal as the controller admin (their token identifies them),
+    # so it behaves like dispatched commands: as <admin> on the host, with
+    # that user's own sudo. Falls back to the SSH login shell when no admin
+    # identity is presented or the admin is already the SSH user.
+    admin_user = _resolve_admin_username(request)
+    become = None
+    if admin_user and admin_user != ssh_user:
+        become = _become_user_command(ssh_user, admin_user)
 
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -500,11 +540,18 @@ def open_terminal(name: str):
     try:
         client.connect(
             host["ip"],
-            username=host.get("user", "root"),
+            username=ssh_user,
             key_filename=key_path,
             timeout=10,
         )
-        channel = client.invoke_shell(term="xterm", width=120, height=32)
+        if become:
+            # Start the session as the admin user via an interactive PTY exec
+            # rather than the SSH user's default shell.
+            channel = client.get_transport().open_session()
+            channel.get_pty(term="xterm", width=120, height=32)
+            channel.exec_command(become)
+        else:
+            channel = client.invoke_shell(term="xterm", width=120, height=32)
         channel.settimeout(0.0)  # non-blocking - /terminal/read polls instead of blocking
     except paramiko.AuthenticationException:
         client.close()

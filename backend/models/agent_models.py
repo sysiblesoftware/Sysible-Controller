@@ -32,6 +32,7 @@ class SelfDisenrollRequest(BaseModel):
 class TaskCreateRequest(BaseModel):
     command: str
     kind: str = "command"
+    description: Optional[str] = None  # human label for the activity log
 
 
 class TaskResultRequest(BaseModel):

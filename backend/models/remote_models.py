@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic import BaseModel
 
 
@@ -10,6 +12,7 @@ class AddHostRequest(BaseModel):
 
 class ExecRequest(BaseModel):
     cmd: str
+    description: Optional[str] = None  # human label for the activity log
 
 
 class EnrollSSHRequest(BaseModel):

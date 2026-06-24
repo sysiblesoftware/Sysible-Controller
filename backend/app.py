@@ -61,6 +61,9 @@ from backend.db import (
     create_admin_token,
     resolve_admin_token,
     delete_admin_token,
+    log_activity,
+    get_activity_log,
+    get_agent_hostname,
 )
 from backend import portal_auth, portal_files, portal_manager, tls_manager
 from backend.policy import validate_password_against_policy
@@ -376,10 +379,25 @@ def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
 
     task_id = queue_task(host_id, body.command, body.kind, run_as=run_as)
 
+    # Activity feed: record who did what, where. Only for admin-initiated
+    # tasks (run_as set) - internal/controller tasks (SSH auto-enroll, user
+    # sync) aren't operator actions and would just be noise.
+    if run_as:
+        log_activity(run_as, get_agent_hostname(host_id),
+                     body.description or _describe_command(body.command), body.command)
+
     return {
         "task_id": task_id,
         "status": "queued"
     }
+
+
+def _describe_command(command: str) -> str:
+    """Fallback human description when a tool didn't supply one - the first
+    meaningful token of the command, so the feed reads like 'ran: systemctl'
+    rather than a blank."""
+    c = (command or "").strip().split("\n", 1)[0]
+    return ("ran: " + c[:80] + ("…" if len(c) > 80 else "")) if c else "ran a command"
 
 
 @app.get("/agents/{host_id}/tasks")
@@ -436,6 +454,37 @@ def get_agent_results(
 def get_edition():
     from backend.edition import edition_info
     return edition_info()
+
+
+@app.get("/activity-log", dependencies=[Depends(require_api_key)])
+def get_activity_log_route(limit: int = 200, since_id: int = 0):
+    """Human-readable, attributed feed of actions the controller carried out
+    (who did what, where). `since_id` lets the GUI poll for only new rows."""
+    return {"entries": get_activity_log(limit=limit, since_id=since_id)}
+
+
+@app.get("/controller-log", dependencies=[Depends(require_api_key)])
+def get_controller_log_route(lines: int = 400):
+    """Recent controller (sysible-backend) log lines from the journal, for
+    the Live Activity & Logs view. The backend runs under systemd, so it can
+    read its own journal."""
+    import subprocess
+    lines = max(1, min(int(lines), 5000))
+    try:
+        proc = subprocess.run(
+            ["journalctl", "-u", "sysible-backend", "-n", str(lines), "--no-pager", "-o", "short-iso"],
+            capture_output=True, text=True, timeout=10,
+        )
+        out = proc.stdout or proc.stderr
+        if proc.returncode != 0 and not proc.stdout:
+            out = (f"(could not read journal: {proc.stderr.strip() or 'journalctl failed'})\n"
+                   "If the controller wasn't started via systemd, use "
+                   "'journalctl -u sysible-backend' or 'sysible_controller logs'.")
+    except FileNotFoundError:
+        out = "(journalctl not available on this host)"
+    except subprocess.TimeoutExpired:
+        out = "(timed out reading the journal)"
+    return {"log": out}
 
 
 # =========================================================

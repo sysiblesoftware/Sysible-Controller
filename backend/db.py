@@ -458,6 +458,25 @@ def init_db():
     )
     """)
 
+    # -----------------------------------------------------
+    # Activity log: a human-readable, attributed feed of actions the
+    # controller carried out - "<admin> <description> on <host>" - for the
+    # Live Activity & Logs view. username is the UNFORGEABLE initiating
+    # admin (from their token, set server-side at dispatch); description is
+    # the tool's human label (or a command fallback); command is kept for
+    # detail. Distinct from admin_audit_log (admin-account events only).
+    # -----------------------------------------------------
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS activity_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp REAL,
+        username TEXT,
+        host TEXT,
+        description TEXT,
+        command TEXT
+    )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -1328,6 +1347,48 @@ def delete_admin_token(token):
     cur.execute("DELETE FROM admin_tokens WHERE token=?", (token,))
     conn.commit()
     conn.close()
+
+
+# --- Activity log (Live Activity & Logs feed) ---
+def log_activity(username, host, description, command=""):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO activity_log (timestamp, username, host, description, command) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (time.time(), username or "(unknown)", host or "", description or "", command or ""),
+    )
+    conn.commit()
+    # Keep the table from growing forever - trim to the most recent 5000 rows.
+    cur.execute(
+        "DELETE FROM activity_log WHERE id NOT IN "
+        "(SELECT id FROM activity_log ORDER BY id DESC LIMIT 5000)"
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_agent_hostname(host_id):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT hostname FROM agents WHERE host_id=?", (host_id,))
+    row = cur.fetchone()
+    conn.close()
+    return (row[0] if row else None) or host_id
+
+
+def get_activity_log(limit=200, since_id=0):
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, timestamp, username, host, description, command FROM activity_log "
+        "WHERE id > ? ORDER BY id DESC LIMIT ?",
+        (since_id, limit),
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
 
 
 def get_administrator(username):

@@ -428,11 +428,17 @@ def enroll_ssh(body: EnrollSSHRequest):
 # controller's public key installed via /enroll-ssh or out-of-band)
 # =========================================================
 @router.post("/hosts/{name}/exec")
-def exec_remote(name: str, body: ExecRequest):
+def exec_remote(name: str, body: ExecRequest, request: Request):
     hosts = load_hosts()
 
     if name not in hosts:
         raise HTTPException(status_code=404, detail="host not found")
+
+    # Activity feed: record admin-initiated SSH exec (identity from token).
+    admin = _resolve_admin_username(request)
+    if admin:
+        from backend.db import log_activity
+        log_activity(admin, name, body.description or ("ran: " + body.cmd[:80]), body.cmd)
 
     host = hosts[name]
     target = f"{host['user']}@{host['ip']}"

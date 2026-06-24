@@ -4,9 +4,9 @@
 
 Sysible Controller is a self-hosted infrastructure management console for Linux system administrators and engineers. One controller, installed on a single Linux machine, gives you a single point of control over an entire fleet of Linux hosts — user and group administration, health diagnostics, service control, scheduled jobs, package and repository management, networking, storage and filesystem management, firewall and security hardening, and a live remote terminal — whether each host runs Sysible's lightweight agent or is reached directly over SSH.
 
-![The Sysible Controller System Administration panel — seventeen fleet-wide tools, one click each](docs/screenshots/screenshot_system_administration.png)
+![The Sysible Controller System Administration panel — eighteen fleet-wide tools, one click each](docs/screenshots/screenshot_system_administration.png)
 
-> The **System Administration** panel: seventeen point-and-click tools — users and groups, health/logs/recovery, services, storage, networking, firewall, security, containers, directory services, and more — each acting across your whole fleet of agent and SSH hosts.
+> The **System Administration** panel: eighteen point-and-click tools — users and groups, health/logs/recovery, services, storage, networking, firewall, security, containers, directory services, and more — each acting across your whole fleet of agent and SSH hosts.
 
 ## Overview
 
@@ -41,7 +41,7 @@ What that buys you in practice:
 - **Security defaults that don't require a PKI team.** Self-signed TLS scoped to every address the controller can be reached at, a dedicated SSH key pair generated and managed per fleet, single-use enrollment tokens so a leaked agent bundle can't silently enroll a second host, and an audit log of who logged in and what administrator accounts changed — all provisioned automatically at install time.
 - **Self-service without handing out admin access.** The Webserver Portal lets a host owner fetch their own agent bundle or drop off a file without ever touching the admin GUI, SSH, or a credential that could be used for anything else.
 - **Cross-distro by design.** The installer and every package/repository action detect `dnf`, `yum`, `zypper`, or `apt-get` at the moment they run, so a mixed RHEL/SUSE/Debian fleet is one fleet, not three separate runbooks.
-- **Find any action by name.** A search box on the dashboard matches plain-language tasks — "create a user", "add a repository", "open a firewall port" — and jumps straight to the right tool (and, for User & Group Administration, the right tab), so you never have to remember which of the seventeen System Administration tools owns it.
+- **Find any action by name.** A search box on the dashboard matches plain-language tasks — "create a user", "add a repository", "open a firewall port" — and jumps straight to the right tool (and, for User & Group Administration, the right tab), so you never have to remember which of the eighteen System Administration tools owns it.
 - **Dark or light, your call.** A header toggle switches the entire GUI between a dark and a light theme on the fly — every open window re-skins immediately, no restart — and remembers the choice for next time.
 
 ## Key capabilities
@@ -63,6 +63,7 @@ What that buys you in practice:
 | **Firewall Administration** | Install a firewall (firewalld or ufw), manage firewalld zones, ports, and rich rules, plus the underlying `nftables` and `iptables` rule sets, and **list all actually-listening ports** (via `ss`) regardless of backend, across managed hosts. |
 | **Security Administration** | Install the SELinux userspace tools, configure and troubleshoot SELinux, harden SSH access and rotate keys, review audit logs and failed logins, install security updates, set OS-level password policy, apply system hardening, and install/run vulnerability scanners (Lynis and rkhunter) across managed hosts. |
 | **Directory Services (Active Directory / LDAP)** | Join hosts to **Active Directory** (realmd/SSSD/adcli — installs the tooling, joins the domain, with the join password kept off the command line), leave a domain, show realm/Kerberos status, permit AD users/groups to log in, enable home-dir creation, test **LDAPS** connectivity, and write a generic SSSD LDAP/LDAPS client config. |
+| **Distro Subscription & Licensing** | Register and manage commercial-distro subscriptions across the fleet: **Red Hat** (`subscription-manager` — register by org + activation key or username/password, auto-attach, refresh, list consumed/available, list repositories, unregister), **Ubuntu Pro** (`pro` — status, attach by token, enable/disable services like esm-infra, livepatch, fips, detach), and **SUSE** (`SUSEConnect` — status, register by reg-code, list extensions/modules, deregister). Each action is guarded to the matching distro. |
 | **Backup & Recovery** | Back up and restore files (timestamped tar.gz), verify backup integrity, install scheduled backups, create and merge LVM snapshots, guide deleted-file recovery, and run a read-only disaster-recovery drill. |
 | **Time Synchronization** | Configure chrony/NTP and point it at chosen servers, verify synchronization, troubleshoot clock drift, and set the system time zone. |
 | **Certificate Management** | Generate CSRs, install/renew/replace certificates, check expiry, verify certificate chains, and troubleshoot TLS endpoints with `openssl s_client`. |
@@ -145,6 +146,10 @@ install_sysible.sh   Installer
 sysible_controller   The CLI entry point
 version.py      Single source of truth for the installed version
 ```
+
+## Editions
+
+This is the **Community edition**, which manages up to **10 hosts**. The controller refuses to enroll an 11th host (agent or SSH), and Host Enrollment shows a `Community edition — N/10 hosts used` badge so the limit is visible up front. The cap lives in one place (`backend/edition.py`, `HOST_LIMIT = 10`); set it to `None` for an unlimited build. As an open-source edition, the cap is an honest-user limit — anyone with the source can change it — so the larger-fleet and unrestricted capabilities are intended for a separately licensed Enterprise edition rather than enforced here.
 
 ## License & version
 

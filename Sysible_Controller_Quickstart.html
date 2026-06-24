@@ -42,6 +42,7 @@ nav.toc a{color:var(--accent);text-decoration:none;display:block;padding:2px 0}
 <a href='#certs'>Certificate Management</a>
 <a href='#containers'>Containers & VMs</a>
 <a href='#directory'>Directory Services (Active Directory / LDAP)</a>
+<a href='#subscriptions'>Distro Subscription & Licensing</a>
 <a href='#settings'>Sysible Controller Settings</a>
 <a href='#portal'>Webserver Portal</a>
 </nav>
@@ -109,6 +110,9 @@ nav.toc a{color:var(--accent);text-decoration:none;display:block;padding:2px 0}
 <section class=sec id='directory'><h2>Directory Services (Active Directory / LDAP)</h2>
 <div class=shot><img src='docs/screenshots/screenshot_directory.png' alt='Directory Services (Active Directory / LDAP) screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>Directory Services</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Click <b>Install AD Dependencies</b>, then <b>Join Domain</b> and <b>Permit Login</b>; the <b>LDAP / LDAPS</b> and <b>Kerberos</b> tabs configure and test identity.</li></ol></section>
+<section class=sec id='subscriptions'><h2>Distro Subscription & Licensing</h2>
+<div class=shot><img src='docs/screenshots/screenshot_subscription.png' alt='Distro Subscription & Licensing screenshot'></div>
+<ol class=how><li>Open <b>System Administration</b> → <b>Distro Subscription &amp; Licensing</b>.</li><li>On <b>Overview</b>, click <b>Detect Distro &amp; Subscription Tools</b> to see which vendor applies; check the hosts to act on.</li><li>Use the matching tab — <b>Red Hat (RHSM)</b> (register by org + activation key), <b>Ubuntu Pro</b> (attach a token, enable services), or <b>SUSE (SCC)</b> (register a reg-code) — then Status / List to confirm.</li></ol></section>
 <section class=sec id='settings'><h2>Sysible Controller Settings</h2>
 <div class=shot><img src='docs/screenshots/screenshot_settings.png' alt='Sysible Controller Settings screenshot'></div>
 <ol class=how><li>Open <b>Sysible Controller Settings</b> from the Dashboard.</li><li>Set the controller address/port, add or remove administrators, and tune the admin password policy.</li><li>Review the <b>Audit Log</b> and record a license key under <b>License &amp; Version</b>.</li></ol></section>

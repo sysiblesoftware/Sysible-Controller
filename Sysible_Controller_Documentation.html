@@ -374,7 +374,7 @@ sudo ./install_sysible.sh</pre>
 <p>After logging in, you land on the main Dashboard — the home screen for the whole application. It is a single window with the Sysible logo and product name at the top, a search bar, and a grid of five clickable tiles below it. Each tile opens that tool in its own window ("popout"), which can be left open alongside the Dashboard and other tool windows — closing a tool window does not close the Dashboard or any other open tool.</p>
 
 <h2>Feature search</h2>
-<p>Typing into the search bar at the top of the Dashboard matches against a curated list of common tasks — things like <strong>create a user</strong>, <strong>add a repository</strong>, <strong>restart a service</strong>, or <strong>reset password</strong> — and lists the matching task(s) below it as you type. Pressing Return, or clicking a result, opens the right tile directly; for tasks that live under System Administration's sub-tiles, it opens straight through to that sub-tile, and for User &amp; Group Administration tasks it lands on the specific tab (Create User, Account, Password, Groups, or Reports) rather than leaving you to find it. This saves having to already know which of the Dashboard's tiles — or, for anything under System Administration, which of its seventeen sub-tiles — a given task lives under.</p>
+<p>Typing into the search bar at the top of the Dashboard matches against a curated list of common tasks — things like <strong>create a user</strong>, <strong>add a repository</strong>, <strong>restart a service</strong>, or <strong>reset password</strong> — and lists the matching task(s) below it as you type. Pressing Return, or clicking a result, opens the right tile directly; for tasks that live under System Administration's sub-tiles, it opens straight through to that sub-tile, and for User &amp; Group Administration tasks it lands on the specific tab (Create User, Account, Password, Groups, or Reports) rather than leaving you to find it. This saves having to already know which of the Dashboard's tiles — or, for anything under System Administration, which of its eighteen sub-tiles — a given task lives under.</p>
 
 <figure class="mock">
   <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Sysible Controller</span></div>
@@ -392,7 +392,7 @@ sudo ./install_sysible.sh</pre>
 <tr><td><strong>Sysible Controller Settings</strong></td><td>Configure the controller itself: the address/port baked into agent bundles, administrator accounts, their password policy, the audit log, and the License &amp; Version section.</td></tr>
 <tr><td><strong>Sysible Connect</strong></td><td>Unified console for direct, hands-on work on individual hosts — live terminal, one-off commands, file transfer, and one-click SSH enrollment.</td></tr>
 <tr><td><strong>Webserver Portal Configuration</strong></td><td>Start/stop the optional host-facing portal, set its credentials and port, and manage the shared file pool.</td></tr>
-<tr><td><strong>System Administration</strong></td><td>Sub-menu of seventeen fleet-wide operational tools — user/group accounts, health/logs/recovery (incl. boot &amp; kernel), services, environmental policies, scheduled tasks, package management, repositories, networking, the filesystem layer (incl. NFS/CIFS), block storage, the firewall, security/hardening, backup &amp; recovery, time sync, certificates, containers &amp; VMs, and directory services (Active Directory/LDAP).</td></tr>
+<tr><td><strong>System Administration</strong></td><td>Sub-menu of eighteen fleet-wide operational tools — user/group accounts, health/logs/recovery (incl. boot &amp; kernel), services, environmental policies, scheduled tasks, package management, repositories, networking, the filesystem layer (incl. NFS/CIFS), block storage, the firewall, security/hardening, backup &amp; recovery, time sync, certificates, containers &amp; VMs, directory services (Active Directory/LDAP), and distro subscription &amp; licensing.</td></tr>
 </table>
 </div>
 
@@ -401,6 +401,8 @@ sudo ./install_sysible.sh</pre>
 <h1 class="sec"><span class="tag">Section 7</span>Host Enrollment</h1>
 
 <p>The Host Enrollment page is where hosts are brought under management using the Sysible agent, and where the resulting fleet of enrolled hosts is organized and maintained. It is reached from the "Sysible Controller Host Enrollment" tile on the Dashboard.</p>
+
+<div class="note"><b>Community edition — 10-host limit</b>This build is the Community edition, which manages up to <strong>10 hosts</strong>. The controller refuses to enroll an 11th host (agent or SSH), and this page shows a <code>Community edition — N/10 hosts used</code> badge so the limit is visible up front rather than only surfacing as an error. The cap is defined in one place (<code>backend/edition.py</code>); larger-fleet and unrestricted use are intended for a separately licensed Enterprise edition.</div>
 
 <figure class="mock">
   <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Sysible Controller Host Enrollment</span></div>
@@ -519,15 +521,15 @@ sudo ./run_agent.sh</pre>
 <div class="page" id="sysadmin">
 <h1 class="sec"><span class="tag">Section 10</span>System Administration</h1>
 
-<p>The System Administration menu is the hub for day-to-day fleet management. Rather than one sprawling window, it opens a compact launcher with seventeen tiles, each opening its own dedicated window: <strong>User &amp; Group Administration</strong>, <strong>System Health, Logs &amp; Recovery</strong> (health and boot/kernel recovery combined into one window), <strong>Service Management</strong>, <strong>Environmental Policies</strong>, <strong>Cron &amp; Systemd Timers</strong>, <strong>Host Software Management</strong>, <strong>Repository Management</strong>, <strong>Network Management</strong>, <strong>File System Management</strong>, <strong>Storage Administration</strong>, <strong>Firewall Administration</strong>, <strong>Security Administration</strong>, <strong>Backup &amp; Recovery</strong>, <strong>Time Synchronization</strong>, <strong>Certificate Management</strong>, <strong>Containers &amp; VMs</strong>, and <strong>Directory Services (Active Directory / LDAP)</strong>. (Running an ad-hoc script across hosts lives in <strong>Sysible Connect</strong>, not here.) A <strong>search box</strong> at the top of the launcher filters the tiles as you type — enter a word like <em>firewall</em>, <em>users</em>, or <em>raid</em> and only the matching tools remain, the same idea as the main Dashboard's search.</p>
+<p>The System Administration menu is the hub for day-to-day fleet management. Rather than one sprawling window, it opens a compact launcher with eighteen tiles, each opening its own dedicated window: <strong>User &amp; Group Administration</strong>, <strong>System Health, Logs &amp; Recovery</strong> (health and boot/kernel recovery combined into one window), <strong>Service Management</strong>, <strong>Environmental Policies</strong>, <strong>Cron &amp; Systemd Timers</strong>, <strong>Host Software Management</strong>, <strong>Repository Management</strong>, <strong>Network Management</strong>, <strong>File System Management</strong>, <strong>Storage Administration</strong>, <strong>Firewall Administration</strong>, <strong>Security Administration</strong>, <strong>Backup &amp; Recovery</strong>, <strong>Time Synchronization</strong>, <strong>Certificate Management</strong>, <strong>Containers &amp; VMs</strong>, , <strong>Directory Services (Active Directory / LDAP)</strong>, and <strong>Distro Subscription &amp; Licensing</strong>. (Running an ad-hoc script across hosts lives in <strong>Sysible Connect</strong>, not here.) A <strong>search box</strong> at the top of the launcher filters the tiles as you type — enter a word like <em>firewall</em>, <em>users</em>, or <em>raid</em> and only the matching tools remain, the same idea as the main Dashboard's search.</p>
 
 <figure class="mock">
   <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">System Administration</span></div>
-  <img src="docs/screenshots/screenshot_system_administration.png" alt="The System Administration launcher — a three-column grid of seventeen color-coded tool tiles, each opening its own focused window." style="display:block;width:100%;height:auto;">
+  <img src="docs/screenshots/screenshot_system_administration.png" alt="The System Administration launcher — a three-column grid of eighteen color-coded tool tiles, each opening its own focused window." style="display:block;width:100%;height:auto;">
 </figure>
-<figcaption>The System Administration launcher — a search box (type to filter the tiles, e.g. “firewall” or “raid”) over seventeen color-coded tool tiles, each opening its own focused window.</figcaption>
+<figcaption>The System Administration launcher — a search box (type to filter the tiles, e.g. “firewall” or “raid”) over eighteen color-coded tool tiles, each opening its own focused window.</figcaption>
 
-<h2>What ties the seventeen tools together</h2>
+<h2>What ties the eighteen tools together</h2>
 <ul>
 <li><strong>A unified, merged host list.</strong> Every tool works against the same pool of hosts regardless of connection method (agent or SSH) — you never have to think about which transport a host uses.</li>
 <li><strong>Grouping by environment.</strong> Hosts are organized under collapsible environment headers, with Collapse All / Expand All for tidying a large fleet.</li>
@@ -539,7 +541,7 @@ sudo ./run_agent.sh</pre>
 </ul>
 
 <h2 id="uga">User &amp; Group Administration</h2>
-<p>The most detailed of the seventeen tools — accounts, passwords, sudo rights, group memberships, and account metadata across the fleet.</p>
+<p>The most detailed of the eighteen tools — accounts, passwords, sudo rights, group memberships, and account metadata across the fleet.</p>
 
 <figure class="mock">
   <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">User & Group Administration</span></div>
@@ -1123,6 +1125,21 @@ sudo ./run_agent.sh</pre>
 <tr><td>Configure LDAP(S) Client</td><td>Writes a basic <code>/etc/sssd/sssd.conf</code> for a generic (non-AD) LDAP or LDAPS directory and restarts SSSD.</td></tr>
 </table>
 </div>
+
+<h2 id="subscriptions">Distro Subscription &amp; Licensing</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Distro Subscription & Licensing</span></div>
+  <img src="docs/screenshots/screenshot_subscription.png" alt="Distro Subscription &amp; Licensing — Overview, Red Hat (RHSM), Ubuntu Pro, and SUSE (SCC) tabs for registering and managing commercial-distro subscriptions across checked hosts." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Distro Subscription &amp; Licensing — Overview, Red Hat (RHSM), Ubuntu Pro, and SUSE (SCC) tabs, dispatched across the checked hosts like every other tool.</figcaption>
+<p>Register and manage the commercial Linux distributions' subscriptions from one place, dispatched across the checked hosts. Four tabs: <strong>Overview</strong> (detect the distro and which subscription tooling is present), <strong>Red Hat (RHSM)</strong>, <strong>Ubuntu Pro</strong>, and <strong>SUSE (SCC)</strong>. Each vendor's actions are guarded to the matching distro, so running a Red Hat action against an Ubuntu host fails with a clear message rather than silently. Registration secrets (RHSM password, Pro token, SUSE reg-code) are entered in masked fields; because the vendor tools accept them only on their own command line, the Red Hat <strong>activation key</strong> path (no password) is preferred where possible.</p>
+<table class="ref">
+<tr><th>Tab</th><th>Actions</th></tr>
+<tr><td>Overview</td><td>Detect Distro &amp; Subscription Tools — identifies the OS and whether <code>subscription-manager</code>, <code>pro</code>, or <code>SUSEConnect</code> is installed.</td></tr>
+<tr><td>Red Hat (RHSM)</td><td>Subscription Status, Register (Organization + Activation Key, or Username + Password, with auto-attach), Auto-Attach, Refresh, List Consumed / Available, List Repositories, Unregister.</td></tr>
+<tr><td>Ubuntu Pro</td><td>Pro Status, Attach (token), Detach, Refresh, and Enable/Disable services (esm-infra, esm-apps, livepatch, fips, usg, cis, realtime-kernel, landscape).</td></tr>
+<tr><td>SUSE (SCC)</td><td>Registration Status, Register (reg-code + optional email), List Extensions / Modules, Deregister.</td></tr>
+</table>
 
 <!-- ===================== 11. WEBSERVER PORTAL ===================== -->
 <div class="page" id="portal">

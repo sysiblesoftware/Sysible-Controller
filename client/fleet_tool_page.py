@@ -52,15 +52,17 @@ class _DispatchWorker(QThread):
 
     done = Signal(object)
 
-    def __init__(self, entries, command):
+    def __init__(self, entries, command, description=None):
         super().__init__()
         self._entries = entries
         self._command = command
+        self._description = description
 
     def run(self):
         def work(entry):
             try:
-                return _entry_key(entry), entry, api.run_on_entry(entry, self._command)
+                return _entry_key(entry), entry, api.run_on_entry(
+                    entry, self._command, description=self._description)
             except Exception as e:  # never let one host kill the whole batch
                 return _entry_key(entry), entry, {
                     "sync": True, "stdout": "", "stderr": str(e),
@@ -239,7 +241,7 @@ class FleetToolPage(QWidget):
         # then build the result tabs back here on the main thread.
         if not hasattr(self, "_dispatch_workers"):
             self._dispatch_workers = []
-        worker = _DispatchWorker(entries, command)
+        worker = _DispatchWorker(entries, command, description=label)
         worker.done.connect(lambda res, lbl=label: self._on_dispatch_done(res, lbl))
         # Keep a reference until the thread fully finishes so it isn't garbage
         # collected mid-run if another action is launched right after.

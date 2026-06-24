@@ -1258,7 +1258,7 @@ class UserGroupAdministrationPage(QWidget):
         pending = []
 
         for entry in entries:
-            result = api.run_on_entry(entry, command)
+            result = api.run_on_entry(entry, command, description=label)
 
             if result["sync"]:
                 if result["error"] or result.get("code") not in (0, None):

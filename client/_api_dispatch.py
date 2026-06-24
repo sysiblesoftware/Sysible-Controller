@@ -147,7 +147,7 @@ def list_merged_hosts(agent_only=True):
     return merged
 
 
-def run_on_entry(entry, command: str, kind: str = "command"):
+def run_on_entry(entry, command: str, kind: str = "command", description: str = None):
     """Run `command` on one merged-host entry (as produced by
     list_merged_hosts()). SSH executes synchronously over exec_remote()
     - the result is ready immediately. Agent dispatch is async - only a
@@ -156,12 +156,16 @@ def run_on_entry(entry, command: str, kind: str = "command"):
     callers can branch on which case they got:
       {"sync": True,  "stdout", "stderr", "code", "error"}   (ssh, done)
       {"sync": False, "task_id", "error"}                    (agent, pending)
+
+    `description` is the human label recorded in the controller's activity
+    feed (e.g. "Set password for user-tester"); when omitted the controller
+    falls back to a summary of the command itself.
     """
     entry = _underlying_entry(entry)
 
     if entry["kind"] == "ssh":
         try:
-            result = exec_remote(entry["id"], command)
+            result = exec_remote(entry["id"], command, description=description)
             return {
                 "sync": True,
                 "stdout": result.get("stdout", ""),
@@ -172,7 +176,7 @@ def run_on_entry(entry, command: str, kind: str = "command"):
         except Exception as e:
             return {"sync": True, "stdout": "", "stderr": "", "code": None, "error": str(e)}
 
-    task_ids = queue_command_on_hosts([entry["id"]], command, kind=kind)
+    task_ids = queue_command_on_hosts([entry["id"]], command, kind=kind, description=description)
     task_id = task_ids.get(entry["id"])
     return {
         "sync": False,

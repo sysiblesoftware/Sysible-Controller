@@ -40,8 +40,11 @@ def set_host_environment(name: str, environment: str):
     return _request("POST", f"/remote/hosts/{name}/environment", json={"environment": environment})
 
 
-def exec_remote(name: str, cmd: str):
-    return _request("POST", f"/remote/hosts/{name}/exec", json={"cmd": cmd})
+def exec_remote(name: str, cmd: str, description: str = None):
+    body = {"cmd": cmd}
+    if description:
+        body["description"] = description
+    return _request("POST", f"/remote/hosts/{name}/exec", json=body)
 
 
 def open_terminal(name: str):
@@ -172,11 +175,14 @@ def poll_agent_download(host_id: str, task_id, save_path):
     return {"error": None}
 
 
-def queue_command_on_hosts(host_ids, command: str, kind: str = "command"):
+def queue_command_on_hosts(host_ids, command: str, kind: str = "command", description: str = None):
+    body_base = {"command": command, "kind": kind}
+    if description:
+        body_base["description"] = description
     task_ids = {}
     for host_id in host_ids:
         try:
-            result = _request("POST", f"/agents/{host_id}/tasks", json={"command": command, "kind": kind})
+            result = _request("POST", f"/agents/{host_id}/tasks", json=body_base)
             task_ids[host_id] = result.get("task_id") if result else None
         except Exception:
             task_ids[host_id] = None

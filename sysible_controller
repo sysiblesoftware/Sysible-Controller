@@ -13,6 +13,11 @@ BASE="/opt/sysible"
 VENV="$BASE/venv"
 RUN_DIR="$BASE/run"
 CLIENT_PID_FILE="$RUN_DIR/client.pid"
+# Per-user fallback for the client pid/log, used when the shared run dir or a
+# stale root-owned file there isn't writable by the desktop user. Kept in a
+# fixed place (not a random temp name) so a later 'status'/'stop' invocation -
+# even a different process - can still find it. See _resolve_gui_log / _start_gui.
+PID_FALLBACK="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/sysible-client.pid"
 PORTAL_PID_FILE="$RUN_DIR/portal.pid"
 GUI_LOG_FILE="$RUN_DIR/gui.log"
 SERVICE="sysible-backend"
@@ -33,8 +38,21 @@ _require_root() {
   fi
 }
 
+# The pid file actually in use: the shared run-dir one if present, else the
+# per-user fallback (written when the run dir wasn't writable at start).
+_effective_pid_file() {
+  if [[ -f "$CLIENT_PID_FILE" ]]; then
+    echo "$CLIENT_PID_FILE"
+  elif [[ -f "$PID_FALLBACK" ]]; then
+    echo "$PID_FALLBACK"
+  else
+    echo "$CLIENT_PID_FILE"
+  fi
+}
+
 _client_running() {
-  [[ -f "$CLIENT_PID_FILE" ]] && kill -0 "$(cat "$CLIENT_PID_FILE")" 2>/dev/null
+  local f; f="$(_effective_pid_file)"
+  [[ -f "$f" ]] && kill -0 "$(cat "$f")" 2>/dev/null
 }
 
 # =========================================================
@@ -79,9 +97,27 @@ _fetch_api_key() {
   export SYSIBLE_API_KEY
 }
 
+# Pick a log path we can actually write to. The shared run dir is created
+# 1777 at install so any user can drop a file there, but two things still
+# break a plain redirect: a stale gui.log left root-owned (mode 644) by an
+# earlier `sudo` run can't be truncated by the desktop user, and an install
+# predating the 1777 change has a non-writable run dir. In either case fall
+# back to a per-user location instead of dying with "Permission denied".
+_resolve_gui_log() {
+  # ( : > FILE ) truncates/creates FILE if writable, else fails quietly.
+  if ( : > "$GUI_LOG_FILE" ) 2>/dev/null; then
+    chmod 666 "$GUI_LOG_FILE" 2>/dev/null
+    return
+  fi
+  local base="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}"
+  GUI_LOG_FILE="$base/sysible-gui.log"
+  : > "$GUI_LOG_FILE" 2>/dev/null
+  echo "Note: $RUN_DIR/gui.log isn't writable as this user; logging GUI output to $GUI_LOG_FILE instead." >&2
+}
+
 _start_gui() {
   if _client_running; then
-    pid="$(cat "$CLIENT_PID_FILE")"
+    pid="$(cat "$(_effective_pid_file)")"
     echo "GUI client already running (PID $pid) - signaling it to bring its window to the front..."
     # A closed/hidden GUI process used to be a dead end here - this just
     # printed "already running" and returned, leaving no way back short of
@@ -96,6 +132,7 @@ _start_gui() {
   fi
 
   _fetch_api_key
+  _resolve_gui_log
 
   echo "Starting GUI client..."
   cd "$BASE" || exit 1
@@ -108,7 +145,15 @@ _start_gui() {
   setsid python3 client/main.py </dev/null >"$GUI_LOG_FILE" 2>&1 &
   disown
   GUI_PID=$!
-  echo "$GUI_PID" > "$CLIENT_PID_FILE"
+  # Same writability story as the log: fall back to the per-user pid file if
+  # the shared one isn't writable, so 'status'/'stop' still find it (they
+  # resolve the same fallback via _effective_pid_file). Clear any stale
+  # fallback first so it can't shadow a successful shared write later.
+  rm -f "$PID_FALLBACK" 2>/dev/null
+  if ! ( echo "$GUI_PID" > "$CLIENT_PID_FILE" ) 2>/dev/null; then
+    CLIENT_PID_FILE="$PID_FALLBACK"
+    echo "$GUI_PID" > "$CLIENT_PID_FILE"
+  fi
 
   # $RUN_DIR is shared between however this got invoked - root via
   # `sudo sysible_controller start`, or the desktop user directly via
@@ -123,12 +168,14 @@ _start_gui() {
 }
 
 _stop_gui() {
+  local f; f="$(_effective_pid_file)"
   if _client_running; then
-    pid="$(cat "$CLIENT_PID_FILE")"
+    pid="$(cat "$f")"
     echo "Stopping GUI client (PID $pid)..."
     kill "$pid" 2>/dev/null
   fi
-  rm -f "$CLIENT_PID_FILE"
+  # Remove both the shared and the per-user pid file so neither lingers.
+  rm -f "$CLIENT_PID_FILE" "$PID_FALLBACK"
 }
 
 # =========================================================
@@ -219,7 +266,7 @@ cmd_status() {
   systemctl status "$SERVICE" --no-pager
   echo ""
   if _client_running; then
-    echo "GUI client: running (PID $(cat "$CLIENT_PID_FILE"))"
+    echo "GUI client: running (PID $(cat "$(_effective_pid_file)"))"
   else
     echo "GUI client: not running (see $GUI_LOG_FILE for the last launch attempt's output, if any)"
   fi

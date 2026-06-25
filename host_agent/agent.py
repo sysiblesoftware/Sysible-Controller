@@ -373,7 +373,11 @@ def _run_as_user(user, cmd, become_password=None):
     plain = (["runuser", "-u", user, "--", "bash", "-c", cmd] if root
              else ["sudo", "-n", "runuser", "-u", user, "--", "bash", "-c", cmd])
     first = _exec(plain)
-    if first["returncode"] == 0 or not _looks_like_privilege_error(first["stderr"]):
+    # Look for the privilege error in BOTH streams: some commands redirect
+    # their stderr into stdout (e.g. `... 2>&1`), which would otherwise hide a
+    # "Permission denied" from this check and stop us from escalating.
+    combined = (first["stderr"] or "") + "\n" + (first["stdout"] or "")
+    if first["returncode"] == 0 or not _looks_like_privilege_error(combined):
         return first
 
     # Escalate. With a become-password use `sudo -S` (read password from

@@ -1395,7 +1395,12 @@ class TerminalPopout(QWidget):
             return
 
         try:
-            task_ids = api.queue_command_on_hosts([self.active_id], cmd)
+            # Elevate typed commands the same way the fleet tools do: on a
+            # password-sudo host, attach the operator's stored sudo password so
+            # a privileged command escalates instead of bouncing off `sudo -n`.
+            task_ids = api.queue_command_on_hosts(
+                [self.active_id], cmd,
+                become_password=api.become_password_for_host(self.active_id))
         except Exception as e:
             self.output.append(str(e))
             return

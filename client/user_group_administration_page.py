@@ -1257,6 +1257,9 @@ class UserGroupAdministrationPage(QWidget):
                 QMessageBox.information(self, "No hosts checked", "Check one or more target hosts first.")
             return False
 
+        # Per-action failure list, shown when the async (agent) results land.
+        self._dispatch_failures = []
+
         ok_count = 0
         failed = []
         pending = []
@@ -1312,15 +1315,29 @@ class UserGroupAdministrationPage(QWidget):
             if result is None:
                 continue
             done.append(key)
+            # The agent reported back - check whether the command actually
+            # succeeded. A non-zero exit (or stderr with no code) is a failure;
+            # surface the last stderr line so a sudo/permission problem isn't a
+            # silent "reported back".
+            code = result.get("code")
+            err = (result.get("stderr") or result.get("error") or "").strip()
+            if (code not in (0, None)) or (err and code is None):
+                reason = err.splitlines()[-1] if err else f"exit {code}"
+                self._dispatch_failures.append(f"{entry['label']}: {reason[:200]}")
 
         for key in done:
             del self.pending_dispatch[key]
 
         if not self.pending_dispatch:
             self.dispatch_poll_timer.stop()
-            if "failed on:" not in self.dispatch_status.text():
+            failures = getattr(self, "_dispatch_failures", [])
+            if failures or "failed on:" in self.dispatch_status.text():
+                self.dispatch_status.setStyleSheet(f"color: {STATUS_ERROR_COLOR};")
+                extra = ("  Failed: " + "  |  ".join(failures)) if failures else ""
+                self.dispatch_status.setText(self.dispatch_status.text() + extra)
+            else:
                 self.dispatch_status.setStyleSheet(f"color: {STATUS_SUCCESS_COLOR};")
-            self.dispatch_status.setText(self.dispatch_status.text() + " All pending hosts reported back.")
+                self.dispatch_status.setText(self.dispatch_status.text() + " All hosts succeeded.")
 
     # =========================================================
     # ACTIONS (all dispatched to checked hosts, never local)

@@ -1860,6 +1860,19 @@ class RemoteAdministrationPage(QWidget):
                 self._add_host_row(e)
                 present_labels.add(e["label"])
 
+        # Saved Windows / RDP hosts - double-click to RDP straight in (1-click
+        # when the password was remembered). These live on this workstation
+        # (rdp_credentials), not in the enrolled fleet.
+        from client import rdp_credentials
+        try:
+            rdp_hosts = rdp_credentials.list_hosts()
+        except Exception:
+            rdp_hosts = []
+        if rdp_hosts:
+            self._add_host_header("Windows Hosts (RDP)")
+            for name in rdp_hosts:
+                self._add_rdp_row(name)
+
         apply_collapse_state(self.host_list)
         self.host_list.blockSignals(False)
 
@@ -1886,6 +1899,52 @@ class RemoteAdministrationPage(QWidget):
             item.setIcon(self._dot_icon(status["color"]))
         item.setData(Qt.UserRole, entry)
         self.host_list.addItem(item)
+
+    def _add_rdp_row(self, name):
+        """A saved Windows/RDP target row. Double-click connects (1-click when
+        a password is stored). Marked kind='rdp' so it's skipped by fleet
+        actions and check-in, which only apply to enrolled agent/SSH hosts."""
+        item = QListWidgetItem(f"    {name}  [RDP]")
+        item.setData(Qt.UserRole, {"kind": "rdp", "label": name, "id": name, "type_text": "RDP"})
+        self.host_list.addItem(item)
+
+    @staticmethod
+    def _is_rdp(entry):
+        return bool(entry) and entry.get("kind") == "rdp"
+
+    def _rdp_connect_saved(self, host):
+        """1-click RDP to a saved Windows host: launch straight away with the
+        remembered credentials; if no password was stored, open the dialog
+        prefilled so it can be entered."""
+        from client import rdp_credentials, rdp_launcher
+        saved = rdp_credentials.load(host) or {}
+        if not saved.get("password"):
+            self._open_rdp(host)
+            return
+        screen_size = None
+        try:
+            scr = QApplication.primaryScreen()
+            if scr is not None:
+                g = scr.availableGeometry()
+                dpr = scr.devicePixelRatio() or 1.0
+                screen_size = f"{int(round(g.width() * dpr))}x{int(round(g.height() * dpr))}"
+        except Exception:
+            screen_size = None
+        ok, msg = rdp_launcher.launch(
+            host, saved.get("username", ""), saved.get("domain", ""),
+            saved.get("password", ""), "dynamic", screen_size=screen_size)
+        if not ok:
+            QMessageBox.critical(self, "RDP connection failed", msg)
+
+    def _forget_rdp_host(self, name):
+        from client import rdp_credentials
+        if QMessageBox.question(
+                self, "Forget host",
+                f"Remove the saved RDP details for '{name}'?",
+                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        rdp_credentials.forget(name)
+        self.load_hosts()
 
     def _dot_icon(self, color):
         """A small filled circle in `color`, cached per color, used as a
@@ -1917,7 +1976,7 @@ class RemoteAdministrationPage(QWidget):
         entries = []
         for i in range(self.host_list.count()):
             entry = self.host_list.item(i).data(Qt.UserRole)
-            if entry is not None:
+            if entry is not None and not self._is_rdp(entry):
                 entries.append(entry)
         if not entries:
             QMessageBox.information(self, "No hosts", "There are no hosts in the list.")
@@ -1976,7 +2035,7 @@ class RemoteAdministrationPage(QWidget):
         entries = []
         for i in range(self.host_list.count()):
             entry = self.host_list.item(i).data(Qt.UserRole)
-            if entry is not None:
+            if entry is not None and not self._is_rdp(entry):
                 entries.append(entry)
         if not entries:
             self.checkin_label.setText("No hosts to check.")
@@ -2006,6 +2065,20 @@ class RemoteAdministrationPage(QWidget):
         entry = item.data(Qt.UserRole)
         if not entry:
             return  # environment header row, not a host
+
+        # Saved Windows/RDP host: connect or forget; no environment assignment.
+        if self._is_rdp(entry):
+            menu = QMenu(self)
+            menu.addAction(f"Connect to “{entry['label']}” (RDP)").triggered.connect(
+                lambda _checked=False, n=entry["label"]: self._rdp_connect_saved(n))
+            menu.addAction(f"Edit / reconnect “{entry['label']}”…").triggered.connect(
+                lambda _checked=False, n=entry["label"]: self._open_rdp(n))
+            menu.addSeparator()
+            menu.addAction(f"Forget “{entry['label']}”").triggered.connect(
+                lambda _checked=False, n=entry["label"]: self._forget_rdp_host(n))
+            menu.exec(self.host_list.viewport().mapToGlobal(pos))
+            return
+
         current = entry.get("environment") or ""
 
         menu = QMenu(self)
@@ -2117,6 +2190,18 @@ class RemoteAdministrationPage(QWidget):
         if entry is None:
             return  # header row
 
+        # Saved Windows/RDP host: no terminal/file-transfer; just show how to
+        # connect. Don't run it through the agent/SSH "underlying" logic.
+        if self._is_rdp(entry):
+            self.active_entry = entry
+            self.active_kind = "rdp"
+            self.active_id = entry["label"]
+            self.active_label = entry["label"]
+            self.active_host_label.setText(f"{entry['label']}  [Saved RDP host]")
+            self.connection_label.setText(
+                "Double-click to open a Remote Desktop session (right-click to forget).")
+            return
+
         self.active_entry = entry
         underlying = _default_underlying(entry)
         self.active_kind = underlying["kind"]
@@ -2156,6 +2241,11 @@ class RemoteAdministrationPage(QWidget):
         entry = item.data(Qt.UserRole)
         if entry is None:
             return  # header
+
+        # A saved Windows host: double-click connects over RDP, not a terminal.
+        if self._is_rdp(entry):
+            self._rdp_connect_saved(entry["label"])
+            return
 
         # Every double-click opens a NEW, independent session - including
         # additional shells to a host that already has one open. Number

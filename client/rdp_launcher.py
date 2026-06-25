@@ -36,6 +36,43 @@ def available_client():
     return None
 
 
+def _resolve_host(host):
+    """Resolve a hostname to an IP using the OS resolver (honours /etc/hosts
+    and nsswitch), preserving any :port. Returns (host_or_ip, error). If it's
+    already an IP it's returned unchanged; if it can't be resolved, returns a
+    clear error so the caller can surface it."""
+    import socket
+    h, sep, port = host.rpartition(":")
+    # rpartition on a bare IPv6 or no-colon host: if there's no colon, h is ""
+    if not sep:
+        h, port = host, ""
+    # Bracketed IPv6 [::1]:3389 or already-numeric → don't touch.
+    if h.startswith("[") or _looks_like_ip(h):
+        return host, None
+    try:
+        # AF_UNSPEC: works for IPv4 and IPv6, honours /etc/hosts.
+        infos = socket.getaddrinfo(h, None)
+        ip = infos[0][4][0]
+    except OSError:
+        return host, (
+            f"Could not resolve the hostname '{h}'. Check it's spelled right and "
+            f"present in DNS or /etc/hosts on this machine (try: getent hosts {h}), "
+            f"or enter the IP address instead."
+        )
+    return (f"{ip}:{port}" if port else ip), None
+
+
+def _looks_like_ip(s):
+    import socket
+    for fam in (socket.AF_INET, socket.AF_INET6):
+        try:
+            socket.inet_pton(fam, s)
+            return True
+        except OSError:
+            continue
+    return False
+
+
 def _build_freerdp_args(binary, host, username, domain, password, size, screen_size=None):
     # Quality: GFX H.264 4:4:4 (sharpest text - 4:2:0 smears it) + 32-bit
     # colour. /network:auto is deliberately left off: on a misjudged link it
@@ -169,6 +206,15 @@ def launch(host, username="", domain="", password="", size="1280x800", screen_si
     host = (host or "").strip()
     if not host:
         return False, "No host/address given."
+
+    # Resolve the hostname ourselves via the OS resolver (which consults
+    # /etc/hosts + nsswitch), then hand the RDP client the IP. Some FreeRDP
+    # builds don't resolve plain /etc/hosts names reliably, which is why a
+    # hostname "didn't work but the IP did". If it can't be resolved at all,
+    # say so clearly instead of a vague connection failure.
+    host, rerr = _resolve_host(host)
+    if rerr:
+        return False, rerr
 
     client = available_client()
     if client is None:

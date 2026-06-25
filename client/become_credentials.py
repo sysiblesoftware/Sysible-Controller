@@ -31,6 +31,23 @@ _STORE_FILE = _CONFIG_DIR / "become_creds.json"
 _GLOBAL = "*"
 
 
+def _current_admin():
+    """The logged-in admin for this GUI session. The become-password is the
+    sudo password for THAT admin's matching local user, so the store is
+    namespaced per admin - otherwise one admin's password would be used for
+    everyone. Falls back to '_' when unknown (e.g. before login)."""
+    try:
+        from client import session
+        return session.get_current_admin() or "_"
+    except Exception:
+        return "_"
+
+
+def _key(host):
+    # NUL separates admin from host - neither can contain it.
+    return f"{_current_admin()}\x00{host}"
+
+
 def encryption_available():
     return _HAVE_FERNET
 
@@ -67,11 +84,12 @@ def _save(data):
 
 
 def set_password(password, host=_GLOBAL):
-    """Store (encrypted) the sudo password for `host` (or globally). A blank
-    password removes the stored entry."""
+    """Store (encrypted) the current admin's sudo password for `host` (or
+    globally for them). A blank password removes the stored entry."""
     data = _load()
+    k = _key(host)
     if not password:
-        data.pop(host, None)
+        data.pop(k, None)
         _save(data)
         return True
     if not _HAVE_FERNET:
@@ -80,7 +98,7 @@ def set_password(password, host=_GLOBAL):
     if not key:
         return False
     try:
-        data[host] = Fernet(key).encrypt(password.encode()).decode()
+        data[k] = Fernet(key).encrypt(password.encode()).decode()
     except Exception:
         return False
     _save(data)
@@ -88,10 +106,10 @@ def set_password(password, host=_GLOBAL):
 
 
 def get_password(host=_GLOBAL):
-    """Decrypted sudo password for `host`, falling back to the global entry,
-    or None."""
+    """Decrypted sudo password for the current admin on `host`, falling back
+    to their global entry, or None."""
     data = _load()
-    token = data.get(host) or data.get(_GLOBAL)
+    token = data.get(_key(host)) or data.get(_key(_GLOBAL))
     if not token or not _HAVE_FERNET:
         return None
     key = _get_key()
@@ -105,11 +123,12 @@ def get_password(host=_GLOBAL):
 
 def is_set(host=_GLOBAL):
     data = _load()
-    return bool(data.get(host) or data.get(_GLOBAL))
+    return bool(data.get(_key(host)) or data.get(_key(_GLOBAL)))
 
 
 def clear(host=_GLOBAL):
     data = _load()
-    if host in data:
-        del data[host]
+    k = _key(host)
+    if k in data:
+        del data[k]
         _save(data)

@@ -16,4 +16,4 @@ route, About dialog, etc.) should import this rather than hardcoding
 its own copy.
 """
 
-VERSION = "2.0.0"
+VERSION = "3.0.0"

@@ -1549,14 +1549,18 @@ class RemoteAdministrationPage(QWidget):
             "live connection test. A colored dot and the result appear next to each host."
         )
         self.btn_checkin.clicked.connect(self.check_in_hosts)
-        btn_script = QPushButton("Run Script on All Hosts…")
-        btn_script.setToolTip("Run an ad-hoc command or multi-line script across checked hosts.")
-        btn_script.clicked.connect(self.open_script_runner)
+        # Fleet-wide actions - these act on the whole fleet, not the host list
+        # itself, so they live in the right-hand panel (Fleet Actions box),
+        # not stacked on top of the list. Created here, placed in
+        # _build_content_panel().
+        self.btn_script = QPushButton("Run Script on All Hosts…")
+        self.btn_script.setToolTip("Run an ad-hoc command or multi-line script across checked hosts.")
+        self.btn_script.clicked.connect(self.open_script_runner)
 
-        btn_rdp = QPushButton("RDP To A Windows Host…")
-        btn_rdp.setToolTip("Open a Remote Desktop (RDP) session to a Windows host by address, "
-                           "or right-click an enrolled host to RDP to it.")
-        btn_rdp.clicked.connect(lambda: self._open_rdp(""))
+        self.btn_rdp = QPushButton("RDP To A Windows Host…")
+        self.btn_rdp.setToolTip("Open a Remote Desktop (RDP) session to a Windows host by address, "
+                                "or right-click an enrolled host to RDP to it.")
+        self.btn_rdp.clicked.connect(lambda: self._open_rdp(""))
 
         # Fleet power / agent control - act on every host in the list.
         self.btn_restart_agent = QPushButton("Restart Agent on All Hosts")
@@ -1578,17 +1582,27 @@ class RemoteAdministrationPage(QWidget):
         self.checkin_label = QLabel("")
         theme.style_hint_label(self.checkin_label)
 
+        # Compact list-management toolbar that sits BELOW the list (via
+        # extra_widgets) so the panel reads as "just the host list" with its
+        # own controls underneath, instead of a stack of buttons on top.
+        list_tools = QWidget()
+        lt = QVBoxLayout(list_tools)
+        lt.setContentsMargins(0, 0, 0, 0)
+        lt.setSpacing(6)
+        for pair in ([btn_refresh, self.btn_checkin], [btn_collapse_all, btn_expand_all]):
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            row.setContentsMargins(0, 0, 0, 0)
+            for b in pair:
+                b.setMinimumHeight(28)
+                row.addWidget(b)
+            lt.addLayout(row)
+
         host_panel = build_host_panel(
             "Managed Hosts (agent + SSH)",
             self.host_list,
-            [
-                [btn_refresh, self.btn_checkin],
-                [btn_collapse_all, btn_expand_all],
-                [btn_script, btn_rdp],
-                [self.btn_restart_agent],
-                [self.btn_reboot_all, self.btn_poweroff_all],
-            ],
-            extra_widgets=[self.checkin_label],
+            [],  # no buttons stacked above the list
+            extra_widgets=[list_tools, self.checkin_label],
             width=340,  # wider so each host's IP fits next to it
         )
         body.addWidget(host_panel)
@@ -1644,6 +1658,17 @@ class RemoteAdministrationPage(QWidget):
         sel.addWidget(open_hint)
 
         col.addWidget(sel_box)
+
+        # ---- fleet actions (act on the whole fleet / checked hosts) ----
+        fleet_box = QGroupBox("Fleet Actions (all hosts)")
+        fleet = QVBoxLayout(fleet_box)
+        fleet.addWidget(self.btn_script)
+        fleet.addWidget(self.btn_restart_agent)
+        power_row = QHBoxLayout()
+        power_row.addWidget(self.btn_reboot_all)
+        power_row.addWidget(self.btn_poweroff_all)
+        fleet.addLayout(power_row)
+        col.addWidget(fleet_box)
 
         # ---- file transfer ----
         file_box = QGroupBox("File Transfer (selected host)")
@@ -1729,6 +1754,23 @@ class RemoteAdministrationPage(QWidget):
         self.enroll_status.setWordWrap(True)
         col_enroll.addWidget(self.enroll_status)
         col.addWidget(enroll_box)
+
+        # ---- RDP to a Windows host (a different way to reach a new box,
+        # so it sits right under "SSH to a New Host") ----
+        rdp_box = QGroupBox("RDP To A Windows Host")
+        rdp_v = QVBoxLayout(rdp_box)
+        rdp_hint = QLabel(
+            "Open a graphical Remote Desktop session to a Windows host by address "
+            "(or right-click an enrolled host in the list to RDP to it)."
+        )
+        theme.style_hint_label(rdp_hint)
+        rdp_hint.setWordWrap(True)
+        rdp_v.addWidget(rdp_hint)
+        rdp_row = QHBoxLayout()
+        rdp_row.addWidget(self.btn_rdp)
+        rdp_row.addStretch()
+        rdp_v.addLayout(rdp_row)
+        col.addWidget(rdp_box)
 
         col.addStretch()
 

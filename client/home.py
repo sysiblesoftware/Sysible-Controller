@@ -150,7 +150,7 @@ class HomeWindow(QWidget):
             ("System Administration",
              "User & group administration and system health/log checks across agent and SSH hosts.",
              self.open_system_admin, "fa5s.th-large", "amber", False),
-            ("Live Activity &amp; Logs",
+            ("Live Activity & Logs",
              "Live, attributed feed of who did what across the fleet, plus the controller's own log.",
              self.open_live_log, "fa5s.stream", "sky", True),
         ]

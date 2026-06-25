@@ -1553,8 +1553,8 @@ class RemoteAdministrationPage(QWidget):
         btn_script.setToolTip("Run an ad-hoc command or multi-line script across checked hosts.")
         btn_script.clicked.connect(self.open_script_runner)
 
-        btn_rdp = QPushButton("RDP to Address…")
-        btn_rdp.setToolTip("Open an RDP session to any address (e.g. a Windows server), "
+        btn_rdp = QPushButton("RDP To A Windows Host…")
+        btn_rdp.setToolTip("Open a Remote Desktop (RDP) session to a Windows host by address, "
                            "or right-click an enrolled host to RDP to it.")
         btn_rdp.clicked.connect(lambda: self._open_rdp(""))
 
@@ -1643,12 +1643,6 @@ class RemoteAdministrationPage(QWidget):
         theme.style_hint_label(open_hint)
         sel.addWidget(open_hint)
 
-        detail_buttons = QHBoxLayout()
-        self.remove_host_btn = QPushButton("Remove Host")
-        self.remove_host_btn.clicked.connect(self.delete_host)
-        detail_buttons.addWidget(self.remove_host_btn)
-        detail_buttons.addStretch()
-        sel.addLayout(detail_buttons)
         col.addWidget(sel_box)
 
         # ---- file transfer ----
@@ -1737,6 +1731,27 @@ class RemoteAdministrationPage(QWidget):
         col.addWidget(enroll_box)
 
         col.addStretch()
+
+        # ---- remove host (de-emphasized, at the very bottom) ----
+        # A destructive, infrequent action, so it sits out of the way under
+        # everything else rather than up next to the host details - a small,
+        # quiet link-style button aligned to the right.
+        remove_row = QHBoxLayout()
+        remove_row.addStretch()
+        self.remove_host_btn = QPushButton("Remove selected host")
+        self.remove_host_btn.setToolTip(
+            "Remove the selected host from Sysible (drops its agent and/or SSH connection).")
+        self.remove_host_btn.setCursor(Qt.PointingHandCursor)
+        self.remove_host_btn.setFlat(True)
+        self.remove_host_btn.setStyleSheet(
+            "QPushButton{color:#9aa5b1; border:none; padding:4px 6px; font-size:11px;"
+            "text-decoration:underline;}"
+            "QPushButton:hover{color:#f0c0bc;}"
+        )
+        self.remove_host_btn.clicked.connect(self.delete_host)
+        remove_row.addWidget(self.remove_host_btn)
+        col.addLayout(remove_row)
+
         return panel
 
     # =====================================================

@@ -51,3 +51,20 @@ def make_page_header(title_text, font_size=18, logo_height=28):
     row.addWidget(title, 1)
 
     return row
+
+
+def center_on_screen(widget):
+    """Center `widget` on the screen it's about to appear on (falling back to
+    the primary screen). Parentless top-level windows otherwise open at the
+    window manager's default spot - often the top-left corner - which looks
+    broken for a startup login/setup dialog. Call from the widget's showEvent
+    so its final size is known."""
+    from PySide6.QtGui import QGuiApplication
+
+    screen = widget.screen() or QGuiApplication.primaryScreen()
+    if screen is None:
+        return
+    geo = screen.availableGeometry()
+    frame = widget.frameGeometry()
+    frame.moveCenter(geo.center())
+    widget.move(frame.topLeft())

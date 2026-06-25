@@ -247,6 +247,14 @@ class MainWindow(QMainWindow):
         if self.tray_icon is not None:
             self.tray_icon.hide()
 
+        # Close this dashboard for real BEFORE showing the login gate, so the
+        # only thing on screen during re-login is the (centered) login dialog -
+        # not the old dashboard lingering behind a modal. _logging_out makes
+        # closeEvent accept instead of hiding-to-tray.
+        self._logging_out = True
+        self.close()
+        app.processEvents()
+
         # Re-run the login gate (login dialog + any forced password change).
         if _run_login_gate():
             new_window = MainWindow()
@@ -254,11 +262,6 @@ class MainWindow(QMainWindow):
             _retain_window(new_window)
         else:
             app.quit()
-
-        # Let this old window close for real now that a replacement (or quit)
-        # is in flight.
-        self._logging_out = True
-        self.close()
 
     def _suppress_watchdog(self, grace_seconds):
         """Connected to bus.backend_restart_expected - holds off on

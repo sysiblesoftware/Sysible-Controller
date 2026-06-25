@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt
 from client import api, session
 from client import theme
 from client.theme import STATUS_ERROR_COLOR
-from client.branding import LOGO_PATH
+from client.branding import LOGO_PATH, center_on_screen
 
 
 class CreateAdminDialog(QDialog):
@@ -106,6 +106,13 @@ class CreateAdminDialog(QDialog):
         # memory only (never logged), in case main.py wants it.
         self.username = None
         self.password = None
+        self._centered = False
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._centered:
+            self._centered = True
+            center_on_screen(self)
 
     def _attempt_setup(self):
         username = self.username_input.text().strip()

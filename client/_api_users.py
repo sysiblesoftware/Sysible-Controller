@@ -373,7 +373,27 @@ def _hash_password(password: str):
 
 
 def cmd_create_user(username: str, password: str = "", shell: str = "/bin/bash") -> str:
-    cmd = f"useradd -m -s {shlex.quote(shell or '/bin/bash')} {shlex.quote(username)}"
+    u = shlex.quote(username)
+    sh = shlex.quote(shell or "/bin/bash")
+    # `useradd -m` should create and populate the home directory, but a few
+    # setups don't (CREATE_HOME disabled in /etc/login.defs, a useradd that
+    # only honours --create-home, an empty/odd /etc/skel, or the home base on
+    # a mount that wasn't ready). So after creating the account, look up the
+    # home path the account was actually given and, if it's still missing,
+    # build it explicitly from /etc/skel with the right owner/permissions -
+    # then verify it exists and fail loudly if it still doesn't.
+    ensure_home = (
+        f'h="$(getent passwd {u} | cut -d: -f6)"; '
+        f'if [ -n "$h" ] && [ ! -d "$h" ]; then '
+        f'  mkdir -p "$h"; cp -aT /etc/skel "$h" 2>/dev/null || true; '
+        f'  chown -R {u}:{u} "$h" 2>/dev/null || true; chmod 700 "$h"; '
+        f'fi; '
+        f'if [ -z "$h" ] || [ ! -d "$h" ]; then '
+        f'  echo "user created but home directory could not be created" >&2; exit 1; '
+        f'fi; '
+        f'echo "home directory ready: $h"'
+    )
+    cmd = f"useradd -m -s {sh} {u} && {{ {ensure_home}; }}"
     if password:
         cmd += " && " + cmd_set_password(username, password)
     return cmd

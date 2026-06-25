@@ -5,8 +5,9 @@ credentials per host with the password encrypted at rest.
 """
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QComboBox, QCheckBox, QMessageBox,
+    QComboBox, QCheckBox, QMessageBox, QApplication,
 )
+from PySide6.QtCore import Qt
 
 from client import rdp_launcher, rdp_credentials
 
@@ -119,8 +120,21 @@ class RdpConnectDialog(QDialog):
         else:
             rdp_credentials.forget(host)
 
-        ok, message = rdp_launcher.launch(host, username, domain, password, size)
+        # launch() watches the client for a couple of seconds to catch an
+        # immediate failure, so give feedback and keep the UI responsive
+        # rather than appearing to freeze.
+        self.connect_btn.setEnabled(False)
+        self.status.setText(f"Connecting to {host}…")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
+        try:
+            ok, message = rdp_launcher.launch(host, username, domain, password, size)
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.connect_btn.setEnabled(True)
+
         if not ok:
-            QMessageBox.critical(self, "RDP", message)
+            self.status.setText("")
+            QMessageBox.critical(self, "RDP connection failed", message)
             return
         self.accept()

@@ -151,16 +151,25 @@ def cmd_uninstall_agent_service() -> str:
         f"rmdir --ignore-fail-on-non-empty {_AGENT_STATE_DIR} 2>/dev/null || true"
     )
     quoted = shlex.quote(teardown)
+    # IMPORTANT: this must exit NON-ZERO when systemd-run can't schedule the
+    # teardown. systemd-run needs root; when the agent runs this as the
+    # operator's (non-root) local user it hits polkit ("Interactive
+    # authentication required"). The agent only retries a command under sudo if
+    # the first, unprivileged attempt FAILS - so if we swallowed that failure
+    # into an exit 0 (as this used to), the agent would think it succeeded and
+    # never escalate, and the service would be left running. Exiting 1 (with the
+    # polkit error still on stderr) is what triggers the agent's sudo retry.
     return (
-        f"if command -v systemd-run >/dev/null 2>&1; then "
-        f"systemd-run --quiet --on-active=2 --unit={_AGENT_SERVICE_NAME}-uninstall "
-        f"/bin/bash -c {quoted} "
-        f"&& echo 'Uninstall scheduled - the systemd service and agent files "
-        f"will be removed within a few seconds.' "
-        f"|| echo 'WARNING: systemd-run failed to schedule teardown - service "
-        f"left running. Run disenroll_agent.sh on this host instead.' >&2; "
-        f"else echo 'WARNING: systemd-run not found - could not schedule "
-        f"automatic teardown. Run disenroll_agent.sh on this host instead.' >&2; fi"
+        f"if ! command -v systemd-run >/dev/null 2>&1; then "
+        f"echo 'WARNING: systemd-run not found - could not schedule automatic "
+        f"teardown. Run disenroll_agent.sh on this host instead.' >&2; exit 1; fi; "
+        f"if systemd-run --quiet --on-active=2 --unit={_AGENT_SERVICE_NAME}-uninstall "
+        f"/bin/bash -c {quoted}; then "
+        f"echo 'Uninstall scheduled - the systemd service and agent files "
+        f"will be removed within a few seconds.'; "
+        f"else "
+        f"echo 'WARNING: systemd-run failed to schedule teardown - service "
+        f"left running. Run disenroll_agent.sh on this host instead.' >&2; exit 1; fi"
     )
 
 

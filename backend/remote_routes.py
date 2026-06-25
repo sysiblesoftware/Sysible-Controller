@@ -243,12 +243,48 @@ def ssh_host_exists(name: str) -> bool:
     return name in load_hosts()
 
 
+def _norm_ip(ip) -> str:
+    return (ip or "").strip()
+
+
+def _ip_owner(ip: str, exclude_name=None):
+    """If `ip` is already managed - by another SSH host record or by an
+    enrolled agent - return the name it's known by, else None. This is what
+    makes it impossible to enroll the same physical machine twice (the same
+    box reached two ways would otherwise show up as two separate rows). IP is
+    the one identifier that pins the machine regardless of what name each
+    path used."""
+    ip = _norm_ip(ip)
+    if not ip:
+        return None
+    for n, h in (load_hosts() or {}).items():
+        if n != exclude_name and _norm_ip(h.get("ip")) == ip:
+            return n
+    try:
+        from backend.db import list_agents
+        for a in list_agents():
+            owner = a.get("hostname") or a.get("host_id")
+            if owner != exclude_name and _norm_ip(a.get("ip")) == ip:
+                return owner
+    except Exception:
+        pass
+    return None
+
+
 def register_agent_ssh_host(name: str, ip: str, environment: str = ""):
     """Add/refresh an SSH host record for an agent host that now accepts
     the controller key, so Remote Administration can open a real
     terminal to it. Connects as root with the shared controller key,
-    exactly like any manually-enrolled SSH host."""
+    exactly like any manually-enrolled SSH host.
+
+    The agent's own hostname is the canonical identity for the box, so if a
+    manually-enrolled SSH host already exists at this IP under a DIFFERENT
+    name, drop it - it's the same machine, and keeping both is the duplicate
+    we're trying to prevent."""
     hosts = load_hosts()
+    ip_n = _norm_ip(ip)
+    for n in [n for n, h in hosts.items() if n != name and _norm_ip(h.get("ip")) == ip_n and ip_n]:
+        del hosts[n]
     hosts[name] = {
         "ip": ip,
         "user": "root",
@@ -299,6 +335,12 @@ def set_agent_ssh_state(host_id: str, value):
 def add_host(body: AddHostRequest):
     from backend.edition import enforce_host_limit
     enforce_host_limit(body.name)
+
+    owner = _ip_owner(body.ip, exclude_name=body.name)
+    if owner:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{body.ip} is already managed as '{owner}'.")
 
     hosts = load_hosts()
 
@@ -355,6 +397,16 @@ def set_host_environment(name: str, body: SetEnvironmentRequest):
 def enroll_ssh(body: EnrollSSHRequest):
     from backend.edition import enforce_host_limit
     enforce_host_limit(body.name)
+
+    # Refuse to enroll a machine that's already managed at this IP (by an
+    # agent or another SSH host). Same physical box, two records = the
+    # duplicate rows we want to make impossible.
+    owner = _ip_owner(body.ip, exclude_name=body.name)
+    if owner:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"{body.ip} is already managed as '{owner}'. Remove that host "
+                    f"first if you want to re-enroll it under a different name."))
 
     public_key = _ensure_controller_key()
 

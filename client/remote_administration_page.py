@@ -2265,6 +2265,17 @@ class RemoteAdministrationPage(QWidget):
             self.enroll_status.setText("Host name, IP, and password are required.")
             return
 
+        # Don't let the same machine be enrolled twice. The controller enforces
+        # this too (409), but checking here gives an immediate, clear message
+        # instead of a round-trip failure.
+        existing = self._managed_host_at_ip(ip)
+        if existing and existing != name:
+            self.enroll_status.setStyleSheet(f"color: {STATUS_ERROR_COLOR};")
+            self.enroll_status.setText(
+                f"{ip} is already managed as '{existing}'. Remove that host first "
+                "if you want to re-enroll it.")
+            return
+
         try:
             api.enroll_ssh(name, ip, user, password, environment)
         except Exception as e:
@@ -2276,6 +2287,20 @@ class RemoteAdministrationPage(QWidget):
         self.enroll_status.setStyleSheet(f"color: {STATUS_SUCCESS_COLOR};")
         self.enroll_status.setText(f"'{name}' connected — double-click it in the list to open a terminal.")
         self.load_hosts()
+
+    def _managed_host_at_ip(self, ip):
+        """Name of an already-managed host (agent or SSH) at `ip`, or None -
+        used to block enrolling the same machine twice."""
+        ip = (ip or "").strip()
+        if not ip:
+            return None
+        try:
+            for entry in api.list_merged_hosts(agent_only=False):
+                if _row_ip(entry) == ip:
+                    return entry.get("label")
+        except Exception:
+            pass
+        return None
 
     def show_controller_key(self):
         try:

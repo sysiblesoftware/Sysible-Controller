@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem,
+    QLineEdit, QListWidget, QListWidgetItem, QPushButton,
 )
 from PySide6.QtGui import QPixmap
 from PySide6.QtCore import Qt
@@ -14,6 +14,7 @@ from client.system_administration_page import SystemAdministrationPage
 from client.live_log_page import LiveLogPage
 from client.branding import LOGO_PATH
 from client.theme_toggle import ThemeToggle
+from client.events import bus
 from client import feature_search, theme, api, session
 
 
@@ -64,6 +65,22 @@ class HomeWindow(QWidget):
         self.edition_badge.setVisible(False)
         header_row.addWidget(self.edition_badge)
         self._refresh_edition_badge()
+
+        # Signed-in identity + Log Out. Shows who's currently logged in and
+        # gives a one-click way to end the session (revokes the RBAC token and
+        # returns to the login screen) without quitting the whole app.
+        self.signed_in_label = QLabel()
+        self.signed_in_label.setVisible(False)
+        header_row.addWidget(self.signed_in_label)
+
+        self.logout_button = QPushButton("Log Out")
+        self.logout_button.setCursor(Qt.PointingHandCursor)
+        self.logout_button.setToolTip(
+            "End this session and return to the login screen"
+        )
+        self.logout_button.clicked.connect(bus.logout_requested.emit)
+        header_row.addWidget(self.logout_button)
+        self._refresh_signed_in()
 
         # Dark/light mode switch - lives here rather than buried in
         # Sysible Controller Settings since it's a personal display
@@ -197,6 +214,32 @@ class HomeWindow(QWidget):
         self.subtitle_label.setStyleSheet(
             f"font-size:11px; color:{subtitle_color};"
         )
+
+        if theme.get_theme_mode() == "light":
+            self.signed_in_label.setStyleSheet("font-size:11px; color:#6B7280;")
+            self.logout_button.setStyleSheet(
+                "QPushButton{font-size:12px; padding:6px 14px; border-radius:6px;"
+                "border:1px solid #C7CDD6; color:#1F2430; background:#F3F5F8;}"
+                "QPushButton:hover{background:#E7EBF0;}"
+            )
+        else:
+            self.signed_in_label.setStyleSheet("font-size:11px; color:#9aa5b1;")
+            self.logout_button.setStyleSheet(
+                "QPushButton{font-size:12px; padding:6px 14px; border-radius:6px;"
+                "border:1px solid #3A4250; color:#EAEAEA; background:#262C38;}"
+                "QPushButton:hover{background:#313947;}"
+            )
+
+    def _refresh_signed_in(self):
+        """Update the 'Signed in as <user>' label from the current session."""
+        username = session.get_current_admin()
+        if username:
+            role = session.get_current_role()
+            suffix = f" ({role})" if role else ""
+            self.signed_in_label.setText(f"Signed in as {username}{suffix}")
+            self.signed_in_label.setVisible(True)
+        else:
+            self.signed_in_label.setVisible(False)
 
     def _refresh_edition_badge(self):
         """Show a 'Community Edition' badge in the header. This is the Community

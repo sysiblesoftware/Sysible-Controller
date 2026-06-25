@@ -16,6 +16,7 @@ from client.create_admin_dialog import CreateAdminDialog
 from client.force_password_change_dialog import ForcePasswordChangeDialog
 from client.branding import LOGO_PATH
 from client.events import bus
+from client import session
 
 # Consecutive missed health checks before treating the backend as
 # down. A couple intervals of slack avoids closing everything over
@@ -69,6 +70,10 @@ class MainWindow(QMainWindow):
             open_action = QAction("Open Dashboard", self)
             open_action.triggered.connect(self._restore_window)
             tray_menu.addAction(open_action)
+
+            logout_action = QAction("Log Out", self)
+            logout_action.triggered.connect(self._logout)
+            tray_menu.addAction(logout_action)
 
             tray_menu.addSeparator()
 
@@ -136,6 +141,14 @@ class MainWindow(QMainWindow):
         self._suppress_watchdog_until = 0.0
         bus.backend_restart_expected.connect(self._suppress_watchdog)
 
+        # Set true only while tearing down for a real logout/quit, so
+        # closeEvent lets the window actually close instead of hiding to tray.
+        self._logging_out = False
+        # Raised by the dashboard header's Log Out button (and the tray's
+        # Log Out). Queued so the click handler returns before we tear the
+        # window down underneath it.
+        bus.logout_requested.connect(self._logout, Qt.QueuedConnection)
+
         self._backend_timer = QTimer(self)
         self._backend_timer.timeout.connect(self._check_backend)
         self._backend_timer.start(BACKEND_CHECK_INTERVAL_MS)
@@ -159,6 +172,11 @@ class MainWindow(QMainWindow):
         # every case; the tray, when one happens to be available and actually
         # rendered by the desktop, is just a faster/more discoverable shortcut
         # to the same _restore_window() call.
+        if self._logging_out:
+            # Deliberate teardown for a logout - let it close for real.
+            event.accept()
+            return
+
         event.ignore()
         self.hide()
 
@@ -174,6 +192,73 @@ class MainWindow(QMainWindow):
 
     def _on_sigusr1(self, signum, frame):
         self._restore_window()
+
+    def _logout(self):
+        """End the current admin session and return to the login screen,
+        without quitting the whole process. Revokes the RBAC token, closes
+        the dashboard and every popout tool window, then re-runs the login
+        gate; a successful login swaps in a fresh dashboard, while cancelling
+        the login quits the app. The backend keeps running throughout."""
+        self._restore_window()
+        resp = QMessageBox.question(
+            self,
+            "Log Out",
+            "Log out of Sysible Controller? Any open tool windows will be "
+            "closed. The controller keeps running in the background.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if resp != QMessageBox.Yes:
+            return
+
+        # Stop the watchdog first - tearing down windows and bouncing through
+        # a modal login dialog shouldn't be mistaken for a backend outage.
+        self._backend_timer.stop()
+
+        # Detach this (soon-to-be-dead) window from the logout signal so a
+        # later logout from the replacement window doesn't also fire here.
+        try:
+            bus.logout_requested.disconnect(self._logout)
+        except (RuntimeError, TypeError):
+            pass
+
+        # Revoke this session's token server-side and clear it locally. Even
+        # if the call fails, the local token is cleared so nothing stays
+        # authenticated on the client.
+        try:
+            api.admin_logout()
+        except Exception:
+            pass
+        session.clear_current_admin()
+
+        app = QApplication.instance()
+
+        # Close every other top-level window (the independent popout tool
+        # windows opened from the dashboard) so none linger with a now-revoked
+        # session. Iterate a copy since closing mutates the list.
+        for w in list(app.topLevelWidgets()):
+            if w is self or not w.isWindow():
+                continue
+            try:
+                w.close()
+            except Exception:
+                pass
+
+        if self.tray_icon is not None:
+            self.tray_icon.hide()
+
+        # Re-run the login gate (login dialog + any forced password change).
+        if _run_login_gate():
+            new_window = MainWindow()
+            new_window.show()
+            _retain_window(new_window)
+        else:
+            app.quit()
+
+        # Let this old window close for real now that a replacement (or quit)
+        # is in flight.
+        self._logging_out = True
+        self.close()
 
     def _suppress_watchdog(self, grace_seconds):
         """Connected to bus.backend_restart_expected - holds off on
@@ -207,6 +292,59 @@ class MainWindow(QMainWindow):
                 "Closing all windows.",
             )
             QApplication.instance().quit()
+
+
+# Keeps live MainWindow instances from being garbage-collected after the
+# local variable that created them goes out of scope (e.g. the old window's
+# _logout method that spawns a replacement). Dead/hidden windows are pruned
+# on each insert so this doesn't grow without bound across many logouts.
+_LIVE_WINDOWS = []
+
+
+def _retain_window(window):
+    _LIVE_WINDOWS[:] = [w for w in _LIVE_WINDOWS if w is not window and _alive(w)]
+    _LIVE_WINDOWS.append(window)
+
+
+def _alive(window):
+    try:
+        return window.isVisible() or not window._logging_out
+    except RuntimeError:
+        # Underlying C++ object already deleted.
+        return False
+
+
+def _run_login_gate():
+    """Run first-run setup OR the normal login, plus any forced password
+    change. Returns True once an administrator is authenticated for this
+    session, or False if the operator cancelled (caller should exit/quit).
+
+    Shared by initial startup and re-login after a logout. On re-login an
+    administrator already exists, so this always takes the login path.
+    """
+    try:
+        needs_setup = api.admin_setup_required()
+    except Exception:
+        needs_setup = False
+
+    if needs_setup:
+        setup = CreateAdminDialog()
+        if setup.exec() != CreateAdminDialog.Accepted:
+            return False
+        # Account created and session set - go straight to the dashboard.
+        return True
+
+    login = AdminLoginDialog()
+    if login.exec() != AdminLoginDialog.Accepted:
+        return False
+
+    # Forced password change for an account still on a temporary password.
+    if login.must_change_password:
+        change = ForcePasswordChangeDialog(login.username, login.password)
+        if change.exec() != ForcePasswordChangeDialog.Accepted:
+            return False
+
+    return True
 
 
 def main():
@@ -255,41 +393,23 @@ def main():
     # On a fresh install no administrator exists - there's no default
     # account - so the first launch makes the operator create their own
     # account (and is then logged straight in). Every later launch shows
-    # the normal login. Quitting either dialog exits the app outright
-    # rather than falling through to the dashboard. If the setup check
-    # can't reach the backend, fall back to the login dialog, which
-    # surfaces the connection error itself.
+    # the normal login. Cancelling exits the app outright rather than
+    # falling through to the dashboard. The same gate is re-run on logout
+    # (see MainWindow._logout) to return to the login screen without
+    # quitting the process. If the setup check can't reach the backend,
+    # it falls back to the login dialog, which surfaces the error itself.
+    #
+    # FORCED PASSWORD CHANGE is handled inside _run_login_gate(): an account
+    # a fellow admin (re)created with a temporary password can't reach the
+    # dashboard until it sets its own - exactly what must_change_password
+    # exists to prevent.
     # =========================================================
-    try:
-        needs_setup = api.admin_setup_required()
-    except Exception:
-        needs_setup = False
-
-    if needs_setup:
-        setup = CreateAdminDialog()
-        if setup.exec() != CreateAdminDialog.Accepted:
-            sys.exit(0)
-        # Account created and session set - go straight to the dashboard.
-    else:
-        login = AdminLoginDialog()
-        if login.exec() != AdminLoginDialog.Accepted:
-            sys.exit(0)
-
-        # =========================================================
-        # FORCED PASSWORD CHANGE
-        # Set on the account that just logged in if a fellow admin
-        # (re)created it with a temporary password. No way to dismiss
-        # this short of quitting - letting someone past this into the
-        # dashboard while still on a temporary password is exactly what
-        # must_change_password exists to prevent.
-        # =========================================================
-        if login.must_change_password:
-            change = ForcePasswordChangeDialog(login.username, login.password)
-            if change.exec() != ForcePasswordChangeDialog.Accepted:
-                sys.exit(0)
+    if not _run_login_gate():
+        sys.exit(0)
 
     window = MainWindow()
     window.show()
+    _retain_window(window)
 
     sys.exit(app.exec())
 

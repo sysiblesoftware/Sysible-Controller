@@ -403,6 +403,9 @@ sudo ./install_sysible.sh</pre>
 <h2>Light and dark theme</h2>
 <p>A small pill-shaped switch in the top-right of the Dashboard header toggles the entire interface between a <strong>dark</strong> theme (the default) and a <strong>light</strong> theme. Clicking the sun or moon re-skins every window already on screen — the Dashboard and any open tool popouts — immediately, with no restart, and the choice is remembered the next time you launch the GUI. The toggle deliberately uses plain sun/moon glyphs rather than an icon font, so it always stays usable as the way back out of light mode even if the icon font is unavailable.</p>
 
+<h2>Signed-in identity &amp; logging out</h2>
+<p>The Dashboard header shows <strong>Signed in as &lt;user&gt;</strong> with the current administrator's role, next to a <strong>Log Out</strong> button (also available on the system-tray menu). Logging out <strong>revokes this session's login token on the controller</strong>, closes the Dashboard and every open tool popout, and returns to the login screen — without stopping the backend, so the same or another administrator can sign straight back in. It's distinct from <strong>Quit Sysible Controller</strong> (the tray menu), which ends the GUI process, and from <code>sysible_controller stop</code>, which stops the backend service as well.</p>
+
 <h2>The dashboard tiles</h2>
 <p>The Dashboard presents a single column of tiles. One of them — <strong>Live Activity &amp; Logs</strong> — is shown only to administrators with the <strong>Superuser</strong> role; Sysadmins don't see it.</p>
 <table class="ref">

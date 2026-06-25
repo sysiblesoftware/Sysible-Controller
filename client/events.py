@@ -27,5 +27,10 @@ class _Events(QObject):
     # instead of mistaking a deliberate restart for a crash.
     backend_restart_expected = Signal(int)
 
+    # Emitted when the operator clicks "Log Out" (dashboard header or tray).
+    # main.py owns the actual teardown/re-login flow; the header button just
+    # raises this so it doesn't need a reference to the MainWindow.
+    logout_requested = Signal()
+
 
 bus = _Events()

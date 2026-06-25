@@ -1144,6 +1144,24 @@ def admin_login(body: AdminLoginRequest, request: Request):
     }
 
 
+@app.post("/admin/logout", dependencies=[Depends(require_api_key)])
+def admin_logout(request: Request):
+    """Invalidate the caller's RBAC identity token so it can't be reused after
+    they log out. Best-effort and idempotent: a missing/unknown token is a
+    no-op (the client clears its own copy regardless). The admin's account is
+    untouched - this only revokes the current session's token."""
+    token = request.headers.get("X-Sysible-Admin-Token")
+    username = ""
+    if token:
+        admin = resolve_admin_token(token)
+        if admin:
+            username = admin.get("username", "")
+        delete_admin_token(token)
+    if username:
+        log_admin_audit("logout", username, "")
+    return {"status": "ok"}
+
+
 @app.get("/admin/administrators", dependencies=[Depends(require_api_key)])
 def list_administrators_route():
     """Username, account metadata only - never password hash/salt."""

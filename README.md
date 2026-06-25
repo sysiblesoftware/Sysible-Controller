@@ -153,6 +153,10 @@ sudo sysible_controller gui
 
 or, with no terminal at all, click the **Sysible Controller** icon in your application menu — it prompts graphically for the admin/root password and reopens the dashboard against the already-running backend.
 
+## Logging out
+
+The dashboard header shows who's signed in and a **Log Out** button (also on the tray menu). Logging out revokes the current session's login token on the controller, closes the dashboard and every open tool window, and returns to the login screen — all without stopping the backend, so another administrator can sign straight in. This is distinct from **Quit** (tray menu), which exits the GUI process entirely, and from `sysible_controller stop`, which stops the backend service too.
+
 ## CLI reference
 
 ```

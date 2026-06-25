@@ -324,6 +324,18 @@ def admin_login(username: str, password: str):
     return result
 
 
+def admin_logout():
+    """Revoke this session's RBAC token server-side and clear it locally.
+    Best-effort: the local token is cleared even if the network call fails,
+    so the GUI never stays 'logged in' on the client after a logout."""
+    try:
+        _request("POST", "/admin/logout")
+    except Exception:
+        pass
+    finally:
+        set_admin_token(None)
+
+
 def list_administrators():
     return _request("GET", "/admin/administrators").get("administrators", [])
 

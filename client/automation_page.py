@@ -74,4 +74,4 @@ class AutomationPage(FleetToolPage):
         )
         if confirm != QMessageBox.Yes:
             return
-        self.run_command(script, "Run Command")
+        self.run_command(script, "Ran ad-hoc command/script")

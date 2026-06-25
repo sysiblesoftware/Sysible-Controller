@@ -1,0 +1,7 @@
+# Frontend build + deps are never committed (the old removal accidentally
+# swept 460k+ lines of node_modules into git). Build artifacts are produced
+# by the installer / `npm run build`, not tracked.
+frontend/node_modules/
+frontend/dist/
+*.pyc
+__pycache__/

@@ -37,14 +37,14 @@ def available_client():
 
 
 def _build_freerdp_args(binary, host, username, domain, password, size, screen_size=None):
-    # Quality baseline: the GFX pipeline (H.264/RemoteFX) renders a far sharper
-    # desktop than the legacy codecs, AND it carries the Display Control channel
-    # that /dynamic-resolution actually needs - without /gfx, /dynamic-resolution
-    # silently does nothing and the session stays stuck at FreeRDP's tiny
-    # ~1024x768 default (the "awful resolution" symptom). 32-bit colour and
-    # auto network tuning round it out.
-    args = [binary, f"/v:{host}", "/cert:ignore", "+clipboard",
-            "/gfx", "/bpp:32", "/network:auto"]
+    # Quality: open the session at a real, fixed resolution and let the GFX
+    # (H.264/RemoteFX) pipeline carry it. We deliberately do NOT use
+    # /dynamic-resolution - it renegotiates the remote desktop down to the
+    # initial window size and renders blurry/upscaled; a fixed full-resolution
+    # session is crisp (matches what `xfreerdp /size:WxH` looks like by hand).
+    # /network:auto is also left off: on a misjudged link it silently turns on
+    # compression and drops visual quality.
+    args = [binary, f"/v:{host}", "/cert:ignore", "+clipboard", "/gfx", "/bpp:32"]
     if username:
         args.append(f"/u:{username}")
     if domain:
@@ -52,16 +52,14 @@ def _build_freerdp_args(binary, host, username, domain, password, size, screen_s
     if password:
         args.append(f"/p:{password}")
     if size == "fullscreen":
-        args += ["/f", "/dynamic-resolution"]
+        args.append("/f")
     elif size == "dynamic":
-        # Open at the local screen size so the desktop fills the window from
-        # the outset (no upscaled-from-1024x768 blur), then track resizes.
+        # "Fit my screen": a fixed session at the local screen's real pixel
+        # resolution - large and sharp, no dynamic-resolution blur.
         if screen_size:
             args.append(f"/size:{screen_size}")
-        args.append("/dynamic-resolution")
-    elif size:  # e.g. "1280x800"
-        # Smart-sizing scales the remote desktop cleanly to the window.
-        args += [f"/size:{size}", "/smart-sizing"]
+    elif size:  # explicit "WxH" - a sharp fixed window at exactly that size
+        args.append(f"/size:{size}")
     return args
 
 

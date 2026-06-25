@@ -127,14 +127,21 @@ class RdpConnectDialog(QDialog):
         self.status.setText(f"Connecting to {host}…")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         QApplication.processEvents()
-        # Local screen size → FreeRDP opens the desktop at full size (crisp)
-        # instead of its tiny default that then upscales blurry.
+        # Local screen size → FreeRDP opens the desktop at full *physical*
+        # resolution (crisp) instead of a smaller default that gets upscaled
+        # blurry. availableGeometry() is in LOGICAL pixels, so on a HiDPI
+        # display (devicePixelRatio > 1) it's smaller than the real panel - we
+        # multiply by the ratio to get true pixels, which is the resolution the
+        # remote desktop should actually render at.
         screen_size = None
         try:
             scr = QApplication.primaryScreen()
             if scr is not None:
                 g = scr.availableGeometry()
-                screen_size = f"{g.width()}x{g.height()}"
+                dpr = scr.devicePixelRatio() or 1.0
+                w = int(round(g.width() * dpr))
+                h = int(round(g.height() * dpr))
+                screen_size = f"{w}x{h}"
         except Exception:
             screen_size = None
         try:

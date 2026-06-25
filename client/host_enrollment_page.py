@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QFileDialog,
     QAbstractItemView,
+    QGroupBox,
 )
 
 from client import api
@@ -147,9 +148,16 @@ class HostEnrollmentPage(QWidget):
 
         layout.addLayout(env_row)
 
-        # --- Sudo mode (passwordless vs password-sudo) ---
+        # --- Sudo policy (a host attribute: does its sudo need a password?) ---
+        # This box sets *how* the host's sudo works - controller policy that
+        # belongs with the host. The operator's actual sudo *password* is a
+        # personal credential and lives on the dashboard header ("Sudo
+        # Password"), not here, so it isn't duplicated per page.
+        sudo_box = QGroupBox("Sudo policy (selected host / environment)")
+        sudo_v = QVBoxLayout(sudo_box)
+
         sudo_row = QHBoxLayout()
-        sudo_row.addWidget(QLabel("Sudo on selected host(s):"))
+        sudo_row.addWidget(QLabel("Selected host(s):"))
         btn_pw_sudo = QPushButton("Requires Password")
         btn_pw_sudo.setToolTip(
             "Mark the selected host(s) as forbidding passwordless sudo. Dispatched "
@@ -161,14 +169,8 @@ class HostEnrollmentPage(QWidget):
             "Mark the selected host(s) as allowing passwordless sudo (agent uses 'sudo -n'). Default.")
         btn_nopw_sudo.clicked.connect(lambda: self.set_sudo_mode(False))
         sudo_row.addWidget(btn_nopw_sudo)
-        btn_set_pw = QPushButton("Set My Sudo Password…")
-        btn_set_pw.setToolTip(
-            "Store (encrypted, on this machine) the sudo password used for password-sudo "
-            "hosts. The same password the terminal's 'Send sudo password' button uses.")
-        btn_set_pw.clicked.connect(self.set_become_password)
-        sudo_row.addWidget(btn_set_pw)
         sudo_row.addStretch()
-        layout.addLayout(sudo_row)
+        sudo_v.addLayout(sudo_row)
 
         # Per-environment default: hosts inherit this when assigned to the
         # environment chosen in the combo above.
@@ -183,8 +185,17 @@ class HostEnrollmentPage(QWidget):
             "inherit it when assigned to that environment.")
         btn_env_default.clicked.connect(self.set_environment_sudo_default)
         env_default_row.addWidget(btn_env_default)
-        layout.addLayout(env_default_row)
+        sudo_v.addLayout(env_default_row)
         self.env_combo.currentTextChanged.connect(self._update_env_sudo_label)
+
+        sudo_hint = QLabel(
+            "For password-sudo hosts, store your own sudo password from the "
+            "“Sudo Password” button in the dashboard header.")
+        theme.style_hint_label(sudo_hint)
+        sudo_hint.setWordWrap(True)
+        sudo_v.addWidget(sudo_hint)
+
+        layout.addWidget(sudo_box)
 
         # =====================================================
         # BUTTONS
@@ -436,8 +447,8 @@ class HostEnrollmentPage(QWidget):
             QMessageBox.information(
                 self, "Password sudo",
                 f"{len(agents)} host(s) set to require a sudo password. Make sure you've "
-                "stored your sudo password (Set My Sudo Password…) so dispatched commands "
-                "can elevate.")
+                "stored your sudo password (the “Sudo Password” button in the dashboard "
+                "header) so dispatched commands can elevate.")
 
     def _update_env_sudo_label(self):
         env = self.env_combo.currentText()
@@ -469,25 +480,6 @@ class HostEnrollmentPage(QWidget):
             QMessageBox.critical(self, "Error", str(e))
             return
         self.refresh()
-
-    def set_become_password(self):
-        from client import become_credentials
-        from PySide6.QtWidgets import QInputDialog, QLineEdit
-        if not become_credentials.encryption_available():
-            QMessageBox.warning(self, "Unavailable",
-                                "The encryption library isn't available, so a sudo password "
-                                "can't be stored securely on this machine.")
-            return
-        text, ok = QInputDialog.getText(
-            self, "Set sudo password",
-            "Your sudo password for password-sudo hosts (stored encrypted on this machine, "
-            "as the fleet default):", QLineEdit.Password)
-        if not ok:
-            return
-        become_credentials.set_password(text, host="*")
-        QMessageBox.information(
-            self, "Saved",
-            "Sudo password stored (encrypted)." if text else "Stored sudo password cleared.")
 
     def _selected_agents(self):
         """Every selected host row (skips environment header rows). Falls

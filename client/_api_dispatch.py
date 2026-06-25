@@ -178,6 +178,18 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
         except Exception:
             become_password = None
 
+        # Fail fast with a clear instruction instead of dispatching a command
+        # that will just bounce off `sudo` for lack of a password. This host is
+        # marked "sudo requires a password" but none is stored for the
+        # logged-in admin, so there's nothing for the agent to elevate with.
+        if not become_password:
+            msg = (
+                f"'{entry.get('label', 'this host')}' is set to require a sudo password, "
+                "but you haven't stored yours yet. Click “Sudo Password” in the "
+                "dashboard header to set it, then try again."
+            )
+            return {"sync": True, "stdout": "", "stderr": msg, "code": None, "error": msg}
+
     if entry["kind"] == "ssh":
         try:
             result = exec_remote(entry["id"], command, description=description,

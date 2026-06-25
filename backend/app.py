@@ -274,32 +274,37 @@ def enroll(req: EnrollRequest):
     # Plain `def` (threadpooled) for the same reason as heartbeat below: the
     # body is all blocking DB/token work and shouldn't occupy the event loop.
 
-    if not validate_enroll_token(req.token):
-        raise HTTPException(
-            status_code=403,
-            detail="Invalid or expired token"
+    # Hold the enroll lock across validate→consume so a single-use token can't
+    # be claimed by two concurrent requests (TOCTOU). enforce_host_limit's
+    # count + create_or_update_agent also live inside it, so the cap can't be
+    # raced past either.
+    with _ENROLL_LOCK:
+        if not validate_enroll_token(req.token):
+            raise HTTPException(
+                status_code=403,
+                detail="Invalid or expired token"
+            )
+
+        host_id = resolve_enroll_token_host(req.token, req.host_id)
+
+        # Community-edition host cap (no-op in an unlimited/Enterprise build).
+        from backend.edition import enforce_host_limit
+        enforce_host_limit(req.hostname or host_id)
+
+        agent_secret = secrets.token_hex(24)
+
+        create_or_update_agent(
+            host_id,
+            req.hostname,
+            req.platform,
+            req.kernel,
+            "online",
+            time.time(),
+            agent_secret,
+            req.ip
         )
 
-    host_id = resolve_enroll_token_host(req.token, req.host_id)
-
-    # Community-edition host cap (no-op in an unlimited/Enterprise build).
-    from backend.edition import enforce_host_limit
-    enforce_host_limit(req.hostname or host_id)
-
-    agent_secret = secrets.token_hex(24)
-
-    create_or_update_agent(
-        host_id,
-        req.hostname,
-        req.platform,
-        req.kernel,
-        "online",
-        time.time(),
-        agent_secret,
-        req.ip
-    )
-
-    consume_enroll_token(req.token, host_id)
+        consume_enroll_token(req.token, host_id)
 
     # Give this agent host a real SSH terminal automatically: queue the
     # controller's key-install + sshd-check command. force=True so a
@@ -373,6 +378,14 @@ _NON_LOGGED_KINDS = {"sync_users", "ssh_enable"}
 _PENDING_BECOME = {}            # task_id -> {"password": str, "expiry": float}
 _PENDING_BECOME_LOCK = threading.Lock()
 _BECOME_TTL_S = 300
+
+# Serializes the agent-enrollment critical section. Enrollment validates a
+# single-use token, then (separately) consumes it; without this lock two
+# concurrent requests carrying the SAME token can both pass validation before
+# either consumes it (a TOCTOU race), letting one leaked bundle enroll more
+# than one host and slip past the host cap. Enrollment is infrequent and the
+# controller is single-process, so a coarse lock here is cheap and correct.
+_ENROLL_LOCK = threading.Lock()
 
 
 def _sweep_become(now=None):

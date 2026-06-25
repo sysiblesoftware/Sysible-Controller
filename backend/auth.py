@@ -70,18 +70,34 @@ def require_api_key(x_api_key: str = Header(default=None, alias="X-API-Key")):
 
 def require_superuser(x_admin_token: str = Header(default=None, alias="X-Sysible-Admin-Token")):
     """RBAC gate for superuser-only actions (managing admins, enrolling/
-    removing hosts, controller config). Enforced via the caller's login
-    token: a sysadmin token is rejected 403. A request with NO token is
-    allowed through - that's first-run bootstrap (no admin exists yet) or a
-    direct API-key caller, which is already root-equivalent within the
-    controller's trust boundary. The hard, unspoofable control is on-host
-    (run-as-user + local sudo); this is controller-side separation of duties.
+    removing hosts, controller config, viewing the activity/controller logs).
+
+    A present token is validated: an invalid/expired token is 401, a non-
+    superuser (sysadmin) token is 403.
+
+    A request with NO token is allowed ONLY during first-run bootstrap, i.e.
+    before any administrator exists (the first admin is created via
+    /admin/setup, which doesn't pass through here). Once at least one admin
+    exists a valid superuser token is mandatory - otherwise the superuser /
+    sysadmin split could be bypassed by simply omitting the header while
+    holding the install-time API key, collapsing the role separation to
+    nothing. The hard, unspoofable control is still on-host (run-as-user +
+    local sudo); this enforces the controller-side separation of duties too.
 
     db is imported lazily to avoid an import cycle (db has no dependency on
     auth, but importing it at module load would still couple the two)."""
+    from backend.db import resolve_admin_token, count_administrators
+
     if not x_admin_token:
-        return
-    from backend.db import resolve_admin_token
+        # Bootstrap only: no admins yet => allow (so the very first account can
+        # be set up). After that, a superuser token is required.
+        if count_administrators() == 0:
+            return
+        raise HTTPException(
+            status_code=401,
+            detail="A superuser login token is required for this action.",
+        )
+
     admin = resolve_admin_token(x_admin_token)
     if not admin:
         raise HTTPException(status_code=401, detail="Invalid or expired admin token")

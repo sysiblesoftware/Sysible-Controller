@@ -11,11 +11,11 @@ from PySide6.QtWidgets import (
 from client import rdp_launcher, rdp_credentials
 
 _SIZES = [
-    ("1280 × 800 (windowed)", "1280x800"),
-    ("1920 × 1080 (windowed)", "1920x1080"),
-    ("1024 × 768 (windowed)", "1024x768"),
+    ("Dynamic / resizable (recommended)", "dynamic"),
     ("Full screen", "fullscreen"),
-    ("Dynamic / resizable", "dynamic"),
+    ("1920 × 1080 (windowed)", "1920x1080"),
+    ("1280 × 800 (windowed)", "1280x800"),
+    ("1024 × 768 (windowed)", "1024x768"),
 ]
 
 

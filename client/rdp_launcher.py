@@ -8,8 +8,10 @@ appear in `ps` to other users *on the operator's own machine*. That's a
 local-only exposure of a process the operator themselves started; if a
 password isn't supplied, the client prompts for it instead.
 """
+import os
 import shutil
 import subprocess
+import tempfile
 
 # Looked up in order; first one found wins.
 _FREERDP_BINARIES = ["xfreerdp3", "xfreerdp", "wlfreerdp"]
@@ -43,13 +45,41 @@ def _build_freerdp_args(binary, host, username, domain, password, size):
     return args
 
 
-def _build_remmina_args(host, username, domain):
-    # Remmina prompts for the password itself (we don't put it in the URI).
-    user = username
-    if domain and username:
-        user = f"{domain}\\{username}"
-    target = f"rdp://{user}@{host}" if user else f"rdp://{host}"
-    return [_REMMINA, "-c", target]
+def _build_remmina_args(host, username, domain, size):
+    """Remmina ignores resolution on a bare 'rdp://' URI, which is why a
+    fallback session opens tiny. Write a temporary .remmina connection
+    profile carrying the resolution/scaling instead, and launch that. No
+    password is written to the file - Remmina prompts for it."""
+    # Map the dialog's size choice to Remmina profile keys.
+    # resolution_mode: 1 = use client/initial, 2 = custom WxH
+    # scale: 0 none, 1 scaled, 2 dynamic-resolution; viewmode: 1 window, 3 fullscreen
+    if size == "fullscreen":
+        res = "resolution_mode=1\nscale=2\nviewmode=3\ndynamic_resolution=1\n"
+    elif size == "dynamic":
+        res = "resolution_mode=1\nscale=2\nviewmode=1\ndynamic_resolution=1\n"
+    else:  # e.g. "1280x800"
+        w, _, h = size.partition("x")
+        res = (f"resolution_mode=2\nresolution_width={w or 1280}\n"
+               f"resolution_height={h or 800}\nscale=1\nviewmode=1\n")
+
+    profile = (
+        "[remmina]\n"
+        f"name=Sysible - {host}\n"
+        "protocol=RDP\n"
+        f"server={host}\n"
+        f"username={username}\n"
+        f"domain={domain}\n"
+        "ignore-tls-errors=1\n"
+        "disablepasswordstoring=1\n"
+        "glyph-cache=1\n"
+        + res
+    )
+    d = tempfile.mkdtemp(prefix="sysible-rdp-")
+    path = os.path.join(d, "session.remmina")
+    with open(path, "w") as f:
+        f.write(profile)
+    os.chmod(path, 0o600)
+    return [_REMMINA, "-c", path]
 
 
 def launch(host, username="", domain="", password="", size="1280x800"):
@@ -66,8 +96,10 @@ def launch(host, username="", domain="", password="", size="1280x800"):
         )
 
     if client == _REMMINA:
-        args = _build_remmina_args(host, username, domain)
-        note = "Launched Remmina (it will prompt for the password)."
+        args = _build_remmina_args(host, username, domain, size)
+        note = ("Launched Remmina (it will prompt for the password). For sharper, "
+                "fully resizable RDP, install FreeRDP (the 'freerdp2-x11'/'freerdp' "
+                "package that provides xfreerdp).")
     else:
         args = _build_freerdp_args(client, host, username, domain, password, size)
         note = f"Launched {client} to {host}."

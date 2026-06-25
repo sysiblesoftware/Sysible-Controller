@@ -32,8 +32,16 @@ class RdpConnectDialog(QDialog):
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
-        self.host_input = QLineEdit(host)
-        self.host_input.setPlaceholderText("hostname or IP (optionally host:port)")
+        # Editable dropdown: free-form to type a new address, but also lists
+        # every host whose RDP details were remembered, so reconnecting is a
+        # pick rather than a retype. Selecting one prefills its credentials.
+        self.host_input = QComboBox()
+        self.host_input.setEditable(True)
+        self.host_input.lineEdit().setPlaceholderText("hostname or IP (optionally host:port)")
+        saved = rdp_credentials.list_hosts()
+        self.host_input.addItems(saved)
+        self.host_input.setCurrentText(host or "")
+        self.host_input.currentTextChanged.connect(self._on_host_changed)
         layout.addLayout(self._row("Host / address:", self.host_input))
 
         self.user_input = QLineEdit()
@@ -105,8 +113,14 @@ class RdpConnectDialog(QDialog):
             self.pass_input.setText(saved.get("password", ""))
             self.remember.setChecked(True)
 
+    def _on_host_changed(self, text):
+        # When the typed/picked host matches a remembered one, fill in its
+        # saved username/domain/password automatically.
+        if rdp_credentials.is_remembered((text or "").strip()):
+            self._prefill(text.strip())
+
     def _connect(self):
-        host = self.host_input.text().strip()
+        host = self.host_input.currentText().strip()
         if not host:
             QMessageBox.warning(self, "Missing host", "Enter a host or address.")
             return

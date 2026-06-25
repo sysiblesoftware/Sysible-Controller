@@ -107,3 +107,9 @@ def forget(host):
 
 def is_remembered(host):
     return host in _load_all()
+
+
+def list_hosts():
+    """Sorted list of host names with remembered RDP details, so the dialog
+    can offer them for one-click reconnect instead of retyping the address."""
+    return sorted(_load_all().keys())

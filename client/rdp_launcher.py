@@ -44,7 +44,8 @@ def _build_freerdp_args(binary, host, username, domain, password, size, screen_s
     # session is crisp (matches what `xfreerdp /size:WxH` looks like by hand).
     # /network:auto is also left off: on a misjudged link it silently turns on
     # compression and drops visual quality.
-    args = [binary, f"/v:{host}", "/cert:ignore", "+clipboard", "/gfx", "/bpp:32"]
+    # /gfx:AVC444 = H.264 4:4:4 chroma = sharpest text (4:2:0 smears it).
+    args = [binary, f"/v:{host}", "/cert:ignore", "+clipboard", "/gfx:AVC444", "/bpp:32"]
     if username:
         args.append(f"/u:{username}")
     if domain:

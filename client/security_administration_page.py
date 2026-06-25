@@ -1214,7 +1214,12 @@ class SecurityAdministrationPage(QWidget):
     def _status_text(self, data):
         if data["pending"]:
             return "pending..."
-        return "ok" if not data["stderr"] else "error"
+        # Success is the exit code where we have one (the same rule the
+        # result banner uses); stderr alone is NOT failure - many commands
+        # write progress/warnings to stderr on success.
+        code = data.get("code")
+        failed = (code != 0) if code is not None else (bool(data["stderr"]) and not data["stdout"])
+        return "error" if failed else "ok"
 
     def _render_security_result(self, text_edit, data):
         if data["pending"]:

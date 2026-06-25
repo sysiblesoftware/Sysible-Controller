@@ -294,7 +294,12 @@ class FleetToolPage(QWidget):
     def _status_text(self, data):
         if data["pending"]:
             return "pending..."
-        return "ok" if not data["stderr"] else "error"
+        # Judge success by the exit code (the same rule the result banner uses),
+        # NOT by whether anything went to stderr - plenty of commands that
+        # succeed (apt/dnf, systemctl, useradd, ...) still write progress or
+        # warnings to stderr, and flagging those as "error" in the tab label
+        # contradicted the green "complete" banner in the tab body.
+        return "error" if result_banner.result_failed(data) else "ok"
 
     def _render(self, text_edit, data):
         if data["pending"]:

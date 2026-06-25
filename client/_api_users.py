@@ -40,12 +40,15 @@ def set_host_environment(name: str, environment: str):
     return _request("POST", f"/remote/hosts/{name}/environment", json={"environment": environment})
 
 
-def exec_remote(name: str, cmd: str, description: str = None, become_password: str = None):
+def exec_remote(name: str, cmd: str, description: str = None, become_password: str = None,
+                log: bool = True):
     body = {"cmd": cmd}
     if description:
         body["description"] = description
     if become_password:
         body["become_password"] = become_password
+    if not log:
+        body["log"] = False
     return _request("POST", f"/remote/hosts/{name}/exec", json=body)
 
 

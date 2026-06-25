@@ -231,7 +231,8 @@ def sync_entry_users(entry):
 
     if entry["kind"] == "ssh":
         try:
-            result = exec_remote(entry["id"], build_user_sync_command())
+            # log=False: a background user-list read, not an operator action.
+            result = exec_remote(entry["id"], build_user_sync_command(), log=False)
         except Exception as e:
             return {"sync": True, "data": None, "error": str(e)}
 

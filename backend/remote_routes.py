@@ -434,9 +434,11 @@ def exec_remote(name: str, body: ExecRequest, request: Request):
     if name not in hosts:
         raise HTTPException(status_code=404, detail="host not found")
 
-    # Activity feed: record admin-initiated SSH exec (identity from token).
+    # Activity feed: record admin-initiated SSH exec (identity from token),
+    # unless this is a background/internal read (body.log=False, e.g. the
+    # user-list sync) which isn't an operator action.
     admin = _resolve_admin_username(request)
-    if admin:
+    if admin and body.log:
         from backend.db import log_activity
         log_activity(admin, name, body.description or ("ran: " + body.cmd[:80]), body.cmd)
 

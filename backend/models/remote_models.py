@@ -13,6 +13,7 @@ class AddHostRequest(BaseModel):
 class ExecRequest(BaseModel):
     cmd: str
     description: Optional[str] = None  # human label for the activity log
+    log: bool = True  # False for background/internal reads (e.g. user-list sync)
 
 
 class EnrollSSHRequest(BaseModel):

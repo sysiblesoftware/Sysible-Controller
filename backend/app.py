@@ -365,6 +365,11 @@ def heartbeat(req: HeartbeatRequest):
 # logged. They're handed to the host's authenticated agent exactly once when
 # it polls for the task, then deleted; a TTL sweep drops any that were never
 # collected (e.g. an offline host) so a password can't linger.
+# Task kinds that are background/internal reads, not operator actions -
+# kept out of the activity feed (e.g. the User & Group panel's user-list
+# sync that fires automatically after any change).
+_NON_LOGGED_KINDS = {"sync_users", "ssh_enable"}
+
 _PENDING_BECOME = {}            # task_id -> {"password": str, "expiry": float}
 _PENDING_BECOME_LOCK = threading.Lock()
 _BECOME_TTL_S = 300
@@ -419,9 +424,10 @@ def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
         _store_become(task_id, body.become_password)
 
     # Activity feed: record who did what, where. Only for admin-initiated
-    # tasks (run_as set) - internal/controller tasks (SSH auto-enroll, user
-    # sync) aren't operator actions and would just be noise.
-    if run_as:
+    # tasks (run_as set), and not background/internal reads - the user-list
+    # sync and SSH auto-enroll aren't operator actions and would just be
+    # noise (showing as "ran a script" after an unrelated click).
+    if run_as and body.kind not in _NON_LOGGED_KINDS:
         log_activity(run_as, get_agent_hostname(host_id),
                      body.description or _describe_command(body.command), body.command)
 

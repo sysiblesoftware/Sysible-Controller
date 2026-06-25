@@ -73,6 +73,17 @@ class HomeWindow(QWidget):
         self.signed_in_label.setVisible(False)
         header_row.addWidget(self.signed_in_label)
 
+        # Self-service sudo-password store - available to every admin
+        # (including sysadmins, who don't see the Settings tile), since it's a
+        # personal credential needed to elevate on password-sudo hosts.
+        self.sudo_pw_button = QPushButton("Sudo Password")
+        self.sudo_pw_button.setCursor(Qt.PointingHandCursor)
+        self.sudo_pw_button.setToolTip(
+            "Set or clear your sudo password for hosts that require one (stored "
+            "encrypted on this computer).")
+        self.sudo_pw_button.clicked.connect(self.open_sudo_password)
+        header_row.addWidget(self.sudo_pw_button)
+
         self.logout_button = QPushButton("Log Out")
         self.logout_button.setCursor(Qt.PointingHandCursor)
         self.logout_button.setToolTip(
@@ -217,18 +228,20 @@ class HomeWindow(QWidget):
 
         if theme.get_theme_mode() == "light":
             self.signed_in_label.setStyleSheet("font-size:11px; color:#6B7280;")
-            self.logout_button.setStyleSheet(
+            chip = (
                 "QPushButton{font-size:12px; padding:6px 14px; border-radius:6px;"
                 "border:1px solid #C7CDD6; color:#1F2430; background:#F3F5F8;}"
                 "QPushButton:hover{background:#E7EBF0;}"
             )
         else:
             self.signed_in_label.setStyleSheet("font-size:11px; color:#9aa5b1;")
-            self.logout_button.setStyleSheet(
+            chip = (
                 "QPushButton{font-size:12px; padding:6px 14px; border-radius:6px;"
                 "border:1px solid #3A4250; color:#EAEAEA; background:#262C38;}"
                 "QPushButton:hover{background:#313947;}"
             )
+        self.logout_button.setStyleSheet(chip)
+        self.sudo_pw_button.setStyleSheet(chip)
 
     def _refresh_signed_in(self):
         """Update the 'Signed in as <user>' label from the current session."""
@@ -317,6 +330,19 @@ class HomeWindow(QWidget):
         self.system_admin_window.show()
         self.system_admin_window.raise_()
         return self.system_admin_window
+
+    def open_sudo_password(self):
+        """Personal sudo-password store - reachable by every admin from the
+        header, since sysadmins don't have the Settings tile. Host labels (for
+        per-host overrides) are fetched best-effort; fleet-default works
+        regardless."""
+        from client.sudo_password_dialog import SudoPasswordDialog
+        try:
+            labels = sorted(h["label"] for h in api.list_merged_hosts(agent_only=False))
+        except Exception:
+            labels = []
+        dlg = SudoPasswordDialog(self, host_labels=labels)
+        dlg.exec()
 
     # =========================================================
     # FEATURE SEARCH

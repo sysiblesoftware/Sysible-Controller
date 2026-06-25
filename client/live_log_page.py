@@ -176,28 +176,78 @@ class LiveLogPage(QWidget):
         except Exception as e:
             self.status.setText(f"Activity feed unavailable: {e}")
             return
-        # Endpoint returns newest-first; insert oldest-first at the top so the
-        # newest ends up at the very top and order stays correct.
-        for e in reversed(entries):
-            self._add_activity_row(e)
+        if not entries:
+            return
+        for e in entries:
             self._last_id = max(self._last_id, e.get("id", 0))
-        if entries:
-            self.status.setText(f"{self.activity.count()} event(s) — last update {time.strftime('%H:%M:%S')}")
+        # The same action dispatched to several hosts is logged once per host
+        # (each host's task is queued separately). Collapse those into a single
+        # row that lists every host, so a fleet-wide action reads as one line.
+        groups = self._group_entries(entries)  # newest-first
+        # Insert oldest-first at the top so the newest ends up at the very top.
+        for g in reversed(groups):
+            self._add_activity_group(g)
+        self.status.setText(
+            f"{self.activity.count()} event(s) — last update {time.strftime('%H:%M:%S')}")
 
-    def _add_activity_row(self, e):
-        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e.get("timestamp", 0)))
-        user = e.get("username") or "(unknown)"
-        host = e.get("host") or ""
-        desc = e.get("description") or ""
-        on = f"  on {host}" if host else ""
+    # Entries sharing user + description + command and landing within this many
+    # seconds of each other are treated as one action across multiple hosts.
+    _GROUP_WINDOW_S = 30
+
+    def _group_entries(self, entries):
+        """Collapse same-action-different-host entries into groups. Returns a
+        list of group dicts (newest-first), each with a combined `hosts` list."""
+        groups = []
+        open_by_key = {}
+        for e in sorted(entries, key=lambda x: x.get("id", 0)):  # oldest-first
+            key = (e.get("username"), e.get("description"), e.get("command"))
+            ts = e.get("timestamp", 0)
+            g = open_by_key.get(key)
+            if g is not None and abs(ts - g["_last_ts"]) <= self._GROUP_WINDOW_S:
+                host = e.get("host")
+                if host and host not in g["hosts"]:
+                    g["hosts"].append(host)
+                g["_last_ts"] = ts
+                g["timestamp"] = max(g["timestamp"], ts)
+                g["id"] = max(g["id"], e.get("id", 0))
+            else:
+                g = {
+                    "id": e.get("id", 0),
+                    "timestamp": ts,
+                    "_last_ts": ts,
+                    "username": e.get("username"),
+                    "description": e.get("description"),
+                    "command": e.get("command"),
+                    "hosts": [e["host"]] if e.get("host") else [],
+                }
+                groups.append(g)
+                open_by_key[key] = g
+        groups.sort(key=lambda x: x["id"], reverse=True)  # newest-first
+        return groups
+
+    def _add_activity_group(self, g):
+        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(g.get("timestamp", 0)))
+        user = g.get("username") or "(unknown)"
+        hosts = g.get("hosts") or []
+        desc = g.get("description") or ""
+        if not hosts:
+            on = ""
+        elif len(hosts) == 1:
+            on = f"  on {hosts[0]}"
+        else:
+            on = f"  on {len(hosts)} hosts: {', '.join(hosts)}"
         item = QListWidgetItem(f"{ts}   {user}  —  {desc}{on}")
-        # Keep the full entry (incl. the complete command) on the item so a
-        # double-click can show it in full - see _show_entry_details.
-        item.setData(Qt.UserRole, e)
-        cmd = (e.get("command") or "").strip()
+        # Keep an entry dict (incl. the complete command + every host) on the
+        # item so a double-click can show it in full - see _show_entry_details.
+        item.setData(Qt.UserRole, {
+            "timestamp": g.get("timestamp", 0),
+            "username": user,
+            "host": ", ".join(hosts),
+            "description": desc,
+            "command": g.get("command", ""),
+        })
+        cmd = (g.get("command") or "").strip()
         if cmd:
-            # Hover shows a short single-line command; multi-line/scripts just
-            # invite the double-click instead of dumping code into a tooltip.
             if "\n" not in cmd and len(cmd) <= 200 and not cmd.lstrip().startswith(
                     ("import ", "python", "#!", "cat <<", "base64", "{")):
                 item.setToolTip(cmd)
@@ -208,7 +258,6 @@ class LiveLogPage(QWidget):
         if any(k in low for k in ("delet", "remov", "lock", "kill", "reboot", "power off", "disable")):
             item.setForeground(QColor("#f0a0a0"))
         self.activity.insertItem(0, item)
-        # Cap the view so it doesn't grow without bound.
         while self.activity.count() > 1000:
             self.activity.takeItem(self.activity.count() - 1)
 

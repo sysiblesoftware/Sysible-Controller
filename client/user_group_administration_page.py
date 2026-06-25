@@ -1257,43 +1257,31 @@ class UserGroupAdministrationPage(QWidget):
                 QMessageBox.information(self, "No hosts checked", "Check one or more target hosts first.")
             return False
 
-        # Per-action failure list, shown when the async (agent) results land.
+        # Per-action dispatch state, so the status line is accurate PER HOST at
+        # every stage (sync results immediately, agent results as they land)
+        # rather than appending failures onto a stale "N pending" message. A
+        # host is in exactly one bucket: succeeded, failed (with a reason), or
+        # still pending. _dispatch_failures stays as the failure-reason list.
+        self._dispatch = {"label": label, "total": len(entries), "succeeded": 0}
         self._dispatch_failures = []
-
-        ok_count = 0
-        failed = []
-        pending = []
 
         for entry in entries:
             result = api.run_on_entry(entry, command, description=label)
 
             if result["sync"]:
                 if result["error"] or result.get("code") not in (0, None):
-                    failed.append(entry["label"])
+                    self._dispatch_failures.append(
+                        f"{entry['label']}: {self._failure_reason(result)}")
                 else:
-                    ok_count += 1
+                    self._dispatch["succeeded"] += 1
             else:
                 if result["error"]:
-                    failed.append(entry["label"])
+                    self._dispatch_failures.append(f"{entry['label']}: {result['error']}")
                 else:
                     key = _entry_key(entry)
                     self.pending_dispatch[key] = (entry, result["task_id"], label)
-                    pending.append(entry["label"])
 
-        msg = f"{label}: {ok_count}/{len(entries)} done"
-        if pending:
-            msg += f", {len(pending)} pending ({', '.join(pending)})"
-        if failed:
-            msg += f", failed on: {', '.join(failed)}"
-        msg += "."
-
-        if failed:
-            self.dispatch_status.setStyleSheet(f"color: {STATUS_ERROR_COLOR};")
-        elif pending:
-            self.dispatch_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
-        else:
-            self.dispatch_status.setStyleSheet(f"color: {STATUS_SUCCESS_COLOR};")
-        self.dispatch_status.setText(msg)
+        self._render_dispatch_status()
 
         if self.pending_dispatch and not self.dispatch_poll_timer.isActive():
             self.dispatch_poll_timer.start(DISPATCH_POLL_MS)
@@ -1302,6 +1290,44 @@ class UserGroupAdministrationPage(QWidget):
             QTimer.singleShot(AUTO_RESYNC_DELAY_MS, lambda: self._auto_resync(entries))
 
         return True
+
+    @staticmethod
+    def _failure_reason(result):
+        """Concise, single-line reason from a dispatch result - the agent's last
+        stderr line (e.g. "useradd: user 'gurl' already exists") or the exit
+        code, so the per-host failure says WHY."""
+        err = (result.get("error") or result.get("stderr") or "").strip()
+        if err:
+            return err.splitlines()[-1][:200]
+        code = result.get("code")
+        return f"exit {code}"
+
+    def _render_dispatch_status(self):
+        """Render the per-host dispatch summary from the current state. Called
+        after the initial dispatch and again as each agent result lands, so the
+        counts and the pending/failed lists always agree with reality."""
+        d = getattr(self, "_dispatch", None)
+        if not d:
+            return
+        failures = getattr(self, "_dispatch_failures", [])
+        pending_labels = [e["label"] for (e, _t, _l) in self.pending_dispatch.values()]
+
+        text = f"{d['label']}: {d['succeeded']}/{d['total']} succeeded"
+        if pending_labels:
+            text += f", {len(pending_labels)} pending ({', '.join(pending_labels)})"
+        if failures:
+            text += ".  Failed — " + "  |  ".join(failures)
+        else:
+            text += "."
+
+        if pending_labels:
+            color = STATUS_NEUTRAL_COLOR
+        elif failures:
+            color = STATUS_ERROR_COLOR
+        else:
+            color = STATUS_SUCCESS_COLOR
+        self.dispatch_status.setStyleSheet(f"color: {color};")
+        self.dispatch_status.setText(text)
 
     def _poll_dispatch(self):
         if not self.pending_dispatch:
@@ -1318,26 +1344,23 @@ class UserGroupAdministrationPage(QWidget):
             # The agent reported back - check whether the command actually
             # succeeded. A non-zero exit (or stderr with no code) is a failure;
             # surface the last stderr line so a sudo/permission problem isn't a
-            # silent "reported back".
+            # silent "reported back". Each host lands in exactly one bucket.
             code = result.get("code")
             err = (result.get("stderr") or result.get("error") or "").strip()
             if (code not in (0, None)) or (err and code is None):
-                reason = err.splitlines()[-1] if err else f"exit {code}"
-                self._dispatch_failures.append(f"{entry['label']}: {reason[:200]}")
+                self._dispatch_failures.append(
+                    f"{entry['label']}: {self._failure_reason(result)}")
+            else:
+                self._dispatch["succeeded"] += 1
 
         for key in done:
             del self.pending_dispatch[key]
 
+        # Re-render after this batch so counts/pending/failed stay accurate.
+        self._render_dispatch_status()
+
         if not self.pending_dispatch:
             self.dispatch_poll_timer.stop()
-            failures = getattr(self, "_dispatch_failures", [])
-            if failures or "failed on:" in self.dispatch_status.text():
-                self.dispatch_status.setStyleSheet(f"color: {STATUS_ERROR_COLOR};")
-                extra = ("  Failed: " + "  |  ".join(failures)) if failures else ""
-                self.dispatch_status.setText(self.dispatch_status.text() + extra)
-            else:
-                self.dispatch_status.setStyleSheet(f"color: {STATUS_SUCCESS_COLOR};")
-                self.dispatch_status.setText(self.dispatch_status.text() + " All hosts succeeded.")
 
     # =========================================================
     # ACTIONS (all dispatched to checked hosts, never local)

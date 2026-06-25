@@ -123,8 +123,13 @@ class LiveLogPage(QWidget):
         desc = e.get("description") or ""
         on = f"  on {host}" if host else ""
         item = QListWidgetItem(f"{ts}   {user}  —  {desc}{on}")
-        if e.get("command"):
-            item.setToolTip(e["command"])
+        # Show the raw command only on hover, and only when it's a concise
+        # single-line shell command - never dump multi-line / script / python
+        # code into the feed.
+        cmd = (e.get("command") or "").strip()
+        if cmd and "\n" not in cmd and len(cmd) <= 200 and not cmd.lstrip().startswith(
+                ("import ", "python", "#!", "cat <<", "base64", "{")):
+            item.setToolTip(cmd)
         # Tint destructive-looking actions.
         low = desc.lower()
         if any(k in low for k in ("delet", "remov", "lock", "kill", "reboot", "power off", "disable")):

@@ -432,11 +432,22 @@ def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
 
 
 def _describe_command(command: str) -> str:
-    """Fallback human description when a tool didn't supply one - the first
-    meaningful token of the command, so the feed reads like 'ran: systemctl'
-    rather than a blank."""
-    c = (command or "").strip().split("\n", 1)[0]
-    return ("ran: " + c[:80] + ("…" if len(c) > 80 else "")) if c else "ran a command"
+    """Fallback human description when a tool didn't supply one. Deliberately
+    NEVER echoes raw code into the feed: multi-line / script / python
+    commands collapse to a generic phrase, and a concise single-line shell
+    command shows just its leading program name (e.g. 'ran: systemctl')."""
+    c = (command or "").strip()
+    if not c:
+        return "ran a command"
+    first = c.split("\n", 1)[0].strip()
+    is_scripty = (
+        "\n" in c
+        or first.startswith(("import ", "python", "#!", "cat <<", "base64", "{"))
+        or len(first) > 80
+    )
+    if is_scripty:
+        return "ran a script"
+    return "ran: " + first[:80]
 
 
 @app.get("/agents/{host_id}/tasks")
@@ -502,14 +513,15 @@ def get_edition():
     return edition_info()
 
 
-@app.get("/activity-log", dependencies=[Depends(require_api_key)])
+@app.get("/activity-log", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def get_activity_log_route(limit: int = 200, since_id: int = 0):
     """Human-readable, attributed feed of actions the controller carried out
-    (who did what, where). `since_id` lets the GUI poll for only new rows."""
+    (who did what, where). Superuser-only - it's a fleet-wide audit view.
+    `since_id` lets the GUI poll for only new rows."""
     return {"entries": get_activity_log(limit=limit, since_id=since_id)}
 
 
-@app.get("/controller-log", dependencies=[Depends(require_api_key)])
+@app.get("/controller-log", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def get_controller_log_route(lines: int = 400):
     """Recent controller (sysible-backend) log lines from the journal, for
     the Live Activity & Logs view. The backend runs under systemd, so it can

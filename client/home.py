@@ -11,6 +11,7 @@ from client.admin_configuration_page import AdminConfigurationPage
 from client.remote_administration_page import RemoteAdministrationPage
 from client.webserver_portal_page import WebserverPortalPage
 from client.system_administration_page import SystemAdministrationPage
+from client.live_log_page import LiveLogPage
 from client.branding import LOGO_PATH
 from client.theme_toggle import ThemeToggle
 from client import feature_search, theme, api, session
@@ -149,6 +150,9 @@ class HomeWindow(QWidget):
             ("System Administration",
              "User & group administration and system health/log checks across agent and SSH hosts.",
              self.open_system_admin, "fa5s.th-large", "amber", False),
+            ("Live Activity &amp; Logs",
+             "Live, attributed feed of who did what across the fleet, plus the controller's own log.",
+             self.open_live_log, "fa5s.stream", "sky", True),
         ]
 
         superuser = session.is_superuser()
@@ -174,6 +178,7 @@ class HomeWindow(QWidget):
         self.remote_window = None
         self.portal_window = None
         self.system_admin_window = None
+        self.live_log_window = None
 
     def _apply_header_theme(self):
         """Re-color the title/subtitle for the current mode. They set
@@ -255,6 +260,13 @@ class HomeWindow(QWidget):
         self.portal_window.show()
         self.portal_window.raise_()
         return self.portal_window
+
+    def open_live_log(self):
+        if self.live_log_window is None:
+            self.live_log_window = LiveLogPage()
+        self.live_log_window.show()
+        self.live_log_window.raise_()
+        return self.live_log_window
 
     def open_system_admin(self):
         if self.system_admin_window is None:

@@ -102,6 +102,24 @@ case "$PKGMGR" in
 esac
 
 # =========================================================
+# RDP CLIENT (FreeRDP / xfreerdp) for Sysible Connect's RDP feature.
+# Optional and best-effort: package names differ across distros and the
+# controller works fine without it (RDP just falls back to Remmina, or is
+# unavailable), so a failure here must never abort the install.
+# =========================================================
+echo "Installing an RDP client (FreeRDP) for Sysible Connect..."
+case "$PKGMGR" in
+  dnf|yum)  "$PKGMGR" install -y freerdp || true ;;
+  zypper)   zypper --non-interactive install -y freerdp || true ;;
+  apt-get)  apt install -y freerdp3-x11 || apt install -y freerdp2-x11 || true ;;
+esac
+if command -v xfreerdp3 >/dev/null 2>&1 || command -v xfreerdp >/dev/null 2>&1; then
+  echo "FreeRDP (xfreerdp) installed - Sysible Connect RDP will use it."
+else
+  echo "NOTE: FreeRDP not installed - Sysible Connect RDP will fall back to Remmina if present."
+fi
+
+# =========================================================
 # DEPLOY PROJECT FILES TO BASE
 # Sysible Controller always runs out of $BASE - the sysible CLI
 # hardcodes it. This installer can be run

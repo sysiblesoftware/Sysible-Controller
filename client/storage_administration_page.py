@@ -399,7 +399,7 @@ class StorageAdministrationPage(QWidget):
         lvm_hint = QLabel(
             "LVM lets you pool disks/partitions into a Volume Group and carve flexible, "
             "resizable Logical Volumes out of it. Order: Create Physical Volume(s) → "
-            "Create Volume Group → Create Logical Volume → format &amp; mount it. Every "
+            "Create Volume Group → Create Logical Volume → format & mount it. Every "
             "action here needs the lvm2 package - install it if a host reports it missing."
         )
         theme.style_hint_label(lvm_hint)

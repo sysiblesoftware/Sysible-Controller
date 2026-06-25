@@ -90,42 +90,58 @@ def _build_remmina_args(host, username, domain, size):
     return [_REMMINA, "-c", path]
 
 
+def _raw_error_line(err_text, returncode):
+    """The most informative single line from the client's stderr - usually the
+    last [ERROR] line or the ERRCONNECT_* code. Shown verbatim so we diagnose
+    from what actually happened instead of guessing."""
+    lines = [ln.strip() for ln in (err_text or "").splitlines() if ln.strip()]
+    if not lines:
+        return f"exit code {returncode}"
+    for ln in reversed(lines):
+        low = ln.lower()
+        if "errconnect" in low or "[error]" in low or "error:" in low:
+            return ln
+    return lines[-1]
+
+
 def _summarize_failure(host, returncode, err_text):
     """Turn an RDP client's exit code + stderr into something an operator can
-    act on. The most common surprise is that the target simply has no RDP
-    server listening - on Linux that means xrdp (or similar) isn't installed,
-    which Sysible's other tools don't set up for you."""
+    act on, and always append the raw client error so nothing is hidden."""
     low = (err_text or "").lower()
+    raw = _raw_error_line(err_text, returncode)
 
     def has(*needles):
         return any(n in low for n in needles)
 
-    if has("errconnect_connect_failed", "connection refused", "unable to connect",
-           "errconnect_dns", "name or service not known", "no route to host",
-           "transport_connect", "errconnect_connect_cancelled", "freerdp_abort"):
+    if has("errconnect_logon", "logon_failure", "errconnect_password",
+           "errconnect_account", "access denied", "authentication", "credential",
+           "nla", "errconnect_no_or_missing_credentials"):
+        hint = ("The RDP server rejected (or required) credentials. Windows "
+                "hosts usually require Network Level Authentication, so the "
+                "username/domain/password must be correct and non-blank. Check "
+                "them and try again.")
+    elif has("errconnect_connect_failed", "connection refused", "unable to connect",
+             "errconnect_dns", "name or service not known", "no route to host",
+             "transport_connect", "timed out", "timeout"):
         hint = (
-            f"Couldn't reach an RDP server on {host} (TCP 3389).\n\n"
-            "RDP needs a remote-desktop server running on the target:\n"
-            "  • Linux hosts: install and start an RDP server such as xrdp "
-            "(e.g. 'apt install xrdp' / 'dnf install xrdp', then enable it). "
-            "A Sysible-managed Linux host does NOT run one by default.\n"
-            "  • Windows hosts: enable Remote Desktop.\n"
-            "Also confirm the host's firewall allows TCP 3389 from your machine."
-        )
-    elif has("logon_failure", "errconnect_logon", "authentication", "access denied",
-             "errconnect_password", "account", "credential"):
-        hint = ("The RDP server rejected the credentials. Check the username, "
-                "domain, and password (leave the password blank to be prompted "
-                "by the client instead).")
-    elif has("errconnect_security", "tls", "certificate", "protocol_security"):
-        hint = ("RDP security negotiation failed. The server may require a "
+            f"Couldn't open a TCP connection to {host} on port 3389.\n"
+            "  • Confirm the host is reachable from this machine (VPN / subnet / "
+            "name resolution).\n"
+            "  • On a Windows target, make sure Remote Desktop is enabled and "
+            "its firewall allows 3389 from your network.")
+    elif has("errconnect_security", "tls", "certificate", "protocol_security",
+             "negotiat"):
+        hint = ("RDP security/TLS negotiation failed. The server may require a "
                 "different security mode; try again, or use Remmina.")
+    elif has("dynamic-resolution", "unknown option", "invalid", "usage:",
+             "command line"):
+        hint = ("The RDP client rejected a command-line option (likely the "
+                "Dynamic display mode on this FreeRDP build). Pick a fixed size "
+                "in the Display dropdown and try again.")
     else:
-        tail = (err_text or "").strip().splitlines()
-        detail = tail[-1] if tail else f"exit code {returncode}"
-        hint = f"The RDP client exited immediately: {detail}"
+        hint = "The RDP client exited immediately."
 
-    return hint
+    return f"{hint}\n\nClient reported: {raw}"
 
 
 def launch(host, username="", domain="", password="", size="1280x800"):

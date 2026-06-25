@@ -37,14 +37,9 @@ def available_client():
 
 
 def _build_freerdp_args(binary, host, username, domain, password, size, screen_size=None):
-    # Quality: open the session at a real, fixed resolution and let the GFX
-    # (H.264/RemoteFX) pipeline carry it. We deliberately do NOT use
-    # /dynamic-resolution - it renegotiates the remote desktop down to the
-    # initial window size and renders blurry/upscaled; a fixed full-resolution
-    # session is crisp (matches what `xfreerdp /size:WxH` looks like by hand).
-    # /network:auto is also left off: on a misjudged link it silently turns on
-    # compression and drops visual quality.
-    # /gfx:AVC444 = H.264 4:4:4 chroma = sharpest text (4:2:0 smears it).
+    # Quality: GFX H.264 4:4:4 (sharpest text - 4:2:0 smears it) + 32-bit
+    # colour. /network:auto is deliberately left off: on a misjudged link it
+    # silently turns on compression and drops visual quality.
     args = [binary, f"/v:{host}", "/cert:ignore", "+clipboard", "/gfx:AVC444", "/bpp:32"]
     if username:
         args.append(f"/u:{username}")
@@ -53,12 +48,19 @@ def _build_freerdp_args(binary, host, username, domain, password, size, screen_s
     if password:
         args.append(f"/p:{password}")
     if size == "fullscreen":
-        args.append("/f")
+        # Fill the screen, and (with /dynamic-resolution) track multi-monitor /
+        # geometry changes.
+        args += ["/f", "/dynamic-resolution"]
     elif size == "dynamic":
-        # "Fit my screen": a fixed session at the local screen's real pixel
-        # resolution - large and sharp, no dynamic-resolution blur.
+        # "Fit my screen, resizable": open at the screen's real pixel
+        # resolution, and /dynamic-resolution makes the REMOTE desktop
+        # re-render at the new size whenever the window is resized - so it
+        # stays crisp at any size (unlike /smart-sizing, which scales/blurs).
+        # The earlier blur came from /network:auto + a logical-pixel size, both
+        # fixed now, not from /dynamic-resolution itself.
         if screen_size:
             args.append(f"/size:{screen_size}")
+        args.append("/dynamic-resolution")
     elif size:  # explicit "WxH" - a sharp fixed window at exactly that size
         args.append(f"/size:{size}")
     return args

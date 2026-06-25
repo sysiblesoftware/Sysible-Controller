@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QAbstractItemView,
     QGroupBox,
+    QApplication,
 )
 
 from client import api
@@ -93,6 +94,41 @@ class HostEnrollmentPage(QWidget):
         self.download_bundle_btn = QPushButton("Download Agent Bundle")
         self.download_bundle_btn.clicked.connect(self.download_bundle)
         layout.addWidget(self.download_bundle_btn)
+
+        # =====================================================
+        # COMMAND-LINE BUNDLE DOWNLOAD (curl)
+        # Lives here, alongside the GUI download, since both are "get the
+        # agent onto a host" - the way you enroll a headless/terminal-only
+        # box. It pulls from the Webserver Portal's /cli/bundle endpoint, so
+        # the portal must be running with login credentials set (configure
+        # that on the Webserver Portal page).
+        # =====================================================
+        curl_label = QLabel("Command-Line Bundle Download (curl)")
+        curl_label.setStyleSheet("font-size:18px;font-weight:bold;")
+        layout.addWidget(curl_label)
+
+        curl_hint = QLabel(
+            "For terminal-only or headless hosts that can't open a browser: "
+            "downloads the agent bundle, unzips it, and runs the installer in "
+            "one shot, authenticating with the Webserver Portal's login over "
+            "HTTP Basic auth (curl -u). Needs the Webserver Portal running with "
+            "credentials configured (see the Webserver Portal page). Replace "
+            "<password> between the single quotes with the real portal password. "
+            "-k skips the self-signed-cert check; the final install step needs sudo."
+        )
+        theme.style_hint_label(curl_hint)
+        curl_hint.setWordWrap(True)
+        layout.addWidget(curl_hint)
+
+        self.curl_text = QTextEdit()
+        self.curl_text.setReadOnly(True)
+        self.curl_text.setStyleSheet("font-family: monospace;")
+        self.curl_text.setFixedHeight(140)
+        layout.addWidget(self.curl_text)
+
+        self.copy_curl_btn = QPushButton("Copy to Clipboard")
+        self.copy_curl_btn.clicked.connect(self.copy_curl_command)
+        layout.addWidget(self.copy_curl_btn)
 
         # =====================================================
         # INVENTORY LABEL
@@ -292,6 +328,7 @@ class HostEnrollmentPage(QWidget):
             QMessageBox.critical(self, "Error", str(e))
             return
 
+        self._refresh_curl_command()
         self._populate_combo()
         self._update_env_sudo_label()
         self._populate_list()
@@ -480,6 +517,37 @@ class HostEnrollmentPage(QWidget):
             QMessageBox.critical(self, "Error", str(e))
             return
         self.refresh()
+
+    def _refresh_curl_command(self):
+        """Build the one-line curl install command from the portal's status and
+        the controller address. Mirrors the Webserver Portal page's data
+        sources; placeholders are shown until the portal address/credentials
+        are configured there."""
+        try:
+            status = api.get_portal_status()
+        except Exception:
+            status = {}
+        try:
+            config = api.get_controller_config()
+        except Exception:
+            config = {}
+
+        host = config.get("address") or "<this machine's address>"
+        port = status.get("configured_port") or status.get("port") or 443
+        user = status.get("username") if status.get("credentials_configured") else "<username>"
+
+        self.curl_text.setPlainText(
+            f"curl -k -sS -f -u '{user}:<password>' "
+            f"-o sysible-agent-bundle.zip "
+            f'"https://{host}:{port}/cli/bundle" '
+            f"&& unzip -o sysible-agent-bundle.zip -d sysible-agent-bundle "
+            f"&& cd sysible-agent-bundle "
+            f"&& chmod +x run_agent.sh "
+            f"&& sudo ./run_agent.sh"
+        )
+
+    def copy_curl_command(self):
+        QApplication.clipboard().setText(self.curl_text.toPlainText())
 
     def _selected_agents(self):
         """Every selected host row (skips environment header rows). Falls

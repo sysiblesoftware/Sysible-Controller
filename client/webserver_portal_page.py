@@ -1,7 +1,6 @@
 import datetime
 
 from PySide6.QtWidgets import (
-    QApplication,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -16,7 +15,6 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QAbstractItemView,
     QScrollArea,
-    QTextEdit,
 )
 
 from client import api
@@ -134,38 +132,18 @@ class WebserverPortalPage(QWidget):
 
         layout.addWidget(self._divider())
 
-        # =====================================================
-        # COMMAND-LINE BUNDLE DOWNLOAD (curl)
-        # =====================================================
-        curl_label = QLabel("Command-Line Bundle Download (curl)")
-        curl_label.setStyleSheet("font-size:18px;font-weight:bold;")
-        layout.addWidget(curl_label)
-
-        curl_hint = QLabel(
-            "For terminal-only or headless systems that can't open a browser: "
-            "downloads the agent bundle, unzips it, and runs the installer "
-            "(run_agent.sh) in one shot. It authenticates in a single request "
-            "with HTTP Basic auth (curl -u), so there's no login cookie to go "
-            "stale. -k skips certificate verification (same self-signed cert "
-            "warning as above). If the credentials are wrong or the controller "
-            "has no configured address, it stops with a clear error instead of "
-            "a broken download. The final step needs root, hence sudo. Replace "
-            "<password> between the single quotes with the real portal password "
-            "(single quotes keep the shell from mangling characters like $ or !)."
+        # The command-line (curl) bundle-download one-liner used to live here;
+        # it now sits on the Host Enrollment page, next to the GUI bundle
+        # download, since both are about getting the agent onto a host. It
+        # still uses this portal's /cli/bundle endpoint and login, so the
+        # portal must be running with credentials set (configured below).
+        portal_use_hint = QLabel(
+            "Tip: the one-line curl command to enroll a headless host via this "
+            "portal now lives on the Host Enrollment page."
         )
-        theme.style_hint_label(curl_hint)
-        curl_hint.setWordWrap(True)
-        layout.addWidget(curl_hint)
-
-        self.curl_text = QTextEdit()
-        self.curl_text.setReadOnly(True)
-        self.curl_text.setStyleSheet("font-family: monospace;")
-        self.curl_text.setFixedHeight(140)
-        layout.addWidget(self.curl_text)
-
-        copy_curl_btn = QPushButton("Copy to Clipboard")
-        copy_curl_btn.clicked.connect(self.copy_curl_command)
-        layout.addWidget(copy_curl_btn)
+        theme.style_hint_label(portal_use_hint)
+        portal_use_hint.setWordWrap(True)
+        layout.addWidget(portal_use_hint)
 
         layout.addWidget(self._divider())
 
@@ -484,19 +462,6 @@ class WebserverPortalPage(QWidget):
         else:
             self.config_warning_label.setVisible(False)
 
-        curl_host = config.get("address") or "<this machine's address>"
-        curl_port = configured_port or port or 443
-        curl_user = status.get("username") if status.get("credentials_configured") else "<username>"
-        self.curl_text.setPlainText(
-            f"curl -k -sS -f -u '{curl_user}:<password>' "
-            f"-o sysible-agent-bundle.zip "
-            f'"https://{curl_host}:{curl_port}/cli/bundle" '
-            f"&& unzip -o sysible-agent-bundle.zip -d sysible-agent-bundle "
-            f"&& cd sysible-agent-bundle "
-            f"&& chmod +x run_agent.sh "
-            f"&& sudo ./run_agent.sh"
-        )
-
         if error:
             QMessageBox.critical(self, "Portal failed to start", error)
 
@@ -546,9 +511,6 @@ class WebserverPortalPage(QWidget):
             self.refresh()
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
-
-    def copy_curl_command(self):
-        QApplication.clipboard().setText(self.curl_text.toPlainText())
 
     # =====================================================
     # PORTAL PORT

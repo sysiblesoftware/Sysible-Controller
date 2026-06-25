@@ -167,13 +167,14 @@
   <li><span class="num">5</span><a href="#cli">The sysible_controller Command Line</a></li>
   <li><span class="num">6</span><a href="#dashboard">The Dashboard</a>
     <ul class="sub">
+      <li><a href="#sudopassword">Your sudo password</a></li>
       <li><a href="#liveactivity">Live Activity &amp; Logs (Superusers only)</a></li>
     </ul>
   </li>
   <li><span class="num">7</span><a href="#enrollment">Host Enrollment</a></li>
   <li><span class="num">8</span><a href="#remote">Sysible Connect</a>
     <ul class="sub">
-      <li><a href="#rdp">Graphical remote desktop (RDP)</a></li>
+      <li><a href="#rdp">RDP To A Windows Host</a></li>
       <li><a href="#sendsudo">Send sudo password</a></li>
       <li><a href="#fleetpower">Fleet power controls</a></li>
     </ul>
@@ -406,6 +407,19 @@ sudo ./install_sysible.sh</pre>
 <h2>Signed-in identity &amp; logging out</h2>
 <p>The Dashboard header shows <strong>Signed in as &lt;user&gt;</strong> with the current administrator's role, next to a <strong>Log Out</strong> button (also available on the system-tray menu). Logging out <strong>revokes this session's login token on the controller</strong>, closes the Dashboard and every open tool popout, and returns to the login screen — without stopping the backend, so the same or another administrator can sign straight back in. It's distinct from <strong>Quit Sysible Controller</strong> (the tray menu), which ends the GUI process, and from <code>sysible_controller stop</code>, which stops the backend service as well.</p>
 
+<h2 id="sudopassword">Your sudo password</h2>
+<p>Next to the Log Out button, a <strong>Sudo Password</strong> button opens a small dialog where <em>any</em> administrator — Superuser or Sysadmin — stores or clears their own sudo ("become") password. It's the credential the controller delivers to the agent to elevate on <a href="#enrollment">password-sudo hosts</a>, and the same password the terminal's <a href="#sendsudo">Send sudo password</a> button uses. It lives here, on the dashboard, rather than in Settings, precisely so a Sysadmin (who doesn't see Settings) can set it.</p>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">My Sudo Password</span></div>
+  <img src="docs/screenshots/screenshot_sudo_password.png" alt="My Sudo Password — store or clear your encrypted sudo password as a fleet default or per host." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>My Sudo Password — store or clear your sudo password, as a fleet default or per host. It's encrypted on your own computer and never sent to the controller.</figcaption>
+<ul>
+<li><strong>Scope</strong> — store one password as the <strong>fleet default</strong> (used on every password-sudo host), or pick a specific host for a <strong>per-host override</strong>.</li>
+<li><strong>At rest</strong> — encrypted on your own workstation (Fernet, <code>0600</code> key) and <strong>namespaced to your account</strong>, so one administrator's password is never used as another's. Nothing is stored on the controller.</li>
+<li><strong>Status &amp; clear</strong> — the dialog shows whether a password is currently stored for the selected scope, and lets you clear it.</li>
+</ul>
+
 <h2>The dashboard tiles</h2>
 <p>The Dashboard presents a single column of tiles. One of them — <strong>Live Activity &amp; Logs</strong> — is shown only to administrators with the <strong>Superuser</strong> role; Sysadmins don't see it.</p>
 <table class="ref">
@@ -426,10 +440,10 @@ sudo ./install_sysible.sh</pre>
 </figure>
 <figcaption>Live Activity &amp; Logs — a human-readable feed of who did what across the fleet, alongside the controller's own service log.</figcaption>
 <ul>
-<li><strong>Activity</strong> — a chronological feed of operator actions across the fleet: who did it, on which host, and a short human-readable summary (for example <em>created user 'jdoe' on web-01</em>, <em>Locked 'test2' on dev1</em>, <em>Reboot All Hosts</em>). The raw command text is shown only when there is no short summary to fall back on, so the feed stays readable rather than filling with multi-line scripts. Routine background bookkeeping — the periodic user-sync and SSH-enable probes — is deliberately excluded so the feed reflects real operator intent.</li>
+<li><strong>Activity</strong> — a chronological feed of operator actions across the fleet: who did it, on which host(s), and a short human-readable summary (for example <em>Create user 'jdoe' on 2 hosts: web-01, db-01</em>, <em>Locked 'test2' on dev1</em>, <em>Ran ad-hoc command/script on 3 hosts: …</em>). The same action dispatched to several hosts is <strong>collapsed into a single row that lists every host</strong> — rather than one near-identical row per host — by grouping entries with the same operator, summary, and command within a short window. Routine background bookkeeping — the periodic user-sync and SSH-enable probes — is deliberately excluded so the feed reflects real operator intent.</li>
 <li><strong>Controller Log</strong> — a live tail of the backend service's own log, for diagnosing the controller itself.</li>
 </ul>
-<p>Both tabs auto-refresh, with a manual <strong>Refresh</strong> as well, and the activity feed can be cleared.</p>
+<p><strong>Double-click any activity entry</strong> to pop out an <em>Activity Detail</em> window showing who/what/where/when and the <strong>complete command or script</strong> that ran (the feed row only shows a one-line summary, since a script can be many lines), with a <strong>Copy command</strong> button. Both tabs auto-refresh, with a manual <strong>Refresh now</strong> as well, and the activity feed can be cleared from the view.</p>
 </div>
 
 <!-- ===================== 7. HOST ENROLLMENT ===================== -->
@@ -465,17 +479,29 @@ sudo ./run_agent.sh</pre>
 <p>The agent installs and starts as a background systemd service that restarts itself on crash or reboot. The host then appears in the Enrolled Hosts list (allow a few moments for the first heartbeat).</p>
 <div class="warn"><b>One bundle, one host</b>Each bundle's enrollment token is single-use — download a fresh bundle per host rather than reusing one zip on a second machine.</div>
 
+<h2>Command-line bundle download (curl)</h2>
+<p>For a terminal-only or headless host that can't open a browser, the <strong>Command-Line Bundle Download (curl)</strong> box on this page gives a one-liner that downloads the agent bundle, unzips it, and runs the installer in a single shot — authenticating with the <a href="#portal">Webserver Portal</a>'s login over HTTP Basic auth (<code>curl -u</code>). Click <strong>Copy to Clipboard</strong>, replace <code>&lt;password&gt;</code> with the real portal password, and paste it on the target host:</p>
+<pre class="cli">curl -k -sS -f -u 'ops:&lt;password&gt;' -o sysible-agent-bundle.zip \
+  "https://CONTROLLER:PORT/cli/bundle" \
+  &amp;&amp; unzip -o sysible-agent-bundle.zip -d sysible-agent-bundle \
+  &amp;&amp; cd sysible-agent-bundle &amp;&amp; chmod +x run_agent.sh &amp;&amp; sudo ./run_agent.sh</pre>
+<p>It needs the Webserver Portal <strong>running with login credentials set</strong> (configured on the Webserver Portal page); the command is pre-filled here with the controller's address, the portal port, and the portal username. <code>-k</code> skips the self-signed-certificate check and the final install step needs <code>sudo</code>.</p>
+
 <h2>Environment tagging</h2>
 <p>Hosts can be organized into <strong>environments</strong> — labels such as "Production," "Staging," or "Development." Environments are entirely optional; an unassigned host is listed under an "Unassigned" heading. Select a host, use the <strong>Environment</strong> dropdown (choose <strong>"+ New environment..."</strong> to create one on the fly), and click <strong>Set Environment</strong> to apply it. The same environment list is shared elsewhere in the application, including Sysible Connect's SSH-enrollment flow.</p>
 <p><strong>Bulk assignment.</strong> You don't have to set environments one host at a time. <strong>Shift-click</strong> or <strong>Ctrl/Cmd-click</strong> to select several hosts in the Enrolled Hosts list, pick an environment, and <strong>Set Environment</strong> applies it to all of them at once — handy when a batch of newly enrolled hosts all belong to the same environment.</p>
 
-<h2>Sudo mode — passwordless or password ("become")</h2>
-<p>Because every action runs as the triggering administrator's matching local user (see <a href="#directory">the security model</a>), how that user obtains root matters. Each host carries a <strong>sudo mode</strong>:</p>
+<h2>Sudo policy — passwordless or password ("become")</h2>
+<p>Because every action runs as the triggering administrator's matching local user (see <a href="#directory">the security model</a>), how that user obtains root matters. The <strong>Sudo policy</strong> box sets this per host (and per environment):</p>
 <ul>
 <li><strong>NOPASSWD</strong> — the user has passwordless sudo on that host; privileged steps just work.</li>
-<li><strong>Password required ("become")</strong> — that host requires a sudo password. The administrator supplies their sudo password (stored encrypted on their own workstation if they choose), and the controller delivers it to the agent over stdin for just that task. Modeled on Ansible's become-password; see <a href="#tasks-remote">Sysible Connect</a> and the security model for how the password is handled.</li>
+<li><strong>Password required ("become")</strong> — that host requires a sudo password. Modeled on Ansible's become-password; the controller delivers your stored password to the agent over stdin for just that task. See <a href="#tasks-remote">Sysible Connect</a> and the security model for how the password is handled.</li>
 </ul>
-<p>Set a host's mode with the <strong>Sudo Mode</strong> control, and set a <strong>default for an environment</strong> so that every host assigned to it inherits "password required" (or not) automatically. The default is applied at assignment time; an individual host can still be overridden afterward.</p>
+<p>Use <strong>Requires Password</strong> / <strong>Passwordless (NOPASSWD)</strong> on the selected host(s), and <strong>Set Environment's Sudo Default…</strong> so every host assigned to that environment inherits the setting automatically (applied at assignment time; an individual host can still be overridden afterward).</p>
+<div class="note"><b>Your sudo password isn't set here</b>The host's sudo <em>policy</em> lives on this page, but your personal sudo <em>password</em> is a per-administrator credential — set it from the <strong>Sudo Password</strong> button in the dashboard header (see <a href="#sudopassword">Your sudo password</a>), where any administrator (Superuser or Sysadmin) can store or clear it. A dispatched action on a password-sudo host with no stored password stops with a clear message pointing you there, rather than failing silently.</div>
+
+<h2>Preventing duplicate enrollment</h2>
+<p>The controller refuses to enroll a machine whose IP is <strong>already managed</strong> — by an agent or another SSH record — so the same physical box can't end up as two separate hosts under different names. An agent's automatic SSH side, enrolled when it first accepts the controller key, likewise absorbs any earlier manual SSH record at the same IP. And throughout the GUI the host lists <strong>de-duplicate by IP</strong>, so a host reached both ways shows as one row.</p>
 
 <h2>The managed hosts list</h2>
 <p>The Enrolled Hosts list groups hosts under collapsible environment headers, with <strong>Collapse All</strong> / <strong>Expand All</strong> buttons for tidying a large fleet. Selecting a host populates a details panel with its Hostname, Host ID, Platform, Kernel, Status, and Environment. <strong>Refresh</strong> reloads the list and details from the controller.</p>
@@ -528,14 +554,14 @@ sudo ./run_agent.sh</pre>
 <h2>File upload and download</h2>
 <p>The File Transfer section moves files to and from a managed host. <strong>SSH hosts</strong> transfer over SFTP with no enforced size limit, completing synchronously. <strong>Agent-enrolled hosts</strong> transfer through the same queued-task channel used for commands, capped at a modest size (the page states the current limit) since that channel isn't designed for bulk data movement.</p>
 
-<h2 id="rdp">Graphical remote desktop (RDP)</h2>
+<h2 id="rdp">RDP To A Windows Host</h2>
 <figure class="mock">
   <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Open RDP</span></div>
-  <img src="docs/screenshots/screenshot_rdp_dialog.png" alt="Open RDP dialog — host, username, password, and resolution, with an option to remember credentials encrypted." style="display:block;width:100%;height:auto;">
+  <img src="docs/screenshots/screenshot_rdp_dialog.png" alt="RDP dialog — host, username, password, and resolution, with an option to remember credentials encrypted." style="display:block;width:100%;height:auto;">
 </figure>
-<figcaption>Open RDP — connect to a host's graphical desktop, optionally remembering credentials (encrypted on your workstation).</figcaption>
-<div class="note"><b>The target host must run an RDP server</b>RDP connects to a remote-desktop <em>server</em> listening on the host (TCP 3389) — it isn't provided by the Sysible agent. A Sysible-managed <strong>Linux</strong> host does not run one by default: install and enable <code>xrdp</code> (e.g. <code>apt install xrdp</code> / <code>dnf install xrdp</code>) on it first. <strong>Windows</strong> hosts just need Remote Desktop enabled. If no server is listening, the connection now reports "Couldn't reach an RDP server on &lt;host&gt;" instead of the window silently closing.</div>
-<p>For work that needs a full graphical desktop rather than a shell, the selected host's <strong>Open RDP…</strong> button launches a Remote Desktop (RDP) session to it. Sysible uses a locally installed RDP client — <strong>FreeRDP</strong> (<code>xfreerdp</code>), installed for you by the controller's installer, falling back to <strong>Remmina</strong> if that's what the workstation has. You're prompted for the host, username, and password, with a <strong>resolution</strong> option (the default fits the session to the window). Credentials can optionally be <strong>remembered per host</strong>; when saved they're <strong>encrypted at rest</strong> on your own workstation (the same Fernet, <code>0600</code>-key model used for sudo passwords), never stored on the controller.</p>
+<figcaption>RDP — connect to a host's graphical desktop, optionally remembering credentials (encrypted on your workstation).</figcaption>
+<div class="note"><b>The target host must run an RDP server</b>RDP connects to a remote-desktop <em>server</em> listening on the host (TCP 3389) — it isn't provided by the Sysible agent. <strong>Windows</strong> hosts just need Remote Desktop enabled. A Sysible-managed <strong>Linux</strong> host does not run one by default: install and enable <code>xrdp</code> (e.g. <code>apt install xrdp</code> / <code>dnf install xrdp</code>) on it first. If no server is listening, the connection reports "Couldn't reach an RDP server on &lt;host&gt;" (and, for other failures, the actual FreeRDP error) instead of the window silently closing.</div>
+<p>For work that needs a full graphical desktop rather than a shell, the <strong>RDP To A Windows Host…</strong> button (its own box in Sysible Connect, under "SSH to a New Host") launches a Remote Desktop session by address — or right-click an enrolled host to RDP to it. Sysible uses a locally installed RDP client — <strong>FreeRDP</strong> (<code>xfreerdp</code>), installed for you by the controller's installer, falling back to <strong>Remmina</strong> if that's what the workstation has. You're prompted for the host, username, and password, with a <strong>resolution</strong> option (the default fits the session to the window). Credentials can optionally be <strong>remembered per host</strong>; when saved they're <strong>encrypted at rest</strong> on your own workstation (the same Fernet, <code>0600</code>-key model used for sudo passwords), never stored on the controller.</p>
 
 <h2 id="sendsudo">Send sudo password</h2>
 <p>For a host whose sudo requires a password, the <strong>Send sudo password</strong> button types your stored sudo password into the running terminal session on demand — so a <code>sudo</code> prompt in the terminal can be answered without retyping it. The password comes from your per-administrator encrypted store on this workstation; it is never written to the controller or logged.</p>

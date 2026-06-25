@@ -36,8 +36,15 @@ def available_client():
     return None
 
 
-def _build_freerdp_args(binary, host, username, domain, password, size):
-    args = [binary, f"/v:{host}", "/cert:ignore", "+clipboard"]
+def _build_freerdp_args(binary, host, username, domain, password, size, screen_size=None):
+    # Quality baseline: the GFX pipeline (H.264/RemoteFX) renders a far sharper
+    # desktop than the legacy codecs, AND it carries the Display Control channel
+    # that /dynamic-resolution actually needs - without /gfx, /dynamic-resolution
+    # silently does nothing and the session stays stuck at FreeRDP's tiny
+    # ~1024x768 default (the "awful resolution" symptom). 32-bit colour and
+    # auto network tuning round it out.
+    args = [binary, f"/v:{host}", "/cert:ignore", "+clipboard",
+            "/gfx", "/bpp:32", "/network:auto"]
     if username:
         args.append(f"/u:{username}")
     if domain:
@@ -45,11 +52,16 @@ def _build_freerdp_args(binary, host, username, domain, password, size):
     if password:
         args.append(f"/p:{password}")
     if size == "fullscreen":
-        args.append("/f")
+        args += ["/f", "/dynamic-resolution"]
     elif size == "dynamic":
+        # Open at the local screen size so the desktop fills the window from
+        # the outset (no upscaled-from-1024x768 blur), then track resizes.
+        if screen_size:
+            args.append(f"/size:{screen_size}")
         args.append("/dynamic-resolution")
     elif size:  # e.g. "1280x800"
-        args.append(f"/size:{size}")
+        # Smart-sizing scales the remote desktop cleanly to the window.
+        args += [f"/size:{size}", "/smart-sizing"]
     return args
 
 
@@ -144,8 +156,11 @@ def _summarize_failure(host, returncode, err_text):
     return f"{hint}\n\nClient reported: {raw}"
 
 
-def launch(host, username="", domain="", password="", size="1280x800"):
+def launch(host, username="", domain="", password="", size="1280x800", screen_size=None):
     """Spawn an RDP client to `host`. Returns (ok, message).
+
+    `screen_size` ("WxH") is the local screen size, used as the initial desktop
+    size for the dynamic/fit-window mode so it opens crisp at full size.
 
     Watches the spawned client for a couple of seconds: if it dies right away
     (no RDP server, refused connection, bad credentials) we report *why*
@@ -167,7 +182,7 @@ def launch(host, username="", domain="", password="", size="1280x800"):
                 "fully resizable RDP, install FreeRDP (the 'freerdp2-x11'/'freerdp' "
                 "package that provides xfreerdp).")
     else:
-        args = _build_freerdp_args(client, host, username, domain, password, size)
+        args = _build_freerdp_args(client, host, username, domain, password, size, screen_size)
         note = f"Connecting to {host} with {client}…"
 
     # Capture stderr to a temp file so we can read back the reason if the

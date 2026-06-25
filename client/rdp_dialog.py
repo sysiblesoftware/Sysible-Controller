@@ -127,8 +127,19 @@ class RdpConnectDialog(QDialog):
         self.status.setText(f"Connecting to {host}…")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         QApplication.processEvents()
+        # Local screen size → FreeRDP opens the desktop at full size (crisp)
+        # instead of its tiny default that then upscales blurry.
+        screen_size = None
         try:
-            ok, message = rdp_launcher.launch(host, username, domain, password, size)
+            scr = QApplication.primaryScreen()
+            if scr is not None:
+                g = scr.availableGeometry()
+                screen_size = f"{g.width()}x{g.height()}"
+        except Exception:
+            screen_size = None
+        try:
+            ok, message = rdp_launcher.launch(host, username, domain, password, size,
+                                              screen_size=screen_size)
         finally:
             QApplication.restoreOverrideCursor()
             self.connect_btn.setEnabled(True)

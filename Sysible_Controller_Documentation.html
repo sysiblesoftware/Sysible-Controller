@@ -165,9 +165,19 @@
   <li><span class="num">3</span><a href="#install">Installation</a></li>
   <li><span class="num">4</span><a href="#first-login">First Login &amp; Administrator Accounts</a></li>
   <li><span class="num">5</span><a href="#cli">The sysible_controller Command Line</a></li>
-  <li><span class="num">6</span><a href="#dashboard">The Dashboard</a></li>
+  <li><span class="num">6</span><a href="#dashboard">The Dashboard</a>
+    <ul class="sub">
+      <li><a href="#liveactivity">Live Activity &amp; Logs (Superusers only)</a></li>
+    </ul>
+  </li>
   <li><span class="num">7</span><a href="#enrollment">Host Enrollment</a></li>
-  <li><span class="num">8</span><a href="#remote">Sysible Connect</a></li>
+  <li><span class="num">8</span><a href="#remote">Sysible Connect</a>
+    <ul class="sub">
+      <li><a href="#rdp">Graphical remote desktop (RDP)</a></li>
+      <li><a href="#sendsudo">Send sudo password</a></li>
+      <li><a href="#fleetpower">Fleet power controls</a></li>
+    </ul>
+  </li>
   <li><span class="num">9</span><a href="#settings">Sysible Controller Settings</a>
     <ul class="sub">
       <li><a href="#settings-controller">Controller Configuration</a></li>
@@ -247,11 +257,19 @@
   <span class="pill">Admin API key</span>
   <span class="pill">Per-host SSH keys</span>
   <span class="pill">One-time enroll tokens</span>
+  <span class="pill">Role-based access</span>
+  <span class="pill">Runs as you, not root</span>
+  <span class="pill">Login throttling</span>
 </div>
 <p>Security is layered throughout the product:</p>
 <ul>
 <li>Every network-facing service — the backend API, the Webserver Portal, and the agent's calls home — is <strong>HTTPS-only</strong>, using a self-signed TLS certificate the installer generates specifically for that machine.</li>
 <li>Every call the desktop GUI makes to the backend is gated by a single <strong>admin API key</strong> issued at install time and sent as an <code>X-API-Key</code> header.</li>
+<li>Each administrator login issues a signed, expiring <strong>per-administrator token</strong>. The identity an action runs as on a host is derived from that token server-side, so it cannot be forged or chosen by the client.</li>
+<li>Every action on a host runs <strong>as the administrator's matching local user</strong> (via <code>runuser</code>), with that user's own sudo rights and the host's own audit trail — not as an anonymous root daemon. Privileged steps are attempted unprivileged first and escalated only when the OS reports a privilege error.</li>
+<li><strong>Role-based access:</strong> administrators are <strong>Superusers</strong> or <strong>Sysadmins</strong>. Managing administrators and viewing the Live Activity &amp; Controller Log are restricted to Superusers, enforced on the backend rather than only hidden in the GUI.</li>
+<li><strong>Sudo passwords are never stored in the clear.</strong> For password-sudo hosts, the operator's "become" password is fed to <code>sudo -S</code> over <strong>stdin only</strong> — never on the command line, in the environment, in the database, or in any log. The controller holds it in memory keyed to a single task, delivers it once to the authenticated agent, and sweeps it on a short TTL. Any optional convenience copy on the operator's own workstation is encrypted at rest (Fernet, <code>0600</code> key) and namespaced per administrator.</li>
+<li><strong>Login throttling</strong> rate-limits and briefly locks out repeated failed administrator logins, and <strong>security response headers</strong> are sent on every reply with the interactive API docs disabled in production.</li>
 <li>Every host managed over SSH is authenticated with a <strong>dedicated SSH key pair</strong> the controller generates and manages itself, rather than relying on shared or stored passwords.</li>
 <li>Every agent enrollment uses a <strong>single-use enrollment token</strong> baked into its downloadable bundle, so a bundle cannot be silently reused to enroll a second, unintended host.</li>
 </ul>
@@ -378,22 +396,37 @@ sudo ./install_sysible.sh</pre>
 
 <figure class="mock">
   <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Sysible Controller</span></div>
-  <img src="docs/screenshots/screenshot_dashboard.png" alt="The Dashboard — a search box over a single column of five tiles, each opening its own popout window." style="display:block;width:100%;height:auto;">
+  <img src="docs/screenshots/screenshot_dashboard.png" alt="The Dashboard — a search box over a single column of tiles, each opening its own popout window." style="display:block;width:100%;height:auto;">
 </figure>
-<figcaption>The Dashboard — a search box over a single column of five tiles, each opening its own popout window.</figcaption>
+<figcaption>The Dashboard — a search box over a single column of tiles, each opening its own popout window.</figcaption>
 
 <h2>Light and dark theme</h2>
 <p>A small pill-shaped switch in the top-right of the Dashboard header toggles the entire interface between a <strong>dark</strong> theme (the default) and a <strong>light</strong> theme. Clicking the sun or moon re-skins every window already on screen — the Dashboard and any open tool popouts — immediately, with no restart, and the choice is remembered the next time you launch the GUI. The toggle deliberately uses plain sun/moon glyphs rather than an icon font, so it always stays usable as the way back out of light mode even if the icon font is unavailable.</p>
 
-<h2>The five tiles</h2>
+<h2>The dashboard tiles</h2>
+<p>The Dashboard presents a single column of tiles. One of them — <strong>Live Activity &amp; Logs</strong> — is shown only to administrators with the <strong>Superuser</strong> role; Sysadmins don't see it.</p>
 <table class="ref">
 <tr><th>Tile</th><th>What it's for</th></tr>
 <tr><td><strong>Sysible Controller Host Enrollment</strong></td><td>Bring new hosts under management using the lightweight agent; view and manage hosts already enrolled.</td></tr>
-<tr><td><strong>Sysible Controller Settings</strong></td><td>Configure the controller itself: the address/port baked into agent bundles, administrator accounts, their password policy, the audit log, and the License &amp; Version section.</td></tr>
+<tr><td><strong>Sysible Controller Settings</strong></td><td>Configure the controller itself: the address/port baked into agent bundles, role-based administrator accounts, their password policy, the audit log, and the License &amp; Version section.</td></tr>
+<tr><td><strong>Live Activity &amp; Logs</strong> <em>(Superusers only)</em></td><td>A live feed of who did what across the fleet, alongside a tail of the controller's own service log. See <a href="#liveactivity">Live Activity &amp; Logs</a> below.</td></tr>
 <tr><td><strong>Sysible Connect</strong></td><td>Unified console for direct, hands-on work on individual hosts — live terminal, one-off commands, file transfer, and one-click SSH enrollment.</td></tr>
 <tr><td><strong>Webserver Portal Configuration</strong></td><td>Start/stop the optional host-facing portal, set its credentials and port, and manage the shared file pool.</td></tr>
 <tr><td><strong>System Administration</strong></td><td>Sub-menu of eighteen fleet-wide operational tools — user/group accounts, health/logs/recovery (incl. boot &amp; kernel), services, environmental policies, scheduled tasks, package management, repositories, networking, the filesystem layer (incl. NFS/CIFS), block storage, the firewall, security/hardening, backup &amp; recovery, time sync, certificates, containers &amp; VMs, directory services (Active Directory/LDAP), and distro subscription &amp; licensing.</td></tr>
 </table>
+
+<h2 id="liveactivity">Live Activity &amp; Logs <em>(Superusers only)</em></h2>
+<p>The <strong>Live Activity &amp; Logs</strong> tile opens a two-tab window reserved for administrators with the <strong>Superuser</strong> role — the people who run the controller itself, as opposed to the Sysadmins who run the fleet. The restriction is enforced on the backend, so the underlying activity and controller-log endpoints reject a non-Superuser token even if the tile were somehow reached directly.</p>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Live Activity &amp; Logs</span></div>
+  <img src="docs/screenshots/screenshot_live_activity.png" alt="Live Activity & Logs — a feed of fleet actions and a tail of the controller log, both auto-refreshing." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Live Activity &amp; Logs — a human-readable feed of who did what across the fleet, alongside the controller's own service log.</figcaption>
+<ul>
+<li><strong>Activity</strong> — a chronological feed of operator actions across the fleet: who did it, on which host, and a short human-readable summary (for example <em>created user 'jdoe' on web-01</em>, <em>Locked 'test2' on dev1</em>, <em>Reboot All Hosts</em>). The raw command text is shown only when there is no short summary to fall back on, so the feed stays readable rather than filling with multi-line scripts. Routine background bookkeeping — the periodic user-sync and SSH-enable probes — is deliberately excluded so the feed reflects real operator intent.</li>
+<li><strong>Controller Log</strong> — a live tail of the backend service's own log, for diagnosing the controller itself.</li>
+</ul>
+<p>Both tabs auto-refresh, with a manual <strong>Refresh</strong> as well, and the activity feed can be cleared.</p>
 </div>
 
 <!-- ===================== 7. HOST ENROLLMENT ===================== -->
@@ -431,6 +464,15 @@ sudo ./run_agent.sh</pre>
 
 <h2>Environment tagging</h2>
 <p>Hosts can be organized into <strong>environments</strong> — labels such as "Production," "Staging," or "Development." Environments are entirely optional; an unassigned host is listed under an "Unassigned" heading. Select a host, use the <strong>Environment</strong> dropdown (choose <strong>"+ New environment..."</strong> to create one on the fly), and click <strong>Set Environment</strong> to apply it. The same environment list is shared elsewhere in the application, including Sysible Connect's SSH-enrollment flow.</p>
+<p><strong>Bulk assignment.</strong> You don't have to set environments one host at a time. <strong>Shift-click</strong> or <strong>Ctrl/Cmd-click</strong> to select several hosts in the Enrolled Hosts list, pick an environment, and <strong>Set Environment</strong> applies it to all of them at once — handy when a batch of newly enrolled hosts all belong to the same environment.</p>
+
+<h2>Sudo mode — passwordless or password ("become")</h2>
+<p>Because every action runs as the triggering administrator's matching local user (see <a href="#directory">the security model</a>), how that user obtains root matters. Each host carries a <strong>sudo mode</strong>:</p>
+<ul>
+<li><strong>NOPASSWD</strong> — the user has passwordless sudo on that host; privileged steps just work.</li>
+<li><strong>Password required ("become")</strong> — that host requires a sudo password. The administrator supplies their sudo password (stored encrypted on their own workstation if they choose), and the controller delivers it to the agent over stdin for just that task. Modeled on Ansible's become-password; see <a href="#tasks-remote">Sysible Connect</a> and the security model for how the password is handled.</li>
+</ul>
+<p>Set a host's mode with the <strong>Sudo Mode</strong> control, and set a <strong>default for an environment</strong> so that every host assigned to it inherits "password required" (or not) automatically. The default is applied at assignment time; an individual host can still be overridden afterward.</p>
 
 <h2>The managed hosts list</h2>
 <p>The Enrolled Hosts list groups hosts under collapsible environment headers, with <strong>Collapse All</strong> / <strong>Expand All</strong> buttons for tidying a large fleet. Selecting a host populates a details panel with its Hostname, Host ID, Platform, Kernel, Status, and Environment. <strong>Refresh</strong> reloads the list and details from the controller.</p>
@@ -475,12 +517,34 @@ sudo ./run_agent.sh</pre>
 <h2>The pop-out terminal</h2>
 <p><strong>Double-click a host</strong> to open its terminal in its own window. The terminal is a pop-out (not docked in the page), so you can place it wherever you like, resize it freely, and keep several open side by side. You can open <strong>more than one session to the same host</strong> at once — each double-click opens a new, independent session, and repeated windows for the same host are numbered in their title bars.</p>
 <p>For a host that's enrolled both ways, a <strong>Connection</strong> picker at the top of the window switches between the <strong>SSH</strong> session and the <strong>Agent</strong> console; single-transport hosts show only what they have.</p>
+<p>The terminal opens <strong>as your own administrator user</strong> on the host (the local account matching the administrator you logged in as), not as <code>root</code> — the same run-as-you model the fleet tools use — so your shell history, environment, and sudo rights are your own.</p>
 <p>On an <strong>SSH</strong> connection the terminal is a genuine PTY-backed interactive session. Full-screen, cursor-addressed programs — <code>vim</code>, <code>top</code>, <code>htop</code>, <code>less</code> — render correctly rather than spilling stray redraw lines, and the terminal <strong>resizes with the window</strong> so those programs use the whole panel. Output is colorized (ANSI colors are honored), and the <code>user@host</code> portion of the prompt is shown in <strong>green</strong>, turning <strong>red</strong> whenever you are <code>root</code> (including after <code>su</code> or <code>sudo -i</code>) as an at-a-glance privilege cue. Arrow keys, Tab, and Backspace all work, and pasting sends text straight into the session. Buttons provide <strong>Send Ctrl+C</strong> (a real interrupt signal), <strong>Clear</strong> (clears the pane and redraws the prompt), and <strong>Exit Session</strong> (closes the window and tears down the remote session).</p>
 <p>Each terminal window also has a toolbar with <strong>Upload…</strong> and <strong>Download…</strong> (transfer a file to or from that host over SSH), <strong>Find…</strong> (search the terminal output), <strong>Save Output…</strong> (write the terminal's text to a file), and <strong>A- / A+</strong> font-size controls (the remote pty is re-sized to match so full-screen apps still fill the panel).</p>
 <p>On an <strong>Agent</strong> connection there's no persistent shell, so true interactive sessions aren't possible. Instead, type a command in the bottom box and press Enter — it's queued for the agent to execute, with output, errors, and exit code returned once it reports back (typically a few seconds; a timeout is reported after about 30 seconds of silence). Command history is recalled with the Up/Down arrow keys.</p>
 
 <h2>File upload and download</h2>
 <p>The File Transfer section moves files to and from a managed host. <strong>SSH hosts</strong> transfer over SFTP with no enforced size limit, completing synchronously. <strong>Agent-enrolled hosts</strong> transfer through the same queued-task channel used for commands, capped at a modest size (the page states the current limit) since that channel isn't designed for bulk data movement.</p>
+
+<h2 id="rdp">Graphical remote desktop (RDP)</h2>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Open RDP</span></div>
+  <img src="docs/screenshots/screenshot_rdp_dialog.png" alt="Open RDP dialog — host, username, password, and resolution, with an option to remember credentials encrypted." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Open RDP — connect to a host's graphical desktop, optionally remembering credentials (encrypted on your workstation).</figcaption>
+<p>For work that needs a full graphical desktop rather than a shell, the selected host's <strong>Open RDP…</strong> button launches a Remote Desktop (RDP) session to it. Sysible uses a locally installed RDP client — <strong>FreeRDP</strong> (<code>xfreerdp</code>), installed for you by the controller's installer, falling back to <strong>Remmina</strong> if that's what the workstation has. You're prompted for the host, username, and password, with a <strong>resolution</strong> option (the default fits the session to the window). Credentials can optionally be <strong>remembered per host</strong>; when saved they're <strong>encrypted at rest</strong> on your own workstation (the same Fernet, <code>0600</code>-key model used for sudo passwords), never stored on the controller.</p>
+
+<h2 id="sendsudo">Send sudo password</h2>
+<p>For a host whose sudo requires a password, the <strong>Send sudo password</strong> button types your stored sudo password into the running terminal session on demand — so a <code>sudo</code> prompt in the terminal can be answered without retyping it. The password comes from your per-administrator encrypted store on this workstation; it is never written to the controller or logged.</p>
+
+<h2 id="fleetpower">Fleet power controls</h2>
+<p>Three buttons act on <strong>every enrolled host at once</strong>, each behind a confirmation prompt:</p>
+<table class="ref">
+<tr><th>Button</th><th>What it does</th></tr>
+<tr><td><strong>Reboot All Hosts</strong></td><td>Reboots every enrolled host.</td></tr>
+<tr><td><strong>Power Off All Hosts</strong></td><td>Shuts down every enrolled host.</td></tr>
+<tr><td><strong>Restart Agent on All Hosts</strong></td><td>Restarts the Sysible agent service on every enrolled host — useful after redeploying an updated agent bundle, without rebooting the machines.</td></tr>
+</table>
+<div class="warn"><b>Fleet-wide and immediate</b>These act on the whole fleet at once. The confirmation dialog is the only guard — there is no staged rollout — so use them deliberately.</div>
 </div>
 
 <!-- ===================== 9. SETTINGS ===================== -->
@@ -505,7 +569,20 @@ sudo ./run_agent.sh</pre>
 <div class="warn"><b>Port must match</b>The <strong>Port</strong> field must match what the backend is actually listening on (9000 by default) — it's independent of the Webserver Portal's own port. A mismatch here breaks any newly built agent bundle even if the portal works fine.</div>
 
 <h2 id="settings-admins">Administrators</h2>
-<p>Manages who can log into the Dashboard — separate from any accounts on managed hosts. Shows Username, Created By, Last Login, and Must Change Password for each account. <strong>Add Administrator</strong> creates a new account with a temporary password (forced to change on first login). <strong>Remove Selected Administrator</strong> deletes one. "Change My Own Credentials" lets the logged-in administrator update their own username/password, authorized by entering the current password.</p>
+<p>Manages who can log into the Dashboard — separate from any accounts on managed hosts. Shows Username, <strong>Role</strong>, Created By, Last Login, and Must Change Password for each account. <strong>Add Administrator</strong> creates a new account with a temporary password (forced to change on first login) and a chosen role. <strong>Remove Selected Administrator</strong> deletes one. "Change My Own Credentials" lets the logged-in administrator update their own username/password, authorized by entering the current password.</p>
+<figure class="mock">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Sysible Controller Settings</span></div>
+  <img src="docs/screenshots/screenshot_settings.png" alt="Settings — administrators tagged as Superuser or Sysadmin, plus controller config, password policy, audit log." style="display:block;width:100%;height:auto;">
+</figure>
+<figcaption>Sysible Controller Settings — administrators are tagged Superuser or Sysadmin; this and the other controller-level configuration live on one scrollable page.</figcaption>
+<p><strong>Roles.</strong> Every administrator is one of two roles, chosen at creation and changeable later:</p>
+<table class="ref">
+<tr><th>Role</th><th>Can do</th></tr>
+<tr><td><strong>Superuser</strong></td><td>Everything a Sysadmin can, <em>plus</em> managing administrator accounts and their roles, and viewing the <a href="#liveactivity">Live Activity &amp; Logs</a>. These are the people who run the controller.</td></tr>
+<tr><td><strong>Sysadmin</strong></td><td>Full use of the fleet-management tools, but no administrator management and no access to the live activity/controller logs. These are the people who run the fleet.</td></tr>
+</table>
+<p>The role gate is enforced on the backend, so a Sysadmin's token is rejected by the administrator-management and activity-log endpoints even outside the GUI. The very first administrator created at first run is a Superuser.</p>
+<div class="note"><b>Community edition — administrator caps</b>The Community edition allows up to <strong>2 Superusers</strong> and <strong>5 Sysadmins</strong> (alongside the 10-host cap). Larger rosters are intended for a separately licensed Enterprise edition.</div>
 
 <h2 id="settings-policy">Administrator Password Policy</h2>
 <p>Defines complexity rules for Dashboard administrator passwords specifically — minimum length, and toggles for requiring uppercase, lowercase, a digit, and a symbol. Enforced on new administrator accounts, self-service credential changes, and the forced first-login change. Existing passwords predating a policy change are not retroactively invalidated. This governs Dashboard logins only — operating-system accounts on managed hosts are governed separately by Environmental Policies (Section 10).</p>
@@ -1116,8 +1193,10 @@ sudo ./run_agent.sh</pre>
 <p>Its own System Administration tile. Joins managed hosts to Active Directory and configures LDAP/LDAPS identity. Two tabs: <strong>Active Directory</strong> and <strong>LDAP / LDAPS</strong>.</p>
 <table class="ref">
 <tr><th>Action</th><th>What it does</th></tr>
+<tr><td><strong>Prepare Host for AD Join</strong></td><td>The recommended first step. Does the prerequisites that quietly break AD joins: installs the client tooling (realmd, SSSD, adcli, Kerberos), brings up <strong>time sync</strong> (chrony) so the clock matches the DC, enables <strong>oddjobd / mkhomedir</strong> for home-directory creation, and runs a <strong>readiness check</strong> that confirms the domain's <code>_ldap</code>/<code>_kerberos</code> <strong>SRV records actually resolve</strong> before you attempt the join. Get a clean readiness report here and the join itself almost always succeeds the first time.</td></tr>
+<tr><td>Discover Realm</td><td>A pre-join discovery (<code>realm discover</code>) that surfaces DNS problems explicitly — including the common case where a host's domain is a <code>.local</code> name colliding with mDNS — so you get an actionable diagnostic instead of a bare "no such realm found".</td></tr>
 <tr><td>Realm / Domain Status</td><td>Shows the joined realm (<code>realm list</code>), the SSSD service state, and the Kerberos default realm.</td></tr>
-<tr><td>Join Domain</td><td>Installs the AD client tooling (realmd, SSSD, adcli, Kerberos) and joins the domain with a supplied admin account (optionally into a specific computer OU). Needs working DNS for the domain and the host clock in sync with the DC; the join password is fed to realm via a transient root-only file, never the command line.</td></tr>
+<tr><td>Join Domain</td><td>Installs the AD client tooling (realmd, SSSD, adcli, Kerberos) and joins the domain with a supplied admin account (optionally into a specific computer OU). Needs working DNS for the domain and the host clock in sync with the DC — both handled by <strong>Prepare Host for AD Join</strong> above; the join password is fed to realm via a transient root-only file, never the command line.</td></tr>
 <tr><td>Permit Login</td><td>Allows a specific AD user or group to log in (after a join, realm denies all by default).</td></tr>
 <tr><td>Enable Home-Dir Creation</td><td>Configures automatic home-directory creation on first login (authselect/pam_mkhomedir + oddjobd).</td></tr>
 <tr><td>Leave Domain</td><td>Unjoins the host from the domain.</td></tr>
@@ -1136,7 +1215,7 @@ sudo ./run_agent.sh</pre>
 <table class="ref">
 <tr><th>Tab</th><th>Actions</th></tr>
 <tr><td>Overview</td><td>Detect Distro &amp; Subscription Tools — identifies the OS and whether <code>subscription-manager</code>, <code>pro</code>, or <code>SUSEConnect</code> is installed.</td></tr>
-<tr><td>Red Hat (RHSM)</td><td>Subscription Status, Register (Organization + Activation Key, or Username + Password, with auto-attach), Auto-Attach, Refresh, List Consumed / Available, List Repositories, Unregister.</td></tr>
+<tr><td>Red Hat (RHSM)</td><td>Subscription Status, <strong>Register All</strong> (register and auto-attach every checked host in one action), Register (Organization + Activation Key, or Username + Password, with auto-attach), Auto-Attach, Refresh, List Consumed / Available, List Repositories, Unregister.</td></tr>
 <tr><td>Ubuntu Pro</td><td>Pro Status, Attach (token), Detach, Refresh, and Enable/Disable services (esm-infra, esm-apps, livepatch, fips, usg, cis, realtime-kernel, landscape).</td></tr>
 <tr><td>SUSE (SCC)</td><td>Registration Status, Register (reg-code + optional email), List Extensions / Modules, Deregister.</td></tr>
 </table>
@@ -1252,6 +1331,20 @@ sudo ./run_agent.sh</pre>
 <li>Click <strong>Set Environment</strong>.</li>
 </ol>
 
+<h3>Assign several hosts to one environment at once</h3>
+<ol>
+<li>In the Enrolled Hosts list, <strong>Shift-click</strong> a range or <strong>Ctrl/Cmd-click</strong> individual hosts to select several.</li>
+<li>Pick the target environment (or <strong>+ New environment...</strong>).</li>
+<li>Click <strong>Set Environment</strong> — it's applied to every selected host in one action.</li>
+</ol>
+
+<h3>Set a host's sudo mode (passwordless vs. password)</h3>
+<ol>
+<li>Select the host and use the <strong>Sudo Mode</strong> control to choose <strong>NOPASSWD</strong> (passwordless sudo) or <strong>Password required</strong> (the host's sudo needs a password).</li>
+<li>To make a whole environment default to one mode, set its environment-level sudo default; hosts inherit it when assigned to that environment, and can still be overridden individually.</li>
+<li>For password-required hosts, store your sudo password once (Sysible Connect → <strong>Send sudo password</strong>, or the per-host RDP/become prompt) so dispatched actions can elevate.</li>
+</ol>
+
 <h3>Refresh the enrolled hosts list</h3>
 <ol><li>Click <strong>Refresh</strong>.</li></ol>
 
@@ -1310,6 +1403,26 @@ sudo ./run_agent.sh</pre>
 <li>Copy it if you'd rather pre-authorize a host yourself — baked into a golden image, for instance — instead of using Connect Host's one-time password handoff.</li>
 </ol>
 
+<h3>Open a graphical desktop (RDP)</h3>
+<ol>
+<li>Select a host and click <strong>Open RDP…</strong>.</li>
+<li>Enter the host, username, password, and (optionally) a resolution; leave the default to fit the session to the window.</li>
+<li>Tick <strong>Remember credentials for this host</strong> to skip re-entry next time — saved credentials are encrypted on your own workstation, never on the controller.</li>
+<li>Click <strong>Connect</strong>. Sysible launches FreeRDP (<code>xfreerdp</code>), or Remmina if that's what's installed.</li>
+</ol>
+
+<h3>Answer a sudo prompt with your stored password</h3>
+<ol>
+<li>In a terminal on a password-sudo host, run your <code>sudo</code> command so it's waiting at the <em>[sudo] password</em> prompt.</li>
+<li>Click <strong>Send sudo password</strong>. Your stored sudo password (from your encrypted per-administrator store) is typed into the session for you.</li>
+</ol>
+
+<h3>Reboot, power off, or restart agents across the whole fleet</h3>
+<ol>
+<li>Use the <strong>Fleet Power Controls</strong>: <strong>Reboot All Hosts</strong>, <strong>Power Off All Hosts</strong>, or <strong>Restart Agent on All Hosts</strong>.</li>
+<li>Confirm at the prompt — the action runs on every enrolled host at once. Restart Agent is the quick way to pick up a redeployed agent bundle without rebooting machines.</li>
+</ol>
+
 <h2 id="tasks-settings">Sysible Controller Settings</h2>
 <p>Dashboard tile: <strong>Sysible Controller Settings</strong>. See Section 9 for how this differs from Environmental Policies.</p>
 
@@ -1322,10 +1435,12 @@ sudo ./run_agent.sh</pre>
 <li>Click <strong>Save Controller Configuration</strong>.</li>
 </ol>
 
-<h3>Add an administrator</h3>
+<div class="note"><b>Superuser only</b>Administrator management (and the Live Activity &amp; Logs view) is available only to administrators with the <strong>Superuser</strong> role. Sysadmins won't see these controls, and the backend rejects their token if reached directly.</div>
+
+<h3>Add an administrator (and pick a role)</h3>
 <ol>
-<li>Under Administrators, fill in Username and a Temporary Password.</li>
-<li>Click <strong>Add Administrator</strong>. The new account is forced to change that password on its first login.</li>
+<li>Under Administrators, fill in Username and a Temporary Password, and choose the <strong>Role</strong> — <strong>Superuser</strong> (can manage admins and view the activity logs) or <strong>Sysadmin</strong> (fleet tools only).</li>
+<li>Click <strong>Add Administrator</strong>. The new account is forced to change that password on its first login. <em>(Community edition: up to 2 Superusers and 5 Sysadmins.)</em></li>
 </ol>
 
 <h3>Remove an administrator</h3>

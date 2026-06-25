@@ -24,6 +24,8 @@ It manages target hosts through two interchangeable mechanisms, and a single fle
 
 Both paths feed the exact same fleet-wide tools, so day to day you don't think about which transport a given host uses.
 
+**Every action runs as the administrator who triggered it.** When the operator logged in as `cdovbish` runs a command, the agent executes it as the local `cdovbish` account on the target host (`runuser -u cdovbish`), with exactly that user's sudo rights — not as a faceless root daemon. Privileged steps are tried unprivileged first (so reads succeed without sudo), then escalated only when the OS reports a privilege error. The run-as identity is derived from the administrator's signed login token on the controller, never from anything the client can spoof, so the host's own sudo policy and audit trail stay meaningful. Hosts whose sudo requires a password are fully supported too — see **Sudo modes** below.
+
 A separate, optional **Webserver Portal** gives host operators — not Sysible administrators — a self-service way to grab the agent bundle or exchange files with the controller from a browser, without ever needing GUI or shell access.
 
 ## Why Sysible Controller
@@ -48,8 +50,9 @@ What that buys you in practice:
 
 | Area | What it covers |
 |---|---|
-| **Host Enrollment** | Build and download single-use agent bundles; organize enrolled hosts into environments (Production, Staging, etc.); disenroll cleanly. |
-| **Sysible Connect** | Unified list of agent- and SSH-managed hosts (with each host's IP shown inline); one-click SSH enrollment (password used once, then discarded in favor of a generated key); pop-out terminal windows opened by double-clicking a host, with **multiple concurrent sessions per host**; a real PTY terminal for SSH hosts that renders full-screen apps (`vim`, `top`, `less`) correctly and resizes with the window, with the `user@host` prompt shown green (red for root). Each terminal has a toolbar for **file upload/download** to that host, **find-in-output**, **save output**, and **font size** adjustment. A **Check In / Ping** button probes every host — agent hosts by their last heartbeat, SSH hosts by a live connection test — and shows a colored status dot with the age/latency next to each. **Right-click a host** to assign it to an environment. A **Run Script on All Hosts** launcher runs an ad-hoc command or multi-line script across checked hosts with per-host output. Queued command execution for agent hosts; per-connection removal (drop just the SSH or just the agent side of a combined host). Agent hosts are **auto-enrolled for SSH** on enrollment, so they also get a real terminal automatically when an SSH server is present. |
+| **Host Enrollment** | Build and download single-use agent bundles; organize enrolled hosts into environments (Production, Staging, etc.) — **select several hosts at once** (shift/ctrl-click) and assign them to an environment in a single action; set each host's **sudo mode** (passwordless `NOPASSWD` or password-required "become" sudo), which an environment can also default for every host assigned to it; disenroll cleanly. |
+| **Sysible Connect** | Unified list of agent- and SSH-managed hosts (with each host's IP shown inline); one-click SSH enrollment (password used once, then discarded in favor of a generated key); pop-out terminal windows opened by double-clicking a host, with **multiple concurrent sessions per host**, each **opened as your administrator user** (not root); a real PTY terminal for SSH hosts that renders full-screen apps (`vim`, `top`, `less`) correctly and resizes with the window, with the `user@host` prompt shown green (red for root). Each terminal has a toolbar for **file upload/download** to that host, **find-in-output**, **save output**, and **font size** adjustment. **Open RDP…** launches a graphical remote-desktop session to a host (FreeRDP, falling back to Remmina), with per-host credentials optionally remembered, encrypted at rest. **Send sudo password** delivers your stored sudo password to the running terminal for a password-sudo host. **Fleet power controls** — Reboot All Hosts, Power Off All Hosts, and Restart Agent on All Hosts — act on every enrolled host at once behind a confirmation. A **Check In / Ping** button probes every host — agent hosts by their last heartbeat, SSH hosts by a live connection test — and shows a colored status dot with the age/latency next to each. **Right-click a host** to assign it to an environment. A **Run Script on All Hosts** launcher runs an ad-hoc command or multi-line script across checked hosts with per-host output. Queued command execution for agent hosts; per-connection removal (drop just the SSH or just the agent side of a combined host). Agent hosts are **auto-enrolled for SSH** on enrollment, so they also get a real terminal automatically when an SSH server is present. |
+| **Live Activity & Logs** | A **Sysible Controller superuser-only** dashboard pane showing a live feed of fleet activity — who did what, where, and when (create user, lock account, set hostname, fleet reboot, and so on, with a short human-readable summary rather than raw command text) — alongside a tail of the controller's own service log. Both auto-refresh. Background bookkeeping (user syncs, SSH-enable probes) is excluded so the feed reflects real operator actions only. |
 | **User & Group Administration** | Create/lock/unlock/delete accounts, manage sudo and group membership, set or generate passwords against a fleet-wide policy, manage password aging and account expiration, kill active sessions, and terminate an account fleet-wide in one action — across checked hosts, with per-host result tabs. Check **two or more hosts** to see the union of their users, grouped to surface host mismatches (a user present on some hosts but not others). |
 | **System Health, Logs & Recovery** | A single tabbed window combining health and boot/kernel recovery: disk usage, memory/CPU snapshots, uptime, failed services, large-file search, log search/tail, process inspection (kill/renice/restart), and a combined OK/WARNING/CRITICAL health verdict per host (removable/install media excluded from disk scoring) — **plus** boot-failure analysis, GRUB view/change/rebuild, recovery boot targets, kernel parameters, initramfs regeneration, and old-kernel cleanup. |
 | **Service Management** | List installed **and running** services, start/stop/restart/reload, enable/disable at boot, status, logs, dependency view, and one-click troubleshooting for one service or every failed service fleet-wide; create new systemd services and dependency overrides from the GUI. |
@@ -62,23 +65,60 @@ What that buys you in practice:
 | **Storage Administration** | Install the LVM and RAID tools, partition, format, and monitor disks (SMART); manage LVM physical volumes, volume groups, and logical volumes; configure RAID arrays and replace failed disks; and set up swap space — with beginner-oriented intros on the Disks, Partitions, LVM, and RAID tabs. |
 | **Firewall Administration** | Install a firewall (firewalld or ufw), manage firewalld zones, ports, and rich rules, plus the underlying `nftables` and `iptables` rule sets, and **list all actually-listening ports** (via `ss`) regardless of backend, across managed hosts. |
 | **Security Administration** | Install the SELinux userspace tools, configure and troubleshoot SELinux, harden SSH access and rotate keys, review audit logs and failed logins, install security updates, set OS-level password policy, apply system hardening, and install/run vulnerability scanners (Lynis and rkhunter) across managed hosts. |
-| **Directory Services (Active Directory / LDAP)** | Join hosts to **Active Directory** (realmd/SSSD/adcli — installs the tooling, joins the domain, with the join password kept off the command line), leave a domain, show realm/Kerberos status, permit AD users/groups to log in, enable home-dir creation, test **LDAPS** connectivity, and write a generic SSSD LDAP/LDAPS client config. |
-| **Distro Subscription & Licensing** | Register and manage commercial-distro subscriptions across the fleet: **Red Hat** (`subscription-manager` — register by org + activation key or username/password, auto-attach, refresh, list consumed/available, list repositories, unregister), **Ubuntu Pro** (`pro` — status, attach by token, enable/disable services like esm-infra, livepatch, fips, detach), and **SUSE** (`SUSEConnect` — status, register by reg-code, list extensions/modules, deregister). Each action is guarded to the matching distro. |
+| **Directory Services (Active Directory / LDAP)** | A one-click **Prepare Host for AD Join** that does the unglamorous prerequisites first — installs realmd/SSSD/adcli, brings up time sync (chrony), enables oddjobd/mkhomedir, and runs a readiness check that verifies the domain's SRV records actually resolve before you attempt the join — so the join itself succeeds the first time. Then join hosts to **Active Directory** (with the join password kept off the command line), with a discovery pre-check that surfaces DNS problems (including the common `.local`/mDNS reserved-name gotcha) instead of a bare "no such realm". Leave a domain, show realm/Kerberos status, permit AD users/groups to log in, enable home-dir creation, test **LDAPS** connectivity, and write a generic SSSD LDAP/LDAPS client config. |
+| **Distro Subscription & Licensing** | Register and manage commercial-distro subscriptions across the fleet: **Red Hat** (`subscription-manager` — register by org + activation key or username/password, a one-click **Register All** that registers and auto-attaches every checked host in one go, refresh, list consumed/available, list repositories, unregister), **Ubuntu Pro** (`pro` — status, attach by token, enable/disable services like esm-infra, livepatch, fips, detach), and **SUSE** (`SUSEConnect` — status, register by reg-code, list extensions/modules, deregister). Each action is guarded to the matching distro. |
 | **Backup & Recovery** | Back up and restore files (timestamped tar.gz), verify backup integrity, install scheduled backups, create and merge LVM snapshots, guide deleted-file recovery, and run a read-only disaster-recovery drill. |
 | **Time Synchronization** | Configure chrony/NTP and point it at chosen servers, verify synchronization, troubleshoot clock drift, and set the system time zone. |
 | **Certificate Management** | Generate CSRs, install/renew/replace certificates, check expiry, verify certificate chains, and troubleshoot TLS endpoints with `openssl s_client`. |
 | **Containers & VMs** | List and start/stop/restart Docker or Podman containers, view container logs and images, prune, and manage libvirt virtual machines (list/start/shutdown/destroy/info). |
 | **Webserver Portal** | A separate, optional HTTPS web app for host operators to self-service agent downloads and file exchange, with full login history, active-session visibility, and a shared file pool managed from the admin GUI. |
-| **Sysible Controller Settings** | Controller address/port configuration, administrator accounts, the administrator password policy, the audit log, and license/version info, all in one place. |
+| **Sysible Controller Settings** | Controller address/port configuration, **role-based administrator accounts** (each administrator is a **Superuser** or a **Sysadmin** — see *Roles & identity* below), the administrator password policy, the audit log, and license/version info, all in one place. |
+
+## Roles & identity
+
+Sysible administrators come in two roles, set per account in Settings:
+
+- **Superuser** — full control of the controller itself: managing other administrators and their roles, and viewing the Live Activity & Logs pane. Superusers are the people who run Sysible Controller.
+- **Sysadmin** — full use of the fleet-management tools, but no access to administrator management or the live activity/controller logs. Sysadmins are the people who run the *fleet*.
+
+Crucially, **every administrator's actions on a host run as that administrator's matching local user**, with that user's own sudo rights and the host's own audit trail — not as an anonymous root daemon. The run-as identity is bound to the administrator's signed login token on the controller and can't be set by the client, so a host's local access policy stays authoritative.
+
+In the **Community edition** the roster is capped at **2 superusers and 5 sysadmins** (alongside the 10-host cap). Like the host cap, this lives in one place and is an honest-user limit for the open-source edition.
+
+![Sysible Controller Settings — role-based administrators](docs/screenshots/screenshot_settings.png)
+
+> Administrators in Settings, each tagged **Superuser** or **Sysadmin**. Roles are set when an account is added and can be changed later.
+
+### Sudo modes — passwordless or password ("become")
+
+Not every fleet is allowed passwordless sudo. Each host carries a **sudo mode**, and an environment can set the default for hosts assigned to it:
+
+- **NOPASSWD** — the agent's user has passwordless sudo; privileged steps just work.
+- **Password required ("become")** — modeled on Ansible's become-password. The administrator's sudo password is supplied to `sudo -S` over **stdin only** — never on the command line, never in an environment variable, never written to the database or any log. The controller holds it in memory only, keyed to a single task, delivers it once to the authenticated agent that polls for that task, and sweeps it on a short TTL. For convenience it can be **stored encrypted at rest** on the operator's own workstation (Fernet with a `0600` key file, the same model as an SSH private key) and is **namespaced per administrator**, so one admin's password is never used to act as another.
+
+![Host Enrollment — bulk environment assignment and per-host sudo mode](docs/screenshots/screenshot_host_enrollment.png)
+
+> Host Enrollment: select several hosts at once to set their environment in bulk, and choose each host's sudo mode (NOPASSWD or password-required).
 
 ## Security model
 
 - **HTTPS everywhere** — backend API, Webserver Portal, and agent check-ins all run over TLS using a self-signed certificate generated at install time, scoped to every address the controller might be reached at.
 - **Admin API key** — every GUI-to-backend call is gated by a single key issued at install time.
+- **Per-administrator login tokens** — logging in issues a signed, expiring token; the action's run-as identity is derived from that token, so dispatch identity can't be forged by the client.
+- **Role-gated sensitive surfaces** — administrator management and the Live Activity & Controller Log views require a **Superuser** token; the backend enforces the role server-side, not just in the GUI.
+- **Login throttling** — repeated failed administrator logins are rate-limited and briefly lock out, blunting password-guessing.
+- **Hardened HTTP surface** — security response headers on every reply, and the interactive API docs/schema explorer disabled in production.
+- **Sudo passwords never at rest in the clear** — become-passwords live in RAM and in transit only, are fed via stdin, and are kept out of the database, process arguments, environment, and logs; any optional convenience copy on the operator's workstation is encrypted with a `0600` key and scoped per administrator.
 - **Per-fleet SSH key pair** — SSH-managed hosts are authenticated with a key the controller generates and owns, not a shared or stored password.
 - **Single-use enrollment tokens** — each downloaded agent bundle carries its own one-time token, so a bundle can't be silently reused to enroll an unintended host.
 - **Separate password policies** — one policy governs logins to the controller's own dashboard; a separate Environmental Policy governs OS-level accounts on managed hosts.
-- **Audit log** — every login attempt and administrator account change is recorded.
+- **Audit & activity logs** — every login attempt and administrator account change is recorded; a superuser-only activity feed additionally records who did what across the fleet.
+
+For the full trust model, controls, and deployment guidance (firewalling the controller's port to a trusted subnet or VPN), see [`SECURITY.md`](SECURITY.md).
+
+![Live Activity & Logs — a superuser-only feed of fleet actions and the controller log](docs/screenshots/screenshot_live_activity.png)
+
+> Live Activity & Logs (Superuser only): a live, human-readable feed of who did what across the fleet, alongside a tail of the controller's own service log.
 
 ## Requirements
 
@@ -95,13 +135,13 @@ sudo ./install_sysible.sh
 sudo sysible_controller start
 ```
 
-The installer detects your package manager, deploys the project to `/opt/sysible`, sets up a Python virtual environment, generates a self-signed TLS certificate and admin API key, installs the backend as the `sysible-backend` systemd service, installs the `sysible_controller` CLI, and — on a machine with a desktop environment — adds a **Sysible Controller** entry to the application menu using the same logo shown throughout the GUI.
+The installer detects your package manager, deploys the project to `/opt/sysible`, sets up a Python virtual environment, generates a self-signed TLS certificate and admin API key, installs the backend as the `sysible-backend` systemd service, installs the `sysible_controller` CLI, installs an RDP client (FreeRDP — `xfreerdp`) for Sysible Connect's Open RDP action, and — on a machine with a desktop environment — adds a **Sysible Controller** entry to the application menu using the same logo shown throughout the GUI.
 
 ## First launch — create your administrator account
 
 A fresh install ships with **no administrator account and no default password**. The first time the desktop GUI starts, it detects that no administrator exists yet and shows a **Create Administrator Account** screen instead of a login: pick a username and password (entered twice to confirm) and you're logged straight in. There is no `admin`/`admin` to log in with and no separate "now change your password" step. The password must satisfy the Administrator Password Policy in effect.
 
-Every launch after that shows the normal login. When one administrator later adds another from Sysible Controller Settings, that new account gets a temporary password and is required to set its own on first login.
+The first account is a **Superuser** — it can manage other administrators and see the live activity/controller logs. Every launch after that shows the normal login. When a superuser later adds another administrator from Sysible Controller Settings, they pick that account's **role** (Superuser or Sysadmin); the new account gets a temporary password and is required to set its own on first login.
 
 ## Getting back in
 
@@ -149,7 +189,7 @@ version.py      Single source of truth for the installed version
 
 ## Editions
 
-This is the **Community edition**, which manages up to **10 hosts**. The controller refuses to enroll an 11th host (agent or SSH), and Host Enrollment shows a `Community edition — N/10 hosts used` badge so the limit is visible up front. The cap lives in one place (`backend/edition.py`, `HOST_LIMIT = 10`); set it to `None` for an unlimited build. As an open-source edition, the cap is an honest-user limit — anyone with the source can change it — so the larger-fleet and unrestricted capabilities are intended for a separately licensed Enterprise edition rather than enforced here.
+This is the **Community edition**, which manages up to **10 hosts** and **7 administrators (2 superusers + 5 sysadmins)**. The controller refuses to enroll an 11th host (agent or SSH), and Host Enrollment shows a `Community edition — N/10 hosts used` badge so the limit is visible up front. The caps live in one place (`backend/edition.py`, `HOST_LIMIT = 10`); set the host limit to `None` for an unlimited build. As an open-source edition, the cap is an honest-user limit — anyone with the source can change it — so the larger-fleet and unrestricted capabilities are intended for a separately licensed Enterprise edition rather than enforced here.
 
 ## License & version
 

@@ -22,9 +22,11 @@ nav.toc a{color:var(--accent);text-decoration:none;display:block;padding:2px 0}
 <div class=wrap>
 <nav class=toc>
 <a href='#dashboard'>The Dashboard</a>
+<a href='#live_activity'>Live Activity &amp; Logs</a>
 <a href='#host_enrollment'>Host Enrollment</a>
 <a href='#sysible_connect'>Sysible Connect</a>
 <a href='#sysible_connect_terminal'>The Terminal</a>
+<a href='#rdp'>Graphical Desktop (RDP)</a>
 <a href='#user_group'>User & Group Administration</a>
 <a href='#health_logs'>System Health, Logs & Recovery</a>
 <a href='#service'>Service Management</a>
@@ -49,16 +51,22 @@ nav.toc a{color:var(--accent);text-decoration:none;display:block;padding:2px 0}
 <div class=note>Most tools share the same pattern: open the tool, check the hosts to act on in the <b>Target Hosts</b> list, then click an action — each host's result appears in its own tab with a green (success) or red (failure) banner.</div>
 <section class=sec id='dashboard'><h2>The Dashboard</h2>
 <div class=shot><img src='docs/screenshots/screenshot_dashboard.png' alt='The Dashboard screenshot'></div>
-<ol class=how><li>Log in; you land on the Dashboard — a search box over five tiles.</li><li>Type a task like <i>create a user</i> or <i>open a firewall port</i> to jump straight to the right tool.</li><li>Or click a tile to open that tool in its own window.</li></ol></section>
+<ol class=how><li>Log in; you land on the Dashboard — a search box over a column of tiles.</li><li>Type a task like <i>create a user</i> or <i>open a firewall port</i> to jump straight to the right tool.</li><li>Or click a tile to open that tool in its own window. (The <b>Live Activity &amp; Logs</b> tile appears only for Superusers.)</li></ol></section>
+<section class=sec id='live_activity'><h2>Live Activity &amp; Logs <small>(Superusers only)</small></h2>
+<div class=shot><img src='docs/screenshots/screenshot_live_activity.png' alt='Live Activity & Logs screenshot'></div>
+<ol class=how><li>Open <b>Live Activity &amp; Logs</b> from the Dashboard — visible only to Superuser administrators.</li><li>The <b>Activity</b> tab shows a live, plain-language feed of who did what across the fleet; the <b>Controller Log</b> tab tails the backend's own log.</li><li>Both auto-refresh; routine background syncs are filtered out so the feed reflects real actions.</li></ol></section>
 <section class=sec id='host_enrollment'><h2>Host Enrollment</h2>
 <div class=shot><img src='docs/screenshots/screenshot_host_enrollment.png' alt='Host Enrollment screenshot'></div>
-<ol class=how><li>Open <b>Sysible Controller Host Enrollment</b> from the Dashboard.</li><li>Set a default environment, then click <b>Download Agent Bundle</b> and install it on the target host.</li><li>Enrolled hosts appear in the list; use <b>Set Environment</b> or <b>Disenroll Host</b> to manage them.</li></ol></section>
+<ol class=how><li>Open <b>Sysible Controller Host Enrollment</b> from the Dashboard.</li><li>Set a default environment, then click <b>Download Agent Bundle</b> and install it on the target host.</li><li>Enrolled hosts appear in the list; <b>shift/ctrl-click several at once</b> to <b>Set Environment</b> in bulk, set each host's <b>Sudo Mode</b> (NOPASSWD or password-required), or <b>Disenroll Host</b>.</li></ol></section>
 <section class=sec id='sysible_connect'><h2>Sysible Connect</h2>
 <div class=shot><img src='docs/screenshots/screenshot_sysible_connect.png' alt='Sysible Connect screenshot'></div>
-<ol class=how><li>Open <b>Sysible Connect</b>. Agent and SSH hosts share one list, each with its IP.</li><li><b>Double-click a host</b> to open a pop-out terminal; use its toolbar to upload/download files, find, or save output.</li><li>New SSH host? Fill <b>SSH to a New Host</b> and click <b>Connect Host</b> — the password is used once, then replaced by a key. Use <b>Run Script on All Hosts…</b> to run a command fleet-wide.</li></ol></section>
+<ol class=how><li>Open <b>Sysible Connect</b>. Agent and SSH hosts share one list, each with its IP.</li><li><b>Double-click a host</b> to open a pop-out terminal (it opens as <b>your admin user</b>, not root); or click <b>Open RDP…</b> for a graphical desktop, and <b>Send sudo password</b> to answer a sudo prompt from your encrypted store.</li><li>Use <b>Fleet Power Controls</b> (Reboot / Power Off / Restart Agent on all hosts) or <b>Run Script on All Hosts…</b> to act fleet-wide. New SSH host? Fill <b>SSH to a New Host</b> and <b>Connect Host</b> — the password is used once, then replaced by a key.</li></ol></section>
 <section class=sec id='sysible_connect_terminal'><h2>The Terminal</h2>
 <div class=shot><img src='docs/screenshots/screenshot_sysible_connect_terminal.png' alt='The Terminal screenshot'></div>
 <ol class=how><li>Each terminal is a real PTY — <code>vim</code>, <code>top</code>, and <code>less</code> render correctly.</li><li>The <code>user@host</code> prompt is green (red for root); the toolbar adds upload/download, find, save-output, and font sizing.</li><li>Open as many terminals as you like — sessions are independent, even multiple to the same host.</li></ol></section>
+<section class=sec id='rdp'><h2>Graphical Desktop (RDP)</h2>
+<div class=shot><img src='docs/screenshots/screenshot_rdp_dialog.png' alt='Open RDP dialog screenshot'></div>
+<ol class=how><li>Select a host in <b>Sysible Connect</b> and click <b>Open RDP…</b>.</li><li>Enter host, username, password, and resolution (the default fits the window).</li><li>Optionally <b>remember credentials</b> — they're encrypted on your workstation. Click <b>Connect</b> to launch FreeRDP (or Remmina).</li></ol></section>
 <section class=sec id='user_group'><h2>User & Group Administration</h2>
 <div class=shot><img src='docs/screenshots/screenshot_user_group.png' alt='User & Group Administration screenshot'></div>
 <ol class=how><li>Open <b>System Administration</b> → <b>User &amp; Group Administration</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Use the <b>Create User / Account / Password / Groups</b> tabs and click an action (e.g. <b>Create User</b>, <b>Lock</b>, <b>Toggle Sudo</b>). Each host's result opens in its own tab.</li></ol></section>
@@ -109,13 +117,13 @@ nav.toc a{color:var(--accent);text-decoration:none;display:block;padding:2px 0}
 <ol class=how><li>Open <b>System Administration</b> → <b>Containers &amp; VMs</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Click <b>Detect Runtime</b>, then <b>List Containers</b>, <b>View Container Logs</b>, <b>Run</b>, or <b>Prune</b>; the <b>Virtual Machines</b> tab manages libvirt VMs.</li></ol></section>
 <section class=sec id='directory'><h2>Directory Services (Active Directory / LDAP)</h2>
 <div class=shot><img src='docs/screenshots/screenshot_directory.png' alt='Directory Services (Active Directory / LDAP) screenshot'></div>
-<ol class=how><li>Open <b>System Administration</b> → <b>Directory Services</b>.</li><li>Check one or more hosts in the <b>Target Hosts</b> list (use Select All for the whole fleet).</li><li>Click <b>Install AD Dependencies</b>, then <b>Join Domain</b> and <b>Permit Login</b>; the <b>LDAP / LDAPS</b> and <b>Kerberos</b> tabs configure and test identity.</li></ol></section>
+<ol class=how><li>Open <b>System Administration</b> → <b>Directory Services</b> and check the target hosts.</li><li>Click <b>Prepare Host for AD Join</b> first — it installs the tooling, syncs time, enables home-dir creation, and verifies the domain's SRV records resolve.</li><li>With a clean readiness report, click <b>Join Domain</b> then <b>Permit Login</b>; the <b>LDAP / LDAPS</b> and <b>Kerberos</b> tabs configure and test identity.</li></ol></section>
 <section class=sec id='subscriptions'><h2>Distro Subscription & Licensing</h2>
 <div class=shot><img src='docs/screenshots/screenshot_subscription.png' alt='Distro Subscription & Licensing screenshot'></div>
-<ol class=how><li>Open <b>System Administration</b> → <b>Distro Subscription &amp; Licensing</b>.</li><li>On <b>Overview</b>, click <b>Detect Distro &amp; Subscription Tools</b> to see which vendor applies; check the hosts to act on.</li><li>Use the matching tab — <b>Red Hat (RHSM)</b> (register by org + activation key), <b>Ubuntu Pro</b> (attach a token, enable services), or <b>SUSE (SCC)</b> (register a reg-code) — then Status / List to confirm.</li></ol></section>
+<ol class=how><li>Open <b>System Administration</b> → <b>Distro Subscription &amp; Licensing</b>.</li><li>On <b>Overview</b>, click <b>Detect Distro &amp; Subscription Tools</b> to see which vendor applies; check the hosts to act on.</li><li>Use the matching tab — <b>Red Hat (RHSM)</b> (<b>Register All</b> registers + auto-attaches every checked host at once), <b>Ubuntu Pro</b> (attach a token, enable services), or <b>SUSE (SCC)</b> (register a reg-code) — then Status / List to confirm.</li></ol></section>
 <section class=sec id='settings'><h2>Sysible Controller Settings</h2>
 <div class=shot><img src='docs/screenshots/screenshot_settings.png' alt='Sysible Controller Settings screenshot'></div>
-<ol class=how><li>Open <b>Sysible Controller Settings</b> from the Dashboard.</li><li>Set the controller address/port, add or remove administrators, and tune the admin password policy.</li><li>Review the <b>Audit Log</b> and record a license key under <b>License &amp; Version</b>.</li></ol></section>
+<ol class=how><li>Open <b>Sysible Controller Settings</b> from the Dashboard.</li><li>Set the controller address/port, and add administrators choosing a <b>role</b> — <b>Superuser</b> (manage admins, see live logs) or <b>Sysadmin</b> (fleet tools only). Tune the admin password policy.</li><li>Review the <b>Audit Log</b> and record a license key under <b>License &amp; Version</b>.</li></ol></section>
 <section class=sec id='portal'><h2>Webserver Portal</h2>
 <div class=shot><img src='docs/screenshots/screenshot_portal.png' alt='Webserver Portal screenshot'></div>
 <ol class=how><li>Open <b>Webserver Portal Configuration</b> from the Dashboard.</li><li>Set a port and credentials, then click <b>Start Portal</b>.</li><li>Share the URL with host operators; manage the shared file pool and review login history/sessions here.</li></ol></section>

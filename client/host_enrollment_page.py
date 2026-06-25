@@ -622,11 +622,33 @@ class HostEnrollmentPage(QWidget):
         if reply != QMessageBox.Yes:
             return
 
+        # Tearing down the agent's own systemd service needs root. Under the
+        # run-as-you model the task runs as your local user and elevates via
+        # sudo, so a password-sudo host needs your stored sudo password - the
+        # same as any other privileged action (see _api_dispatch.run_on_entry).
+        # Without it the teardown would just bounce off `sudo -n`.
+        become_password = None
+        if self.selected_agent.get("requires_sudo_password"):
+            from client import become_credentials
+            label = self.selected_agent.get("hostname") or host_id
+            become_password = become_credentials.get_password(label)
+            if not become_password:
+                QMessageBox.warning(
+                    self, "Sudo password needed",
+                    f"'{label}' is set to require a sudo password, so tearing down its "
+                    "agent service needs your stored sudo password — but none is saved. "
+                    "Click “Sudo Password” in the dashboard header to set it, then disenroll "
+                    "again. (Or remove the enrollment anyway and run disenroll_agent.sh on "
+                    "the host directly.)")
+                return
+
         self.remove_btn.setEnabled(False)
         self.disenroll_status.setText(f"Asking {host_id} to remove its systemd service...")
 
         try:
-            task_ids = api.queue_command_on_hosts([host_id], api.cmd_uninstall_agent_service())
+            task_ids = api.queue_command_on_hosts(
+                [host_id], api.cmd_uninstall_agent_service(),
+                become_password=become_password)
         except Exception:
             task_ids = {}
 

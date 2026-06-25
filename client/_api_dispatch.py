@@ -145,9 +145,52 @@ def list_merged_hosts(agent_only=True):
         })
 
     merged = merge_duplicate_host_entries(entries)
+    merged = _dedupe_same_ip(merged)
     if agent_only:
         merged = [e for e in merged if e["kind"] != "ssh"]
     return merged
+
+
+def _entry_ip(entry):
+    """The IP that identifies the physical machine behind an entry. SSH
+    addresses arrive as 'user@ip'; a merged host carries both sub-entries."""
+    def ip_of(addr):
+        return (addr or "").split("@")[-1].strip()
+    if entry.get("kind") == "merged":
+        a = entry.get("agent_entry") or {}
+        s = entry.get("ssh_entry") or {}
+        return ip_of(a.get("address")) or ip_of(s.get("address"))
+    return ip_of(entry.get("address"))
+
+
+def _dedupe_same_ip(entries):
+    """Collapse entries that resolve to the SAME physical machine (same IP)
+    into one, keeping the richest connection (merged > agent > ssh). Without
+    this, a box enrolled twice under different names - e.g. an agent host plus
+    a stray manual SSH record at the same IP - shows up as two separate hosts.
+    Entries with no usable IP pass through untouched (deduped by name already).
+    Order is preserved, with the surviving entry taking the first position its
+    IP appeared at."""
+    rank = {"merged": 3, "agent": 2, "ssh": 1}
+    best = {}
+    for e in entries:
+        ip = _entry_ip(e)
+        if not ip:
+            continue
+        cur = best.get(ip)
+        if cur is None or rank.get(e.get("kind"), 0) > rank.get(cur.get("kind"), 0):
+            best[ip] = e
+
+    result = []
+    seen = set()
+    for e in entries:
+        ip = _entry_ip(e)
+        if not ip:
+            result.append(e)
+        elif ip not in seen:
+            seen.add(ip)
+            result.append(best[ip])
+    return result
 
 
 def run_on_entry(entry, command: str, kind: str = "command", description: str = None):

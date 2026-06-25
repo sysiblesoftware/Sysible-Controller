@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
 
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from client import api
@@ -31,6 +32,14 @@ from client.host_panel import build_host_panel
 
 HOST_REFRESH_MS = 10000
 POLL_MS = 2000
+
+# How long to wait for an agent host to report a queued command's result
+# before giving up and marking that host's tab as timed-out. Set just above
+# the agent's own 300s per-command execution cap so a genuinely long-running
+# command (e.g. a big package upgrade) still resolves normally - only a host
+# that has actually gone away (offline/agent dead) hits this, instead of its
+# tab sitting on "pending..." forever.
+POLL_TIMEOUT_S = 330
 
 # Cap on how many hosts a single fleet action dials out to at once. SSH hosts
 # run synchronously (the controller opens the connection), so without this a
@@ -271,7 +280,7 @@ class FleetToolPage(QWidget):
                     "label": entry["label"], "stdout": "", "stderr": "",
                     "code": None, "pending": True,
                 }
-                self.pending[key] = (entry, result["task_id"])
+                self.pending[key] = (entry, result["task_id"], time.time() + POLL_TIMEOUT_S)
             self._add_tab(key)
         if self.tabs.count() > 0:
             self.tabs.setCurrentIndex(0)
@@ -342,9 +351,21 @@ class FleetToolPage(QWidget):
             self.poll_timer.stop()
             return
         done = []
-        for key, (entry, task_id) in list(self.pending.items()):
+        timed_out = False
+        for key, (entry, task_id, deadline) in list(self.pending.items()):
             result = api.poll_entry_result(entry, task_id)
             if result is None:
+                if time.time() >= deadline:
+                    # Host never reported - don't pend forever. Mark it failed.
+                    self.results[key] = {
+                        "label": entry["label"], "stdout": "",
+                        "stderr": "Timed out waiting for this agent host to report back "
+                                  "(it may be offline or its agent stopped).",
+                        "code": None, "pending": False,
+                    }
+                    self._refresh_tab(key)
+                    done.append(key)
+                    timed_out = True
                 continue
             self.results[key] = {
                 "label": entry["label"], "stdout": result["stdout"],
@@ -357,5 +378,9 @@ class FleetToolPage(QWidget):
             del self.pending[key]
         if not self.pending:
             self.poll_timer.stop()
-            self.status_label.setStyleSheet(f"color: {STATUS_SUCCESS_COLOR};")
-            self.status_label.setText("All hosts reported back.")
+            if timed_out:
+                self.status_label.setStyleSheet(f"color: {STATUS_ERROR_COLOR};")
+                self.status_label.setText("Done - some hosts did not report back in time.")
+            else:
+                self.status_label.setStyleSheet(f"color: {STATUS_SUCCESS_COLOR};")
+                self.status_label.setText("All hosts reported back.")

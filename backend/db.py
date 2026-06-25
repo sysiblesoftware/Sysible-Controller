@@ -1663,6 +1663,18 @@ def get_task_kind(task_id):
     return row[0] if row else None
 
 
+def get_task_host(task_id):
+    """The host_id a task was queued for, or None if the task doesn't exist.
+    Used to confirm a result-reporting agent actually owns the task it's
+    reporting on (so one host can't post results against another's task)."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT host_id FROM agent_tasks WHERE id=?", (task_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
 def list_results(host_id, limit=50, kind=None, task_id=None):
     conn = _connect()
     conn.row_factory = sqlite3.Row

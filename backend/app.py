@@ -24,6 +24,7 @@ from backend.db import (
     fetch_pending_tasks,
     submit_task_result,
     get_task_kind,
+    get_task_host,
     list_results,
     list_environments,
     create_environment,
@@ -493,6 +494,14 @@ def post_task_result(host_id: str, body: TaskResultRequest):
         raise HTTPException(status_code=400, detail="host_id mismatch")
 
     verify_agent(body.host_id, body.agent_secret)
+
+    # The (authenticated) agent may only report on a task that was actually
+    # queued for IT - otherwise a valid agent could post results against
+    # another host's task_id. An unknown task_id (already pruned, never
+    # existed) is rejected too.
+    owner = get_task_host(body.task_id)
+    if owner is None or owner != body.host_id:
+        raise HTTPException(status_code=404, detail="Unknown task for this host")
 
     submit_task_result(body.task_id, body.host_id, body.result)
 

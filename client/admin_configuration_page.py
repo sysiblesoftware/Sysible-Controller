@@ -598,8 +598,9 @@ class AdminConfigurationPage(QWidget):
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        self.admin_table = QTableWidget(0, 4)
-        self.admin_table.setHorizontalHeaderLabels(["Username", "Created By", "Last Login", "Must Change Password"])
+        self.admin_table = QTableWidget(0, 5)
+        self.admin_table.setHorizontalHeaderLabels(
+            ["Username", "Role", "Created By", "Last Login", "Must Change Password"])
         self.admin_table.verticalHeader().setVisible(False)
         self.admin_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.admin_table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -711,10 +712,15 @@ class AdminConfigurationPage(QWidget):
         for row, admin in enumerate(admins):
             self.admin_table.insertRow(row)
             self.admin_table.setItem(row, 0, QTableWidgetItem(admin.get("username", "")))
-            self.admin_table.setItem(row, 1, QTableWidgetItem(admin.get("created_by") or ""))
-            self.admin_table.setItem(row, 2, QTableWidgetItem(self._format_timestamp(admin.get("last_login"))))
+            # Role: superuser (full controller management) or sysadmin (run
+            # tools on hosts). Default to superuser for any legacy row that
+            # predates roles, matching the backend's own default.
+            role = (admin.get("role") or "superuser").capitalize()
+            self.admin_table.setItem(row, 1, QTableWidgetItem(role))
+            self.admin_table.setItem(row, 2, QTableWidgetItem(admin.get("created_by") or ""))
+            self.admin_table.setItem(row, 3, QTableWidgetItem(self._format_timestamp(admin.get("last_login"))))
             self.admin_table.setItem(
-                row, 3, QTableWidgetItem("Yes" if admin.get("must_change_password") else "No")
+                row, 4, QTableWidgetItem("Yes" if admin.get("must_change_password") else "No")
             )
 
         current = session.get_current_admin()

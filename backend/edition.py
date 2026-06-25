@@ -59,8 +59,32 @@ def current_host_names():
     return {n for n in names if n}
 
 
+def host_identities():
+    """Distinct PHYSICAL hosts under management, keyed by IP where known so the
+    same machine reached two ways (agent + SSH) - or accidentally enrolled
+    twice at one IP under different names - counts ONCE. Falls back to the
+    host's name when it has no recorded IP. This is what the host count/limit
+    should use; counting by name alone over-counts a duplicate at one IP."""
+    ids = set()
+    try:
+        from backend.db import list_agents
+        for a in list_agents():
+            ip = (a.get("ip") or "").strip()
+            ids.add(ip or (a.get("hostname") or a.get("host_id")))
+    except Exception:
+        pass
+    try:
+        from backend.remote_routes import load_hosts
+        for name, h in (load_hosts() or {}).items():
+            ip = (h.get("ip") or "").strip()
+            ids.add(ip or name)
+    except Exception:
+        pass
+    return {i for i in ids if i}
+
+
 def host_count():
-    return len(current_host_names())
+    return len(host_identities())
 
 
 def enforce_host_limit(candidate_name):
@@ -69,15 +93,16 @@ def enforce_host_limit(candidate_name):
     always allowed (it isn't a new host)."""
     if HOST_LIMIT is None:
         return
-    names = current_host_names()
-    if candidate_name and candidate_name in names:
+    # Re-enrolling/updating an already-managed name isn't a new host.
+    if candidate_name and candidate_name in current_host_names():
         return
-    if len(names) >= HOST_LIMIT:
+    count = host_count()  # distinct physical hosts (deduped by IP)
+    if count >= HOST_LIMIT:
         raise HTTPException(
             status_code=403,
             detail=(
                 f"Community edition is limited to {HOST_LIMIT} managed hosts "
-                f"({len(names)} already enrolled). Remove a host first, or use the "
+                f"({count} already enrolled). Remove a host first, or use the "
                 f"Enterprise edition to manage more."
             ),
         )

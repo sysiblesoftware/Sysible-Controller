@@ -913,8 +913,12 @@ class UserGroupAdministrationPage(QWidget):
                 self.sync_status.setStyleSheet(f"color: {STATUS_SUCCESS_COLOR};")
                 self.sync_status.setText(f"Synced {synced_so_far}/{self.sync_total} hosts.")
 
-            if self.active_entry is not None and _entry_key(self.active_entry) in self.host_data:
-                self.refresh_user_panel_from_cache()
+            # Re-render once the sync batch lands. NOT gated on active_entry:
+            # in the multi-host union/mismatch view you've only checked boxes
+            # (no single active host), and that gate left the mismatch list
+            # stale after adding a user to a missing host. refresh_user_panel_
+            # from_cache() handles the no-data case itself.
+            self.refresh_user_panel_from_cache()
 
     def _auto_resync(self, entries):
         # Background re-read after an action. Treat it as its OWN batch so the

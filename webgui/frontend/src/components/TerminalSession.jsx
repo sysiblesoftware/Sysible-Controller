@@ -71,5 +71,8 @@ export default function TerminalSession({ hostId, active, onStatus, onClosed }) 
     return () => clearTimeout(t);
   }, [active]);
 
-  return <div className="term-host" ref={elRef} style={{ display: active ? "block" : "none" }} />;
+  // No display:none — the dock hides inactive sessions with `visibility`,
+  // which keeps a real layout box so xterm's fit() always has dimensions
+  // (display:none collapses to 0×0 and renders the terminal blank).
+  return <div className="term-host" ref={elRef} style={{ height: "100%" }} />;
 }

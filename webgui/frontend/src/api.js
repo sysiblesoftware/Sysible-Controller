@@ -48,6 +48,16 @@ export const api = {
     req("/api/sudo", { method: "POST", body: { password, scope } }),
   clearSudo: (scope) =>
     req("/api/sudo", { method: "DELETE", body: { scope } }),
+  // Sysible Connect
+  fleet: (action, targets, command) =>
+    req("/api/fleet", { method: "POST", body: { action, targets, command } }),
+  checkin: () => req("/api/checkin", { method: "POST" }),
+  controllerKey: () => req("/api/controller-key"),
+  enrollSsh: (payload) => req("/api/enroll-ssh", { method: "POST", body: payload }),
+  setHostEnvironment: (hostId, environment) =>
+    req(`/api/host/${encodeURIComponent(hostId)}/environment`, { method: "POST", body: { environment } }),
+  removeHost: (hostId) =>
+    req(`/api/host/${encodeURIComponent(hostId)}`, { method: "DELETE" }),
   uploadFile: (host, remotePath, file) => {
     const fd = new FormData();
     fd.append("host", host);

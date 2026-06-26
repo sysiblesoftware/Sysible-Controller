@@ -199,6 +199,11 @@ def login(body: LoginRequest, request: Request):
     request.session.clear()
     request.session["user"] = body.username.strip()
     request.session["role"] = result.get("role") or "superuser"
+    # Keep the controller-issued admin token so the BFF can call superuser-
+    # gated controller routes (enroll-ssh, remove host, set environment) on
+    # this admin's behalf. Stored server-side in the session, never echoed.
+    if result.get("token"):
+        request.session["token"] = result["token"]
     return {
         "username": body.username.strip(),
         "role": request.session["role"],
@@ -311,6 +316,141 @@ def environments(user: str = Depends(require_login)):
         return {"environments": api.list_environments()}
     except Exception:
         return {"environments": []}
+
+
+# ----------------------------------------------------------------------
+# Sysible Connect — fleet actions, check-in, SSH enrollment, host admin
+# ----------------------------------------------------------------------
+def _superuser_request(method, path, request: Request, **kw):
+    """Call a superuser-gated controller route on behalf of the logged-in
+    admin, using the token captured at login. client.api holds the API key;
+    we add the admin token header the controller's require_superuser wants."""
+    import requests
+    token = request.session.get("token")
+    if not token:
+        raise HTTPException(status_code=403, detail="This action requires a superuser login.")
+    headers = dict(api._headers())
+    headers["X-Sysible-Admin-Token"] = token
+    try:
+        r = api._SESSION.request(method, f"{api.BASE_URL}{path}", headers=headers,
+                                 timeout=kw.pop("timeout", 30), verify=api._VERIFY, **kw)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+    if not r.ok:
+        detail = None
+        try:
+            detail = r.json().get("detail")
+        except Exception:
+            pass
+        raise HTTPException(status_code=r.status_code, detail=detail or r.reason)
+    return r.json() if r.content else {}
+
+
+_FLEET_COMMANDS = {
+    "reboot": (dispatch.cmd_reboot_host, "REBOOT"),
+    "poweroff": (dispatch.cmd_poweroff_host, "power off"),
+    "restart_agent": (dispatch.cmd_restart_agent, "restart the agent on"),
+}
+
+
+class FleetRequest(BaseModel):
+    action: str                 # reboot | poweroff | restart_agent | script
+    command: str = ""           # used when action == "script"
+    targets: list[str] = []     # host ids; empty = all hosts
+
+
+@app.post("/api/fleet")
+def fleet(body: FleetRequest, user: str = Depends(require_login)):
+    """Run a fleet action across the selected hosts (or all hosts)."""
+    if body.action == "script":
+        command = body.command.strip()
+        if not command:
+            raise HTTPException(status_code=400, detail="A script/command is required.")
+    else:
+        spec = _FLEET_COMMANDS.get(body.action)
+        if not spec:
+            raise HTTPException(status_code=400, detail=f"Unknown fleet action: {body.action}")
+        command = spec[0]()
+
+    try:
+        all_entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+
+    targets = body.targets or list(all_entries.keys())
+    results = []
+    for tid in targets:
+        entry = all_entries.get(tid)
+        if entry is None:
+            results.append({"host": tid, "ok": False, "error": "host not found",
+                            "stdout": "", "stderr": "", "code": None})
+            continue
+        become = sudo_store.resolve(user, entry.get("label", ""))
+        results.append(_dispatch_one(entry, command, "command", become))
+    return {"action": body.action, "command": command, "results": results}
+
+
+@app.post("/api/checkin")
+def checkin(user: str = Depends(require_login)):
+    """Lightweight reachability probe: run `true` on every host and report
+    which answered (mirrors the desktop 'Check In / Ping')."""
+    try:
+        entries = dispatch.list_merged_hosts(agent_only=False)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+    out = []
+    for entry in entries:
+        r = _dispatch_one(entry, "true", "command", None)
+        out.append({"host": entry["label"], "id": entry["id"],
+                    "reachable": bool(r.get("ok")) or r.get("code") == 0,
+                    "detail": r.get("error") or ""})
+    return {"results": out}
+
+
+@app.get("/api/controller-key")
+def controller_key(user: str = Depends(require_login)):
+    try:
+        return api._request("GET", "/remote/controller-key")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+class EnrollRequest(BaseModel):
+    name: str
+    ip: str
+    username: str
+    password: str
+    environment: str = ""
+
+
+@app.post("/api/enroll-ssh")
+def enroll_ssh(body: EnrollRequest, request: Request, user: str = Depends(require_login)):
+    payload = {"name": body.name, "ip": body.ip, "username": body.username,
+               "password": body.password}
+    if body.environment:
+        payload["environment"] = body.environment
+    return _superuser_request("POST", "/remote/enroll-ssh", request, json=payload)
+
+
+class HostEnvRequest(BaseModel):
+    environment: str = ""
+
+
+@app.post("/api/host/{host_id}/environment")
+def set_host_environment(host_id: str, body: HostEnvRequest, request: Request,
+                         user: str = Depends(require_login)):
+    try:
+        return api.set_agent_environment(host_id, body.environment)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.delete("/api/host/{host_id}")
+def remove_host(host_id: str, request: Request, user: str = Depends(require_login)):
+    try:
+        return api.disenroll_agent(host_id) or {"removed": True}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 # ----------------------------------------------------------------------

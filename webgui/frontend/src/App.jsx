@@ -6,6 +6,7 @@ import Hosts from "./views/Hosts.jsx";
 import ToolRunner from "./views/ToolRunner.jsx";
 import Connect from "./views/Connect.jsx";
 import SudoModal from "./components/SudoModal.jsx";
+import StandaloneTerminal from "./components/StandaloneTerminal.jsx";
 
 // Sections opened from a dashboard tile. Titles mirror the desktop.
 const SECTIONS = {
@@ -55,6 +56,12 @@ export default function App() {
 
   if (checking) return <div className="login-wrap"><span className="spin" /></div>;
   if (!user) return <Login onLoggedIn={onLoggedIn} />;
+
+  // Pop-out terminal window: ?term=<hostId> renders just a full-window shell.
+  const qs = new URLSearchParams(location.search);
+  if (qs.get("term")) {
+    return <StandaloneTerminal hostId={qs.get("term")} label={qs.get("label") || ""} />;
+  }
 
   const badge = (() => {
     if (!edition) return "";

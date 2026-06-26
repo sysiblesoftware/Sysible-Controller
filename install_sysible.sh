@@ -149,6 +149,11 @@ if [[ "$SRC_DIR" != "$BASE" ]]; then
     "$SRC_DIR"/ "$BASE"/
 fi
 
+# Record the source checkout path so `destroy --purge` can remove it too.
+if [[ "$SRC_DIR" != "$BASE" ]]; then
+  echo "$SRC_DIR" > "$BASE/.install_src" 2>/dev/null || true
+fi
+
 cd "$BASE"
 
 python3 -m venv "$VENV"

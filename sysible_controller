@@ -402,12 +402,24 @@ PY
 cmd_destroy() {
   _require_root destroy
 
+  # --purge: also remove the leftover DB backup(s) in /tmp and the source
+  # checkout the installer was run from (recorded at install time). Captured
+  # here, before $BASE is deleted below.
+  local PURGE=0
+  [[ "$2" == "--purge" ]] && PURGE=1
+  local SRC=""
+  [[ -f "$BASE/.install_src" ]] && SRC="$(cat "$BASE/.install_src" 2>/dev/null)"
+
   echo "==================================================================="
   echo " THIS WILL PERMANENTLY REMOVE SYSIBLE FROM THIS MACHINE:"
-  echo "   - stop and disable the $SERVICE systemd service"
+  echo "   - stop and disable the $SERVICE and ${WEBGUI_SERVICE} services"
   echo "   - delete $BASE (database, TLS certificate, admin API key -"
   echo "     everything)"
   echo "   - remove this 'sysible_controller' command"
+  if [[ "$PURGE" == "1" ]]; then
+    echo "   - PURGE: also delete /tmp DB backups and the source checkout"
+    [[ -n "$SRC" ]] && echo "            ($SRC)"
+  fi
   echo ""
   echo " Enrolled hosts' agents are NOT touched by this - their own"
   echo " sysible-agent systemd services keep running and will just start"
@@ -432,13 +444,22 @@ cmd_destroy() {
   systemctl daemon-reload
 
   DB_FILE="$BASE/backend/sysible.db"
-  if [[ -f "$DB_FILE" ]]; then
+  if [[ -f "$DB_FILE" && "$PURGE" != "1" ]]; then
     BACKUP="/tmp/sysible-backup-$(date +%Y%m%d%H%M%S).db"
     cp -f "$DB_FILE" "$BACKUP" 2>/dev/null && echo "Database backed up to $BACKUP (this copy is left behind on purpose - delete it yourself once you're sure you don't need it)."
   fi
 
   echo "Removing $BASE..."
   rm -rf "$BASE"
+
+  if [[ "$PURGE" == "1" ]]; then
+    echo "Purging leftover DB backups in /tmp..."
+    rm -f /tmp/sysible-backup-*.db
+    if [[ -n "$SRC" && -d "$SRC" && "$SRC" != "/" && "$SRC" != "$BASE" && "$SRC" != "$HOME" ]]; then
+      echo "Removing source checkout $SRC..."
+      rm -rf "$SRC"
+    fi
+  fi
 
   # $BASE covers everything installed under it, but the application
   # menu launcher lives outside $BASE in the system-wide applications

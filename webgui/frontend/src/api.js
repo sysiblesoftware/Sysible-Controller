@@ -86,6 +86,12 @@ export const api = {
   portalLoginHistory: (limit = 200) => req(`/api/portal/login-history?limit=${limit}`),
   portalSessions: () => req("/api/portal/sessions"),
   portalRevokeSession: (id) => req(`/api/portal/sessions/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
+  portalUploads: () => req("/api/portal/uploads"),
+  portalUploadUrl: (name) => `/api/portal/uploads/${encodeURIComponent(name)}`,
+  portalUploadDelete: (name) => req(`/api/portal/uploads/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  portalDownloads: () => req("/api/portal/downloads"),
+  portalStageDownload: (file) => { const fd = new FormData(); fd.append("file", file); return req("/api/portal/downloads", { method: "POST", body: fd }); },
+  portalDownloadDelete: (name) => req(`/api/portal/downloads/${encodeURIComponent(name)}`, { method: "DELETE" }),
   // User & Group — live host inventory
   usersSync: (hostId) => req("/api/users/sync", { method: "POST", body: { host_id: hostId } }),
   // Host Enrollment

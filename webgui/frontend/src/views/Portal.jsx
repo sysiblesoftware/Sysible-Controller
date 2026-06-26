@@ -33,7 +33,17 @@ export default function Portal() {
   }
   function loadHistory() { api.portalLoginHistory().then((d) => setHistory(d.history || [])).catch((e) => setErr(e.message)); }
   function loadSessions() { api.portalSessions().then((d) => setSessions(d.sessions || [])).catch((e) => setErr(e.message)); }
-  useEffect(() => { loadStatus(); loadHistory(); loadSessions(); }, []);
+  const [uploads, setUploads] = useState([]); const [downloads, setDownloads] = useState([]);
+  function loadUploads() { api.portalUploads().then((d) => setUploads(d.files || [])).catch(() => {}); }
+  function loadDownloads() { api.portalDownloads().then((d) => setDownloads(d.files || [])).catch(() => {}); }
+  useEffect(() => { loadStatus(); loadHistory(); loadSessions(); loadUploads(); loadDownloads(); }, []);
+
+  function fname(f) { return typeof f === "string" ? f : (f.name || f.filename || ""); }
+  async function stageDownload(e) {
+    const file = e.target.files[0]; if (!file) return;
+    setErr(""); try { await api.portalStageDownload(file); loadDownloads(); } catch (e2) { setErr(e2.message); }
+    e.target.value = "";
+  }
 
   const running = status && (status.running || status.status === "running");
   const scheme = (status && status.scheme) || "https";
@@ -164,6 +174,56 @@ export default function Portal() {
                   </td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        )}
+      </fieldset>
+
+      <fieldset className="tool-group-box"><legend>Files Uploaded By Hosts</legend>
+        <div className="spread" style={{ marginBottom: 8 }}>
+          <span className="faint">Files host operators uploaded through the portal.</span>
+          <button className="btn ghost sm" onClick={loadUploads}>Refresh List</button>
+        </div>
+        {uploads.length === 0 ? <div className="empty">No uploaded files.</div> : (
+          <table>
+            <thead><tr><th>File</th><th></th></tr></thead>
+            <tbody>
+              {uploads.map((f, i) => { const n = fname(f); return (
+                <tr key={n || i}>
+                  <td>{n}</td>
+                  <td style={{ textAlign: "right" }}>
+                    <a className="btn ghost sm" href={api.portalUploadUrl(n)}>Save To Computer</a>{" "}
+                    <button className="btn ghost sm" onClick={async () => { await api.portalUploadDelete(n); loadUploads(); }}>Delete</button>
+                  </td>
+                </tr>
+              ); })}
+            </tbody>
+          </table>
+        )}
+      </fieldset>
+
+      <fieldset className="tool-group-box"><legend>Files Staged For Download</legend>
+        <div className="spread" style={{ marginBottom: 8 }}>
+          <span className="faint">Files you've staged for host operators to download via the portal.</span>
+          <div className="row">
+            <label className="btn ghost sm" style={{ cursor: "pointer" }}>
+              Add File…<input type="file" style={{ display: "none" }} onChange={stageDownload} />
+            </label>
+            <button className="btn ghost sm" onClick={loadDownloads}>Refresh List</button>
+          </div>
+        </div>
+        {downloads.length === 0 ? <div className="empty">No staged files.</div> : (
+          <table>
+            <thead><tr><th>File</th><th></th></tr></thead>
+            <tbody>
+              {downloads.map((f, i) => { const n = fname(f); return (
+                <tr key={n || i}>
+                  <td>{n}</td>
+                  <td style={{ textAlign: "right" }}>
+                    <button className="btn ghost sm" onClick={async () => { await api.portalDownloadDelete(n); loadDownloads(); }}>Delete</button>
+                  </td>
+                </tr>
+              ); })}
             </tbody>
           </table>
         )}

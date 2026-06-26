@@ -845,6 +845,60 @@ def portal_revoke_session(session_id: int, request: Request, user: str = Depends
     return _wrap(lambda: _as_admin(request, lambda: api.revoke_portal_session(session_id)))
 
 
+# Portal file management: files host operators uploaded, and files staged for
+# them to download.
+@app.get("/api/portal/uploads")
+def portal_uploads(user: str = Depends(require_login)):
+    return _wrap(lambda: {"files": api.list_portal_uploads()})
+
+
+@app.get("/api/portal/uploads/{filename}")
+def portal_upload_download(filename: str, user: str = Depends(require_login)):
+    tmp = Path(tempfile.mkdtemp(prefix="sysible-pu-"))
+    dest = tmp / filename
+    try:
+        api.download_portal_upload(filename, str(dest))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    def _cleanup():
+        try:
+            dest.unlink(missing_ok=True); tmp.rmdir()
+        except Exception:
+            pass
+    return FileResponse(str(dest), filename=filename, media_type="application/octet-stream",
+                        background=BackgroundTask(_cleanup))
+
+
+@app.delete("/api/portal/uploads/{filename}")
+def portal_upload_delete(filename: str, user: str = Depends(require_login)):
+    return _wrap(lambda: api.delete_portal_upload(filename) or {"deleted": True})
+
+
+@app.get("/api/portal/downloads")
+def portal_downloads(user: str = Depends(require_login)):
+    return _wrap(lambda: {"files": api.list_portal_downloads()})
+
+
+@app.post("/api/portal/downloads")
+async def portal_download_stage(file: UploadFile = File(...), user: str = Depends(require_login)):
+    tmp = Path(tempfile.mkdtemp(prefix="sysible-pd-"))
+    p = tmp / (file.filename or "file.bin")
+    try:
+        p.write_bytes(await file.read())
+        return _wrap(lambda: api.stage_portal_download(str(p)) or {"staged": True})
+    finally:
+        try:
+            p.unlink(missing_ok=True); tmp.rmdir()
+        except Exception:
+            pass
+
+
+@app.delete("/api/portal/downloads/{filename}")
+def portal_download_delete(filename: str, user: str = Depends(require_login)):
+    return _wrap(lambda: api.delete_portal_download(filename) or {"deleted": True})
+
+
 # ----------------------------------------------------------------------
 # Host Enrollment
 # ----------------------------------------------------------------------

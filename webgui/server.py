@@ -724,6 +724,30 @@ def portal_creds(body: PortalCreds, request: Request, user: str = Depends(requir
         body.username, body.password, body.current_password)))
 
 
+class PortalRemoveCreds(BaseModel):
+    current_password: str = ""
+
+
+@app.delete("/api/portal/credentials")
+def portal_remove_creds(body: PortalRemoveCreds, request: Request, user: str = Depends(require_login)):
+    return _wrap(lambda: _as_admin(request, lambda: api.remove_portal_credentials(body.current_password)))
+
+
+@app.get("/api/portal/login-history")
+def portal_login_history(limit: int = 200, user: str = Depends(require_login)):
+    return _wrap(lambda: {"history": api.get_portal_login_history(limit)})
+
+
+@app.get("/api/portal/sessions")
+def portal_sessions(user: str = Depends(require_login)):
+    return _wrap(lambda: {"sessions": api.get_portal_sessions()})
+
+
+@app.post("/api/portal/sessions/{session_id}/revoke")
+def portal_revoke_session(session_id: int, request: Request, user: str = Depends(require_login)):
+    return _wrap(lambda: _as_admin(request, lambda: api.revoke_portal_session(session_id)))
+
+
 # ----------------------------------------------------------------------
 # Host Enrollment
 # ----------------------------------------------------------------------

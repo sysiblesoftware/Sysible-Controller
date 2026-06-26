@@ -331,6 +331,17 @@ def stop():
     deadline = time.time() + 4
     while time.time() < deadline and _is_alive(pid):
         time.sleep(0.15)
+    # If it ignored SIGTERM, escalate to SIGKILL so we don't leave an
+    # orphaned uvicorn holding the port (and then report a stale pidfile as
+    # "stopped" while it's actually still serving).
+    if _is_alive(pid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+        hard = time.time() + 2
+        while time.time() < hard and _is_alive(pid):
+            time.sleep(0.1)
     WEBGUI_PID_FILE.unlink(missing_ok=True)
     WEBGUI_PORT_FILE.unlink(missing_ok=True)
     return status()

@@ -554,6 +554,11 @@ _register(Action(name="vm_list", tool="Containers & VMs", label="List VMs",
 # ---- Tool: Directory Services (Active Directory / LDAP) --------------
 _register(Action(name="dir_install_ad", tool="Directory Services (Active Directory / LDAP)",
     label="Install AD dependencies", params=[], build=lambda p: api.cmd_install_ad_dependencies()))
+_register(Action(name="dir_prepare_ad", tool="Directory Services (Active Directory / LDAP)",
+    label="Prepare host for AD join",
+    description="One-click prep: install the AD client packages and configure the host, ready to join.",
+    params=[Param("domain", "Domain", required=False, help="e.g. corp.example.com")],
+    build=lambda p: api.cmd_prepare_ad_join(_s(p, "domain"))))
 _register(Action(name="dir_realm_status", tool="Directory Services (Active Directory / LDAP)",
     label="Realm status", params=[], build=lambda p: api.cmd_realm_status()))
 _register(Action(name="dir_krb_status", tool="Directory Services (Active Directory / LDAP)",
@@ -1383,7 +1388,7 @@ _LAYOUT: dict[str, list] = {
         ("Virtual Machines", "Virtual Machines", ["vm_list", "vm_action", "vm_info"]),
     ],
     "Directory Services (Active Directory / LDAP)": [
-        ("Active Directory", "Active Directory", ["dir_install_ad", "dir_realm_status", "dir_join_ad", "dir_leave_ad", "dir_realm_permit", "dir_mkhomedir"]),
+        ("Active Directory", "Active Directory", ["dir_prepare_ad", "dir_install_ad", "dir_realm_status", "dir_join_ad", "dir_leave_ad", "dir_realm_permit", "dir_mkhomedir"]),
         ("LDAP / LDAPS", "LDAP", ["dir_install_ldap", "dir_test_ldaps", "dir_config_ldap_client"]),
         ("Kerberos", "Kerberos", ["dir_krb_status", "dir_krb_config", "dir_krb_kinit", "dir_krb_destroy"]),
     ],

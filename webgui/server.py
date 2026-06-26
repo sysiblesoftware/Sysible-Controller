@@ -198,8 +198,10 @@ def login(body: LoginRequest, request: Request):
     # carried into the authenticated session (session-fixation hardening).
     request.session.clear()
     request.session["user"] = body.username.strip()
+    request.session["role"] = result.get("role") or "superuser"
     return {
         "username": body.username.strip(),
+        "role": request.session["role"],
         "must_change_password": bool(result.get("must_change_password")),
     }
 
@@ -209,6 +211,49 @@ def health():
     """Unauthenticated liveness probe used by the controller's
     webgui_manager to confirm the service actually came up."""
     return {"status": "ok"}
+
+
+# ----------------------------------------------------------------------
+# Sudo (become) password — encrypted at rest on the controller, per admin.
+# ----------------------------------------------------------------------
+from webgui import sudo_store  # noqa: E402
+
+
+class SudoRequest(BaseModel):
+    password: str = ""
+    scope: str = sudo_store.ALL   # "__all__" (fleet default) or a host label
+
+
+@app.get("/api/sudo")
+def sudo_status(user: str = Depends(require_login)):
+    """Which scopes the current admin has a stored sudo password for, so the
+    dialog can show 'a password is stored for this scope'. Never returns the
+    password itself."""
+    return {
+        "encryption_available": sudo_store.encryption_available(),
+        "scopes": sudo_store.scopes_set(user),
+        "all_scope": sudo_store.ALL,
+    }
+
+
+@app.post("/api/sudo")
+def sudo_set(body: SudoRequest, user: str = Depends(require_login)):
+    if not body.password:
+        raise HTTPException(status_code=400, detail="Password is required.")
+    ok = sudo_store.set_password(user, body.scope or sudo_store.ALL, body.password)
+    if not ok:
+        raise HTTPException(
+            status_code=503,
+            detail="Encryption isn't available on the controller, so the password "
+                   "was not stored (it is never written in clear text).",
+        )
+    return {"stored": True, "scope": body.scope or sudo_store.ALL}
+
+
+@app.delete("/api/sudo")
+def sudo_clear(body: SudoRequest, user: str = Depends(require_login)):
+    sudo_store.clear(user, body.scope or sudo_store.ALL)
+    return {"cleared": True, "scope": body.scope or sudo_store.ALL}
 
 
 @app.post("/api/logout")
@@ -222,7 +267,7 @@ def me(request: Request):
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return {"username": user}
+    return {"username": user, "role": request.session.get("role") or "superuser"}
 
 
 # ----------------------------------------------------------------------
@@ -316,18 +361,22 @@ def run_tool(action_name: str, body: RunRequest, user: str = Depends(require_log
             results.append({"host": target, "ok": False, "error": "host not found",
                             "stdout": "", "stderr": "", "code": None})
             continue
-        results.append(_dispatch_one(entry, command, spec.kind))
+        # Resolve this admin's sudo password for the target (host scope wins
+        # over fleet default); only used if the host is flagged sudo-required.
+        become = sudo_store.resolve(user, entry.get("label", ""))
+        results.append(_dispatch_one(entry, command, spec.kind, become))
 
     return {"action": action_name, "command": command, "results": results}
 
 
-def _dispatch_one(entry, command, kind):
+def _dispatch_one(entry, command, kind, become_password=None):
     """Run one command on one host and return a normalized result,
     polling agent tasks to completion (bounded) so the response is
     synchronous from the browser's point of view."""
     label = entry["label"]
     try:
-        outcome = dispatch.run_on_entry(entry, command, kind=kind)
+        outcome = dispatch.run_on_entry(entry, command, kind=kind,
+                                        become_password=become_password)
     except Exception as e:
         return {"host": label, "ok": False, "error": str(e),
                 "stdout": "", "stderr": "", "code": None}

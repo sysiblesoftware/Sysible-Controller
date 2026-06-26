@@ -13,7 +13,7 @@ export default function Login({ onLoggedIn }) {
     setBusy(true);
     try {
       const r = await api.login(username.trim(), password);
-      onLoggedIn(r.username);
+      onLoggedIn(r.username, r.role);
     } catch (e2) {
       setErr(e2.message || "Login failed");
     } finally {

@@ -193,7 +193,8 @@ def _dedupe_same_ip(entries):
     return result
 
 
-def run_on_entry(entry, command: str, kind: str = "command", description: str = None):
+def run_on_entry(entry, command: str, kind: str = "command", description: str = None,
+                 become_password: str = None):
     """Run `command` on one merged-host entry (as produced by
     list_merged_hosts()). SSH executes synchronously over exec_remote()
     - the result is ready immediately. Agent dispatch is async - only a
@@ -213,14 +214,20 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
     # password so the agent can elevate via `sudo -S` (no NOPASSWD needed).
     # Looked up per host with a global fallback; None for NOPASSWD hosts, so
     # the password is never sent to a host that doesn't need it.
-    become_password = None
+    # A caller may inject the become-password directly (the web console
+    # resolves it from its controller-side encrypted store and passes it in);
+    # otherwise fall back to the desktop client's workstation-local store.
     if entry.get("requires_sudo_password"):
-        try:
-            from client import become_credentials
-            become_password = become_credentials.get_password(entry.get("label", ""))
-        except Exception:
-            become_password = None
+        if not become_password:
+            try:
+                from client import become_credentials
+                become_password = become_credentials.get_password(entry.get("label", ""))
+            except Exception:
+                become_password = None
+    else:
+        become_password = None  # never send to a NOPASSWD host
 
+    if entry.get("requires_sudo_password"):
         # Fail fast with a clear instruction instead of dispatching a command
         # that will just bounce off `sudo` for lack of a password. This host is
         # marked "sudo requires a password" but none is stored for the

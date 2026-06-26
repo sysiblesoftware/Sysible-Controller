@@ -42,6 +42,12 @@ export const api = {
       method: "POST",
       body: { targets, params },
     }),
+  // Sudo (become) password — encrypted at rest on the controller, per admin.
+  sudoStatus: () => req("/api/sudo"),
+  setSudo: (password, scope) =>
+    req("/api/sudo", { method: "POST", body: { password, scope } }),
+  clearSudo: (scope) =>
+    req("/api/sudo", { method: "DELETE", body: { scope } }),
   uploadFile: (host, remotePath, file) => {
     const fd = new FormData();
     fd.append("host", host);

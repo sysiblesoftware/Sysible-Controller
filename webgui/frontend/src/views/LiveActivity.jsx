@@ -3,6 +3,15 @@ import { api } from "../api.js";
 
 // Live Activity & Logs: attributed activity feed across the fleet, plus the
 // controller's own log. Auto-refreshes while open.
+function fmtTime(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  let d;
+  if (typeof v === "number" || /^\d+(\.\d+)?$/.test(String(v))) {
+    let n = Number(v); if (n < 1e12) n *= 1000; d = new Date(n);
+  } else d = new Date(v);
+  return isNaN(d.getTime()) ? String(v) : d.toLocaleString();
+}
+
 export default function LiveActivity() {
   const [tab, setTab] = useState("activity");
   const [activity, setActivity] = useState([]);
@@ -48,15 +57,14 @@ export default function LiveActivity() {
       {tab === "activity" ? (
         activity.length === 0 ? <div className="empty">No activity recorded yet.</div> : (
           <table>
-            <thead><tr><th>Time</th><th>Admin</th><th>Host</th><th>Action</th><th>Result</th></tr></thead>
+            <thead><tr><th>Time</th><th>User</th><th>Host</th><th>Action</th></tr></thead>
             <tbody>
               {activity.map((a, i) => (
                 <tr key={a.id ?? i}>
-                  <td className="faint mono">{a.timestamp || a.time || a.created_at || ""}</td>
-                  <td>{a.admin || a.actor || a.user || ""}</td>
+                  <td className="faint mono">{fmtTime(a.timestamp ?? a.time ?? a.created_at)}</td>
+                  <td>{a.username || a.admin || a.actor || a.user || ""}</td>
                   <td>{a.host || a.host_label || ""}</td>
-                  <td>{a.action || a.description || a.summary || ""}</td>
-                  <td>{a.result || a.status || (a.ok === false ? "failed" : a.ok === true ? "ok" : "")}</td>
+                  <td>{a.description || a.action || a.summary || ""}</td>
                 </tr>
               ))}
             </tbody>

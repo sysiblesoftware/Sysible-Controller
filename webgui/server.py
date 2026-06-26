@@ -176,8 +176,8 @@ def _encrypt_token(token: str):
         return None
 
 
-def _session_token(request: "Request"):
-    enc = request.session.get("token_enc")
+def _token_from_session(session):
+    enc = (session or {}).get("token_enc")
     if not enc:
         return None
     c = _token_cipher()
@@ -187,6 +187,25 @@ def _session_token(request: "Request"):
         return c.decrypt(enc.encode()).decode()
     except Exception:
         return None
+
+
+def _session_token(request: "Request"):
+    return _token_from_session(getattr(request, "session", None))
+
+
+# Run `fn` with the admin token set on client.api for its duration. Serialized
+# so concurrent requests can't clobber the process-global token. Used both for
+# superuser-gated routes AND for dispatch/terminal calls, so the controller can
+# derive the run-as user (runuser -u <admin>) and attribute the activity feed.
+def _with_token(token, fn):
+    if not token:
+        return fn()
+    with _ADMIN_TOKEN_LOCK:
+        api.set_admin_token(token)
+        try:
+            return fn()
+        finally:
+            api.set_admin_token(None)
 
 
 def _client_ip(request: Request) -> str:
@@ -411,7 +430,7 @@ class FleetRequest(BaseModel):
 
 
 @app.post("/api/fleet")
-def fleet(body: FleetRequest, user: str = Depends(require_login)):
+def fleet(body: FleetRequest, request: Request, user: str = Depends(require_login)):
     """Run a fleet action across the selected hosts (or all hosts)."""
     if body.action == "script":
         command = body.command.strip()
@@ -428,6 +447,7 @@ def fleet(body: FleetRequest, user: str = Depends(require_login)):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
 
+    token = _session_token(request)
     targets = body.targets or list(all_entries.keys())
     results = []
     for tid in targets:
@@ -437,7 +457,7 @@ def fleet(body: FleetRequest, user: str = Depends(require_login)):
                             "stdout": "", "stderr": "", "code": None})
             continue
         become = sudo_store.resolve(user, entry.get("label", ""))
-        results.append(_dispatch_one(entry, command, "command", become))
+        results.append(_dispatch_one(entry, command, "command", become, token))
     return {"action": body.action, "command": command, "results": results}
 
 
@@ -535,13 +555,7 @@ _ADMIN_TOKEN_LOCK = _threading.Lock()
 
 
 def _as_admin(request: Request, fn):
-    token = _session_token(request)
-    with _ADMIN_TOKEN_LOCK:
-        api.set_admin_token(token)
-        try:
-            return fn()
-        finally:
-            api.set_admin_token(None)
+    return _with_token(_session_token(request), fn)
 
 
 def _wrap(fn):
@@ -795,7 +809,7 @@ class RunRequest(BaseModel):
 
 
 @app.post("/api/tool/{action_name}")
-def run_tool(action_name: str, body: RunRequest, user: str = Depends(require_login)):
+def run_tool(action_name: str, body: RunRequest, request: Request, user: str = Depends(require_login)):
     """Build the shell command for `action_name` via the desktop client's
     cmd_* builder, then dispatch it across every selected target and
     return per-host results. Synchronous: agent tasks are polled here up
@@ -818,6 +832,7 @@ def run_tool(action_name: str, body: RunRequest, user: str = Depends(require_log
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
 
+    token = _session_token(request)
     results = []
     for target in body.targets:
         entry = all_entries.get(target)
@@ -828,19 +843,24 @@ def run_tool(action_name: str, body: RunRequest, user: str = Depends(require_log
         # Resolve this admin's sudo password for the target (host scope wins
         # over fleet default); only used if the host is flagged sudo-required.
         become = sudo_store.resolve(user, entry.get("label", ""))
-        results.append(_dispatch_one(entry, command, spec.kind, become))
+        results.append(_dispatch_one(entry, command, spec.kind, become, token))
 
     return {"action": action_name, "command": command, "results": results}
 
 
-def _dispatch_one(entry, command, kind, become_password=None):
+def _dispatch_one(entry, command, kind, become_password=None, token=None):
     """Run one command on one host and return a normalized result,
     polling agent tasks to completion (bounded) so the response is
-    synchronous from the browser's point of view."""
+    synchronous from the browser's point of view.
+
+    The dispatch itself runs with the admin token set (token!=None) so the
+    controller can derive the run-as user (runuser -u <admin>) and attribute
+    the activity feed; the subsequent agent-result polling does not need it,
+    so the token isn't held during the (bounded) poll loop."""
     label = entry["label"]
     try:
-        outcome = dispatch.run_on_entry(entry, command, kind=kind,
-                                        become_password=become_password)
+        outcome = _with_token(token, lambda: dispatch.run_on_entry(
+            entry, command, kind=kind, become_password=become_password))
     except Exception as e:
         return {"host": label, "ok": False, "error": str(e),
                 "stdout": "", "stderr": "", "code": None}
@@ -970,8 +990,12 @@ async def terminal_ws(ws: WebSocket):
             await ws.close()
             return
         host = first["host"]
+        # Open the terminal WITH the admin token set, so the controller runs
+        # the shell as the admin's user (runuser -u <admin>) instead of the
+        # raw SSH login (root). The token is only needed at open time.
+        ws_token = _token_from_session(ws.scope.get("session"))
         try:
-            opened = await asyncio.to_thread(api.open_terminal, host)
+            opened = await asyncio.to_thread(lambda: _with_token(ws_token, lambda: api.open_terminal(host)))
             session_id = opened["session_id"]
         except Exception as e:
             await ws.send_json({"t": "error", "d": f"could not open terminal: {e}"})

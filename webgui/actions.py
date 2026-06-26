@@ -1361,6 +1361,63 @@ _LAYOUT: dict[str, list] = {
         ("Diagnostics", "Boot & GRUB", ["health_list_kernels", "health_grub", "boot_analyze", "boot_set_grub_default", "boot_set_grub_timeout", "boot_rebuild_grub", "boot_set_target", "boot_set_cmdline", "boot_regen_initramfs", "boot_remove_kernels"]),
         ("Support & Reports", "Support", ["health_support_info", "health_sos_report", "health_install_sos", "health_install_auditd"]),
     ],
+    "File System Management": [
+        ("Directories and Files", "Directories & Files", ["fs_list_dir", "fs_mkdir", "fs_rmdir", "fs_copy", "fs_move", "fs_rename"]),
+        ("Permissions, Ownership and Links", "Permissions & Ownership", ["fs_chmod", "fs_chown", "fs_show_acl", "fs_set_acl"]),
+        ("Permissions, Ownership and Links", "Links", ["fs_symlink", "fs_hardlink"]),
+        ("Mount / Unmount", "Mount / Unmount", ["fs_mount", "fs_unmount"]),
+        ("Network Mounts (NFS/CIFS)", "Network Mounts", ["fs_mount_nfs", "fs_mount_cifs"]),
+        ("Resize & Repair", "Resize & Repair", ["fs_resize", "fs_repair"]),
+        ("fstab and Quotas", "fstab", ["fs_show_fstab", "fs_add_fstab", "fs_remove_fstab"]),
+        ("fstab and Quotas", "Quotas", ["fs_show_quotas", "fs_enable_quotas", "fs_set_quota"]),
+        ("Archive and Compress", "Archive & Compress", ["fs_archive", "fs_extract", "fs_compress", "fs_decompress"]),
+    ],
+    "Distro Subscription & Licensing": [
+        ("Overview", "Overview", ["sub_detect", "sub_register_all"]),
+        ("Red Hat (RHSM)", "RHSM", ["sub_rhsm_status", "sub_rhsm_register", "sub_rhsm_auto_attach", "sub_rhsm_refresh", "sub_rhsm_consumed", "sub_rhsm_available", "sub_rhsm_repos", "sub_rhsm_unregister"]),
+        ("Ubuntu Pro", "Ubuntu Pro", ["sub_pro_status", "sub_pro_attach", "sub_pro_detach", "sub_pro_enable", "sub_pro_disable", "sub_pro_refresh"]),
+        ("SUSE (SCC)", "SUSE", ["sub_suse_status", "sub_suse_register", "sub_suse_extensions", "sub_suse_deregister"]),
+    ],
+    "Containers & VMs": [
+        ("Containers", "Containers", ["cont_runtime", "cont_list", "cont_images", "cont_action", "cont_logs", "cont_prune"]),
+        ("Virtual Machines", "Virtual Machines", ["vm_list", "vm_action", "vm_info"]),
+    ],
+    "Directory Services (Active Directory / LDAP)": [
+        ("Active Directory", "Active Directory", ["dir_install_ad", "dir_realm_status", "dir_join_ad", "dir_leave_ad", "dir_realm_permit", "dir_mkhomedir"]),
+        ("LDAP / LDAPS", "LDAP", ["dir_install_ldap", "dir_test_ldaps", "dir_config_ldap_client"]),
+        ("Kerberos", "Kerberos", ["dir_krb_status", "dir_krb_config", "dir_krb_kinit", "dir_krb_destroy"]),
+    ],
+    "Backup & Recovery": [
+        ("Files", "Files", ["backup_files", "backup_restore", "backup_verify", "backup_recover_deleted"]),
+        ("Snapshots", "LVM Snapshots", ["backup_snapshot", "backup_restore_snapshot"]),
+        ("Schedule & DR", "Schedule & DR", ["backup_schedule", "backup_test_dr"]),
+    ],
+    "Certificate Management": [
+        ("Certificates", "Certificates", ["cert_generate_csr", "cert_check", "cert_install", "cert_renew_certbot"]),
+        ("Chain & TLS", "Chain & TLS", ["cert_verify_chain", "cert_troubleshoot_tls"]),
+    ],
+    # ---- single-pane tools: no tab bar, just titled group sections ----
+    "Service Management": [
+        ("", "Services", ["svc_list", "svc_list_running", "svc_status", "svc_start", "svc_stop", "svc_restart", "svc_reload", "svc_enable", "svc_disable", "svc_troubleshoot", "svc_dependencies", "svc_logs"]),
+        ("", "Custom Systemd Service", ["svc_set_deps", "svc_create"]),
+        ("", "Processes", ["proc_high_load", "proc_zombies", "proc_kill", "proc_renice", "proc_restart"]),
+    ],
+    "Host Software Management": [
+        ("", "Query", ["pkg_list_installed", "pkg_search", "pkg_query", "pkg_verify", "pkg_detect_env"]),
+        ("", "Install / Update / Remove", ["pkg_install", "pkg_update", "pkg_remove", "pkg_install_local"]),
+        ("", "Maintenance", ["pkg_clean_cache"]),
+    ],
+    "Repository Management": [
+        ("", "Repositories", ["repo_list", "repo_add", "repo_enable", "repo_disable", "repo_remove", "repo_create"]),
+    ],
+    "Cron & Systemd Timers": [
+        ("", "Cron Jobs", ["cron_list", "cron_add", "cron_remove"]),
+        ("", "Systemd Timers", ["timer_list", "timer_status", "timer_start", "timer_stop", "timer_enable", "timer_disable", "timer_create", "timer_delete"]),
+    ],
+    "Time Synchronization": [
+        ("", "Status", ["time_status", "time_verify", "time_troubleshoot"]),
+        ("", "Configure", ["time_set_ntp", "time_set_tz", "time_list_tz", "time_configure_chrony"]),
+    ],
 }
 
 _ORDER: dict[str, int] = {}

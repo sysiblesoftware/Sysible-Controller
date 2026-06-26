@@ -8,11 +8,15 @@ import TerminalDock from "../components/TerminalDock.jsx";
 export default function Connect() {
   const [hosts, setHosts] = useState([]);
   const [sel, setSel] = useState(null);
+  const [checked, setChecked] = useState([]);
   const [err, setErr] = useState("");
   const [collapsed, setCollapsed] = useState({});
   const [checkin, setCheckin] = useState(null);
   const [busy, setBusy] = useState("");
   const dock = useRef(null);
+
+  const toggleCheck = (id) =>
+    setChecked((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]));
 
   function loadHosts() {
     api.hosts().then((d) => setHosts(d.hosts || [])).catch((e) => setErr(e.message));
@@ -46,6 +50,10 @@ export default function Connect() {
           </button>
         </div>
         <div className="ctl-row">
+          <button className="btn ghost sm" onClick={() => setChecked(hosts.map((h) => h.id))}>Select All</button>
+          <button className="btn ghost sm" onClick={() => setChecked([])}>Deselect All</button>
+        </div>
+        <div className="ctl-row">
           <button className="btn ghost sm" onClick={() =>
             setCollapsed(Object.fromEntries(groups.map(([e]) => [e, true])))}>Collapse All</button>
           <button className="btn ghost sm" onClick={() => setCollapsed({})}>Expand All</button>
@@ -63,12 +71,15 @@ export default function Connect() {
                   const ci = checkin && checkin.find((r) => r.id === h.id);
                   return (
                     <div className={"host-row" + (sel && sel.id === h.id ? " active" : "")}
-                         key={h.id} style={{ cursor: "pointer",
-                           background: sel && sel.id === h.id ? "var(--row-hover)" : "" }}
-                         onClick={() => setSel(h)} onDoubleClick={() => openTerm(h)}
-                         title="Double-click to open a terminal">
+                         key={h.id} style={{
+                           background: sel && sel.id === h.id ? "var(--row-hover)" : "" }}>
+                      <input type="checkbox" checked={checked.includes(h.id)}
+                             onChange={() => toggleCheck(h.id)}
+                             onClick={(e) => e.stopPropagation()} />
                       {ci && <span className={"dot " + (ci.reachable ? "ok" : "bad")} />}
-                      <span>{h.label}</span>
+                      <span style={{ cursor: "pointer" }}
+                            onClick={() => setSel(h)} onDoubleClick={() => openTerm(h)}
+                            title="Click to select · double-click to open a terminal">{h.label}</span>
                       <span className="meta">{h.has_agent ? "Agent+SSH" : "SSH"} {h.address}</span>
                     </div>
                   );
@@ -103,7 +114,7 @@ export default function Connect() {
           <TerminalDock ref={dock} />
         </Section>
 
-        <FleetActions hosts={hosts} onErr={setErr} />
+        <FleetActions hosts={hosts} checked={checked} onErr={setErr} />
 
         {sel && <FileTransfer host={sel} onErr={setErr} />}
 
@@ -130,21 +141,26 @@ function Section({ title, children }) {
   );
 }
 
-function FleetActions({ hosts, onErr }) {
+function FleetActions({ hosts, checked, onErr }) {
   const [running, setRunning] = useState("");
   const [results, setResults] = useState(null);
   const [script, setScript] = useState("");
 
+  // Act on checked hosts; if none are checked, fall back to the whole fleet.
+  const targets = checked.length ? checked : [];
+  const scopeN = checked.length || hosts.length;
+  const scopeLabel = checked.length ? `${checked.length} checked` : `all ${hosts.length}`;
+
   async function act(action, confirmMsg, command) {
-    if (confirmMsg && !window.confirm(confirmMsg)) return;
+    if (confirmMsg && !window.confirm(`${confirmMsg} (${scopeLabel} host${scopeN === 1 ? "" : "s"})`)) return;
     setRunning(action); setResults(null); onErr("");
-    try { setResults(await api.fleet(action, [], command)); }
+    try { setResults(await api.fleet(action, targets, command)); }
     catch (e) { onErr(e.message); }
     finally { setRunning(""); }
   }
 
   return (
-    <Section title={`Fleet Actions (all ${hosts.length} hosts)`}>
+    <Section title={`Fleet Actions (${scopeLabel} host${scopeN === 1 ? "" : "s"})`}>
       <label className="field" style={{ marginTop: 0 }}>
         <span>Run a script on all hosts</span>
         <textarea rows={2} value={script} onChange={(e) => setScript(e.target.value)}

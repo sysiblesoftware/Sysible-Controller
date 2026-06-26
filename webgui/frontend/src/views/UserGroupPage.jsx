@@ -54,10 +54,39 @@ export default function UserGroupPage() {
     setSyncing(false);
   }
 
-  const viewData = hostData[viewHost] || {};
-  const users = (viewData.users || []).filter((u) =>
-    !userQuery.trim() || u.username.toLowerCase().includes(userQuery.trim().toLowerCase()));
-  const selUserObj = (viewData.users || []).find((u) => u.username === selUser) || null;
+  // Hosts we have synced data for — prefer the checked set, fall back to all
+  // synced. The middle list is the UNION across these hosts so we can flag
+  // users that exist on only some of them ("host mismatch").
+  const syncedIds = useMemo(() => {
+    const have = Object.keys(hostData);
+    const c = checked.filter((id) => hostData[id]);
+    return c.length ? c : have;
+  }, [hostData, checked]);
+  const labelOf = (id) => (hosts.find((h) => h.id === id)?.label || id);
+
+  // username -> Set(hostId) it exists on, across syncedIds.
+  const present = useMemo(() => {
+    const p = {};
+    for (const id of syncedIds)
+      for (const u of (hostData[id]?.users || [])) (p[u.username] || (p[u.username] = new Set())).add(id);
+    return p;
+  }, [hostData, syncedIds]);
+
+  const ft = userQuery.trim().toLowerCase();
+  const showU = (name) => !ft || name.toLowerCase().includes(ft);
+  const names = Object.keys(present).filter(showU).sort();
+  const consistent = names.filter((n) => present[n].size === syncedIds.length);
+  const partial = names.filter((n) => present[n].size !== syncedIds.length);
+
+  // user object (for the detail panels) from any synced host that has it.
+  function userObj(name) {
+    for (const id of syncedIds) {
+      const u = (hostData[id]?.users || []).find((x) => x.username === name);
+      if (u) return u;
+    }
+    return null;
+  }
+  const selUserObj = selUser ? userObj(selUser) : null;
 
   async function run(action, targets, params, label) {
     if (targets.length === 0) { setErr("No target host(s) for this action."); return; }
@@ -83,7 +112,27 @@ export default function UserGroupPage() {
     finally { setRunning(false); }
   }
 
-  const selTargets = viewHost ? [viewHost] : [];
+  // Per-user actions target the synced hosts where that user exists (so a
+  // Lock/Delete applies everywhere it's present); fall back to all synced.
+  const selTargets = selUser && present[selUser] ? [...present[selUser]] : syncedIds;
+
+  function renderUserRow(name, note) {
+    const u = userObj(name);
+    return (
+      <div key={name} className="host-row" style={{ paddingLeft: 4, cursor: "pointer", alignItems: "flex-start",
+             background: selUser === name ? "var(--row-hover)" : "" }}
+           onClick={() => { setSelUser(name); setTab("account"); }}>
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          <span>
+            {name}
+            {u && u.sudo ? <span className="badge amber" style={{ fontSize: 10, marginLeft: 6 }}>sudo</span> : null}
+            {u && u.locked ? <span className="badge" style={{ fontSize: 10, marginLeft: 6 }}>locked</span> : null}
+          </span>
+          {note && <span className="meta" style={{ fontSize: 11 }}>{note}</span>}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="three-pane" style={{ gridTemplateColumns: "240px 230px 1fr" }}>
@@ -126,25 +175,35 @@ export default function UserGroupPage() {
         <div className="faint" style={{ fontSize: 12, marginTop: 8 }}>{syncMsg}</div>
       </div>
 
-      {/* MIDDLE: users on selected host */}
+      {/* MIDDLE: users — union across synced hosts, with host-mismatch grouping */}
       <div style={{ borderRight: "1px solid var(--border)", paddingRight: 12, display: "flex", flexDirection: "column" }}>
         <div style={{ fontWeight: 600, marginBottom: 6 }}>
-          Viewing: {viewHost ? (hosts.find((h) => h.id === viewHost)?.label || viewHost) : "(no host selected)"}
+          {syncedIds.length === 0 ? "Users (no host synced)"
+            : syncedIds.length === 1 ? `Users on ${labelOf(syncedIds[0])}`
+            : `Users across ${syncedIds.length} synced hosts`}
         </div>
         <input placeholder="Search users…" value={userQuery} onChange={(e) => setUserQuery(e.target.value)} />
-        <div className="section-title" style={{ marginTop: 12 }}>Users (on selected host)</div>
-        <div style={{ flex: 1, overflowY: "auto" }}>
-          {!viewHost && <div className="faint" style={{ padding: 8 }}>Sync a host to load its users.</div>}
-          {viewHost && users.length === 0 && <div className="faint" style={{ padding: 8 }}>No users (sync the host).</div>}
-          {users.map((u) => (
-            <div key={u.username} className="host-row" style={{ paddingLeft: 4, cursor: "pointer",
-                   background: selUser === u.username ? "var(--row-hover)" : "" }}
-                 onClick={() => { setSelUser(u.username); setTab("account"); }}>
-              <span>{u.username}</span>
-              {u.sudo && <span className="badge amber" style={{ fontSize: 10 }}>sudo</span>}
-              {u.locked && <span className="badge" style={{ fontSize: 10 }}>locked</span>}
-            </div>
-          ))}
+        <div style={{ flex: 1, overflowY: "auto", marginTop: 10 }}>
+          {syncedIds.length === 0 && <div className="faint" style={{ padding: 8 }}>Check hosts and Sync to load users.</div>}
+          {syncedIds.length === 1 && names.map((n) => renderUserRow(n))}
+          {syncedIds.length >= 2 && (
+            <>
+              {consistent.length > 0 && (
+                <div className="section-title" style={{ marginTop: 0 }}>On all {syncedIds.length} hosts ({consistent.length})</div>
+              )}
+              {consistent.map((n) => renderUserRow(n))}
+              {partial.length > 0 && (
+                <div className="section-title" style={{ color: "var(--amber)" }}>
+                  Host mismatch — on some hosts only ({partial.length})
+                </div>
+              )}
+              {partial.map((n) => {
+                const on = [...present[n]].map(labelOf);
+                const missing = syncedIds.filter((id) => !present[n].has(id)).map(labelOf);
+                return renderUserRow(n, `on ${on.join(", ")} — missing on ${missing.join(", ")}`);
+              })}
+            </>
+          )}
         </div>
       </div>
 

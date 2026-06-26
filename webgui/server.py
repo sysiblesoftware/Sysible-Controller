@@ -469,6 +469,8 @@ def fleet(body: FleetRequest, request: Request, user: str = Depends(require_logi
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
 
+    desc = {"reboot": "Reboot host", "poweroff": "Power off host",
+            "restart_agent": "Restart agent", "script": "Ran fleet script"}.get(body.action, body.action)
     token = _session_token(request)
     targets = body.targets or list(all_entries.keys())
     results = []
@@ -479,7 +481,7 @@ def fleet(body: FleetRequest, request: Request, user: str = Depends(require_logi
                             "stdout": "", "stderr": "", "code": None})
             continue
         become = sudo_store.resolve(user, entry.get("label", ""))
-        results.append(_dispatch_one(entry, command, "command", become, token))
+        results.append(_dispatch_one(entry, command, "command", become, token, desc))
     return {"action": body.action, "command": command, "results": results}
 
 
@@ -854,6 +856,15 @@ def run_tool(action_name: str, body: RunRequest, request: Request, user: str = D
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
 
+    # Human description for the activity feed (else the controller logs a
+    # generic "ran a script"). Use the action label + a representative param.
+    desc = spec.label
+    for p in spec.params:
+        v = body.params.get(p.name)
+        if v and getattr(p, "type", "text") in ("text", "select", "number"):
+            desc = f"{spec.label}: {v}"
+            break
+
     token = _session_token(request)
     results = []
     for target in body.targets:
@@ -865,24 +876,25 @@ def run_tool(action_name: str, body: RunRequest, request: Request, user: str = D
         # Resolve this admin's sudo password for the target (host scope wins
         # over fleet default); only used if the host is flagged sudo-required.
         become = sudo_store.resolve(user, entry.get("label", ""))
-        results.append(_dispatch_one(entry, command, spec.kind, become, token))
+        results.append(_dispatch_one(entry, command, spec.kind, become, token, desc))
 
     return {"action": action_name, "command": command, "results": results}
 
 
-def _dispatch_one(entry, command, kind, become_password=None, token=None):
+def _dispatch_one(entry, command, kind, become_password=None, token=None, description=None):
     """Run one command on one host and return a normalized result,
     polling agent tasks to completion (bounded) so the response is
     synchronous from the browser's point of view.
 
     The dispatch itself runs with the admin token set (token!=None) so the
     controller can derive the run-as user (runuser -u <admin>) and attribute
-    the activity feed; the subsequent agent-result polling does not need it,
-    so the token isn't held during the (bounded) poll loop."""
+    the activity feed; `description` is the human label recorded in that feed.
+    The subsequent agent-result polling does not need the token, so it isn't
+    held during the (bounded) poll loop."""
     label = entry["label"]
     try:
         outcome = _with_token(token, lambda: dispatch.run_on_entry(
-            entry, command, kind=kind, become_password=become_password))
+            entry, command, kind=kind, become_password=become_password, description=description))
     except Exception as e:
         return {"host": label, "ok": False, "error": str(e),
                 "stdout": "", "stderr": "", "code": None}

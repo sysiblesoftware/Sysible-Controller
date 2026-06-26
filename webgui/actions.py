@@ -539,7 +539,7 @@ _register(Action(name="cont_images", tool="Containers & VMs", label="List images
     params=[], build=lambda p: api.cmd_list_images()))
 _register(Action(name="cont_action", tool="Containers & VMs", label="Container action",
     params=[Param("action", "Action", type="select",
-                  options=["start", "stop", "restart", "pause", "unpause", "kill"], default="start"),
+                  options=["start", "stop", "restart", "rm", "pause", "unpause"], default="start"),
             Param("name", "Container")],
     build=lambda p: api.cmd_container_action(_s(p, "action", "start"), _s(p, "name"))))
 _register(Action(name="cont_logs", tool="Containers & VMs", label="Container logs",

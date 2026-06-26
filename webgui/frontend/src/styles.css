@@ -215,6 +215,13 @@ tr:hover td { background: var(--row-hover); }
   color: var(--text-dim); padding: 7px 13px; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 13px; }
 .tabs button.active { background: var(--panel); color: var(--text); border-color: var(--border); }
 
+/* ---------- Host Enrollment: hosts (left) | actions (right) ---------- */
+.he-2col { display: flex; gap: 16px; align-items: flex-start; }
+.he-2col .he-hosts { width: 380px; flex-shrink: 0; display: flex; flex-direction: column;
+  max-height: calc(100vh - 230px); }
+.he-2col .he-actions { flex: 1; min-width: 0; }
+@media (max-width: 900px) { .he-2col { flex-direction: column; } .he-2col .he-hosts { width: 100%; } }
+
 /* ---------- Tool page: host tree | actions | results (3 columns) ---------- */
 .tool-flex {
   display: flex; gap: 16px; flex: 1; min-height: 0;

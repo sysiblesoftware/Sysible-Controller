@@ -188,36 +188,24 @@ _stop_gui() {
 # Best-effort: a web-console hiccup never blocks the controller itself.
 # Set SYSIBLE_WEBGUI=0 to opt out of auto-start.
 # =========================================================
+# The web console runs as its own systemd service (sysible-webgui), separate
+# from the backend and the desktop GUI, so it can be started/stopped on its own.
+WEBGUI_SERVICE="sysible-webgui"
+
 _start_webgui() {
-  [[ "${SYSIBLE_WEBGUI:-1}" == "1" ]] || return 0
-  echo "Starting web console..."
+  if ! systemctl list-unit-files "${WEBGUI_SERVICE}.service" >/dev/null 2>&1 \
+     || ! systemctl cat "${WEBGUI_SERVICE}.service" >/dev/null 2>&1; then
+    echo "Web console service not installed. Run 'sudo $BASE/install_sysible.sh' first."
+    return 1
+  fi
+  echo "Starting web console (${WEBGUI_SERVICE})..."
+  systemctl enable --now "${WEBGUI_SERVICE}.service" 2>/dev/null
   local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  "$VENV/bin/python" - "$BASE" "${ip:-<this-host>}" <<'PY'
-import sys
-sys.path.insert(0, sys.argv[1])
-host = sys.argv[2]
-try:
-    from backend import webgui_manager as m
-    r = m.start()
-except Exception as e:
-    print(f"  Web console could not start: {e}")
-    raise SystemExit(0)
-if r.get("running"):
-    print(f"  Web console: {r.get('scheme','https')}://{host}:{r.get('port')}/")
-else:
-    err = (r.get("error") or "see run/webgui.log").splitlines()[0]
-    print(f"  Web console did not start: {err}")
-    print("  (Controller is unaffected; retry with 'sysible_controller webgui start'.)")
-PY
+  echo "  Web console: https://${ip:-<this-host>}:8800/"
 }
 
 _stop_webgui() {
-  "$VENV/bin/python" - "$BASE" <<'PY' >/dev/null 2>&1 || true
-import sys
-sys.path.insert(0, sys.argv[1])
-from backend import webgui_manager as m
-m.stop()
-PY
+  systemctl disable --now "${WEBGUI_SERVICE}.service" >/dev/null 2>&1 || true
 }
 
 # =========================================================
@@ -258,11 +246,13 @@ cmd_start() {
   echo "Starting $SERVICE..."
   systemctl start "$SERVICE"
   _wait_for_backend
-  _start_webgui
-  _start_gui
 
   echo ""
-  echo "Sysible Controller is running. 'sysible_controller status' to check, 'sysible_controller logs' to tail the backend."
+  echo "Controller backend is running. The web console and desktop GUI are"
+  echo "separate services, started on their own:"
+  echo "   Web console : sudo sysible_controller webgui start"
+  echo "   Desktop GUI : sysible_controller gui"
+  echo "'sysible_controller status' to check, 'sysible_controller logs' to tail the backend."
 }
 
 cmd_stop() {
@@ -351,19 +341,19 @@ cmd_webgui() {
       echo "Web console stopped."
       ;;
     status|"")
-      "$VENV/bin/python" - "$BASE" <<'PY'
-import sys
-sys.path.insert(0, sys.argv[1])
-from backend import webgui_manager as m
-s = m.status()
-if s.get("running"):
-    print(f"Web console: running ({s.get('scheme')} port {s.get('port')}, PID {s.get('pid')})")
-else:
-    print("Web console: not running")
-PY
+      if systemctl is-active --quiet "${WEBGUI_SERVICE}.service"; then
+        ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+        echo "Web console: running (${WEBGUI_SERVICE}) -> https://${ip:-<this-host>}:8800/"
+      else
+        echo "Web console: not running. Start it with 'sysible_controller webgui start'."
+      fi
+      systemctl status "${WEBGUI_SERVICE}.service" --no-pager 2>/dev/null | head -5 || true
+      ;;
+    logs)
+      journalctl -u "${WEBGUI_SERVICE}.service" -n 50 --no-pager
       ;;
     *)
-      echo "Usage: sysible_controller webgui {start|stop|status}"
+      echo "Usage: sysible_controller webgui {start|stop|status|logs}"
       exit 1
       ;;
   esac
@@ -397,7 +387,8 @@ cmd_destroy() {
 
   echo "Disabling and removing $SERVICE..."
   systemctl disable --now "$SERVICE" 2>/dev/null
-  rm -f "/etc/systemd/system/$SERVICE.service"
+  systemctl disable --now "${WEBGUI_SERVICE}.service" 2>/dev/null
+  rm -f "/etc/systemd/system/$SERVICE.service" "/etc/systemd/system/${WEBGUI_SERVICE}.service"
   systemctl daemon-reload
 
   DB_FILE="$BASE/backend/sysible.db"

@@ -297,6 +297,60 @@ else
 fi
 
 # =========================================================
+# DEFAULT WEB-CONSOLE ADMIN
+# On a headless box there's no desktop first-run wizard to create the first
+# administrator, so the browser console would have nothing to log in with.
+# Seed a default superuser (only when NO administrators exist yet) with a
+# random password, flagged must-change. Printed once at the end of install.
+# =========================================================
+DEFAULT_ADMIN_USER="admin"
+DEFAULT_ADMIN_PASS="$($VENV/bin/python -c 'import secrets;print(secrets.token_urlsafe(9))')"
+SEEDED_ADMIN="$($VENV/bin/python - "$DEFAULT_ADMIN_USER" "$DEFAULT_ADMIN_PASS" <<'PY'
+import sys
+from backend.db import count_administrators, add_administrator
+from backend import portal_auth
+if count_administrators() == 0:
+    salt, h = portal_auth.hash_password(sys.argv[2])
+    add_administrator(sys.argv[1], h, salt, must_change_password=1,
+                      created_by="installer", role="superuser")
+    print("created")
+else:
+    print("exists")
+PY
+)"
+
+# =========================================================
+# INSTALL THE WEB CONSOLE AS ITS OWN SYSTEMD SERVICE
+# Separate from the backend and from the desktop GUI, with its own start/stop
+# (sysible_controller webgui start|stop). Runs start_webgui.sh, which handles
+# the cookie secret, TLS, and a first-run front-end build.
+# =========================================================
+WEBGUI_SERVICE_FILE="/etc/systemd/system/sysible-webgui.service"
+WEBGUI_UNIT="[Unit]
+Description=Sysible Web Console (browser GUI)
+After=network-online.target sysible-backend.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$BASE
+Environment=PYTHON=$VENV/bin/python
+ExecStart=$BASE/start_webgui.sh
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
+"
+if [[ ! -f "$WEBGUI_SERVICE_FILE" ]] || [[ "$(cat "$WEBGUI_SERVICE_FILE")" != "$WEBGUI_UNIT" ]]; then
+  echo "Installing systemd service (sysible-webgui)..."
+  echo "$WEBGUI_UNIT" > "$WEBGUI_SERVICE_FILE"
+  systemctl daemon-reload
+fi
+chmod +x "$BASE/start_webgui.sh" 2>/dev/null || true
+
+# =========================================================
 # INSTALL THE `sysible_controller` CLI
 # Single global command (start/stop/restart/status/logs/gui/destroy)
 # - see ./sysible_controller. Named after the product (Sysible
@@ -400,4 +454,19 @@ if [[ -f "$DESKTOP_DIR/sysible-controller.desktop" ]]; then
   echo "without needing a terminal (it will prompt for the admin/root password)."
   echo ""
 fi
-echo "Run: sudo sysible_controller start"
+echo "==================================================================="
+echo " SERVICES (each started separately):"
+echo "   Controller backend : sudo sysible_controller start"
+echo "   Web console (GUI)  : sudo sysible_controller webgui start   ->  https://<this-host>:8800/"
+echo "   Desktop GUI client : sysible_controller gui   (needs a desktop session)"
+echo "==================================================================="
+if [[ "$SEEDED_ADMIN" == "created" ]]; then
+  echo ""
+  echo " WEB CONSOLE LOGIN (default admin created for this fresh install):"
+  echo "     username:  $DEFAULT_ADMIN_USER"
+  echo "     password:  $DEFAULT_ADMIN_PASS"
+  echo " Change it after first login (Settings -> My Account). This is shown"
+  echo " only once - copy it now."
+  echo ""
+fi
+echo "Run: sudo sysible_controller start  &&  sudo sysible_controller webgui start"

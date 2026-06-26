@@ -12,6 +12,29 @@ function fmtTime(v) {
   return isNaN(d.getTime()) ? String(v) : d.toLocaleString();
 }
 
+// Collapse same-action-different-host entries (same user/description/command
+// within 30s) into one group with a combined host list — mirrors the desktop.
+const GROUP_WINDOW_S = 30;
+function groupActivity(entries) {
+  const groups = [];
+  const openByKey = {};
+  const sorted = [...entries].sort((a, b) => (a.id || 0) - (b.id || 0)); // oldest first
+  for (const e of sorted) {
+    const key = `${e.username}|${e.description}|${e.command}`;
+    const ts = Number(e.timestamp || 0);
+    const g = openByKey[key];
+    if (g && Math.abs(ts - g._lastTs) <= GROUP_WINDOW_S) {
+      if (e.host && !g.hosts.includes(e.host)) g.hosts.push(e.host);
+      g._lastTs = ts; g.timestamp = Math.max(g.timestamp, ts); g.id = Math.max(g.id, e.id || 0);
+    } else {
+      const ng = { id: e.id || 0, timestamp: ts, _lastTs: ts, username: e.username,
+        description: e.description, command: e.command, hosts: e.host ? [e.host] : [] };
+      groups.push(ng); openByKey[key] = ng;
+    }
+  }
+  return groups.sort((a, b) => b.id - a.id); // newest first
+}
+
 export default function LiveActivity() {
   const [tab, setTab] = useState("activity");
   const [activity, setActivity] = useState([]);
@@ -52,6 +75,7 @@ export default function LiveActivity() {
           <span className="faint">Auto-refresh</span>
         </label>
         <button className="btn ghost sm" onClick={load}>Refresh</button>
+        {tab === "activity" && <button className="btn ghost sm" onClick={() => setActivity([])}>Clear view</button>}
       </div>
 
       {err && <div className="error-box">{err}</div>}
@@ -61,13 +85,14 @@ export default function LiveActivity() {
           <table>
             <thead><tr><th>Time</th><th>User</th><th>Host</th><th>Action</th></tr></thead>
             <tbody>
-              {activity.map((a, i) => (
-                <tr key={a.id ?? i} style={{ cursor: "pointer" }} onClick={() => { setDetail(a); setCopied(false); }}
+              {groupActivity(activity).map((a, i) => (
+                <tr key={a.id ?? i} style={{ cursor: "pointer" }}
+                    onClick={() => { setDetail({ ...a, host: a.hosts.join(", ") }); setCopied(false); }}
                     title="Click to see the exact command">
-                  <td className="faint mono">{fmtTime(a.timestamp ?? a.time ?? a.created_at)}</td>
-                  <td>{a.username || a.admin || a.actor || a.user || ""}</td>
-                  <td>{a.host || a.host_label || ""}</td>
-                  <td>{a.description || a.action || a.summary || ""}</td>
+                  <td className="faint mono">{fmtTime(a.timestamp)}</td>
+                  <td>{a.username || "(unknown)"}</td>
+                  <td>{a.hosts.length <= 1 ? (a.hosts[0] || "") : `${a.hosts.length} hosts: ${a.hosts.join(", ")}`}</td>
+                  <td>{a.description || ""}</td>
                 </tr>
               ))}
             </tbody>

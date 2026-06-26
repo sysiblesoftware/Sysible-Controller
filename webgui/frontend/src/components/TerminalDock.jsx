@@ -9,6 +9,7 @@ import TerminalSession from "./TerminalSession.jsx";
 const TerminalDock = forwardRef(function TerminalDock(_props, ref) {
   const [sessions, setSessions] = useState([]); // {id, hostId, label, status}
   const [activeId, setActiveId] = useState(null);
+  const [find, setFind] = useState("");
   const nextId = useRef(1);
   const handles = useRef({}); // id -> imperative handle
 
@@ -59,6 +60,13 @@ const TerminalDock = forwardRef(function TerminalDock(_props, ref) {
         <button className="btn sm" onClick={act((h) => h.sendSudo())} title="Type your stored sudo password + Enter into this shell">
           Send Sudo Password
         </button>
+        <button className="btn ghost sm" onClick={act((h) => h.sendCtrlC())} title="Interrupt the running command">Send Ctrl+C</button>
+        <input className="term-find" placeholder="Find…" value={find}
+               onChange={(e) => setFind(e.target.value)}
+               onKeyDown={(e) => { if (e.key === "Enter") act((h) => h.find(find, e.shiftKey))(); }} />
+        <button className="btn ghost sm" onClick={act((h) => h.find(find, false))} title="Find next (Enter)">▾</button>
+        <button className="btn ghost sm" onClick={act((h) => h.find(find, true))} title="Find previous (Shift+Enter)">▴</button>
+        <button className="btn ghost sm" onClick={act((h) => h.saveOutput())}>Save Output</button>
         <button className="btn ghost sm" onClick={act((h) => h.zoom(-1))} title="Smaller font">A−</button>
         <button className="btn ghost sm" onClick={act((h) => h.zoom(1))} title="Larger font">A+</button>
         <button className="btn ghost sm" onClick={act((h) => h.clear())}>Clear</button>

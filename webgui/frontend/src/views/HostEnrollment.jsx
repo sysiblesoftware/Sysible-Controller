@@ -3,16 +3,47 @@ import { api } from "../api.js";
 
 // Sysible Controller Host Enrollment: hand out the agent bundle / enroll
 // token and see the enrolled agent fleet.
+
+// Format a "last seen" value (epoch seconds, ms, or ISO string) for display.
+function fmtSeen(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  let d;
+  if (typeof v === "number" || /^\d+(\.\d+)?$/.test(String(v))) {
+    let n = Number(v);
+    if (n < 1e12) n *= 1000; // seconds -> ms
+    d = new Date(n);
+  } else {
+    d = new Date(v);
+  }
+  return isNaN(d.getTime()) ? String(v) : d.toLocaleString();
+}
+
 export default function HostEnrollment() {
   const [agents, setAgents] = useState([]);
+  const [envs, setEnvs] = useState([]);
   const [token, setToken] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
 
   function load() {
     api.agents().then((d) => setAgents(d.agents || [])).catch((e) => setErr(e.message));
+    api.environments().then((d) => setEnvs(d.environments || [])).catch(() => {});
   }
   useEffect(() => { load(); }, []);
+
+  const NEW_ENV = "+ New environment…";
+  async function assignEnv(a, value) {
+    const id = a.host_id || a.id;
+    setErr("");
+    let env = value;
+    if (value === NEW_ENV) {
+      env = (window.prompt("New environment name:") || "").trim();
+      if (!env) return;
+      try { await api.createEnvironment(env); } catch (e) { setErr(e.message); return; }
+    }
+    try { await api.setHostEnvironment(id, env); load(); }
+    catch (e) { setErr(e.message); }
+  }
 
   async function genToken() {
     setBusy("token"); setErr("");
@@ -68,10 +99,17 @@ export default function HostEnrollment() {
           <tbody>
             {agents.map((a) => (
               <tr key={a.host_id || a.id || a.label}>
-                <td style={{ fontWeight: 600 }}>{a.label || a.host_id || a.name}</td>
+                <td style={{ fontWeight: 600 }}>{a.hostname || a.label || a.host_id || a.name}</td>
                 <td className="faint">{a.address || a.ip || ""}</td>
-                <td>{a.environment ? <span className="badge">{a.environment}</span> : <span className="faint">—</span>}</td>
-                <td className="faint mono">{a.last_seen || a.last_heartbeat || a.updated_at || ""}</td>
+                <td>
+                  <select value={a.environment || ""} onChange={(e) => assignEnv(a, e.target.value)}
+                          style={{ maxWidth: 180 }}>
+                    <option value="">(unassigned)</option>
+                    {envs.map((e) => <option key={e} value={e}>{e}</option>)}
+                    <option value={NEW_ENV}>{NEW_ENV}</option>
+                  </select>
+                </td>
+                <td className="faint mono">{fmtSeen(a.last_seen ?? a.last_heartbeat ?? a.updated_at)}</td>
                 <td style={{ textAlign: "right" }}>
                   <button className="btn ghost sm" onClick={() => disenroll(a)}>Disenroll</button>
                 </td>

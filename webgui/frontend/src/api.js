@@ -89,6 +89,9 @@ export const api = {
   enrollSsh: (payload) => req("/api/enroll-ssh", { method: "POST", body: payload }),
   setHostEnvironment: (hostId, environment) =>
     req(`/api/host/${encodeURIComponent(hostId)}/environment`, { method: "POST", body: { environment } }),
+  environments: () => req("/api/environments"),
+  createEnvironment: (name) => req("/api/environments", { method: "POST", body: { name } }),
+  deleteEnvironment: (name) => req(`/api/environments/${encodeURIComponent(name)}`, { method: "DELETE" }),
   removeHost: (hostId) =>
     req(`/api/host/${encodeURIComponent(hostId)}`, { method: "DELETE" }),
   uploadFile: (host, remotePath, file) => {

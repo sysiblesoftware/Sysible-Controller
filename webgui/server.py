@@ -356,6 +356,19 @@ def environments(user: str = Depends(require_login)):
         return {"environments": []}
 
 
+@app.post("/api/environments")
+def create_environment(body: dict, request: Request, user: str = Depends(require_login)):
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Environment name is required.")
+    return _wrap(lambda: _as_admin(request, lambda: api.create_environment(name)))
+
+
+@app.delete("/api/environments/{name}")
+def delete_environment(name: str, request: Request, user: str = Depends(require_login)):
+    return _wrap(lambda: _as_admin(request, lambda: api.delete_environment(name)))
+
+
 # ----------------------------------------------------------------------
 # Sysible Connect — fleet actions, check-in, SSH enrollment, host admin
 # ----------------------------------------------------------------------

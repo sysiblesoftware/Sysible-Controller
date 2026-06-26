@@ -30,6 +30,7 @@ export default function App() {
   const [role, setRole] = useState("");
   const [checking, setChecking] = useState(true);
   const [view, setView] = useState(null); // null = dashboard
+  const [target, setTarget] = useState(null); // {tool, tab} from task search
   const [edition, setEdition] = useState(null);
   const [sudoOpen, setSudoOpen] = useState(false);
   const [theme, setTheme] = useState(localStorage.getItem("sysible_theme") || "dark");
@@ -101,16 +102,18 @@ export default function App() {
       </header>
 
       <div className="app-body">
-        {view === null && <Dashboard role={role} onOpen={setView} />}
+        {view === null && <Dashboard role={role}
+          onOpen={(section, opts) => { setView(section); setTarget(opts || null); }} />}
         {view !== null && (
           <>
             <div className="page-head">
-              <span className="crumb" onClick={() => setView(null)}>← Dashboard</span>
+              <span className="crumb" onClick={() => { setView(null); setTarget(null); }}>← Dashboard</span>
               <h2>{SECTIONS[view]}</h2>
             </div>
             {view === "hosts" && <HostEnrollment />}
             {view === "settings" && <Settings />}
-            {view === "sysadmin" && <ToolRunner />}
+            {view === "sysadmin" && <ToolRunner openTool={target?.tool} openTab={target?.tab}
+              onConsumed={() => setTarget(null)} />}
             {view === "connect" && <Connect />}
             {view === "portal" && <Portal />}
             {view === "live" && <LiveActivity />}

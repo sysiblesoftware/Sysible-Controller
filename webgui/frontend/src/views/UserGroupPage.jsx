@@ -15,7 +15,7 @@ function genPassword(len = 16) {
   return out.sort(() => Math.random() - 0.5).join("");
 }
 
-export default function UserGroupPage() {
+export default function UserGroupPage({ initialTab } = {}) {
   const [hosts, setHosts] = useState([]);
   const [checked, setChecked] = useState([]);
   const [collapsed, setCollapsed] = useState({});
@@ -25,7 +25,7 @@ export default function UserGroupPage() {
   const [syncing, setSyncing] = useState(false);
   const [userQuery, setUserQuery] = useState("");
   const [selUser, setSelUser] = useState(null);
-  const [tab, setTab] = useState("create");
+  const [tab, setTab] = useState(initialTab || "create");
   const [results, setResults] = useState(null);
   const [running, setRunning] = useState(false);
   const [err, setErr] = useState("");

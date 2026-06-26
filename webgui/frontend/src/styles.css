@@ -145,6 +145,9 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 
 .search-bar { width: 100%; padding: 11px 14px; font-size: 14px; margin-bottom: 18px;
   background: var(--panel); border: 1px solid var(--border-strong); border-radius: 7px; }
+.search-result { display: flex; align-items: baseline; width: 100%; text-align: left;
+  background: transparent; border: none; border-radius: 6px; padding: 9px 12px; cursor: pointer; }
+.search-result:hover { background: var(--row-hover); }
 
 /* ---------- Dashboard tiles ---------- */
 .tiles { display: flex; flex-direction: column; gap: 14px; max-width: 1100px; margin: 0 auto; }

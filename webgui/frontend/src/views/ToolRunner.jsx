@@ -34,11 +34,11 @@ const TOOLS = [
   ["Distro Subscription & Licensing", "Register and manage commercial-distro subscriptions: Red Hat (subscription-manager), Ubuntu Pro, and SUSE (SUSEConnect) — status, attach/enable, and repositories.", "id-card", "ico-amber"],
 ];
 
-export default function ToolRunner() {
+export default function ToolRunner({ openTool, openTab, onConsumed }) {
   const [catalog, setCatalog] = useState(null);
   const [hosts, setHosts] = useState([]);
   const [err, setErr] = useState("");
-  const [open, setOpen] = useState(null);   // {name, special?}
+  const [open, setOpen] = useState(null);   // {name, special?, tab?}
   const [q, setQ] = useState("");
 
   const loadHosts = useCallback(() => {
@@ -49,6 +49,15 @@ export default function ToolRunner() {
     api.tools().then((d) => setCatalog(d.tools || [])).catch((e) => setErr(e.message));
     loadHosts();
   }, [loadHosts]);
+
+  // Task search asked to jump straight to a specific tool (+ optional tab).
+  useEffect(() => {
+    if (!openTool) return;
+    const t = TOOLS.find(([name]) => name === openTool);
+    if (t) setOpen({ name: t[0], special: t[4], tab: openTab });
+    onConsumed && onConsumed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openTool, openTab]);
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -71,7 +80,7 @@ export default function ToolRunner() {
         {open.special === "env"
           ? <EnvironmentalPolicies hosts={hosts} onRefreshHosts={loadHosts} />
           : Custom
-            ? <Custom />
+            ? <Custom initialTab={open.tab} />
             : tool
               ? <ToolPage tool={tool} hosts={hosts} onRefreshHosts={loadHosts} />
               : <div className="empty">This tool isn't available.</div>}

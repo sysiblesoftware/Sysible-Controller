@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { searchTasks } from "../featureSearch.js";
 
 // Inline SVG icons (stroke uses currentColor so the tint classes color them).
 const I = {
@@ -37,10 +38,7 @@ export default function Dashboard({ role, onOpen }) {
     () => TILES.filter(([,,,,, su]) => !su || isSuper),
     [isSuper]
   );
-  const filtered = tiles.filter(([t, d]) => {
-    const s = q.trim().toLowerCase();
-    return !s || t.toLowerCase().includes(s) || d.toLowerCase().includes(s);
-  });
+  const results = useMemo(() => searchTasks(q), [q]);
 
   return (
     <div>
@@ -50,15 +48,37 @@ export default function Dashboard({ role, onOpen }) {
         value={q}
         onChange={(e) => setQ(e.target.value)}
       />
-      <div className="tiles">
-        {filtered.map(([title, desc, icon, cls, section]) => (
-          <button key={section} className="tile" onClick={() => onOpen(section)}>
-            <div className={"tile-ico " + cls}><Icon name={icon} /></div>
-            <h3>{title}</h3>
-            <p>{desc}</p>
-          </button>
-        ))}
-      </div>
+
+      {q.trim() ? (
+        <div className="card" style={{ padding: 6 }}>
+          {results.length === 0 ? (
+            <div className="empty" style={{ padding: 16 }}>No matching task. Try “create a user”, “firewall”, “restart service”…</div>
+          ) : results.map((r, i) => (
+            <button key={i} className="search-result"
+                    onClick={() => onOpen(r.section, { tool: r.tool, tab: r.tab })}>
+              <span style={{ fontWeight: 600 }}>{r.title}</span>
+              <span className="faint" style={{ marginLeft: 8 }}>
+                {r.section === "sysadmin" && r.tool ? `System Administration › ${r.tool}` : sectionLabel(r.section)}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="tiles">
+          {tiles.map(([title, desc, icon, cls, section]) => (
+            <button key={section} className="tile" onClick={() => onOpen(section)}>
+              <div className={"tile-ico " + cls}><Icon name={icon} /></div>
+              <h3>{title}</h3>
+              <p>{desc}</p>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
+}
+
+function sectionLabel(s) {
+  return ({ hosts: "Host Enrollment", settings: "Settings", connect: "Sysible Connect",
+    portal: "Webserver Portal", live: "Live Activity & Logs" })[s] || s;
 }

@@ -5,8 +5,22 @@ any) machines that can't run the PySide6 desktop client but can reach
 the controller over the network.
 
 It is a **separate service** from the controller and the desktop app. It
-runs as its own process on its own port, reuses the desktop client's
-existing Python logic, and serves a React single-page app.
+runs as its own process on its own port (`sysible-webgui`, HTTPS on 8800
+by default), reuses the desktop client's existing Python logic, and
+serves a React single-page app. It has **full feature parity** with the
+desktop GUI — all 18 tools, every action, the live terminals, file
+transfer, the superuser activity feed, and the dark/light theme toggle.
+
+On a normal install you don't run any of the commands below by hand: the
+installer (`install_sysible.sh`) builds the front end, installs the
+`sysible-webgui` systemd service, and seeds a default web-console
+administrator. The sections below are for understanding, hand-running, or
+developing the service. To operate it day to day, use the controller CLI:
+
+```bash
+sudo sysible_controller webgui start     # start | stop | status | logs
+sudo sysible_controller reset-admin       # set/reset a web-console login password
+```
 
 ---
 
@@ -77,7 +91,31 @@ uvicorn server:app --host 0.0.0.0 --port 8800
 ```
 
 Open `https://<this-host>:8800/` and sign in with a controller administrator
-account (the same credentials the desktop app uses).
+account — the **same accounts** the desktop app uses (administrators are stored
+once on the controller and shared by both front ends).
+
+On a fresh install the installer seeds a default superuser named `admin` and
+prints its one-time password, in red, at the end of the install output. Log in
+with that, then change it under **Settings → My Account**. If administrators
+already existed (so no default was seeded) or a password is lost, run
+`sudo sysible_controller reset-admin [username] [password]` — it prints a fresh
+password the same way and flags the account to change it at next login. A
+superuser can also reset any other administrator's password from
+**Settings → Administrators** without knowing the old one.
+
+### Identity & run-as (same model as the desktop)
+
+Signing in issues a signed login token; the BFF encrypts that token into the
+session cookie with a server-side key, so it survives a service restart, is
+never stored in the clear, and is never echoed back to the browser. Every
+action and terminal the browser runs is dispatched **as the administrator who
+is signed in** — the controller derives the run-as Linux user from the token
+(`runuser -u <admin>` on agent hosts), exactly as the desktop client does, so
+the host's own sudo policy and audit trail stay authoritative and the activity
+feed attributes each action to the right person. Password ("become") sudo is
+supported: each administrator stores their own sudo password (encrypted at rest
+on the controller) from the header's **Sudo Password** button, and it's fed to
+`sudo -S` over stdin only.
 
 ### Environment variables
 
@@ -89,7 +127,27 @@ account (the same credentials the desktop app uses).
 | `SYSIBLE_WEBGUI_LOGIN_MAX_ATTEMPTS` | Failed logins per IP before a temporary lockout (default 8). |
 | `SYSIBLE_WEBGUI_LOGIN_WINDOW`  | Lockout/counting window in seconds (default 300). |
 | `SYSIBLE_WEBGUI_TASK_TIMEOUT`  | Seconds to wait for an agent task result (default 60). |
+| `SYSIBLE_WEBGUI_NOBUILD`       | `1` to skip the front-end build on start (serve the existing `dist/` as-is). |
 | `SYSIBLE_API_BASE_URL`, `SYSIBLE_API_KEY`, `SYSIBLE_CA_CERT` | Controller connection — read by `client.api`, same as the desktop app. |
+
+## Updating / redeploying
+
+`start_webgui.sh` rebuilds the front end whenever the source (`frontend/src`,
+`index.html`, `package.json`, `vite.config.js`) is **newer than the built
+bundle** — not only when `dist/` is missing — so after pulling new code a plain
+restart picks up the change:
+
+```bash
+git pull
+sudo sysible_controller webgui stop && sudo sysible_controller webgui start
+```
+
+Re-running `sudo ./install_sysible.sh` also rsyncs the new source to
+`/opt/sysible` and rebuilds. Set `SYSIBLE_WEBGUI_NOBUILD=1` to serve the
+existing `dist/` without rebuilding (e.g. when Node isn't available at run
+time and you've committed a prebuilt bundle). Asset filenames are content-
+hashed, so once the new bundle is served a normal reload picks it up; only
+`index.html` may need a hard refresh.
 
 ## Security posture (network exposure)
 
@@ -150,10 +208,10 @@ Param types the form supports: `text`, `password`, `number`, `select`
 
 ### Current coverage
 
-**Full parity: all 18 desktop tiles, 321 actions, every one of the 319
-`cmd_*` builders wired (100%).** Each action maps to the existing `cmd_*`
-builder, so the web action runs the identical shell command the desktop
-tool would. Highlights:
+**Full parity: all 18 desktop tiles, 323 actions, every `cmd_*` builder
+wired (100%).** Each action maps to the existing `cmd_*` builder, so the
+web action runs the identical shell command the desktop tool would.
+Highlights:
 
 - **Run Command**, **Service Management**, **User & Group Administration**
 - **Host Software Management** (install/update/remove/search/query/clean)

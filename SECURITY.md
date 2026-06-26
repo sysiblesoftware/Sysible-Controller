@@ -17,6 +17,14 @@ the controller safely.
 - The **desktop GUI** reads the API key locally (root-only file) and uses
   it to call the API. A separate **administrator username/password**
   gates the GUI itself.
+- The **web console** (`sysible-webgui`, port 8800) is a browser front end
+  for administrators. It is a **backend-for-frontend (BFF)**: the service
+  holds the admin API key server-side and the browser **never** receives
+  it. The browser authenticates only with a signed, http-only **session
+  cookie**; the administrator's login token is encrypted into that cookie
+  with a server-side key. It enforces the same administrator accounts,
+  roles, and run-as identity as the desktop GUI. Like the API it is
+  network-reachable and must be firewalled to a trusted subnet/VPN.
 - The **Webserver Portal** (optional, started on demand) is a
   host-facing service for agent-bundle/file download. It has its own
   login and runs as a separate process on its own port.
@@ -47,26 +55,57 @@ the controller safely.
   `Cache-Control: no-store`, and a Content-Security-Policy.
 - Interactive API docs (Swagger/ReDoc) are disabled so the API surface
   isn't published to anyone who can reach the port.
-- Portal session cookie is `HttpOnly`, `Secure`, `SameSite=Strict`.
+- Portal and web-console session cookies are `HttpOnly`, `Secure` (under
+  TLS), `SameSite=Strict` — which also closes CSRF on the state-changing
+  `POST`s without a separate token.
 - Brute-force throttling: per-IP lockout on the public portal login
   (5 failures / 15 min → 15 min lockout) and, as defense-in-depth, on the
-  admin login (10 / 15 min → 10 min lockout).
+  admin login (10 / 15 min → 10 min lockout) and the web-console login
+  (per-IP attempt cap → HTTP 429 cooldown; a successful login rotates the
+  session as session-fixation hardening).
 - No CORS is enabled; the apps are same-origin only.
+
+**Web console (BFF) specifics**
+- The controller **API key never reaches the browser** — the
+  `sysible-webgui` service holds it and the SPA only ever sends
+  `{action, params, targets}`.
+- The administrator login token is **encrypted into the session cookie**
+  with a persisted server-side key, so it survives restarts, is never
+  stored or transmitted in the clear, and is never echoed to the client.
+- Actions and terminals dispatch **as the signed-in administrator** (the
+  controller derives the run-as user from the token, not from anything the
+  browser sends), so the host's sudo policy and audit trail stay
+  authoritative.
+- A superuser can reset another administrator's password; the target is
+  required to change it at next login. Role-gated surfaces (administrator
+  management, the Live Activity & Controller Log views) require a
+  superuser token, enforced server-side.
+- "Become" (password) sudo passwords are kept encrypted at rest on the
+  controller (Fernet, `0600` key), namespaced per administrator, and fed
+  to `sudo -S` over stdin only — never on the command line, in the
+  environment, the database, or logs.
 
 ## Deploying safely — read this
 
 1. **Keep the controller off the public internet.** The API binds
    `0.0.0.0:9000` because remote agents must reach it; it cannot be
    localhost-only. Restrict access at the network layer — firewall port
-   9000 (and the portal's port, if used) to the trusted subnet or VPN
-   that your managed hosts and admins are on. This is the single most
-   important control.
+   9000, the **web console's port 8800**, and the portal's port (if used)
+   to the trusted subnet or VPN that your managed hosts and admins are on.
+   This is the single most important control. The web console is a full
+   administrative surface, so treat reaching it the same as reaching the
+   API: anyone who can log in can run privileged commands fleet-wide.
    - Example (firewalld): allow only a trusted subnet
      `firewall-cmd --add-rich-rule='rule family=ipv4 source address=10.0.0.0/24 port port=9000 protocol=tcp accept'`
-     and ensure 9000 isn't open to `public`.
+     (repeat for `8800`) and ensure those ports aren't open to `public`.
+   - Prefer not running the web console at all if you only ever use the
+     desktop GUI — `sysible_controller webgui stop` and leave it down.
 2. **Use a strong, unique admin password**, and rotate it if it may have
    been exposed. Set an admin password policy in Sysible Controller
-   Settings.
+   Settings. On a fresh install the web console seeds a default `admin`
+   with a one-time random password printed (in red) at the end of the
+   install — **change it on first login** under Settings → My Account, or
+   reset it with `sudo sysible_controller reset-admin`.
 3. **Protect the API key file.** It stays `600` root-only; don't copy it
    onto untrusted machines. Rotating it (delete the file and restart)
    invalidates every existing client until they re-read it.
@@ -79,12 +118,26 @@ the controller safely.
    machine itself; local root there is equivalent to controlling the
    whole fleet.
 
-## What is intentionally *not* exposed
+## On the browser console's attack surface
 
-- There is no browser-based administrative GUI. Administration is done
-  from the desktop client (or the API with the admin key). A browser
-  front end was evaluated and removed to keep the network-reachable
-  attack surface minimal.
+Earlier versions shipped no browser administrative GUI to keep the
+network-reachable surface minimal. The **web console** now provides one,
+because headless controllers and non-Linux administrators need it — but it
+is built so that adding it does **not** widen the trust boundary beyond the
+API that already had to be network-reachable:
+
+- It exposes no new privilege: signing in requires a controller
+  administrator account, exactly like the desktop GUI, and every action
+  runs as that administrator with that user's sudo rights.
+- The admin API key stays server-side (BFF); a compromised browser session
+  is bounded by the signed-in administrator's role and the host sudo
+  policy, not by possession of the key.
+- It is hardened for network exposure (session cookie, CSRF-closing
+  `SameSite=Strict`, login throttle, strict CSP / anti-clickjacking
+  headers, API docs disabled).
+
+Treat it like the API: firewall its port to a trusted subnet/VPN, and if
+you don't use it, don't run it.
 
 ## Reporting a vulnerability
 

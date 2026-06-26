@@ -359,6 +359,46 @@ cmd_webgui() {
   esac
 }
 
+cmd_reset_admin() {
+  # Set (or create) a web-console administrator's password. Use when the
+  # default install-time admin was skipped (admins already existed) or the
+  # password was lost. Username defaults to 'admin'; password is generated
+  # unless given. Prints the credentials once.
+  _require_root "reset-admin"
+  local user="${2:-admin}"
+  local pass="$3"
+  local out
+  out="$("$VENV/bin/python" - "$BASE" "$user" "$pass" <<'PY' 2>/dev/null
+import sys, secrets
+sys.path.insert(0, sys.argv[1])
+from backend.db import add_administrator, update_administrator_password, list_administrators
+from backend import portal_auth
+user = sys.argv[2] or "admin"
+pw = sys.argv[3] or secrets.token_urlsafe(9)
+salt, h = portal_auth.hash_password(pw)
+existing = {a.get("username") for a in list_administrators()}
+if user in existing:
+    update_administrator_password(user, h, salt, must_change_password=1)
+    print(f"reset\t{user}\t{pw}")
+else:
+    add_administrator(user, h, salt, must_change_password=1, created_by="reset-admin", role="superuser")
+    print(f"created\t{user}\t{pw}")
+PY
+)"
+  if [[ -z "$out" ]]; then
+    echo "ERROR: could not reset the admin (is the controller installed at $BASE?)."
+    exit 1
+  fi
+  local action u p
+  action="$(echo "$out" | cut -f1)"; u="$(echo "$out" | cut -f2)"; p="$(echo "$out" | cut -f3)"
+  echo "==================================================================="
+  echo " Web console admin ${action}:"
+  echo "     username:  $u"
+  echo "     password:  $p"
+  echo " Log in at the web console, then change it (Settings -> My Account)."
+  echo "==================================================================="
+}
+
 cmd_destroy() {
   _require_root destroy
 
@@ -470,9 +510,10 @@ case "$1" in
   logs)    cmd_logs ;;
   gui)     cmd_gui ;;
   webgui)  cmd_webgui "$@" ;;
+  reset-admin) cmd_reset_admin "$@" ;;
   destroy) cmd_destroy ;;
   *)
-    echo "Usage: sysible_controller {start|stop|restart|status|logs|gui|webgui|destroy}"
+    echo "Usage: sysible_controller {start|stop|restart|status|logs|gui|webgui|reset-admin|destroy}"
     exit 1
     ;;
 esac

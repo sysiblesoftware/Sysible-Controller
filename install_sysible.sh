@@ -468,5 +468,10 @@ if [[ "$SEEDED_ADMIN" == "created" ]]; then
   echo " Change it after first login (Settings -> My Account). This is shown"
   echo " only once - copy it now."
   echo ""
+else
+  echo ""
+  echo " Administrators already exist, so no default was created. To set a web"
+  echo " console login password, run:  sudo sysible_controller reset-admin"
+  echo ""
 fi
 echo "Run: sudo sysible_controller start  &&  sudo sysible_controller webgui start"

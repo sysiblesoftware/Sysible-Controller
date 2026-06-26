@@ -179,6 +179,48 @@ _stop_gui() {
 }
 
 # =========================================================
+# WEB CONSOLE (browser-based, headless-friendly GUI)
+# Managed by backend/webgui_manager.py - which handles building the front
+# end, the persistent cookie secret, TLS (reusing the controller's own
+# cert), health-gated startup, and stop. We drive it from the same venv the
+# backend uses so it can import the controller's client.* modules. This is
+# what gives a headless controller a GUI: a browser, not a desktop app.
+# Best-effort: a web-console hiccup never blocks the controller itself.
+# Set SYSIBLE_WEBGUI=0 to opt out of auto-start.
+# =========================================================
+_start_webgui() {
+  [[ "${SYSIBLE_WEBGUI:-1}" == "1" ]] || return 0
+  echo "Starting web console..."
+  local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  "$VENV/bin/python" - "$BASE" "${ip:-<this-host>}" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+host = sys.argv[2]
+try:
+    from backend import webgui_manager as m
+    r = m.start()
+except Exception as e:
+    print(f"  Web console could not start: {e}")
+    raise SystemExit(0)
+if r.get("running"):
+    print(f"  Web console: {r.get('scheme','https')}://{host}:{r.get('port')}/")
+else:
+    err = (r.get("error") or "see run/webgui.log").splitlines()[0]
+    print(f"  Web console did not start: {err}")
+    print("  (Controller is unaffected; retry with 'sysible_controller webgui start'.)")
+PY
+}
+
+_stop_webgui() {
+  "$VENV/bin/python" - "$BASE" <<'PY' >/dev/null 2>&1 || true
+import sys
+sys.path.insert(0, sys.argv[1])
+from backend import webgui_manager as m
+m.stop()
+PY
+}
+
+# =========================================================
 # Readiness wait + "is this actually current code" self-check -
 # needed since systemd reporting the unit as "active" only means the
 # process launched, not that uvicorn finished binding and serving
@@ -216,6 +258,7 @@ cmd_start() {
   echo "Starting $SERVICE..."
   systemctl start "$SERVICE"
   _wait_for_backend
+  _start_webgui
   _start_gui
 
   echo ""
@@ -225,6 +268,7 @@ cmd_start() {
 cmd_stop() {
   _require_root stop
 
+  _stop_webgui
   _stop_gui
 
   echo "Stopping $SERVICE..."
@@ -270,6 +314,16 @@ cmd_status() {
   else
     echo "GUI client: not running (see $GUI_LOG_FILE for the last launch attempt's output, if any)"
   fi
+  "$VENV/bin/python" - "$BASE" 2>/dev/null <<'PY' || true
+import sys
+sys.path.insert(0, sys.argv[1])
+from backend import webgui_manager as m
+s = m.status()
+if s.get("running"):
+    print(f"Web console: running ({s.get('scheme')} port {s.get('port')}, PID {s.get('pid')})")
+else:
+    print("Web console: not running")
+PY
 }
 
 cmd_logs() {
@@ -280,6 +334,39 @@ cmd_gui() {
   # No _require_root here anymore - see _fetch_api_key for why the GUI
   # itself doesn't need to run as root, just a one-shot privileged read.
   _start_gui
+}
+
+cmd_webgui() {
+  # Manual control of the browser-based console, independent of the
+  # controller's own start/stop. Root: it reads the TLS key and writes its
+  # pid/secret under $RUN_DIR, same as the backend.
+  case "$2" in
+    start)
+      _require_root "webgui start"
+      _start_webgui
+      ;;
+    stop)
+      _require_root "webgui stop"
+      _stop_webgui
+      echo "Web console stopped."
+      ;;
+    status|"")
+      "$VENV/bin/python" - "$BASE" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from backend import webgui_manager as m
+s = m.status()
+if s.get("running"):
+    print(f"Web console: running ({s.get('scheme')} port {s.get('port')}, PID {s.get('pid')})")
+else:
+    print("Web console: not running")
+PY
+      ;;
+    *)
+      echo "Usage: sysible_controller webgui {start|stop|status}"
+      exit 1
+      ;;
+  esac
 }
 
 cmd_destroy() {
@@ -391,9 +478,10 @@ case "$1" in
   status)  cmd_status ;;
   logs)    cmd_logs ;;
   gui)     cmd_gui ;;
+  webgui)  cmd_webgui "$@" ;;
   destroy) cmd_destroy ;;
   *)
-    echo "Usage: sysible_controller {start|stop|restart|status|logs|gui|destroy}"
+    echo "Usage: sysible_controller {start|stop|restart|status|logs|gui|webgui|destroy}"
     exit 1
     ;;
 esac

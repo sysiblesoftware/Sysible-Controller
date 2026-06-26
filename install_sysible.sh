@@ -157,6 +157,28 @@ source "$VENV/bin/activate"
 pip install --upgrade pip
 pip install -r "$BASE/requirements.txt"
 
+# =========================================================
+# WEB CONSOLE (browser-based, headless-friendly GUI)
+# Extra Python deps the BFF needs, plus a production build of the React
+# front end so 'sysible_controller start' can serve it immediately.
+# Best-effort: if Node isn't present the controller is unaffected - the
+# web console self-heals (builds) on its first start instead.
+# =========================================================
+if [[ -f "$BASE/webgui/requirements.txt" ]]; then
+  echo "Installing web console Python dependencies..."
+  pip install -r "$BASE/webgui/requirements.txt"
+fi
+if [[ -d "$BASE/webgui/frontend" ]]; then
+  if command -v npm >/dev/null 2>&1; then
+    echo "Building web console front end (npm)..."
+    ( cd "$BASE/webgui/frontend" && npm install --no-audit --no-fund && npm run build ) \
+      || echo "WARNING: web console front-end build failed - it will be retried on first 'sysible_controller webgui start'."
+  else
+    echo "NOTE: Node.js/npm not found - skipping web console front-end build."
+    echo "      Install Node 18+, then run 'sysible_controller webgui start' to build it."
+  fi
+fi
+
 chmod +x "$BASE/sysible_controller"
 
 # =========================================================

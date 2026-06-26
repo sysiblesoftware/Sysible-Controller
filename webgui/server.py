@@ -490,18 +490,13 @@ class HostEnvRequest(BaseModel):
 @app.post("/api/host/{host_id}/environment")
 def set_host_environment(host_id: str, body: HostEnvRequest, request: Request,
                          user: str = Depends(require_login)):
-    try:
-        return api.set_agent_environment(host_id, body.environment)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    # Superuser-gated on the controller — pass the admin token via _as_admin.
+    return _wrap(lambda: _as_admin(request, lambda: api.set_agent_environment(host_id, body.environment)))
 
 
 @app.delete("/api/host/{host_id}")
 def remove_host(host_id: str, request: Request, user: str = Depends(require_login)):
-    try:
-        return api.disenroll_agent(host_id) or {"removed": True}
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    return _wrap(lambda: _as_admin(request, lambda: api.disenroll_agent(host_id) or {"removed": True}))
 
 
 class SudoRequiredRequest(BaseModel):
@@ -511,7 +506,7 @@ class SudoRequiredRequest(BaseModel):
 @app.post("/api/host/{host_id}/sudo")
 def set_host_sudo(host_id: str, body: SudoRequiredRequest, request: Request,
                   user: str = Depends(require_login)):
-    return _wrap(lambda: api.set_sudo_password_required(host_id, body.required))
+    return _wrap(lambda: _as_admin(request, lambda: api.set_sudo_password_required(host_id, body.required)))
 
 
 @app.get("/api/environment-sudo-defaults")
@@ -564,13 +559,14 @@ def _wrap(fn):
 # Live Activity & Logs
 # ----------------------------------------------------------------------
 @app.get("/api/activity")
-def activity(limit: int = 200, since_id: int = 0, user: str = Depends(require_login)):
-    return _wrap(lambda: {"activity": api.get_activity_log(limit=limit, since_id=since_id)})
+def activity(limit: int = 200, since_id: int = 0, request: Request = None, user: str = Depends(require_login)):
+    # /activity-log is superuser-gated on the controller — pass the admin token.
+    return _wrap(lambda: _as_admin(request, lambda: {"activity": api.get_activity_log(limit=limit, since_id=since_id)}))
 
 
 @app.get("/api/controller-log")
-def controller_log(lines: int = 400, user: str = Depends(require_login)):
-    return _wrap(lambda: api.get_controller_log(lines=lines))
+def controller_log(lines: int = 400, request: Request = None, user: str = Depends(require_login)):
+    return _wrap(lambda: _as_admin(request, lambda: api.get_controller_log(lines=lines)))
 
 
 # ----------------------------------------------------------------------

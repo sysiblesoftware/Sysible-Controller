@@ -18,6 +18,8 @@ export default function LiveActivity() {
   const [log, setLog] = useState("");
   const [err, setErr] = useState("");
   const [auto, setAuto] = useState(true);
+  const [detail, setDetail] = useState(null);
+  const [copied, setCopied] = useState(false);
   const timer = useRef(null);
 
   async function load() {
@@ -60,7 +62,8 @@ export default function LiveActivity() {
             <thead><tr><th>Time</th><th>User</th><th>Host</th><th>Action</th></tr></thead>
             <tbody>
               {activity.map((a, i) => (
-                <tr key={a.id ?? i}>
+                <tr key={a.id ?? i} style={{ cursor: "pointer" }} onClick={() => { setDetail(a); setCopied(false); }}
+                    title="Click to see the exact command">
                   <td className="faint mono">{fmtTime(a.timestamp ?? a.time ?? a.created_at)}</td>
                   <td>{a.username || a.admin || a.actor || a.user || ""}</td>
                   <td>{a.host || a.host_label || ""}</td>
@@ -74,6 +77,30 @@ export default function LiveActivity() {
         <pre className="card mono" style={{ whiteSpace: "pre-wrap", maxHeight: "70vh", overflowY: "auto", fontSize: 12.5 }}>
           {log || "（empty）"}
         </pre>
+      )}
+
+      {detail && (
+        <div className="modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) setDetail(null); }}>
+          <div className="modal" style={{ maxWidth: 640 }}>
+            <h3 style={{ textAlign: "left" }}>{detail.description || detail.action || "Activity"}</h3>
+            <div className="muted" style={{ fontSize: 13, marginBottom: 10 }}>
+              {fmtTime(detail.timestamp ?? detail.time ?? detail.created_at)}
+              {" · "}{detail.username || detail.admin || "(unknown)"}
+              {detail.host ? ` · ${detail.host}` : ""}
+            </div>
+            <div className="section-title" style={{ marginTop: 0 }}>Exact command</div>
+            {detail.command
+              ? <pre className="cmd-preview" style={{ whiteSpace: "pre-wrap", maxHeight: "40vh", overflowY: "auto" }}>{detail.command}</pre>
+              : <div className="faint">No command recorded for this entry.</div>}
+            <div className="spread" style={{ marginTop: 16 }}>
+              <button className="btn ghost sm" disabled={!detail.command}
+                      onClick={() => navigator.clipboard?.writeText(detail.command || "").then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })}>
+                {copied ? "Copied ✓" : "Copy command"}
+              </button>
+              <button className="btn sm" onClick={() => setDetail(null)}>Close</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

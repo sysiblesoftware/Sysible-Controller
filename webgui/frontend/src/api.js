@@ -95,6 +95,8 @@ export const api = {
   // User & Group — live host inventory
   usersSync: (hostId) => req("/api/users/sync", { method: "POST", body: { host_id: hostId } }),
   servicesList: (hostId, running) => req("/api/services/list", { method: "POST", body: { host_id: hostId, running } }),
+  packagesList: (hostId) => req("/api/packages/list", { method: "POST", body: { host_id: hostId } }),
+  installLocalPackage: (file, targets) => { const fd = new FormData(); fd.append("file", file); fd.append("targets", JSON.stringify(targets)); return req("/api/packages/install-local", { method: "POST", body: fd }); },
   // Host Enrollment
   agents: () => req("/api/agents"),
   enrollToken: () => req("/api/enroll-token", { method: "POST" }),

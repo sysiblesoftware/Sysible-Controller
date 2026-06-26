@@ -816,6 +816,78 @@ def services_list(body: ServicesListRequest, request: Request, user: str = Depen
 
 
 # ----------------------------------------------------------------------
+# Host Software — live installed-packages list + upload-and-install
+# ----------------------------------------------------------------------
+class PkgListRequest(BaseModel):
+    host_id: str
+
+
+@app.post("/api/packages/list")
+def packages_list(body: PkgListRequest, request: Request, user: str = Depends(require_login)):
+    try:
+        entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+    entry = entries.get(body.host_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="host not found")
+    from client import _api_automation
+    cmd = _api_automation.cmd_list_installed_packages()
+    r = _dispatch_one(entry, cmd, "command", None, _session_token(request))
+    if r.get("error") and not r.get("stdout"):
+        raise HTTPException(status_code=502, detail=r["error"])
+    pkgs, seen = [], set()
+    for ln in (r.get("stdout") or "").splitlines():
+        ln = ln.strip()
+        if not ln or "Neither dpkg" in ln:
+            continue
+        if ln not in seen:
+            seen.add(ln); pkgs.append(ln)
+    return {"host": entry["label"], "packages": pkgs}
+
+
+@app.post("/api/packages/install-local")
+async def packages_install_local(request: Request, file: UploadFile = File(...),
+                                 targets: str = Form(""), user: str = Depends(require_login)):
+    import json as _json
+    tids = _json.loads(targets) if targets else []
+    if not tids:
+        raise HTTPException(status_code=400, detail="No target hosts selected.")
+    tmp = Path(tempfile.mkdtemp(prefix="sysible-pkg-"))
+    fname = file.filename or "package.bin"
+    local = tmp / fname
+    remote = "/tmp/" + fname
+    local.write_bytes(await file.read())
+    spec = actions.get("pkg_install_local")
+    cmd = spec.build({"remote_path": remote})
+    token = _session_token(request)
+    try:
+        entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+    results = []
+    for tid in tids:
+        entry = entries.get(tid)
+        if entry is None:
+            results.append({"host": tid, "ok": False, "error": "host not found",
+                            "stdout": "", "stderr": "", "code": None})
+            continue
+        try:
+            await asyncio.to_thread(api.upload_file_ssh, tid, str(local), remote)
+        except Exception as e:
+            results.append({"host": entry["label"], "ok": False, "error": f"upload failed: {e}",
+                            "stdout": "", "stderr": "", "code": None})
+            continue
+        become = sudo_store.resolve(user, entry.get("label", ""))
+        results.append(_dispatch_one(entry, cmd, "command", become, token, f"Install local package {fname}"))
+    try:
+        local.unlink(missing_ok=True); tmp.rmdir()
+    except Exception:
+        pass
+    return {"results": results}
+
+
+# ----------------------------------------------------------------------
 # Webserver Portal
 # ----------------------------------------------------------------------
 @app.get("/api/portal/status")

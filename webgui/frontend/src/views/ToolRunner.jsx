@@ -3,6 +3,7 @@ import { api } from "../api.js";
 import ToolPage from "./ToolPage.jsx";
 import UserGroupPage from "./UserGroupPage.jsx";
 import ServiceManagementPage from "./ServiceManagementPage.jsx";
+import HostSoftwarePage from "./HostSoftwarePage.jsx";
 import EnvironmentalPolicies from "./EnvironmentalPolicies.jsx";
 import ToolIcon from "../components/ToolIcons.jsx";
 
@@ -10,6 +11,7 @@ import ToolIcon from "../components/ToolIcons.jsx";
 const CUSTOM_PAGES = {
   "User & Group Administration": UserGroupPage,
   "Service Management": ServiceManagementPage,
+  "Host Software Management": HostSoftwarePage,
 };
 
 // The System Administration tile grid — mirrors the desktop page exactly:

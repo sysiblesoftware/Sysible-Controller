@@ -94,6 +94,7 @@ export const api = {
   portalDownloadDelete: (name) => req(`/api/portal/downloads/${encodeURIComponent(name)}`, { method: "DELETE" }),
   // User & Group — live host inventory
   usersSync: (hostId) => req("/api/users/sync", { method: "POST", body: { host_id: hostId } }),
+  servicesList: (hostId, running) => req("/api/services/list", { method: "POST", body: { host_id: hostId, running } }),
   // Host Enrollment
   agents: () => req("/api/agents"),
   enrollToken: () => req("/api/enroll-token", { method: "POST" }),

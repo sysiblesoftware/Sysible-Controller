@@ -783,6 +783,39 @@ def users_sync(body: UserSyncRequest, user: str = Depends(require_login)):
 
 
 # ----------------------------------------------------------------------
+# Service Management — live installed/running services on one host
+# ----------------------------------------------------------------------
+class ServicesListRequest(BaseModel):
+    host_id: str
+    running: bool = False
+
+
+@app.post("/api/services/list")
+def services_list(body: ServicesListRequest, request: Request, user: str = Depends(require_login)):
+    try:
+        entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+    entry = entries.get(body.host_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="host not found")
+    spec = actions.get("svc_list_running" if body.running else "svc_list")
+    cmd = spec.build({})
+    r = _dispatch_one(entry, cmd, "command", None, _session_token(request))
+    if r.get("error") and not r.get("stdout"):
+        raise HTTPException(status_code=502, detail=r["error"])
+    names, seen = [], set()
+    for ln in (r.get("stdout") or "").splitlines():
+        ln = ln.strip()
+        if not ln or ln.lower().startswith("systemctl not"):
+            continue
+        name = ln.split()[0]
+        if name and name not in seen:
+            seen.add(name); names.append(name)
+    return {"host": entry["label"], "services": names}
+
+
+# ----------------------------------------------------------------------
 # Webserver Portal
 # ----------------------------------------------------------------------
 @app.get("/api/portal/status")

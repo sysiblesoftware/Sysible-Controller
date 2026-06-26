@@ -52,6 +52,8 @@ export const api = {
     req("/api/admins", { method: "POST", body: { username, password, role } }),
   removeAdmin: (username) =>
     req(`/api/admins/${encodeURIComponent(username)}`, { method: "DELETE" }),
+  resetAdminPassword: (username, new_password) =>
+    req(`/api/admins/${encodeURIComponent(username)}/password`, { method: "POST", body: { new_password } }),
   passwordPolicy: () => req("/api/password-policy"),
   setPasswordPolicy: (policy) =>
     req("/api/password-policy", { method: "POST", body: policy }),

@@ -377,6 +377,13 @@ def force_admin_password_change(username: str, current_password: str, new_passwo
     )
 
 
+def reset_administrator_password(username: str, new_password: str, actor: str = ""):
+    return _request(
+        "POST", f"/admin/administrators/{username}/password",
+        json={"new_password": new_password, "actor": actor},
+    )
+
+
 def get_admin_audit_log(limit: int = 200):
     return _request("GET", "/admin/audit-log", params={"limit": limit}).get("entries", [])
 

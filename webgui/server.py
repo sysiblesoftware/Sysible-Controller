@@ -655,6 +655,17 @@ def del_admin(username: str, request: Request, user: str = Depends(require_login
     return _wrap(lambda: _as_admin(request, lambda: api.remove_administrator(username, actor=user)))
 
 
+class AdminPasswordReset(BaseModel):
+    new_password: str
+
+
+@app.post("/api/admins/{username}/password")
+def reset_admin_password(username: str, body: AdminPasswordReset, request: Request,
+                         user: str = Depends(require_login)):
+    return _wrap(lambda: _as_admin(request, lambda: api.reset_administrator_password(
+        username, body.new_password, actor=user)))
+
+
 @app.get("/api/password-policy")
 def get_policy(user: str = Depends(require_login)):
     return _wrap(lambda: api.get_admin_password_policy())

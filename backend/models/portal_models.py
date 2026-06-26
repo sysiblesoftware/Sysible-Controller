@@ -63,3 +63,11 @@ class ForcePasswordChangeRequest(BaseModel):
     username: str
     current_password: str
     new_password: str
+
+
+class ResetAdministratorPasswordRequest(BaseModel):
+    # Superuser-initiated reset of ANOTHER administrator's password.
+    # No current password required - the caller is a superuser. The target
+    # is required to change it on their next login.
+    new_password: str
+    actor: str = ""  # username of the superuser performing the reset, for the audit log

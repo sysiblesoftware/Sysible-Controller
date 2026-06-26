@@ -93,6 +93,7 @@ from backend.models.portal_models import (
     ChangeAdminCredentialsRequest,
     AddAdministratorRequest,
     ForcePasswordChangeRequest,
+    ResetAdministratorPasswordRequest,
 )
 from backend.models.policy_models import (
     SetEnvironmentalPolicyRequest,
@@ -1314,6 +1315,33 @@ def force_admin_password_change(body: ForcePasswordChangeRequest):
     log_admin_audit("forced_password_change_completed", body.username, "")
 
     return {"username": body.username, "status": "updated"}
+
+
+@app.post("/admin/administrators/{username}/password",
+          dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def reset_administrator_password_route(username: str, body: ResetAdministratorPasswordRequest):
+    """Superuser resets ANOTHER administrator's password without knowing the
+    target's current password. The target must change it on next login."""
+
+    admin = get_administrator(username)
+
+    if admin is None:
+        raise HTTPException(status_code=404, detail="No such administrator")
+
+    if not body.new_password:
+        raise HTTPException(status_code=400, detail="Password cannot be empty")
+
+    ok, message = validate_password_against_policy(body.new_password, get_admin_password_policy())
+    if not ok:
+        raise HTTPException(status_code=400, detail=message)
+
+    salt, password_hash = portal_auth.hash_password(body.new_password)
+    update_administrator_password(username, password_hash, salt, must_change_password=1)
+
+    log_admin_audit("password_reset", username,
+                    f"reset by {body.actor}" if body.actor else "reset by superuser")
+
+    return {"username": username, "status": "reset"}
 
 
 @app.get("/admin/audit-log", dependencies=[Depends(require_api_key)])

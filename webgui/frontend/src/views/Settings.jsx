@@ -30,6 +30,9 @@ function Admins() {
   const [list, setList] = useState([]);
   const [u, setU] = useState(""); const [p, setP] = useState(""); const [role, setRole] = useState("sysadmin");
   const [err, setErr] = useErr(); const [msg, setMsg] = useState("");
+  const [resetUser, setResetUser] = useState("");   // which row's reset field is open
+  const [resetPw, setResetPw] = useState("");
+  const [resetBusy, setResetBusy] = useState(false);
 
   const load = () => api.admins().then((d) => setList(d.administrators || [])).catch((e) => setErr(e.message));
   useEffect(() => { load(); }, []);
@@ -43,6 +46,17 @@ function Admins() {
     if (!window.confirm(`Remove administrator ${name}?`)) return;
     setErr(""); try { await api.removeAdmin(name); load(); } catch (e) { setErr(e.message); }
   }
+  function openReset(name) { setResetUser(name); setResetPw(""); setErr(""); setMsg(""); }
+  async function submitReset(name) {
+    if (!resetPw) { setErr("Enter a new password."); return; }
+    setResetBusy(true); setErr(""); setMsg("");
+    try {
+      await api.resetAdminPassword(name, resetPw);
+      setMsg(`Password reset for ${name}. They must change it on next login.`);
+      setResetUser(""); setResetPw("");
+    } catch (e) { setErr(e.message); }
+    finally { setResetBusy(false); }
+  }
 
   return (
     <div>
@@ -51,13 +65,31 @@ function Admins() {
           <thead><tr><th>Username</th><th>Role</th><th></th></tr></thead>
           <tbody>
             {list.map((a) => (
-              <tr key={a.username}>
+              <React.Fragment key={a.username}>
+              <tr>
                 <td style={{ fontWeight: 600 }}>{a.username}</td>
                 <td><span className="badge">{a.role}</span></td>
-                <td style={{ textAlign: "right" }}>
+                <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                  <button className="btn ghost sm" onClick={() => openReset(a.username)} style={{ marginRight: 6 }}>Reset password</button>
                   <button className="btn ghost sm" onClick={() => remove(a.username)}>Remove</button>
                 </td>
               </tr>
+              {resetUser === a.username && (
+                <tr>
+                  <td colSpan={3} style={{ background: "var(--panel-2)" }}>
+                    <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                      <span className="faint">New password for <strong>{a.username}</strong>:</span>
+                      <input style={{ flex: 1, minWidth: 160 }} type="password" autoFocus value={resetPw}
+                             placeholder="New password" onChange={(e) => setResetPw(e.target.value)}
+                             onKeyDown={(e) => { if (e.key === "Enter") submitReset(a.username); }} />
+                      <button className="btn sm" disabled={resetBusy || !resetPw} onClick={() => submitReset(a.username)}>
+                        {resetBusy ? <span className="spin" /> : "Set Password"}</button>
+                      <button className="btn ghost sm" onClick={() => setResetUser("")}>Cancel</button>
+                    </div>
+                  </td>
+                </tr>
+              )}
+              </React.Fragment>
             ))}
           </tbody>
         </table>

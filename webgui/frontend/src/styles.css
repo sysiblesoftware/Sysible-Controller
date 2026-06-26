@@ -90,7 +90,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 a { color: var(--slate); text-decoration: none; }
-button { font-family: inherit; }
+button { font-family: inherit; color: inherit; }
 .muted { color: var(--text-dim); }
 .faint { color: var(--text-faint); }
 .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }

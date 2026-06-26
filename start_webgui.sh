@@ -23,18 +23,32 @@ PY="${PYTHON:-python3}"
 
 echo "[webgui] project: $HERE"
 
-# 1) Front end: build once if dist/ is missing.
+# 1) Front end: build if dist/ is missing OR any source file is newer than the
+#    built bundle, so a plain restart always serves the latest code (no full
+#    reinstall needed after a git pull). Set SYSIBLE_WEBGUI_NOBUILD=1 to skip.
+need_build=0
 if [ ! -f "$FRONTEND/dist/index.html" ]; then
+  need_build=1
+elif [ -d "$FRONTEND/src" ]; then
+  # newest source file (src + index.html + configs) vs the built index.html
+  newest_src="$(find "$FRONTEND/src" "$FRONTEND/index.html" "$FRONTEND/package.json" \
+                  "$FRONTEND/vite.config.js" -type f -newer "$FRONTEND/dist/index.html" 2>/dev/null | head -1)"
+  [ -n "$newest_src" ] && need_build=1
+fi
+
+if [ "${SYSIBLE_WEBGUI_NOBUILD:-0}" = "1" ]; then
+  echo "[webgui] SYSIBLE_WEBGUI_NOBUILD=1 — skipping front-end build."
+elif [ "$need_build" = "1" ]; then
   if command -v npm >/dev/null 2>&1; then
-    echo "[webgui] building front end (first run)…"
+    echo "[webgui] building front end (source changed or first run)…"
     ( cd "$FRONTEND" && npm install --no-audit --no-fund && npm run build )
   else
-    echo "[webgui] WARNING: npm not found and the front end isn't built." >&2
+    echo "[webgui] WARNING: npm not found and the front end isn't up to date." >&2
     echo "          Install Node.js 18+ and re-run, or the console will only" >&2
-    echo "          serve a 'frontend not built' placeholder." >&2
+    echo "          serve a stale or 'frontend not built' placeholder." >&2
   fi
 else
-  echo "[webgui] front end already built (webgui/frontend/dist)."
+  echo "[webgui] front end already up to date (webgui/frontend/dist)."
 fi
 
 # 2) Stable cookie-signing secret (0600), so restarts don't log everyone out.

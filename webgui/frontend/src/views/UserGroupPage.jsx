@@ -115,6 +115,12 @@ export default function UserGroupPage({ initialTab } = {}) {
   // Per-user actions target the synced hosts where that user exists (so a
   // Lock/Delete applies everywhere it's present); fall back to all synced.
   const selTargets = selUser && present[selUser] ? [...present[selUser]] : syncedIds;
+  const allHostIds = hosts.map((h) => h.id);
+  // Selected user's status on each synced host (for "View Status by Host").
+  const statusRows = selUser ? syncedIds.map((id) => {
+    const u = (hostData[id]?.users || []).find((x) => x.username === selUser);
+    return { host: labelOf(id), present: !!u, shell: u?.shell, sudo: u?.sudo, locked: u?.locked };
+  }) : [];
 
   function renderUserRow(name, note) {
     const u = userObj(name);
@@ -217,7 +223,8 @@ export default function UserGroupPage({ initialTab } = {}) {
         </div>
 
         {tab === "create" && <CreateUser checked={checked} run={run} running={running} />}
-        {tab === "account" && <Account user={selUserObj} targets={selTargets} run={run} running={running} />}
+        {tab === "account" && <Account user={selUserObj} targets={selTargets} run={run} running={running}
+          statusRows={statusRows} allHostIds={allHostIds} />}
         {tab === "password" && <Password user={selUser} targets={selTargets} run={run} running={running} />}
         {tab === "groups" && <Groups user={selUser} checked={checked} viewTargets={selTargets} run={run} running={running} />}
         {tab === "reports" && <Reports targets={selTargets} run={run} running={running} />}
@@ -265,9 +272,10 @@ function CreateUser({ checked, run, running }) {
   );
 }
 
-function Account({ user, targets, run, running }) {
+function Account({ user, targets, run, running, statusRows = [], allHostIds = [] }) {
   const [shell, setShell] = useState(""); const [comment, setComment] = useState("");
-  useEffect(() => { setShell(user?.shell || ""); setComment(""); }, [user]);
+  const [showStatus, setShowStatus] = useState(false);
+  useEffect(() => { setShell(user?.shell || ""); setComment(""); setShowStatus(false); }, [user]);
   if (!user) return <div className="empty">Select a user from the list to manage their account.</div>;
   const u = user.username;
   return (
@@ -290,13 +298,40 @@ function Account({ user, targets, run, running }) {
           <button className="btn sm" disabled={running || !comment} onClick={() => run("user_set_comment", targets, { username: u, comment }, `Set full name for ${u}`)}>Set Full Name</button></div>
       </label>
       <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 14 }}>
+        <button className="btn sm ghost" onClick={() => setShowStatus((v) => !v)}>View Status by Host</button>
         <button className="btn sm" disabled={running} onClick={() => run("user_lock", targets, { username: u }, `Lock ${u}`)}>Lock</button>
         <button className="btn sm" disabled={running} onClick={() => run("user_unlock", targets, { username: u }, `Unlock ${u}`)}>Unlock</button>
         <button className="btn sm" disabled={running} onClick={() => run("user_set_sudo", targets, { username: u, enable: !user.sudo }, `Toggle sudo for ${u}`)}>
           {user.sudo ? "Remove Sudo" : "Grant Sudo"}</button>
         <button className="btn sm" disabled={running} onClick={() => run("user_kill_sessions", targets, { username: u }, `Kill sessions for ${u}`)}>Kill Sessions</button>
-        <button className="btn sm danger" disabled={running} onClick={() => window.confirm(`Delete user ${u} on this host?`) && run("user_delete", targets, { username: u }, `Delete ${u}`)}>Delete User</button>
+        <button className="btn sm danger" disabled={running} onClick={() => window.confirm(`Delete user ${u} on ${targets.length} host(s)?`) && run("user_delete", targets, { username: u }, `Delete ${u}`)}>Delete User</button>
+        <button className="btn sm danger" disabled={running || allHostIds.length === 0}
+                onClick={() => window.confirm(`Terminate ${u} — remove from ALL ${allHostIds.length} managed hosts? This cannot be undone.`)
+                  && run("user_delete", allHostIds, { username: u }, `Terminate user ${u} (all hosts)`)}>
+          Terminate User (All Hosts)</button>
       </div>
+
+      {showStatus && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <strong>Status by host — {u}</strong>
+          {statusRows.length === 0 ? <div className="faint" style={{ marginTop: 6 }}>Sync hosts to see per-host status.</div> : (
+            <table style={{ marginTop: 8 }}>
+              <thead><tr><th>Host</th><th>Present</th><th>Shell</th><th>Sudo</th><th>State</th></tr></thead>
+              <tbody>
+                {statusRows.map((r, i) => (
+                  <tr key={i}>
+                    <td>{r.host}</td>
+                    <td>{r.present ? <span className="ok-text">yes</span> : <span className="faint">no</span>}</td>
+                    <td className="faint">{r.present ? r.shell : "—"}</td>
+                    <td>{r.present ? (r.sudo ? "yes" : "no") : "—"}</td>
+                    <td>{r.present ? (r.locked ? "locked" : "active") : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
     </div>
   );
 }

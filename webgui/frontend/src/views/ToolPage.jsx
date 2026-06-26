@@ -57,11 +57,12 @@ export default function ToolPage({ tool, hosts, onRefreshHosts }) {
   const groups = tabs.map.get(currentTab) || new Map();
 
   return (
-    <div className="three-pane">
+    <div className="tool-3col">
       <HostTree hosts={hosts} value={targets} onChange={setTargets} onRefresh={onRefreshHosts}
                 footer="Check one or more hosts, then run an action." />
 
-      <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+      {/* Middle: actions */}
+      <div className="tool-actions-col">
         {tabs.order.length > 1 && (
           <div className="tabs">
             {tabs.order.map((t) => (
@@ -69,8 +70,7 @@ export default function ToolPage({ tool, hosts, onRefreshHosts }) {
             ))}
           </div>
         )}
-
-        <div style={{ flex: 1, overflowY: "auto", paddingRight: 4 }}>
+        <div className="tool-actions-scroll">
           {[...groups.entries()].map(([groupTitle, acts]) => (
             <fieldset key={groupTitle || "_"} className="tool-group-box">
               {groupTitle && <legend>{groupTitle}</legend>}
@@ -82,26 +82,31 @@ export default function ToolPage({ tool, hosts, onRefreshHosts }) {
           ))}
           {err && <div className="error-box">{err}</div>}
         </div>
+      </div>
 
-        <div className="results-bar">
-          <span className="faint">Run an action above; results appear below (newest first).</span>
-          <button className="btn ghost sm" onClick={() => setResults([])} disabled={!results.length}>Clear All Results</button>
+      {/* Right: results, full height, newest first */}
+      <div className="tool-results-col">
+        <div className="results-head">
+          <strong>Results</strong>
+          <button className="btn ghost sm" onClick={() => setResults([])} disabled={!results.length}>Clear All</button>
         </div>
-        <div style={{ maxHeight: "34vh", overflowY: "auto" }}>
-          {results.map((res, i) => (
-            <div className="result" key={res.at + "-" + i}>
-              <div className="rh"><strong>{res.label}</strong>
-                <span className="faint mono" style={{ fontSize: 11 }}>{new Date(res.at).toLocaleTimeString()}</span></div>
-              {res.results.map((r, j) => (
-                <div key={j} style={{ borderTop: "1px solid var(--border)" }}>
-                  <div className="rh"><span className={"dot " + (r.ok ? "ok" : "bad")} /><span>{r.host}</span>
-                    {r.code != null && <span className="faint">exit {r.code}</span>}
-                    {r.error && <span className="badge amber">{r.error}</span>}</div>
-                  {(r.stdout || r.stderr) && <pre>{r.stdout}{r.stderr}</pre>}
-                </div>
-              ))}
-            </div>
-          ))}
+        <div className="tool-results-scroll">
+          {results.length === 0
+            ? <div className="empty" style={{ padding: 24 }}>Run an action — output appears here (newest first).</div>
+            : results.map((res, i) => (
+              <div className="result" key={res.at + "-" + i}>
+                <div className="rh"><strong>{res.label}</strong>
+                  <span className="faint mono" style={{ fontSize: 11 }}>{new Date(res.at).toLocaleTimeString()}</span></div>
+                {res.results.map((r, j) => (
+                  <div key={j} style={{ borderTop: "1px solid var(--border)" }}>
+                    <div className="rh"><span className={"dot " + (r.ok ? "ok" : "bad")} /><span>{r.host}</span>
+                      {r.code != null && <span className="faint">exit {r.code}</span>}
+                      {r.error && <span className="badge amber">{r.error}</span>}</div>
+                    {(r.stdout || r.stderr) && <pre>{r.stdout}{r.stderr}</pre>}
+                  </div>
+                ))}
+              </div>
+            ))}
         </div>
       </div>
     </div>

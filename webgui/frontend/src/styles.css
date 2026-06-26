@@ -194,6 +194,23 @@ tr:hover td { background: var(--row-hover); }
   color: var(--text-dim); padding: 7px 13px; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 13px; }
 .tabs button.active { background: var(--panel); color: var(--text); border-color: var(--border); }
 
+/* ---------- Tool page: host tree | actions | results (3 columns) ---------- */
+.tool-3col {
+  display: grid; grid-template-columns: 230px minmax(0, 1fr) minmax(320px, 420px);
+  gap: 16px; height: 100%;
+}
+.tool-actions-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.tool-actions-scroll { flex: 1; overflow-y: auto; padding-right: 4px; }
+.tool-results-col {
+  display: flex; flex-direction: column; min-height: 0;
+  border-left: 1px solid var(--border); padding-left: 16px;
+}
+.results-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding-bottom: 10px; margin-bottom: 4px; border-bottom: 1px solid var(--border);
+}
+.tool-results-scroll { flex: 1; overflow-y: auto; }
+
 /* ---------- Tool group boxes (desktop QGroupBox look) ---------- */
 .tool-group-box {
   border: 1px solid var(--border); border-radius: 8px; margin: 0 0 14px;

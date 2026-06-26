@@ -4,8 +4,7 @@ import Login from "./views/Login.jsx";
 import Dashboard from "./views/Dashboard.jsx";
 import Hosts from "./views/Hosts.jsx";
 import ToolRunner from "./views/ToolRunner.jsx";
-import Terminal from "./views/Terminal.jsx";
-import Files from "./views/Files.jsx";
+import Connect from "./views/Connect.jsx";
 import SudoModal from "./components/SudoModal.jsx";
 
 // Sections opened from a dashboard tile. Titles mirror the desktop.
@@ -99,8 +98,7 @@ export default function App() {
             </div>
             {view === "hosts" && <Hosts />}
             {view === "sysadmin" && <ToolRunner />}
-            {view === "connect" && <Terminal />}
-            {view === "files" && <Files />}
+            {view === "connect" && <Connect />}
           </>
         )}
       </div>

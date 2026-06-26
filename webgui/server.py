@@ -150,6 +150,23 @@ _LOGIN_MAX_ATTEMPTS = int(os.getenv("SYSIBLE_WEBGUI_LOGIN_MAX_ATTEMPTS", "8"))
 _LOGIN_WINDOW_S = int(os.getenv("SYSIBLE_WEBGUI_LOGIN_WINDOW", "300"))
 _login_attempts: dict[str, list] = {}
 
+# Server-side store for controller admin tokens, keyed by an opaque handle
+# that lives in the (signed, http-only) session cookie. The token itself —
+# a privileged bearer credential — never goes into the cookie, so it can't be
+# read out of it. In-memory: a controller restart simply requires re-login
+# for superuser actions.
+import threading as _thr  # noqa: E402
+_SESSION_TOKENS: dict[str, str] = {}
+_SESSION_TOKENS_LOCK = _thr.Lock()
+
+
+def _session_token(request: "Request"):
+    h = request.session.get("thandle")
+    if not h:
+        return None
+    with _SESSION_TOKENS_LOCK:
+        return _SESSION_TOKENS.get(h)
+
 
 def _client_ip(request: Request) -> str:
     # Behind a reverse proxy the real IP is in X-Forwarded-For; fall back to
@@ -200,10 +217,14 @@ def login(body: LoginRequest, request: Request):
     request.session["user"] = body.username.strip()
     request.session["role"] = result.get("role") or "superuser"
     # Keep the controller-issued admin token so the BFF can call superuser-
-    # gated controller routes (enroll-ssh, remove host, set environment) on
-    # this admin's behalf. Stored server-side in the session, never echoed.
+    # gated controller routes on this admin's behalf — stored SERVER-SIDE,
+    # keyed by an opaque handle in the cookie, never in the cookie itself and
+    # never echoed to the browser.
     if result.get("token"):
-        request.session["token"] = result["token"]
+        handle = secrets.token_urlsafe(24)
+        with _SESSION_TOKENS_LOCK:
+            _SESSION_TOKENS[handle] = result["token"]
+        request.session["thandle"] = handle
     return {
         "username": body.username.strip(),
         "role": request.session["role"],
@@ -263,6 +284,10 @@ def sudo_clear(body: SudoRequest, user: str = Depends(require_login)):
 
 @app.post("/api/logout")
 def logout(request: Request):
+    h = request.session.get("thandle")
+    if h:
+        with _SESSION_TOKENS_LOCK:
+            _SESSION_TOKENS.pop(h, None)
     request.session.clear()
     return {"status": "ok"}
 
@@ -326,7 +351,7 @@ def _superuser_request(method, path, request: Request, **kw):
     admin, using the token captured at login. client.api holds the API key;
     we add the admin token header the controller's require_superuser wants."""
     import requests
-    token = request.session.get("token")
+    token = _session_token(request)
     if not token:
         raise HTTPException(status_code=403, detail="This action requires a superuser login.")
     headers = dict(api._headers())
@@ -463,7 +488,7 @@ _ADMIN_TOKEN_LOCK = _threading.Lock()
 
 
 def _as_admin(request: Request, fn):
-    token = request.session.get("token")
+    token = _session_token(request)
     with _ADMIN_TOKEN_LOCK:
         api.set_admin_token(token)
         try:
@@ -473,8 +498,10 @@ def _as_admin(request: Request, fn):
 
 
 def _wrap(fn):
+    """Run a controller call, turning any non-HTTP error into a 502 so a
+    controller hiccup surfaces cleanly instead of as an opaque 500."""
     try:
-        return fn() if not callable(fn) else fn()
+        return fn()
     except HTTPException:
         raise
     except Exception as e:

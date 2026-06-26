@@ -1,136 +1,84 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Terminal as XTerm } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { api, terminalWsUrl } from "../api.js";
+import { api } from "../api.js";
+import TerminalSession from "../components/TerminalSession.jsx";
 
+// Sysible Connect terminals: open several host shells at once as tabs. Each
+// tab is an independent, persistent TerminalSession (xterm + websocket).
 export default function Terminal() {
   const [hosts, setHosts] = useState([]);
-  const [host, setHost] = useState("");
-  const [connected, setConnected] = useState(false);
-  const [status, setStatus] = useState("");
+  const [pick, setPick] = useState("");
+  const [sessions, setSessions] = useState([]); // {id, hostId, label, status}
+  const [activeId, setActiveId] = useState(null);
   const [err, setErr] = useState("");
-
-  const elRef = useRef(null);
-  const termRef = useRef(null);
-  const fitRef = useRef(null);
-  const wsRef = useRef(null);
+  const nextId = useRef(1);
 
   useEffect(() => {
     api.hosts()
-      .then((d) => {
-        const agentful = (d.hosts || []);
-        setHosts(agentful);
-        if (agentful[0]) setHost(agentful[0].id);
-      })
-      .catch((x) => setErr(x.message));
-    return () => disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+      .then((d) => { setHosts(d.hosts || []); if (d.hosts && d.hosts[0]) setPick(d.hosts[0].id); })
+      .catch((e) => setErr(e.message));
   }, []);
 
-  function disconnect() {
-    if (wsRef.current) {
-      try { wsRef.current.close(); } catch { /* ignore */ }
-      wsRef.current = null;
-    }
-    if (termRef.current) {
-      termRef.current.dispose();
-      termRef.current = null;
-    }
-    setConnected(false);
+  function openSession() {
+    if (!pick) return;
+    const host = hosts.find((h) => h.id === pick);
+    const id = nextId.current++;
+    setSessions((s) => [...s, { id, hostId: pick, label: host ? host.label : pick, status: "connecting" }]);
+    setActiveId(id);
   }
 
-  function connect() {
-    if (!host) return;
-    setErr("");
-    setStatus("Connecting…");
-
-    const term = new XTerm({
-      fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
-      fontSize: 13,
-      theme: { background: "#000000", foreground: "#e6edf3" },
-      cursorBlink: true,
+  function closeSession(id) {
+    setSessions((s) => s.filter((x) => x.id !== id));
+    setActiveId((cur) => {
+      if (cur !== id) return cur;
+      const rest = sessions.filter((x) => x.id !== id);
+      return rest.length ? rest[rest.length - 1].id : null;
     });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(elRef.current);
-    fit.fit();
-    termRef.current = term;
-    fitRef.current = fit;
-
-    const ws = new WebSocket(terminalWsUrl());
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ t: "open", host, cols: term.cols, rows: term.rows }));
-    };
-    ws.onmessage = (ev) => {
-      let msg;
-      try { msg = JSON.parse(ev.data); } catch { return; }
-      if (msg.t === "ready") {
-        setConnected(true);
-        setStatus("");
-        term.focus();
-      } else if (msg.t === "o") {
-        term.write(msg.d);
-      } else if (msg.t === "closed") {
-        setStatus("Session closed.");
-        disconnect();
-      } else if (msg.t === "error") {
-        setErr(msg.d || "terminal error");
-        disconnect();
-      }
-    };
-    ws.onclose = () => { setConnected(false); };
-    ws.onerror = () => { setErr("WebSocket error — is the controller reachable?"); };
-
-    term.onData((d) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "i", d }));
-    });
-
-    const onResize = () => {
-      if (!fitRef.current || !termRef.current) return;
-      fitRef.current.fit();
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ t: "r", cols: term.cols, rows: term.rows }));
-      }
-    };
-    window.addEventListener("resize", onResize);
-    ws._cleanup = () => window.removeEventListener("resize", onResize);
   }
 
-  if (err && !connected) {
-    // show error but keep the picker usable
+  function setStatus(id, status) {
+    setSessions((s) => s.map((x) => (x.id === id ? { ...x, status } : x)));
   }
 
   return (
-    <div className="term-wrap">
+    <div>
       <div className="row" style={{ marginBottom: 12 }}>
-        <select
-          value={host}
-          onChange={(e) => setHost(e.target.value)}
-          disabled={connected}
-          style={{ maxWidth: 320 }}
-        >
+        <select value={pick} onChange={(e) => setPick(e.target.value)} style={{ maxWidth: 320 }}>
           {hosts.length === 0 && <option value="">No hosts</option>}
           {hosts.map((h) => (
-            <option key={h.id} value={h.id}>
-              {h.label}{!h.has_agent ? " (ssh)" : ""}
-            </option>
+            <option key={h.id} value={h.id}>{h.label}{!h.has_agent ? " (ssh)" : ""}</option>
           ))}
         </select>
-        {!connected ? (
-          <button className="btn" onClick={connect} disabled={!host}>Connect</button>
-        ) : (
-          <button className="btn secondary" onClick={disconnect}>Disconnect</button>
-        )}
-        {status && <span className="muted">{status}</span>}
+        <button className="btn" onClick={openSession} disabled={!pick}>Open Terminal</button>
+        <span className="faint">Open as many hosts as you like — each is its own tab.</span>
       </div>
 
-      {err && <div className="error-box" style={{ marginBottom: 12 }}>{err}</div>}
+      {err && <div className="error-box">{err}</div>}
 
-      <div className="term-host" ref={elRef} style={{ display: connected || status ? "block" : "none" }} />
-      {!connected && !status && (
-        <div className="empty">Pick a host and connect to open a live shell.</div>
+      {sessions.length === 0 ? (
+        <div className="empty">No terminals open. Pick a host and click “Open Terminal”.</div>
+      ) : (
+        <>
+          <div className="term-tabs">
+            {sessions.map((s) => (
+              <div key={s.id} className={"term-tab" + (s.id === activeId ? " active" : "")}
+                   onClick={() => setActiveId(s.id)}>
+                <span className={"dot " + (s.status === "connected" ? "ok" : s.status?.startsWith("error") || s.status === "closed" ? "bad" : "")} />
+                <span>{s.label}</span>
+                <span className="x" onClick={(e) => { e.stopPropagation(); closeSession(s.id); }}>✕</span>
+              </div>
+            ))}
+          </div>
+          {/* All sessions stay mounted; only the active one is visible. */}
+          {sessions.map((s) => (
+            <div key={s.id} style={{ display: s.id === activeId ? "block" : "none" }}>
+              <TerminalSession
+                hostId={s.hostId}
+                active={s.id === activeId}
+                onStatus={(st) => setStatus(s.id, st)}
+              />
+            </div>
+          ))}
+        </>
       )}
     </div>
   );

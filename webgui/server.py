@@ -454,6 +454,182 @@ def remove_host(host_id: str, request: Request, user: str = Depends(require_logi
 
 
 # ----------------------------------------------------------------------
+# Superuser-token helper: set the admin token (captured at login) on the
+# shared client.api for the duration of one controller call. Serialized so
+# concurrent requests can't clobber the process-global token.
+# ----------------------------------------------------------------------
+import threading as _threading  # noqa: E402
+_ADMIN_TOKEN_LOCK = _threading.Lock()
+
+
+def _as_admin(request: Request, fn):
+    token = request.session.get("token")
+    with _ADMIN_TOKEN_LOCK:
+        api.set_admin_token(token)
+        try:
+            return fn()
+        finally:
+            api.set_admin_token(None)
+
+
+def _wrap(fn):
+    try:
+        return fn() if not callable(fn) else fn()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+# ----------------------------------------------------------------------
+# Live Activity & Logs
+# ----------------------------------------------------------------------
+@app.get("/api/activity")
+def activity(limit: int = 200, since_id: int = 0, user: str = Depends(require_login)):
+    return _wrap(lambda: {"activity": api.get_activity_log(limit=limit, since_id=since_id)})
+
+
+@app.get("/api/controller-log")
+def controller_log(lines: int = 400, user: str = Depends(require_login)):
+    return _wrap(lambda: api.get_controller_log(lines=lines))
+
+
+# ----------------------------------------------------------------------
+# Settings — administrators, password policy, controller config, license, audit
+# ----------------------------------------------------------------------
+@app.get("/api/admins")
+def list_admins(user: str = Depends(require_login)):
+    return _wrap(lambda: {"administrators": api.list_administrators()})
+
+
+class AdminCreate(BaseModel):
+    username: str
+    password: str
+    role: str = "sysadmin"
+
+
+@app.post("/api/admins")
+def add_admin(body: AdminCreate, request: Request, user: str = Depends(require_login)):
+    return _wrap(lambda: _as_admin(request, lambda: api.add_administrator(
+        body.username, body.password, actor=user, role=body.role)))
+
+
+@app.delete("/api/admins/{username}")
+def del_admin(username: str, request: Request, user: str = Depends(require_login)):
+    return _wrap(lambda: _as_admin(request, lambda: api.remove_administrator(username, actor=user)))
+
+
+@app.get("/api/password-policy")
+def get_policy(user: str = Depends(require_login)):
+    return _wrap(lambda: api.get_admin_password_policy())
+
+
+@app.post("/api/password-policy")
+def set_policy(body: dict, request: Request, user: str = Depends(require_login)):
+    return _wrap(lambda: _as_admin(request, lambda: api.set_admin_password_policy(body)))
+
+
+@app.get("/api/controller-config")
+def get_cfg(user: str = Depends(require_login)):
+    return _wrap(lambda: api.get_controller_config())
+
+
+class ControllerCfg(BaseModel):
+    hostname: str = ""
+    ip: str = ""
+    address_mode: str = "hostname"
+    port: int = 9000
+
+
+@app.post("/api/controller-config")
+def set_cfg(body: ControllerCfg, request: Request, user: str = Depends(require_login)):
+    return _wrap(lambda: _as_admin(request, lambda: api.set_controller_config(
+        body.hostname, body.ip, body.address_mode, body.port)))
+
+
+@app.get("/api/audit-log")
+def audit_log(limit: int = 200, user: str = Depends(require_login)):
+    return _wrap(lambda: {"audit": api.get_admin_audit_log(limit=limit)})
+
+
+@app.get("/api/license")
+def license_config(user: str = Depends(require_login)):
+    return _wrap(lambda: api.get_license_config())
+
+
+# ----------------------------------------------------------------------
+# Webserver Portal
+# ----------------------------------------------------------------------
+@app.get("/api/portal/status")
+def portal_status(user: str = Depends(require_login)):
+    return _wrap(lambda: api.get_portal_status())
+
+
+@app.post("/api/portal/start")
+def portal_start(request: Request, user: str = Depends(require_login)):
+    return _wrap(lambda: _as_admin(request, lambda: api.start_portal()))
+
+
+@app.post("/api/portal/stop")
+def portal_stop(request: Request, user: str = Depends(require_login)):
+    return _wrap(lambda: _as_admin(request, lambda: api.stop_portal()))
+
+
+class PortalPort(BaseModel):
+    port: int
+
+
+@app.post("/api/portal/config")
+def portal_cfg(body: PortalPort, request: Request, user: str = Depends(require_login)):
+    return _wrap(lambda: _as_admin(request, lambda: api.set_portal_port(body.port)))
+
+
+class PortalCreds(BaseModel):
+    username: str
+    password: str
+    current_password: str = ""
+
+
+@app.post("/api/portal/credentials")
+def portal_creds(body: PortalCreds, request: Request, user: str = Depends(require_login)):
+    return _wrap(lambda: _as_admin(request, lambda: api.set_portal_credentials(
+        body.username, body.password, body.current_password)))
+
+
+# ----------------------------------------------------------------------
+# Host Enrollment
+# ----------------------------------------------------------------------
+@app.get("/api/agents")
+def agents(user: str = Depends(require_login)):
+    return _wrap(lambda: {"agents": api.get_agents()})
+
+
+@app.post("/api/enroll-token")
+def enroll_token(request: Request, user: str = Depends(require_login)):
+    return _wrap(lambda: _as_admin(request, lambda: api.generate_enroll_token()))
+
+
+@app.get("/api/agent-bundle")
+def agent_bundle(user: str = Depends(require_login)):
+    """Download the ready-to-run agent bundle (tar.gz) the desktop's Host
+    Enrollment page hands out."""
+    tmpdir = Path(tempfile.mkdtemp(prefix="sysible-bundle-"))
+    dest = tmpdir / "sysible-agent.tar.gz"
+    try:
+        api.download_agent_bundle(str(dest))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not build bundle: {e}")
+
+    def _cleanup():
+        try:
+            dest.unlink(missing_ok=True); tmpdir.rmdir()
+        except Exception:
+            pass
+    return FileResponse(str(dest), filename="sysible-agent.tar.gz",
+                        media_type="application/gzip", background=BackgroundTask(_cleanup))
+
+
+# ----------------------------------------------------------------------
 # Tool catalog + the generic dispatch engine
 # ----------------------------------------------------------------------
 @app.get("/api/tools")

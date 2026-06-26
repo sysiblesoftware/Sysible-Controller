@@ -42,6 +42,35 @@ export const api = {
       method: "POST",
       body: { targets, params },
     }),
+  // Live Activity & Logs
+  activity: (limit = 200, sinceId = 0) =>
+    req(`/api/activity?limit=${limit}&since_id=${sinceId}`),
+  controllerLog: (lines = 400) => req(`/api/controller-log?lines=${lines}`),
+  // Settings
+  admins: () => req("/api/admins"),
+  addAdmin: (username, password, role) =>
+    req("/api/admins", { method: "POST", body: { username, password, role } }),
+  removeAdmin: (username) =>
+    req(`/api/admins/${encodeURIComponent(username)}`, { method: "DELETE" }),
+  passwordPolicy: () => req("/api/password-policy"),
+  setPasswordPolicy: (policy) =>
+    req("/api/password-policy", { method: "POST", body: policy }),
+  controllerConfig: () => req("/api/controller-config"),
+  setControllerConfig: (cfg) =>
+    req("/api/controller-config", { method: "POST", body: cfg }),
+  auditLog: (limit = 200) => req(`/api/audit-log?limit=${limit}`),
+  license: () => req("/api/license"),
+  // Webserver Portal
+  portalStatus: () => req("/api/portal/status"),
+  portalStart: () => req("/api/portal/start", { method: "POST" }),
+  portalStop: () => req("/api/portal/stop", { method: "POST" }),
+  portalSetPort: (port) => req("/api/portal/config", { method: "POST", body: { port } }),
+  portalSetCreds: (username, password, current_password) =>
+    req("/api/portal/credentials", { method: "POST", body: { username, password, current_password } }),
+  // Host Enrollment
+  agents: () => req("/api/agents"),
+  enrollToken: () => req("/api/enroll-token", { method: "POST" }),
+  agentBundleUrl: () => "/api/agent-bundle",
   // Sudo (become) password — encrypted at rest on the controller, per admin.
   sudoStatus: () => req("/api/sudo"),
   setSudo: (password, scope) =>

@@ -2,18 +2,23 @@ import React, { useEffect, useState, useCallback } from "react";
 import { api } from "./api.js";
 import Login from "./views/Login.jsx";
 import Dashboard from "./views/Dashboard.jsx";
-import Hosts from "./views/Hosts.jsx";
 import ToolRunner from "./views/ToolRunner.jsx";
 import Connect from "./views/Connect.jsx";
+import LiveActivity from "./views/LiveActivity.jsx";
+import Settings from "./views/Settings.jsx";
+import Portal from "./views/Portal.jsx";
+import HostEnrollment from "./views/HostEnrollment.jsx";
 import SudoModal from "./components/SudoModal.jsx";
 import StandaloneTerminal from "./components/StandaloneTerminal.jsx";
 
 // Sections opened from a dashboard tile. Titles mirror the desktop.
 const SECTIONS = {
-  hosts: "Host Enrollment & Fleet",
-  sysadmin: "System Administration",
+  hosts: "Sysible Controller Host Enrollment",
+  settings: "Sysible Controller Settings",
   connect: "Sysible Connect",
-  files: "File Transfer",
+  portal: "Webserver Portal Configuration",
+  sysadmin: "System Administration",
+  live: "Live Activity & Logs",
 };
 
 function applyTheme(t) {
@@ -103,9 +108,12 @@ export default function App() {
               <span className="crumb" onClick={() => setView(null)}>← Dashboard</span>
               <h2>{SECTIONS[view]}</h2>
             </div>
-            {view === "hosts" && <Hosts />}
+            {view === "hosts" && <HostEnrollment />}
+            {view === "settings" && <Settings />}
             {view === "sysadmin" && <ToolRunner />}
             {view === "connect" && <Connect />}
+            {view === "portal" && <Portal />}
+            {view === "live" && <LiveActivity />}
           </>
         )}
       </div>

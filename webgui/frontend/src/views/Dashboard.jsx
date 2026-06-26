@@ -42,8 +42,6 @@ export default function Dashboard({ role, onOpen }) {
     return !s || t.toLowerCase().includes(s) || d.toLowerCase().includes(s);
   });
 
-  const BUILT = new Set(["hosts", "sysadmin", "connect"]);
-
   return (
     <div>
       <input
@@ -54,15 +52,10 @@ export default function Dashboard({ role, onOpen }) {
       />
       <div className="tiles">
         {filtered.map(([title, desc, icon, cls, section]) => (
-          <button
-            key={section}
-            className="tile"
-            onClick={() => BUILT.has(section) ? onOpen(section) : null}
-            style={!BUILT.has(section) ? { opacity: 0.6, cursor: "default" } : undefined}
-          >
+          <button key={section} className="tile" onClick={() => onOpen(section)}>
             <div className={"tile-ico " + cls}><Icon name={icon} /></div>
             <h3>{title}</h3>
-            <p>{desc}{!BUILT.has(section) ? "  (coming soon to the web console)" : ""}</p>
+            <p>{desc}</p>
           </button>
         ))}
       </div>

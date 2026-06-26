@@ -391,11 +391,12 @@ PY
   fi
   local action u p
   action="$(echo "$out" | cut -f1)"; u="$(echo "$out" | cut -f2)"; p="$(echo "$out" | cut -f3)"
+  local R='\033[1;31m' Z='\033[0m'   # bold red / reset
   echo "==================================================================="
-  echo " Web console admin ${action}:"
-  echo "     username:  $u"
-  echo "     password:  $p"
-  echo " Log in at the web console, then change it (Settings -> My Account)."
+  echo -e "${R} Web console admin ${action}:${Z}"
+  echo -e "${R}     username:  $u${Z}"
+  echo -e "${R}     password:  $p${Z}"
+  echo -e "${R} Log in at the web console, then change it (Settings -> My Account).${Z}"
   echo "==================================================================="
 }
 

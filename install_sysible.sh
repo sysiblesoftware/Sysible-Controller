@@ -466,12 +466,13 @@ echo "   Web console (GUI)  : sudo sysible_controller webgui start   ->  https:/
 echo "   Desktop GUI client : sysible_controller gui   (needs a desktop session)"
 echo "==================================================================="
 if [[ "$SEEDED_ADMIN" == "created" ]]; then
+  R='\033[1;31m'; Z='\033[0m'   # bold red / reset
   echo ""
-  echo " WEB CONSOLE LOGIN (default admin created for this fresh install):"
-  echo "     username:  $DEFAULT_ADMIN_USER"
-  echo "     password:  $DEFAULT_ADMIN_PASS"
-  echo " Change it after first login (Settings -> My Account). This is shown"
-  echo " only once - copy it now."
+  echo -e "${R} WEB CONSOLE LOGIN (default admin created for this fresh install):${Z}"
+  echo -e "${R}     username:  $DEFAULT_ADMIN_USER${Z}"
+  echo -e "${R}     password:  $DEFAULT_ADMIN_PASS${Z}"
+  echo -e "${R} Change it after first login (Settings -> My Account). This is shown${Z}"
+  echo -e "${R} only once - copy it now.${Z}"
   echo ""
 else
   echo ""

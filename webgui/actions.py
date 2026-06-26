@@ -51,6 +51,8 @@ class Action:
     params: list = field(default_factory=list)
     description: str = ""
     danger: bool = False        # UI confirms before running (delete, etc.)
+    tab: str = ""               # desktop tab this action lives under
+    group: str = ""             # titled section (QGroupBox) within the tab
 
 
 # ----------------------------------------------------------------------
@@ -1296,6 +1298,48 @@ _register(Action(name="sub_suse_deregister", tool="Distro Subscription & Licensi
 # ----------------------------------------------------------------------
 # Public API used by server.py
 # ----------------------------------------------------------------------
+# ----------------------------------------------------------------------
+# Desktop layout map: how each tool's actions are organized into tabs and
+# titled group sections, matching the desktop *_page.py pages. Extend this
+# per tool; any action not listed falls into a single default tab. Order
+# here is the order shown in the UI.
+#   tool -> [ (tab, group, [action_name, ...]), ... ]
+# ----------------------------------------------------------------------
+_LAYOUT: dict[str, list] = {
+    "Firewall Administration": [
+        ("Firewalld", "Install a Firewall", ["fw_install_firewalld", "fw_install_ufw"]),
+        ("Firewalld", "Service State", ["fw_status", "fw_set_enabled", "fw_reload"]),
+        ("Firewalld", "Default Zone", ["fw_set_default_zone"]),
+        ("Ports", "List Ports", ["fw_list_ports", "fw_list_all_ports"]),
+        ("Ports", "Open / Close Ports", ["fw_open_port", "fw_close_port"]),
+        ("Zones", "Zones", ["fw_list_zones", "fw_create_zone", "fw_delete_zone"]),
+        ("Rich Rules", "Rich Rules", ["fw_list_rich", "fw_add_rich", "fw_remove_rich"]),
+        ("nftables", "Ruleset", ["fw_nft_ruleset", "fw_nft_flush"]),
+        ("nftables", "Tables & Chains", ["fw_nft_add_table", "fw_nft_add_chain"]),
+        ("nftables", "Rules", ["fw_nft_add_rule", "fw_nft_delete_rule"]),
+        ("iptables", "Rules", ["fw_iptables_list", "fw_iptables_save",
+                               "fw_iptables_add", "fw_iptables_delete", "fw_iptables_flush"]),
+    ],
+}
+
+_ORDER: dict[str, int] = {}
+
+
+def _apply_layout():
+    for tool, sections in _LAYOUT.items():
+        idx = 0
+        for tab, group, names in sections:
+            for nm in names:
+                a = _ACTIONS.get(nm)
+                if a is not None:
+                    a.tab, a.group = tab, group
+                    _ORDER[nm] = idx
+                idx += 1
+
+
+_apply_layout()
+
+
 def get(name: str):
     return _ACTIONS.get(name)
 
@@ -1310,6 +1354,8 @@ def catalog():
             "label": a.label,
             "description": a.description,
             "danger": a.danger,
+            "tab": a.tab,
+            "group": a.group,
             "params": [
                 {
                     "name": pr.name, "label": pr.label, "type": pr.type,
@@ -1319,4 +1365,8 @@ def catalog():
                 for pr in a.params
             ],
         })
+    # Order each tool's actions by the desktop layout (unlisted actions keep
+    # registration order, after the laid-out ones).
+    for acts in by_tool.values():
+        acts.sort(key=lambda a: _ORDER.get(a["name"], 10_000))
     return [{"tool": tool, "actions": acts} for tool, acts in by_tool.items()]

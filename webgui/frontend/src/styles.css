@@ -194,6 +194,24 @@ tr:hover td { background: var(--row-hover); }
   color: var(--text-dim); padding: 7px 13px; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 13px; }
 .tabs button.active { background: var(--panel); color: var(--text); border-color: var(--border); }
 
+/* ---------- Tool group boxes (desktop QGroupBox look) ---------- */
+.tool-group-box {
+  border: 1px solid var(--border); border-radius: 8px; margin: 0 0 14px;
+  padding: 12px 14px 14px; min-inline-size: 0;
+}
+.tool-group-box > legend {
+  padding: 0 8px; color: var(--text-dim); font-size: 12px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.action-row { display: flex; align-items: flex-end; gap: 10px; padding: 6px 0; flex-wrap: wrap; }
+.action-row + .action-row { border-top: 1px solid var(--border); }
+.action-fields { display: flex; gap: 10px; flex: 1; flex-wrap: wrap; min-width: 0; }
+.action-field { flex: 1; min-width: 130px; }
+.action-field label.field { margin: 0; }
+.action-row > .btn { white-space: nowrap; }
+.results-bar { display: flex; justify-content: space-between; align-items: center;
+  gap: 12px; padding: 10px 0 6px; border-top: 1px solid var(--border); margin-top: 6px; }
+
 /* ---------- Results ---------- */
 .result { background: var(--panel); border: 1px solid var(--border); border-radius: 7px; margin-top: 10px; overflow: hidden; }
 .result .rh { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); }

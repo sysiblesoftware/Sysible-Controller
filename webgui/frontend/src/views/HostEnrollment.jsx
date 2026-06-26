@@ -23,6 +23,15 @@ export default function HostEnrollment() {
     finally { setBusy(""); }
   }
 
+  async function disenroll(a) {
+    const id = a.host_id || a.id;
+    const label = a.label || a.host_id || a.name;
+    if (!window.confirm(`Disenroll ${label}? Its agent keeps running but stops being managed.`)) return;
+    setErr("");
+    try { await api.removeHost(id); load(); }
+    catch (e) { setErr(e.message); }
+  }
+
   return (
     <div>
       {err && <div className="error-box">{err}</div>}
@@ -55,7 +64,7 @@ export default function HostEnrollment() {
         <div className="empty">No agents enrolled yet.</div>
       ) : (
         <table>
-          <thead><tr><th>Host</th><th>Address</th><th>Environment</th><th>Last seen</th></tr></thead>
+          <thead><tr><th>Host</th><th>Address</th><th>Environment</th><th>Last seen</th><th></th></tr></thead>
           <tbody>
             {agents.map((a) => (
               <tr key={a.host_id || a.id || a.label}>
@@ -63,6 +72,9 @@ export default function HostEnrollment() {
                 <td className="faint">{a.address || a.ip || ""}</td>
                 <td>{a.environment ? <span className="badge">{a.environment}</span> : <span className="faint">—</span>}</td>
                 <td className="faint mono">{a.last_seen || a.last_heartbeat || a.updated_at || ""}</td>
+                <td style={{ textAlign: "right" }}>
+                  <button className="btn ghost sm" onClick={() => disenroll(a)}>Disenroll</button>
+                </td>
               </tr>
             ))}
           </tbody>

@@ -99,14 +99,9 @@ export default function Connect() {
 
         <Section title="Selected Host">
           {sel ? (
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <div>
-                <strong>{sel.label}</strong>{" "}
-                <span className="badge">{sel.has_agent ? "Agent + SSH" : "SSH"}</span>{" "}
-                <span className="faint">{sel.address} · {sel.environment || "Ungrouped"}</span>
-              </div>
-              <button className="btn sm" onClick={() => openTerm(sel)}>Open Terminal</button>
-            </div>
+            <SelectedHost host={sel} onTerminal={() => openTerm(sel)}
+                          onChanged={(clearSel) => { if (clearSel) setSel(null); loadHosts(); }}
+                          onErr={setErr} />
           ) : <span className="faint">No host selected. Click a host; double-click to open its terminal.</span>}
         </Section>
 
@@ -127,6 +122,51 @@ export default function Connect() {
             client for RDP, or ask about adding a browser RDP gateway.
           </div>
         </Section>
+      </div>
+    </div>
+  );
+}
+
+function SelectedHost({ host, onTerminal, onChanged, onErr }) {
+  const [env, setEnv] = useState(host.environment || "");
+  const [busy, setBusy] = useState("");
+  useEffect(() => { setEnv(host.environment || ""); }, [host]);
+
+  async function disenroll() {
+    if (!window.confirm(
+      `Disenroll ${host.label}? The host's agent keeps running but stops being managed ` +
+      `by this controller. You can re-enroll it later.`)) return;
+    setBusy("rm"); onErr("");
+    try { await api.removeHost(host.id); onChanged(true); }
+    catch (e) { onErr(e.message); }
+    finally { setBusy(""); }
+  }
+  async function saveEnv() {
+    setBusy("env"); onErr("");
+    try { await api.setHostEnvironment(host.id, env.trim()); onChanged(false); }
+    catch (e) { onErr(e.message); }
+    finally { setBusy(""); }
+  }
+
+  return (
+    <div>
+      <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <strong>{host.label}</strong>{" "}
+          <span className="badge">{host.has_agent ? "Agent + SSH" : "SSH"}</span>{" "}
+          <span className="faint">{host.address} · {host.environment || "Ungrouped"}</span>
+        </div>
+        <div className="row">
+          <button className="btn sm" onClick={onTerminal}>Open Terminal</button>
+          <button className="btn sm danger" disabled={busy === "rm"} onClick={disenroll}>
+            {busy === "rm" ? <span className="spin" /> : "Disenroll Host"}
+          </button>
+        </div>
+      </div>
+      <div className="row" style={{ marginTop: 10, gap: 8 }}>
+        <input style={{ maxWidth: 220 }} placeholder="Environment (e.g. Prod)" value={env}
+               onChange={(e) => setEnv(e.target.value)} />
+        <button className="btn sm ghost" disabled={busy === "env"} onClick={saveEnv}>Set Environment</button>
       </div>
     </div>
   );

@@ -1,6 +1,13 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { api } from "../api.js";
 import ToolPage from "./ToolPage.jsx";
+import UserGroupPage from "./UserGroupPage.jsx";
+
+// Tools with a bespoke, desktop-faithful page (richer than the generic
+// three-pane action runner). Keyed by catalog tool name.
+const CUSTOM_PAGES = {
+  "User & Group Administration": UserGroupPage,
+};
 
 // System Administration: a grid of tool tiles (from the action catalog);
 // selecting one opens its three-pane page.
@@ -23,13 +30,16 @@ export default function ToolRunner() {
   if (catalog === null) return <div className="empty"><span className="spin" /></div>;
 
   if (openTool) {
+    const Custom = CUSTOM_PAGES[openTool.tool];
     return (
       <div style={{ height: "calc(100vh - 180px)" }}>
         <div className="row" style={{ marginBottom: 12 }}>
           <button className="btn ghost sm" onClick={() => setOpenTool(null)}>← All tools</button>
           <strong>{openTool.tool}</strong>
         </div>
-        <ToolPage tool={openTool} hosts={hosts} onRefreshHosts={loadHosts} />
+        {Custom
+          ? <Custom />
+          : <ToolPage tool={openTool} hosts={hosts} onRefreshHosts={loadHosts} />}
       </div>
     );
   }

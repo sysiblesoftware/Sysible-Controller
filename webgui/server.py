@@ -558,6 +558,45 @@ def license_config(user: str = Depends(require_login)):
 
 
 # ----------------------------------------------------------------------
+# User & Group Administration — live per-host user/group/session data
+# ----------------------------------------------------------------------
+class UserSyncRequest(BaseModel):
+    host_id: str
+
+
+@app.post("/api/users/sync")
+def users_sync(body: UserSyncRequest, user: str = Depends(require_login)):
+    """Pull the live user/group/session inventory from one host (mirrors the
+    desktop 'Sync Checked Hosts'). SSH hosts answer synchronously; agent hosts
+    are polled here to a timeout so the browser gets one response."""
+    try:
+        entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+    entry = entries.get(body.host_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="host not found")
+
+    res = dispatch.sync_entry_users(entry)
+    if res.get("error"):
+        raise HTTPException(status_code=502, detail=res["error"])
+    if res.get("sync"):
+        return {"host": entry["label"], "data": res.get("data") or {}}
+
+    import time as _t
+    task_id = res.get("task_id")
+    deadline = _t.time() + float(os.getenv("SYSIBLE_WEBGUI_TASK_TIMEOUT", "60"))
+    while _t.time() < deadline:
+        polled = dispatch.poll_entry_sync_result(entry, task_id)
+        if polled is not None:
+            if polled.get("error"):
+                raise HTTPException(status_code=502, detail=polled["error"])
+            return {"host": entry["label"], "data": polled.get("data") or {}}
+        _t.sleep(1.0)
+    raise HTTPException(status_code=504, detail="timed out waiting for the agent to report users")
+
+
+# ----------------------------------------------------------------------
 # Webserver Portal
 # ----------------------------------------------------------------------
 @app.get("/api/portal/status")

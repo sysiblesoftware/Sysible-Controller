@@ -67,6 +67,8 @@ export const api = {
   portalSetPort: (port) => req("/api/portal/config", { method: "POST", body: { port } }),
   portalSetCreds: (username, password, current_password) =>
     req("/api/portal/credentials", { method: "POST", body: { username, password, current_password } }),
+  // User & Group — live host inventory
+  usersSync: (hostId) => req("/api/users/sync", { method: "POST", body: { host_id: hostId } }),
   // Host Enrollment
   agents: () => req("/api/agents"),
   enrollToken: () => req("/api/enroll-token", { method: "POST" }),

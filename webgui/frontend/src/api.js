@@ -92,6 +92,11 @@ export const api = {
   environments: () => req("/api/environments"),
   createEnvironment: (name) => req("/api/environments", { method: "POST", body: { name } }),
   deleteEnvironment: (name) => req(`/api/environments/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  setHostSudo: (hostId, required) =>
+    req(`/api/host/${encodeURIComponent(hostId)}/sudo`, { method: "POST", body: { required } }),
+  envSudoDefaults: () => req("/api/environment-sudo-defaults"),
+  setEnvSudoDefault: (name, required) =>
+    req("/api/environment-sudo-default", { method: "POST", body: { name, required } }),
   removeHost: (hostId) =>
     req(`/api/host/${encodeURIComponent(hostId)}`, { method: "DELETE" }),
   uploadFile: (host, remotePath, file) => {

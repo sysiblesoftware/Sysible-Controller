@@ -504,6 +504,32 @@ def remove_host(host_id: str, request: Request, user: str = Depends(require_logi
         raise HTTPException(status_code=502, detail=str(e))
 
 
+class SudoRequiredRequest(BaseModel):
+    required: bool
+
+
+@app.post("/api/host/{host_id}/sudo")
+def set_host_sudo(host_id: str, body: SudoRequiredRequest, request: Request,
+                  user: str = Depends(require_login)):
+    return _wrap(lambda: api.set_sudo_password_required(host_id, body.required))
+
+
+@app.get("/api/environment-sudo-defaults")
+def env_sudo_defaults(user: str = Depends(require_login)):
+    return _wrap(lambda: api.get_environment_sudo_defaults())
+
+
+class EnvSudoDefaultRequest(BaseModel):
+    name: str
+    required: bool
+
+
+@app.post("/api/environment-sudo-default")
+def set_env_sudo_default(body: EnvSudoDefaultRequest, request: Request,
+                         user: str = Depends(require_login)):
+    return _wrap(lambda: _as_admin(request, lambda: api.set_environment_sudo_default(body.name, body.required)))
+
+
 # ----------------------------------------------------------------------
 # Superuser-token helper: set the admin token (captured at login) on the
 # shared client.api for the duration of one controller call. Serialized so

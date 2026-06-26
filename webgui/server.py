@@ -73,14 +73,54 @@ app = FastAPI(title="Sysible Web GUI")
 # Signed http-only session cookie. Set SYSIBLE_WEBGUI_SECRET in the
 # environment for a stable secret across restarts; a random per-process
 # secret (the fallback) logs everyone out whenever the service restarts.
+# (webgui_manager persists one to run/webgui.secret so the deployed
+# service keeps sessions valid across restarts.)
 _SECRET = os.getenv("SYSIBLE_WEBGUI_SECRET") or secrets.token_hex(32)
+
+# Sessions expire so an unattended browser doesn't stay logged in forever.
+# Default 12h; override with SYSIBLE_WEBGUI_SESSION_MAX_AGE (seconds).
+try:
+    _SESSION_MAX_AGE = int(os.getenv("SYSIBLE_WEBGUI_SESSION_MAX_AGE", "43200"))
+except ValueError:
+    _SESSION_MAX_AGE = 43200
+
+# Mark the cookie Secure when we're behind TLS (set by webgui_manager when the
+# controller has certs). same_site="strict" is right for an admin console:
+# the cookie is never attached to cross-site requests, which closes CSRF on
+# the state-changing POSTs without needing a separate token.
+_HTTPS_ONLY = os.getenv("SYSIBLE_WEBGUI_HTTPS_ONLY", "0") == "1"
 app.add_middleware(
     SessionMiddleware,
     secret_key=_SECRET,
     session_cookie="sysible_web",
-    https_only=os.getenv("SYSIBLE_WEBGUI_HTTPS_ONLY", "0") == "1",
-    same_site="lax",
+    https_only=_HTTPS_ONLY,
+    same_site="strict",
+    max_age=_SESSION_MAX_AGE,
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Defense-in-depth headers for a console that may be exposed on a
+    network. CSP keeps everything same-origin (the SPA bundles all its
+    own assets); 'unsafe-inline' style is needed because xterm.js injects
+    inline styles, and connect-src 'self' covers the same-origin
+    terminal websocket."""
+    resp = await call_next(request)
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "same-origin")
+    resp.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; img-src 'self' data:; "
+        "style-src 'self' 'unsafe-inline'; connect-src 'self'; "
+        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    )
+    if _HTTPS_ONLY:
+        resp.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return resp
+
 
 _FRONTEND_DIST = _REPO_ROOT / "webgui" / "frontend" / "dist"
 
@@ -102,17 +142,61 @@ class LoginRequest(BaseModel):
     password: str
 
 
+# In-memory login throttle: slows password guessing against an exposed
+# console without a datastore. Per client IP, allow a burst then lock out
+# for a cooldown. Successful login clears the counter. State is per-process;
+# the deployed service is a single uvicorn process, so that's sufficient.
+_LOGIN_MAX_ATTEMPTS = int(os.getenv("SYSIBLE_WEBGUI_LOGIN_MAX_ATTEMPTS", "8"))
+_LOGIN_WINDOW_S = int(os.getenv("SYSIBLE_WEBGUI_LOGIN_WINDOW", "300"))
+_login_attempts: dict[str, list] = {}
+
+
+def _client_ip(request: Request) -> str:
+    # Behind a reverse proxy the real IP is in X-Forwarded-For; fall back to
+    # the socket peer. (Spoofable if not behind a trusted proxy, but the
+    # throttle is best-effort hardening, not an access control.)
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _throttle_check(ip: str):
+    import time
+    now = time.time()
+    hits = [t for t in _login_attempts.get(ip, []) if now - t < _LOGIN_WINDOW_S]
+    _login_attempts[ip] = hits
+    if len(hits) >= _LOGIN_MAX_ATTEMPTS:
+        retry = int(_LOGIN_WINDOW_S - (now - hits[0]))
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many login attempts. Try again in {max(retry, 1)} seconds.",
+        )
+
+
+def _throttle_record_failure(ip: str):
+    import time
+    _login_attempts.setdefault(ip, []).append(time.time())
+
+
 @app.post("/api/login")
 def login(body: LoginRequest, request: Request):
     """Verify credentials against the controller (client.api holds the
     API key) and, on success, store the username in the signed session
     cookie. Mirrors the desktop admin login exactly."""
+    ip = _client_ip(request)
+    _throttle_check(ip)
     try:
         result = api.admin_login(body.username.strip(), body.password)
     except Exception:
         # client.api raises on a 401 from the controller.
+        _throttle_record_failure(ip)
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
+    _login_attempts.pop(ip, None)  # clear on success
+    # Drop any pre-login session identifier so a fixed/known cookie can't be
+    # carried into the authenticated session (session-fixation hardening).
+    request.session.clear()
     request.session["user"] = body.username.strip()
     return {
         "username": body.username.strip(),

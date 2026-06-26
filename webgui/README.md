@@ -57,35 +57,70 @@ npm run build        # outputs webgui/frontend/dist/
 
 ## Run the service
 
+The simplest path on a headless controller is the launcher at the repo root,
+which builds the front end on first run, generates and reuses a stable cookie
+secret (`run/webgui.secret`, mode 0600), and turns on TLS automatically if the
+controller has a cert:
+
+```bash
+./start_webgui.sh            # port 8800 by default
+./start_webgui.sh 9443       # or pick a port
+```
+
+Or run it by hand:
+
 ```bash
 cd webgui
-pip install -r requirements.txt
-# also ensure the controller's own deps are importable (run in its venv
-# or: pip install -r ../requirements.txt)
-
+pip install -r requirements.txt        # plus the controller's own deps
 export SYSIBLE_WEBGUI_SECRET="$(python3 -c 'import secrets;print(secrets.token_hex(32))')"
 uvicorn server:app --host 0.0.0.0 --port 8800
 ```
 
-Open `http://<this-host>:8800/` and sign in with a controller
-administrator account (the same credentials the desktop app uses).
+Open `https://<this-host>:8800/` and sign in with a controller administrator
+account (the same credentials the desktop app uses).
 
 ### Environment variables
 
 | Variable                       | Purpose                                              |
 |--------------------------------|------------------------------------------------------|
-| `SYSIBLE_WEBGUI_SECRET`        | Stable secret for signing the session cookie. Set this in production — the random fallback logs everyone out on restart. |
-| `SYSIBLE_WEBGUI_HTTPS_ONLY`    | `1` to mark the session cookie Secure (set when behind TLS). |
+| `SYSIBLE_WEBGUI_SECRET`        | Stable secret for signing the session cookie. Set this in production — the random fallback logs everyone out on restart. (`start_webgui.sh` and `webgui_manager` persist one for you.) |
+| `SYSIBLE_WEBGUI_HTTPS_ONLY`    | `1` to mark the session cookie Secure + send HSTS (set automatically when TLS is on). |
+| `SYSIBLE_WEBGUI_SESSION_MAX_AGE` | Session lifetime in seconds before re-login (default 43200 = 12h). |
+| `SYSIBLE_WEBGUI_LOGIN_MAX_ATTEMPTS` | Failed logins per IP before a temporary lockout (default 8). |
+| `SYSIBLE_WEBGUI_LOGIN_WINDOW`  | Lockout/counting window in seconds (default 300). |
 | `SYSIBLE_WEBGUI_TASK_TIMEOUT`  | Seconds to wait for an agent task result (default 60). |
 | `SYSIBLE_API_BASE_URL`, `SYSIBLE_API_KEY`, `SYSIBLE_CA_CERT` | Controller connection — read by `client.api`, same as the desktop app. |
 
+## Security posture (network exposure)
+
+This console is built to be reachable over a network, so it ships hardened by
+default:
+
+- **Session cookie** — signed, http-only, `SameSite=Strict` (closes CSRF on
+  the state-changing `POST`s without a separate token), marked `Secure` under
+  TLS, and expiring after `SESSION_MAX_AGE`. The signing secret is persisted
+  so restarts don't invalidate everyone's session.
+- **Login throttle** — per-IP attempt limit with a cooldown (HTTP 429) to slow
+  password guessing. Successful login clears the counter and rotates the
+  session (session-fixation hardening).
+- **Security headers** — `Content-Security-Policy` (same-origin only),
+  `X-Frame-Options: DENY` / `frame-ancestors 'none'` (anti-clickjacking),
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`, and HSTS
+  when served over TLS.
+- The controller **API key never reaches the browser** — the BFF holds it and
+  the SPA only ever sees `{action, params, targets}`.
+
 ## Production / TLS
 
-Run the service behind a TLS-terminating reverse proxy (nginx/Caddy) and
-set `SYSIBLE_WEBGUI_HTTPS_ONLY=1`. The service serves both the SPA and
-`/api/*` on one origin, so no CORS configuration is needed. During
-front-end development, `npm run dev` (port 5173) proxies `/api` to
-`http://localhost:8800` so cookies work without CORS.
+Either let the launcher use the controller's own cert (it sets
+`SYSIBLE_WEBGUI_HTTPS_ONLY=1` and passes the cert to uvicorn), or run behind a
+TLS-terminating reverse proxy (nginx/Caddy) and set `SYSIBLE_WEBGUI_HTTPS_ONLY=1`
+yourself. Either way the service serves both the SPA and `/api/*` on one
+origin, so no CORS configuration is needed. If you front it with a proxy, make
+sure it forwards `X-Forwarded-For` (so the login throttle sees real client IPs)
+and upgrades websockets (for the terminal). During front-end development,
+`npm run dev` (port 5173) proxies `/api` to `http://localhost:8800` so cookies
+work without CORS.
 
 ---
 

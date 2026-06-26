@@ -8,14 +8,16 @@ export default function Settings() {
   return (
     <div>
       <div className="tabs" style={{ marginBottom: 16 }}>
-        {[["admins", "Administrators"], ["policy", "Password Policy"],
-          ["controller", "Controller"], ["license", "License"], ["audit", "Audit Log"]].map(([k, l]) => (
+        {[["admins", "Administrators"], ["me", "My Account"], ["policy", "Password Policy"],
+          ["controller", "Controller"], ["tls", "TLS / Certificates"], ["license", "License"], ["audit", "Audit Log"]].map(([k, l]) => (
           <button key={k} className={tab === k ? "active" : ""} onClick={() => setTab(k)}>{l}</button>
         ))}
       </div>
       {tab === "admins" && <Admins />}
+      {tab === "me" && <MyAccount />}
       {tab === "policy" && <PasswordPolicy />}
       {tab === "controller" && <ControllerCfg />}
+      {tab === "tls" && <Tls />}
       {tab === "license" && <License />}
       {tab === "audit" && <Audit />}
     </div>
@@ -123,11 +125,76 @@ function ControllerCfg() {
           <option value="hostname">hostname</option><option value="ip">ip</option>
         </select></label>
       <label className="field"><span>Hostname</span><input value={cfg.hostname || ""} onChange={set("hostname")} /></label>
-      <label className="field"><span>IP</span><input value={cfg.ip || ""} onChange={set("ip")} /></label>
+      <label className="field"><span>IP</span>
+        <div className="row"><input style={{ flex: 1 }} value={cfg.ip || ""} onChange={set("ip")} />
+          <button className="btn ghost sm" type="button" onClick={async () => {
+            try { const d = await api.localIps(); const ip = (d.ips || [])[0];
+              if (ip) setCfg((c) => ({ ...c, ip })); } catch (e) { setErr(e.message); } }}>Detect Local IPs</button></div>
+      </label>
       <label className="field"><span>Port</span><input type="number" value={cfg.port || 9000} onChange={set("port")} /></label>
       <button className="btn" style={{ marginTop: 14 }} onClick={save}>Save</button>
       {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
       {err && <div className="error-box">{err}</div>}
+    </div>
+  );
+}
+
+function MyAccount() {
+  const [cur, setCur] = useState(""); const [nu, setNu] = useState("");
+  const [np, setNp] = useState(""); const [np2, setNp2] = useState("");
+  const [err, setErr] = useErr(); const [msg, setMsg] = useState("");
+  async function save() {
+    setErr(""); setMsg("");
+    if (np && np !== np2) { setErr("New passwords don't match."); return; }
+    if (!cur) { setErr("Enter your current password to confirm."); return; }
+    try { await api.changeMyCredentials(cur, nu.trim(), np); setMsg("Credentials updated."); setCur(""); setNp(""); setNp2(""); }
+    catch (e) { setErr(e.message); }
+  }
+  return (
+    <div className="card" style={{ maxWidth: 460 }}>
+      <strong>Change My Own Credentials</strong>
+      <label className="field"><span>Current password</span><input type="password" value={cur} onChange={(e) => setCur(e.target.value)} /></label>
+      <label className="field"><span>New username (optional)</span><input value={nu} onChange={(e) => setNu(e.target.value)} /></label>
+      <label className="field"><span>New password (optional)</span><input type="password" value={np} onChange={(e) => setNp(e.target.value)} /></label>
+      <label className="field"><span>Confirm new password</span><input type="password" value={np2} onChange={(e) => setNp2(e.target.value)} /></label>
+      <button className="btn" style={{ marginTop: 14 }} onClick={save}>Save My Credentials</button>
+      {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
+      {err && <div className="error-box">{err}</div>}
+    </div>
+  );
+}
+
+function Tls() {
+  const [info, setInfo] = useState(null);
+  const [cert, setCert] = useState(null); const [key, setKey] = useState(null); const [chain, setChain] = useState(null);
+  const [err, setErr] = useErr(); const [msg, setMsg] = useState(""); const [busy, setBusy] = useState(false);
+  function load() { api.tlsInfo().then(setInfo).catch((e) => setErr(e.message)); }
+  useEffect(() => { load(); }, []);
+  async function install(e) {
+    e.preventDefault(); setBusy(true); setErr(""); setMsg("");
+    try { await api.installCertificate(cert, key, chain); setMsg("Certificate installed. Restart the controller for it to take effect."); load(); }
+    catch (e2) { setErr(e2.message); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div style={{ maxWidth: 560 }}>
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="spread"><strong>Current TLS certificate</strong><button className="btn ghost sm" onClick={load}>Refresh</button></div>
+        <div className="muted mono" style={{ fontSize: 12.5, marginTop: 8 }}>
+          {info ? <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>{JSON.stringify(info, null, 2)}</pre> : "Loading…"}
+        </div>
+        <a className="btn sm ghost" style={{ marginTop: 10 }} href={api.trustCertUrl()}>Download Trust Certificate</a>
+      </div>
+      <form className="card" onSubmit={install}>
+        <strong>Install Custom Certificate</strong>
+        <p className="faint" style={{ marginTop: 4 }}>Upload a certificate + private key (and optional chain) to replace the self-signed cert.</p>
+        <label className="field"><span>Certificate (.crt/.pem) *</span><input type="file" onChange={(e) => setCert(e.target.files[0] || null)} /></label>
+        <label className="field"><span>Private key (.key) *</span><input type="file" onChange={(e) => setKey(e.target.files[0] || null)} /></label>
+        <label className="field"><span>Chain (optional)</span><input type="file" onChange={(e) => setChain(e.target.files[0] || null)} /></label>
+        <button className="btn" style={{ marginTop: 14 }} disabled={busy || !cert || !key}>{busy ? <span className="spin" /> : "Install Certificate"}</button>
+        {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
+        {err && <div className="error-box">{err}</div>}
+      </form>
     </div>
   );
 }

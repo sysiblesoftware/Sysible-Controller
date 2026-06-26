@@ -60,6 +60,18 @@ export const api = {
     req("/api/controller-config", { method: "POST", body: cfg }),
   auditLog: (limit = 200) => req(`/api/audit-log?limit=${limit}`),
   license: () => req("/api/license"),
+  changeMyCredentials: (current_password, new_username, new_password) =>
+    req("/api/admin/change-credentials", { method: "POST", body: { current_password, new_username, new_password } }),
+  localIps: () => req("/api/local-ips"),
+  tlsInfo: () => req("/api/tls-info"),
+  trustCertUrl: () => "/api/trust-certificate",
+  installCertificate: (certFile, keyFile, chainFile) => {
+    const fd = new FormData();
+    fd.append("cert", certFile);
+    fd.append("key", keyFile);
+    if (chainFile) fd.append("chain", chainFile);
+    return req("/api/tls-certificate", { method: "POST", body: fd });
+  },
   envPolicy: () => req("/api/environmental-policy"),
   setEnvPolicy: (policy) => req("/api/environmental-policy", { method: "POST", body: policy }),
   // Webserver Portal

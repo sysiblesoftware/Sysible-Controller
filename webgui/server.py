@@ -670,6 +670,69 @@ def license_config(user: str = Depends(require_login)):
     return _wrap(lambda: api.get_license_config())
 
 
+class ChangeCreds(BaseModel):
+    current_password: str
+    new_username: str = ""
+    new_password: str = ""
+
+
+@app.post("/api/admin/change-credentials")
+def change_credentials(body: ChangeCreds, request: Request, user: str = Depends(require_login)):
+    new_user = (body.new_username or "").strip() or user
+    return _wrap(lambda: _as_admin(request, lambda: api.change_admin_credentials(
+        user, body.current_password, new_user, body.new_password)))
+
+
+@app.get("/api/local-ips")
+def local_ips(user: str = Depends(require_login)):
+    return _wrap(lambda: {"ips": api.get_local_ips()})
+
+
+@app.get("/api/tls-info")
+def tls_info(user: str = Depends(require_login)):
+    return _wrap(lambda: api.get_tls_info())
+
+
+@app.get("/api/trust-certificate")
+def trust_certificate(user: str = Depends(require_login)):
+    tmpdir = Path(tempfile.mkdtemp(prefix="sysible-trust-"))
+    dest = tmpdir / "sysible-trust.crt"
+    try:
+        api.download_trust_certificate(str(dest))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not fetch trust cert: {e}")
+
+    def _cleanup():
+        try:
+            dest.unlink(missing_ok=True); tmpdir.rmdir()
+        except Exception:
+            pass
+    return FileResponse(str(dest), filename="sysible-trust.crt",
+                        media_type="application/x-x509-ca-cert", background=BackgroundTask(_cleanup))
+
+
+@app.post("/api/tls-certificate")
+async def install_certificate(request: Request, cert: UploadFile = File(...),
+                              key: UploadFile = File(...), chain: UploadFile = File(None),
+                              user: str = Depends(require_login)):
+    tmp = Path(tempfile.mkdtemp(prefix="sysible-cert-"))
+    paths = {}
+    try:
+        for name, up in (("cert", cert), ("key", key), ("chain", chain)):
+            if up is not None:
+                p = tmp / (up.filename or f"{name}.pem")
+                p.write_bytes(await up.read())
+                paths[name] = str(p)
+        return _wrap(lambda: _as_admin(request, lambda: api.install_tls_certificate(
+            paths["cert"], paths["key"], paths.get("chain"))))
+    finally:
+        for p in tmp.glob("*"):
+            try: p.unlink()
+            except Exception: pass
+        try: tmp.rmdir()
+        except Exception: pass
+
+
 @app.get("/api/environmental-policy")
 def get_env_policy(user: str = Depends(require_login)):
     return _wrap(lambda: api.get_environmental_policy())

@@ -76,11 +76,14 @@ export default function Connect() {
                       <input type="checkbox" checked={checked.includes(h.id)}
                              onChange={() => toggleCheck(h.id)}
                              onClick={(e) => e.stopPropagation()} />
-                      {ci && <span className={"dot " + (ci.reachable ? "ok" : "bad")} />}
+                      <span className={"dot " + (ci ? (ci.reachable ? "ok" : "bad")
+                        : h.online === true ? "ok" : h.online === false ? "bad" : "")}
+                        title={h.online === false ? "Offline (no recent agent heartbeat)" : h.online === true ? "Online" : ""} />
                       <span style={{ cursor: "pointer" }}
                             onClick={() => setSel(h)} onDoubleClick={() => openTerm(h)}
                             title="Click to select · double-click to open a terminal">{h.label}</span>
-                      <span className="meta">{h.has_agent ? "Agent+SSH" : "SSH"} {h.address}</span>
+                      <span className="meta">{h.has_agent ? "Agent+SSH" : "SSH"} {h.address}
+                        {h.online === false ? " · offline" : ""}</span>
                     </div>
                   );
                 })}

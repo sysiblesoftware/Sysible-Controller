@@ -352,9 +352,29 @@ def hosts(user: str = Depends(require_login)):
         entries = dispatch.list_merged_hosts(agent_only=False)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
-    # Hand back only what the browser needs to display + later target.
+
+    # Agent heartbeat ages -> passive online/offline (no traffic to the host).
+    # An agent heartbeats every ~1.5s; >20s stale = offline (matches desktop's
+    # CHECKIN_ONLINE_SECONDS). SSH-only hosts can't be judged without an active
+    # probe, so their `online` is null (use Check In / Ping for those).
+    import time as _t
+    now = _t.time()
+    try:
+        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+    except Exception:
+        last_seen = {}
+
     out = []
     for e in entries:
+        agent_id = None
+        if e["kind"] == "agent":
+            agent_id = e["id"]
+        elif e["kind"] == "merged":
+            agent_id = (e.get("agent_entry") or {}).get("id") or e["id"]
+        ls = last_seen.get(agent_id) if agent_id else None
+        online = None
+        if agent_id is not None:
+            online = bool(ls and (now - ls) <= 20)
         out.append({
             "id": e["id"],
             "label": e["label"],
@@ -363,6 +383,8 @@ def hosts(user: str = Depends(require_login)):
             "address": e.get("address", ""),
             "environment": e.get("environment", ""),
             "has_agent": e["kind"] in ("agent", "merged"),
+            "last_seen": ls,
+            "online": online,
         })
     return {"hosts": out}
 
@@ -1033,8 +1055,12 @@ async def terminal_ws(ws: WebSocket):
                     return
                 await asyncio.sleep(0.03 + idle * 0.02)   # 30ms..150ms
 
+        ws_user = (ws.scope.get("session") or {}).get("user")
+        ws_label = first.get("label") or host
+
         async def pump_input():
-            """Keystrokes / resize from the browser -> host."""
+            """Keystrokes / resize / send-sudo-password from the browser -> host."""
+            from webgui import sudo_store
             while True:
                 msg = await ws.receive_json()
                 t = msg.get("t")
@@ -1043,6 +1069,15 @@ async def terminal_ws(ws: WebSocket):
                 elif t == "r" and msg.get("cols") and msg.get("rows"):
                     await asyncio.to_thread(api.resize_terminal, session_id,
                                             int(msg["cols"]), int(msg["rows"]))
+                elif t == "sudo":
+                    # Inject the operator's stored sudo password (host scope wins
+                    # over fleet default) + Enter — for an interactive sudo prompt.
+                    pw = sudo_store.resolve(ws_user, ws_label)
+                    if pw:
+                        await asyncio.to_thread(api.write_terminal, session_id, pw + "\n")
+                    else:
+                        await ws.send_json({"t": "o", "d":
+                            "\r\n[no sudo password stored — set it via 'Sudo Password' in the header]\r\n"})
 
         reader = asyncio.create_task(pump_output())
         writer = asyncio.create_task(pump_input())

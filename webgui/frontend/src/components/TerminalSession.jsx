@@ -1,21 +1,40 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { terminalWsUrl } from "../api.js";
 
 // One independent browser terminal: its own xterm instance + websocket to one
-// host. Stays mounted while its tab exists (hidden when not active) so several
-// sessions can run at once, like the desktop's pop-out terminals.
-export default function TerminalSession({ hostId, active, onStatus, onClosed }) {
+// host. Exposes imperative controls (send sudo password, font zoom, clear) so a
+// toolbar can drive the active session.
+const TerminalSession = forwardRef(function TerminalSession({ hostId, label, active, onStatus, onClosed }, ref) {
   const elRef = useRef(null);
   const termRef = useRef(null);
   const fitRef = useRef(null);
   const wsRef = useRef(null);
+  const [font, setFont] = useState(13);
+
+  useImperativeHandle(ref, () => ({
+    sendSudo() {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "sudo" }));
+    },
+    zoom(delta) {
+      setFont((f) => {
+        const nf = Math.min(Math.max(f + delta, 8), 28);
+        const term = termRef.current, fit = fitRef.current, ws = wsRef.current;
+        if (term) { term.options.fontSize = nf; try { fit.fit(); } catch { /* */ }
+          if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "r", cols: term.cols, rows: term.rows })); }
+        return nf;
+      });
+    },
+    clear() { termRef.current && termRef.current.clear(); },
+    focus() { termRef.current && termRef.current.focus(); },
+  }));
 
   useEffect(() => {
     const term = new XTerm({
       fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
-      fontSize: 13,
+      fontSize: font,
       theme: { background: "#000000", foreground: "#e6edf3" },
       cursorBlink: true,
     });
@@ -30,7 +49,7 @@ export default function TerminalSession({ hostId, active, onStatus, onClosed }) 
     wsRef.current = ws;
     onStatus && onStatus("connecting");
 
-    ws.onopen = () => ws.send(JSON.stringify({ t: "open", host: hostId, cols: term.cols, rows: term.rows }));
+    ws.onopen = () => ws.send(JSON.stringify({ t: "open", host: hostId, label, cols: term.cols, rows: term.rows }));
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch { return; }
       if (m.t === "ready") { onStatus && onStatus("connected"); term.focus(); }
@@ -40,7 +59,6 @@ export default function TerminalSession({ hostId, active, onStatus, onClosed }) 
     };
     ws.onerror = () => onStatus && onStatus("error:websocket");
     ws.onclose = () => onStatus && onStatus("disconnected");
-
     term.onData((d) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "i", d })); });
 
     const onResize = () => {
@@ -49,16 +67,10 @@ export default function TerminalSession({ hostId, active, onStatus, onClosed }) 
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "r", cols: term.cols, rows: term.rows }));
     };
     window.addEventListener("resize", onResize);
-
-    return () => {
-      window.removeEventListener("resize", onResize);
-      try { ws.close(); } catch { /* ignore */ }
-      term.dispose();
-    };
+    return () => { window.removeEventListener("resize", onResize); try { ws.close(); } catch { /* */ } term.dispose(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // When this tab becomes active, refit to the now-visible size and tell the host.
   useEffect(() => {
     if (!active) return;
     const t = setTimeout(() => {
@@ -71,8 +83,7 @@ export default function TerminalSession({ hostId, active, onStatus, onClosed }) 
     return () => clearTimeout(t);
   }, [active]);
 
-  // No display:none — the dock hides inactive sessions with `visibility`,
-  // which keeps a real layout box so xterm's fit() always has dimensions
-  // (display:none collapses to 0×0 and renders the terminal blank).
   return <div className="term-host" ref={elRef} style={{ height: "100%" }} />;
-}
+});
+
+export default TerminalSession;

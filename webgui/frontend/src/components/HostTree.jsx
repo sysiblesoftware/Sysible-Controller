@@ -61,8 +61,10 @@ export default function HostTree({ hosts, value, onChange, onRefresh, footer }) 
               {isOpen && list.map((h) => (
                 <label className="host-row" key={h.id}>
                   <input type="checkbox" checked={value.includes(h.id)} onChange={() => toggleHost(h.id)} />
+                  <span className={"dot " + (h.online === true ? "ok" : h.online === false ? "bad" : "")}
+                        title={h.online === false ? "Offline" : h.online === true ? "Online" : ""} />
                   <span>{h.label}</span>
-                  <span className="meta">{h.has_agent ? "Agent+SSH" : "SSH"}</span>
+                  <span className="meta">{h.has_agent ? "Agent+SSH" : "SSH"}{h.online === false ? " · offline" : ""}</span>
                 </label>
               ))}
             </div>

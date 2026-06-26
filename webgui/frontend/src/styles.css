@@ -285,6 +285,7 @@ tr:hover td { background: var(--row-hover); }
 .term-tab .x { color: var(--text-faint); cursor: pointer; }
 .term-tab .x:hover { color: var(--red); }
 .term-host { background: #000; border: 1px solid var(--border); border-radius: 8px; padding: 6px; height: 70vh; }
+.term-toolbar { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
 
 /* ---------- Modal (sudo password) ---------- */
 .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex;

@@ -65,9 +65,19 @@ export default function UserGroupPage() {
     try {
       const r = await api.runTool(action, targets, params);
       setResults({ label: label || action, ...r });
-      // refresh live data for the viewed host after a mutating action
-      if (viewHost && action !== "user_audit_privileged" && action !== "group_members") {
-        try { const s = await api.usersSync(viewHost); setHostData((d) => ({ ...d, [viewHost]: s.data || {} })); } catch { /* ignore */ }
+      // Re-sync the hosts we acted on (not just the viewed one) so the live
+      // user/group lists reflect the change — Create User in particular runs
+      // on the *checked* hosts, which may differ from the viewed host.
+      if (action !== "user_audit_privileged" && action !== "group_members") {
+        const toSync = [...new Set([...(targets || []), ...(viewHost ? [viewHost] : [])])];
+        for (const id of toSync) {
+          try { const s = await api.usersSync(id); setHostData((d) => ({ ...d, [id]: s.data || {} })); }
+          catch { /* ignore */ }
+        }
+        // Make sure the operator is viewing a host the change actually
+        // happened on (e.g. Create User runs on the checked hosts) so the
+        // refreshed user list shows the result.
+        if (targets[0] && !targets.includes(viewHost)) setViewHost(targets[0]);
       }
     } catch (e) { setErr(e.message); }
     finally { setRunning(false); }

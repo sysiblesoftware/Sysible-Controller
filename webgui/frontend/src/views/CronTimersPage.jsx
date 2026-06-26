@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { api } from "../api.js";
 import HostTree from "../components/HostTree.jsx";
 import ScheduleBuilder from "../components/ScheduleBuilder.jsx";
+import ResultsPane from "../components/ResultsPane.jsx";
 
 // Bespoke Cron & Systemd Timers page: friendly schedule builder for cron jobs
 // and systemd OnCalendar timers, plus the timer control actions.
@@ -17,6 +18,7 @@ export default function CronTimersPage({ hosts = [], onRefreshHosts }) {
   const [onCalendar, setOnCalendar] = useState("");
   const [ts, setTs] = useState({ name: "", exec_start: "", description: "", run_as_user: "root", enable_now: true });
   const [showCreate, setShowCreate] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   async function run(action, params, label) {
     if (targets.length === 0) { setErr("Check one or more hosts first."); return; }
@@ -27,11 +29,12 @@ export default function CronTimersPage({ hosts = [], onRefreshHosts }) {
   }
 
   return (
-    <div className="three-pane" style={{ gridTemplateColumns: "220px 1fr 360px" }}>
-      <HostTree hosts={hosts} value={targets} onChange={setTargets} onRefresh={onRefreshHosts}
-                footer="Check one or more hosts, then run an action." />
+    <div className="tool-flex">
+      {!expanded && <HostTree hosts={hosts} value={targets} onChange={setTargets} onRefresh={onRefreshHosts}
+                footer="Check one or more hosts, then run an action." />}
 
-      <div style={{ overflowY: "auto", paddingRight: 4 }}>
+      {!expanded && (
+      <div className="tool-actions-col"><div className="tool-actions-scroll">
         <fieldset className="tool-group-box" style={{ marginTop: 0 }}><legend>Cron Jobs</legend>
           <div className="group-buttons" style={{ marginBottom: 10 }}>
             <button className="btn sm" disabled={busy} onClick={() => run("cron_list", {}, "List cron jobs")}>List Cron Jobs</button>
@@ -79,26 +82,12 @@ export default function CronTimersPage({ hosts = [], onRefreshHosts }) {
           )}
         </fieldset>
         {err && <div className="error-box">{err}</div>}
-      </div>
+      </div></div>
+      )}
 
-      <div className="tool-results-col" style={{ borderLeft: "1px solid var(--border)", paddingLeft: 16, display: "flex", flexDirection: "column" }}>
-        <div className="results-head"><strong>Results</strong>
-          <button className="btn ghost sm" disabled={!results.length} onClick={() => setResults([])}>Clear All</button></div>
-        <div style={{ flex: 1, overflowY: "auto", maxHeight: "70vh" }}>
-          {results.length === 0 ? <div className="empty" style={{ padding: 24 }}>Run an action — output appears here.</div>
-            : results.map((res, i) => (
-              <div className="result" key={res.at + "-" + i}>
-                <div className="rh"><strong>{res.label}</strong><span className="faint mono" style={{ fontSize: 11 }}>{new Date(res.at).toLocaleTimeString()}</span></div>
-                {res.results.map((r, j) => (
-                  <div key={j} style={{ borderTop: "1px solid var(--border)" }}>
-                    <div className="rh"><span className={"dot " + (r.ok ? "ok" : "bad")} /><span>{r.host}</span>{r.code != null && <span className="faint">exit {r.code}</span>}</div>
-                    {(r.stdout || r.stderr) && <pre>{r.stdout}{r.stderr}</pre>}
-                  </div>
-                ))}
-              </div>
-            ))}
-        </div>
-      </div>
+      <ResultsPane results={results} setResults={setResults} expanded={expanded}
+                   onToggleExpand={() => setExpanded((v) => !v)}
+                   empty="Run an action — output appears here." />
     </div>
   );
 }

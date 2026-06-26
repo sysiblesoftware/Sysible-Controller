@@ -26,6 +26,7 @@
   --red: #e5534b;
   --row-hover: #333333;
   --shadow: rgba(0,0,0,0.45);
+  --error-text: #f3a9a3;
   /* tile accents (icon tint + soft bg), from home.py: teal/slate/purple/coral/amber/sky */
   --teal: #2bb6a3;   --teal-bg: rgba(43,182,163,0.14);
   --slate: #8aa0c8;  --slate-bg: rgba(138,160,200,0.14);
@@ -63,6 +64,20 @@
   --red: #d23b34;
   --row-hover: #f3f5f8;
   --shadow: rgba(20,30,50,0.12);
+  --error-text: #b3261e;
+  /* Accent palette re-tuned for readable text on white (keep the soft -bg tints). */
+  --teal: #0f7d70;
+  --slate: #43567a;
+  --purple: #7341bf;
+  --coral: #bf4c2c;
+  --ambert: #a9750f;
+  --sky: #1a6fb0;
+  --green: #1c8a49;
+  --rose: #bd3b73;
+  --indigo: #404fc6;
+  --copper: #95591f;
+  --crimson: #bd322a;
+  --graphite: #545f70;
 }
 
 * { box-sizing: border-box; }
@@ -114,7 +129,7 @@ label.field { display: block; margin: 12px 0 0; }
 label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim); font-size: 13px; }
 .checkrow { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
 .error-box { background: rgba(229,83,75,0.12); border: 1px solid rgba(229,83,75,0.4);
-  color: #f3a9a3; padding: 9px 11px; border-radius: 6px; margin-top: 12px; font-size: 13px; }
+  color: var(--error-text); padding: 9px 11px; border-radius: 6px; margin-top: 12px; font-size: 13px; }
 
 /* ---------- Login ---------- */
 .login-wrap { display: flex; align-items: center; justify-content: center; height: 100%; padding: 24px; }

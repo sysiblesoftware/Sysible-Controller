@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api.js";
 import HostTree from "../components/HostTree.jsx";
+import ResultsPane from "../components/ResultsPane.jsx";
 
 // Environmental Policies — baseline password / lockout / sudo / umask policy
 // for managed hosts. Edit & save the controller-side defaults, then push the
@@ -12,6 +13,7 @@ export default function EnvironmentalPolicies({ hosts = [], onRefreshHosts }) {
   const [push, setPush] = useState({ password: true, lockout: true, sudo: true, umask: true });
   const [err, setErr] = useState(""); const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(""); const [results, setResults] = useState([]);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => { api.envPolicy().then((p) => setPol(normalize(p || {}))).catch((e) => setErr(e.message)); }, []);
   if (err && !pol) return <div className="error-box">{err}</div>;
@@ -47,11 +49,12 @@ export default function EnvironmentalPolicies({ hosts = [], onRefreshHosts }) {
   }
 
   return (
-    <div className="three-pane" style={{ gridTemplateColumns: "220px 1fr 340px" }}>
-      <HostTree hosts={hosts} value={targets} onChange={setTargets} onRefresh={onRefreshHosts}
-                footer="Check the hosts to push the selected policies to." />
+    <div className="tool-flex">
+      {!expanded && <HostTree hosts={hosts} value={targets} onChange={setTargets} onRefresh={onRefreshHosts}
+                footer="Check the hosts to push the selected policies to." />}
 
-      <div style={{ overflowY: "auto", paddingRight: 4, maxWidth: 560 }}>
+      {!expanded && (
+      <div className="tool-actions-col"><div className="tool-actions-scroll" style={{ maxWidth: 560 }}>
         <fieldset className="tool-group-box" style={{ marginTop: 0 }}><legend>Password Quality</legend>
           <div className="group-fields">
             <div className="group-field"><label className="field"><span>Minimum length</span>
@@ -101,26 +104,12 @@ export default function EnvironmentalPolicies({ hosts = [], onRefreshHosts }) {
 
         {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
         {err && <div className="error-box">{err}</div>}
-      </div>
+      </div></div>
+      )}
 
-      <div className="tool-results-col" style={{ borderLeft: "1px solid var(--border)", paddingLeft: 16, display: "flex", flexDirection: "column" }}>
-        <div className="results-head"><strong>Results</strong>
-          <button className="btn ghost sm" disabled={!results.length} onClick={() => setResults([])}>Clear All</button></div>
-        <div style={{ flex: 1, overflowY: "auto", maxHeight: "70vh" }}>
-          {results.length === 0 ? <div className="empty" style={{ padding: 24 }}>Push policies to see per-host output.</div>
-            : results.map((res, i) => (
-              <div className="result" key={res.at + "-" + i}>
-                <div className="rh"><strong>{res.label}</strong></div>
-                {res.results.map((r, j) => (
-                  <div key={j} style={{ borderTop: "1px solid var(--border)" }}>
-                    <div className="rh"><span className={"dot " + (r.ok ? "ok" : "bad")} /><span>{r.host}</span>{r.code != null && <span className="faint">exit {r.code}</span>}</div>
-                    {(r.stdout || r.stderr) && <pre>{r.stdout}{r.stderr}</pre>}
-                  </div>
-                ))}
-              </div>
-            ))}
-        </div>
-      </div>
+      <ResultsPane results={results} setResults={setResults} expanded={expanded}
+                   onToggleExpand={() => setExpanded((v) => !v)}
+                   empty="Push policies to see per-host output." />
     </div>
   );
 }

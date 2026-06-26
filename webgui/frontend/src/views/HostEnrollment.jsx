@@ -25,11 +25,30 @@ export default function HostEnrollment() {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
 
+  const [portal, setPortal] = useState({});
+  const [cfg, setCfg] = useState({});
+  const [copied, setCopied] = useState(false);
+
   function load() {
     api.agents().then((d) => setAgents(d.agents || [])).catch((e) => setErr(e.message));
     api.environments().then((d) => setEnvs(d.environments || [])).catch(() => {});
+    api.portalStatus().then((s) => setPortal(s || {})).catch(() => {});
+    api.controllerConfig().then((c) => setCfg(c || {})).catch(() => {});
   }
   useEffect(() => { load(); }, []);
+
+  const curlHost = cfg.address || "<this machine's address>";
+  const curlPort = portal.configured_port || portal.port || 443;
+  const curlUser = portal.credentials_configured ? portal.username : "<username>";
+  const curlCmd =
+    `curl -k -sS -f -u '${curlUser}:<password>' -o sysible-agent-bundle.zip ` +
+    `"https://${curlHost}:${curlPort}/cli/bundle" ` +
+    `&& unzip -o sysible-agent-bundle.zip -d sysible-agent-bundle ` +
+    `&& cd sysible-agent-bundle && chmod +x run_agent.sh && sudo ./run_agent.sh`;
+
+  function copyCurl() {
+    navigator.clipboard?.writeText(curlCmd).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
+  }
 
   const NEW_ENV = "+ New environment…";
   async function assignEnv(a, value) {
@@ -85,6 +104,20 @@ export default function HostEnrollment() {
             <div className="cmd-preview">{token}</div>
           </>
         )}
+      </div>
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <strong>Command-Line Bundle Download (curl)</strong>
+        <p className="faint" style={{ marginTop: 4 }}>
+          For headless hosts: downloads the bundle, unzips, and runs the installer in one shot,
+          authenticating with the Webserver Portal login (curl -u). Needs the Webserver Portal
+          running with credentials configured. Replace <code>&lt;password&gt;</code> with the real
+          portal password; <code>-k</code> skips the self-signed-cert check; the install step needs sudo.
+        </p>
+        <div className="cmd-preview" style={{ whiteSpace: "pre-wrap" }}>{curlCmd}</div>
+        <button className="btn sm ghost" style={{ marginTop: 8 }} onClick={copyCurl}>
+          {copied ? "Copied ✓" : "Copy to Clipboard"}
+        </button>
       </div>
 
       <div className="spread" style={{ marginBottom: 8 }}>

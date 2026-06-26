@@ -213,12 +213,18 @@ tr:hover td { background: var(--row-hover); }
 .tabs button.active { background: var(--panel); color: var(--text); border-color: var(--border); }
 
 /* ---------- Tool page: host tree | actions | results (3 columns) ---------- */
-.tool-3col {
-  display: grid; grid-template-columns: 220px minmax(0, 1fr) minmax(340px, 460px);
-  gap: 16px; height: calc(100vh - 200px); min-height: 440px;
+.tool-flex {
+  display: flex; gap: 16px; flex: 1; min-height: 0;
+  height: calc(100vh - 158px);
 }
-.tool-actions-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.tool-flex > .host-pane { width: 220px; flex-shrink: 0; }
+.tool-actions-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1; }
 .tool-actions-scroll { flex: 1; overflow-y: auto; padding-right: 4px; }
+.col-resizer {
+  width: 6px; flex-shrink: 0; cursor: col-resize; border-radius: 3px;
+  background: var(--border); align-self: stretch;
+}
+.col-resizer:hover { background: var(--btn-border); }
 .tool-results-col {
   display: flex; flex-direction: column; min-height: 0;
   border-left: 1px solid var(--border); padding-left: 16px;
@@ -228,6 +234,8 @@ tr:hover td { background: var(--row-hover); }
   padding-bottom: 10px; margin-bottom: 4px; border-bottom: 1px solid var(--border);
 }
 .tool-results-scroll { flex: 1; overflow-y: auto; }
+/* output flows top-to-bottom in the panel scroll (no nested scrollbars) */
+.tool-results-scroll .result pre { max-height: none; }
 
 /* ---------- Tool group boxes (desktop QGroupBox look) ---------- */
 .tool-group-box {

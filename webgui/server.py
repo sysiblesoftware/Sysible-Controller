@@ -150,22 +150,43 @@ _LOGIN_MAX_ATTEMPTS = int(os.getenv("SYSIBLE_WEBGUI_LOGIN_MAX_ATTEMPTS", "8"))
 _LOGIN_WINDOW_S = int(os.getenv("SYSIBLE_WEBGUI_LOGIN_WINDOW", "300"))
 _login_attempts: dict[str, list] = {}
 
-# Server-side store for controller admin tokens, keyed by an opaque handle
-# that lives in the (signed, http-only) session cookie. The token itself —
-# a privileged bearer credential — never goes into the cookie, so it can't be
-# read out of it. In-memory: a controller restart simply requires re-login
-# for superuser actions.
-import threading as _thr  # noqa: E402
-_SESSION_TOKENS: dict[str, str] = {}
-_SESSION_TOKENS_LOCK = _thr.Lock()
+# The controller admin token is a privileged bearer credential. We keep it in
+# the session cookie but ENCRYPTED with a server-side key (the same 0600 key
+# the sudo store uses): the browser only ever sees ciphertext (can't read the
+# token out of the cookie), and because the key is persisted on disk this
+# survives a controller restart — unlike an in-memory store, which would log
+# everyone out of superuser actions on every restart.
+def _token_cipher():
+    try:
+        from cryptography.fernet import Fernet
+        from webgui import sudo_store
+        key = sudo_store._get_key()
+        return Fernet(key) if key else None
+    except Exception:
+        return None
+
+
+def _encrypt_token(token: str):
+    c = _token_cipher()
+    if not c or not token:
+        return None
+    try:
+        return c.encrypt(token.encode()).decode()
+    except Exception:
+        return None
 
 
 def _session_token(request: "Request"):
-    h = request.session.get("thandle")
-    if not h:
+    enc = request.session.get("token_enc")
+    if not enc:
         return None
-    with _SESSION_TOKENS_LOCK:
-        return _SESSION_TOKENS.get(h)
+    c = _token_cipher()
+    if not c:
+        return None
+    try:
+        return c.decrypt(enc.encode()).decode()
+    except Exception:
+        return None
 
 
 def _client_ip(request: Request) -> str:
@@ -216,15 +237,11 @@ def login(body: LoginRequest, request: Request):
     request.session.clear()
     request.session["user"] = body.username.strip()
     request.session["role"] = result.get("role") or "superuser"
-    # Keep the controller-issued admin token so the BFF can call superuser-
-    # gated controller routes on this admin's behalf — stored SERVER-SIDE,
-    # keyed by an opaque handle in the cookie, never in the cookie itself and
-    # never echoed to the browser.
+    # Keep the controller-issued admin token (encrypted) so the BFF can call
+    # superuser-gated controller routes on this admin's behalf. Encrypted with
+    # a server-side key, so it's unreadable from the cookie and never echoed.
     if result.get("token"):
-        handle = secrets.token_urlsafe(24)
-        with _SESSION_TOKENS_LOCK:
-            _SESSION_TOKENS[handle] = result["token"]
-        request.session["thandle"] = handle
+        request.session["token_enc"] = _encrypt_token(result["token"])
     return {
         "username": body.username.strip(),
         "role": request.session["role"],
@@ -284,10 +301,6 @@ def sudo_clear(body: SudoRequest, user: str = Depends(require_login)):
 
 @app.post("/api/logout")
 def logout(request: Request):
-    h = request.session.get("thandle")
-    if h:
-        with _SESSION_TOKENS_LOCK:
-            _SESSION_TOKENS.pop(h, None)
     request.session.clear()
     return {"status": "ok"}
 

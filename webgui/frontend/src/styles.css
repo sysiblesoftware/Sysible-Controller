@@ -237,6 +237,17 @@ tr:hover td { background: var(--row-hover); }
 /* output flows top-to-bottom in the panel scroll (no nested scrollbars) */
 .tool-results-scroll .result pre { max-height: none; }
 
+/* result tabs — one tab per run, like the desktop */
+.result-tabs { display: flex; gap: 4px; flex-wrap: wrap; padding-bottom: 8px;
+  margin-bottom: 4px; border-bottom: 1px solid var(--border); max-height: 96px; overflow-y: auto; }
+.result-tab { display: flex; align-items: center; gap: 6px; padding: 5px 9px;
+  border: 1px solid var(--border); border-radius: 6px; cursor: pointer; font-size: 12.5px;
+  background: var(--panel-2); max-width: 200px; }
+.result-tab.active { border-color: var(--btn-border); background: var(--panel); }
+.result-tab .rt-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.result-tab .x { color: var(--text-faint); }
+.result-tab .x:hover { color: var(--red); }
+
 /* ---------- Tool group boxes (desktop QGroupBox look) ---------- */
 .tool-group-box {
   border: 1px solid var(--border); border-radius: 8px; margin: 0 0 14px;

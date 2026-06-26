@@ -1398,7 +1398,12 @@ _LAYOUT: dict[str, list] = {
     ],
     # ---- single-pane tools: no tab bar, just titled group sections ----
     "Service Management": [
-        ("", "Services", ["svc_list", "svc_list_running", "svc_status", "svc_start", "svc_stop", "svc_restart", "svc_reload", "svc_enable", "svc_disable", "svc_troubleshoot", "svc_dependencies", "svc_logs"]),
+        # One shared "Service name" field, then grouped button rows — matches the
+        # desktop's single-field + Service control / Boot & status / Diagnostics.
+        ("", "Service (enter a name, then act)", ["svc_status", "svc_start", "svc_stop", "svc_restart",
+                                                 "svc_reload", "svc_enable", "svc_disable",
+                                                 "svc_troubleshoot", "svc_dependencies", "svc_logs"]),
+        ("", "Lists", ["svc_list_running", "svc_list"]),
         ("", "Custom Systemd Service", ["svc_set_deps", "svc_create"]),
         ("", "Processes", ["proc_high_load", "proc_zombies", "proc_kill", "proc_renice", "proc_restart"]),
     ],

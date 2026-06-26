@@ -584,6 +584,16 @@ def license_config(user: str = Depends(require_login)):
     return _wrap(lambda: api.get_license_config())
 
 
+@app.get("/api/environmental-policy")
+def get_env_policy(user: str = Depends(require_login)):
+    return _wrap(lambda: api.get_environmental_policy())
+
+
+@app.post("/api/environmental-policy")
+def set_env_policy(body: dict, request: Request, user: str = Depends(require_login)):
+    return _wrap(lambda: _as_admin(request, lambda: api.set_environmental_policy(body)))
+
+
 # ----------------------------------------------------------------------
 # User & Group Administration — live per-host user/group/session data
 # ----------------------------------------------------------------------

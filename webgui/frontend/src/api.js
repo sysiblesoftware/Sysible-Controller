@@ -60,6 +60,8 @@ export const api = {
     req("/api/controller-config", { method: "POST", body: cfg }),
   auditLog: (limit = 200) => req(`/api/audit-log?limit=${limit}`),
   license: () => req("/api/license"),
+  envPolicy: () => req("/api/environmental-policy"),
+  setEnvPolicy: (policy) => req("/api/environmental-policy", { method: "POST", body: policy }),
   // Webserver Portal
   portalStatus: () => req("/api/portal/status"),
   portalStart: () => req("/api/portal/start", { method: "POST" }),

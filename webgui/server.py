@@ -241,14 +241,37 @@ def login(body: LoginRequest, request: Request):
     """Verify credentials against the controller (client.api holds the
     API key) and, on success, store the username in the signed session
     cookie. Mirrors the desktop admin login exactly."""
+    import requests
     ip = _client_ip(request)
     _throttle_check(ip)
     try:
         result = api.admin_login(body.username.strip(), body.password)
-    except Exception:
-        # client.api raises on a 401 from the controller.
-        _throttle_record_failure(ip)
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+    except requests.exceptions.HTTPError as e:
+        # The controller responded with an HTTP error. A 401 is genuinely bad
+        # credentials; anything else (e.g. 429 throttle) is passed through so
+        # it isn't mistaken for a wrong password.
+        resp = getattr(e, "response", None)
+        code = resp.status_code if resp is not None else 401
+        if code == 401:
+            _throttle_record_failure(ip)
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        detail = None
+        try:
+            detail = resp.json().get("detail")
+        except Exception:
+            pass
+        raise HTTPException(status_code=code, detail=detail or "Controller rejected the login.")
+    except Exception as e:
+        # Could NOT reach the controller (down, wrong base URL, unreadable API
+        # key, or TLS verification failed) — this is NOT a wrong password, so
+        # don't throttle and don't claim "invalid credentials". Surface the
+        # real cause so it's diagnosable.
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not reach the controller to verify the login: {e}. "
+                   f"Check the controller is running and the web console can read "
+                   f"its API key and TLS cert (see 'sysible_controller webgui logs').",
+        )
 
     _login_attempts.pop(ip, None)  # clear on success
     # Drop any pre-login session identifier so a fixed/known cookie can't be

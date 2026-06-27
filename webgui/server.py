@@ -68,7 +68,11 @@ from client import _api_dispatch as dispatch
 from webgui import actions
 
 
-app = FastAPI(title="Sysible Web GUI")
+# docs_url/redoc_url/openapi_url disabled: this console is built to be
+# network-reachable, so we don't publish the interactive Swagger/ReDoc consoles
+# or the OpenAPI schema (a full map of the API surface) to anyone who can reach
+# the port — matching the controller backend and the portal.
+app = FastAPI(title="Sysible Web GUI", docs_url=None, redoc_url=None, openapi_url=None)
 
 # Signed http-only session cookie. Set SYSIBLE_WEBGUI_SECRET in the
 # environment for a stable secret across restarts; a random per-process
@@ -89,6 +93,9 @@ except ValueError:
 # the cookie is never attached to cross-site requests, which closes CSRF on
 # the state-changing POSTs without needing a separate token.
 _HTTPS_ONLY = os.getenv("SYSIBLE_WEBGUI_HTTPS_ONLY", "0") == "1"
+# Only trust X-Forwarded-For (for the login throttle's client-IP) when a trusted
+# reverse proxy is actually in front; otherwise the header is client-spoofable.
+_TRUST_PROXY = os.getenv("SYSIBLE_WEBGUI_TRUSTED_PROXY", "0") == "1"
 app.add_middleware(
     SessionMiddleware,
     secret_key=_SECRET,
@@ -209,12 +216,14 @@ def _with_token(token, fn):
 
 
 def _client_ip(request: Request) -> str:
-    # Behind a reverse proxy the real IP is in X-Forwarded-For; fall back to
-    # the socket peer. (Spoofable if not behind a trusted proxy, but the
-    # throttle is best-effort hardening, not an access control.)
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
+    # Only honor X-Forwarded-For when we're explicitly told a trusted proxy sits
+    # in front (SYSIBLE_WEBGUI_TRUSTED_PROXY=1) — otherwise a direct client could
+    # spoof the header to evade the per-IP login throttle. Default to the real
+    # socket peer.
+    if _TRUST_PROXY:
+        fwd = request.headers.get("x-forwarded-for")
+        if fwd:
+            return fwd.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
 
@@ -420,9 +429,13 @@ def environments(user: str = Depends(require_login)):
         return {"environments": []}
 
 
+class EnvironmentCreate(BaseModel):
+    name: str
+
+
 @app.post("/api/environments")
-def create_environment(body: dict, request: Request, user: str = Depends(require_login)):
-    name = (body.get("name") or "").strip()
+def create_environment(body: EnvironmentCreate, request: Request, user: str = Depends(require_login)):
+    name = (body.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Environment name is required.")
     return _wrap(lambda: _as_admin(request, lambda: api.create_environment(name)))
@@ -634,8 +647,10 @@ def controller_log(lines: int = 400, request: Request = None, user: str = Depend
 # Settings — administrators, password policy, controller config, license, audit
 # ----------------------------------------------------------------------
 @app.get("/api/admins")
-def list_admins(user: str = Depends(require_login)):
-    return _wrap(lambda: {"administrators": api.list_administrators()})
+def list_admins(request: Request, user: str = Depends(require_login)):
+    # Superuser-gated on the controller — pass the admin token so a sysadmin
+    # can't read the administrator roster.
+    return _wrap(lambda: _as_admin(request, lambda: {"administrators": api.list_administrators()}))
 
 
 class AdminCreate(BaseModel):
@@ -695,8 +710,9 @@ def set_cfg(body: ControllerCfg, request: Request, user: str = Depends(require_l
 
 
 @app.get("/api/audit-log")
-def audit_log(limit: int = 200, user: str = Depends(require_login)):
-    return _wrap(lambda: {"audit": api.get_admin_audit_log(limit=limit)})
+def audit_log(limit: int = 200, request: Request = None, user: str = Depends(require_login)):
+    # Superuser-gated on the controller — login attempts + admin changes.
+    return _wrap(lambda: _as_admin(request, lambda: {"audit": api.get_admin_audit_log(limit=limit)}))
 
 
 @app.get("/api/license")
@@ -994,7 +1010,9 @@ def portal_uploads(user: str = Depends(require_login)):
 @app.get("/api/portal/uploads/{filename}")
 def portal_upload_download(filename: str, user: str = Depends(require_login)):
     tmp = Path(tempfile.mkdtemp(prefix="sysible-pu-"))
-    dest = tmp / filename
+    # Never trust the routed value for a filesystem write — strip any path
+    # components so a crafted name can't escape the temp dir.
+    dest = tmp / Path(filename).name
     try:
         api.download_portal_upload(filename, str(dest))
     except Exception as e:
@@ -1263,6 +1281,21 @@ async def files_download(host: str, path: str, user: str = Depends(require_login
 #                      {"t":"i","d":<keystrokes>} | {"t":"r","cols":N,"rows":N}
 @app.websocket("/api/terminal/ws")
 async def terminal_ws(ws: WebSocket):
+    # Defense-in-depth against cross-site websocket hijacking: reject a
+    # handshake whose Origin isn't our own host. (The SameSite=Strict session
+    # cookie already prevents a cross-site handshake from carrying the login,
+    # but an explicit Origin check is the canonical CSWSH control.)
+    origin = ws.headers.get("origin")
+    if origin:
+        host = ws.headers.get("host", "")
+        try:
+            from urllib.parse import urlparse
+            if urlparse(origin).netloc != host:
+                await ws.close(code=1008)
+                return
+        except Exception:
+            await ws.close(code=1008)
+            return
     # Auth: SessionMiddleware populates the websocket scope's session the
     # same way it does for HTTP, so the login cookie gates this too.
     if not ws.scope.get("session", {}).get("user"):

@@ -26,88 +26,139 @@ export default function Settings() {
 
 function useErr() { const [err, setErr] = useState(""); return [err, setErr]; }
 
+// Strong random password: crypto RNG over an unambiguous charset (no 0/O/1/l/I).
+function generatePassword(len = 16) {
+  const charset = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%^&*-_=+";
+  const out = new Uint32Array(len);
+  (window.crypto || window.msCrypto).getRandomValues(out);
+  return Array.from(out, (n) => charset[n % charset.length]).join("");
+}
+
 function Admins() {
   const [list, setList] = useState([]);
-  const [u, setU] = useState(""); const [p, setP] = useState(""); const [role, setRole] = useState("sysadmin");
   const [err, setErr] = useErr(); const [msg, setMsg] = useState("");
-  const [resetUser, setResetUser] = useState("");   // which row's reset field is open
-  const [resetPw, setResetPw] = useState("");
-  const [resetBusy, setResetBusy] = useState(false);
+  const [modal, setModal] = useState(null);   // { mode: "add"|"reset", username }
 
   const load = () => api.admins().then((d) => setList(d.administrators || [])).catch((e) => setErr(e.message));
   useEffect(() => { load(); }, []);
 
-  async function add(e) {
-    e.preventDefault(); setErr(""); setMsg("");
-    try { await api.addAdmin(u.trim(), p, role); setMsg(`Added ${u}.`); setU(""); setP(""); load(); }
-    catch (e2) { setErr(e2.message); }
-  }
   async function remove(name) {
-    if (!window.confirm(`Remove administrator ${name}?`)) return;
-    setErr(""); try { await api.removeAdmin(name); load(); } catch (e) { setErr(e.message); }
+    if (!window.confirm(`Remove administrator ${name}? This cannot be undone.`)) return;
+    setErr(""); setMsg("");
+    try { await api.removeAdmin(name); setMsg(`Removed ${name}.`); load(); } catch (e) { setErr(e.message); }
   }
-  function openReset(name) { setResetUser(name); setResetPw(""); setErr(""); setMsg(""); }
-  async function submitReset(name) {
-    if (!resetPw) { setErr("Enter a new password."); return; }
-    setResetBusy(true); setErr(""); setMsg("");
-    try {
-      await api.resetAdminPassword(name, resetPw);
-      setMsg(`Password reset for ${name}. They must change it on next login.`);
-      setResetUser(""); setResetPw("");
-    } catch (e) { setErr(e.message); }
-    finally { setResetBusy(false); }
-  }
+
+  function onDone(text) { setModal(null); setMsg(text); setErr(""); load(); }
 
   return (
     <div>
-      <div className="card" style={{ marginBottom: 16 }}>
+      <div className="spread" style={{ marginBottom: 12 }}>
+        <strong>Administrators</strong>
+        <button className="btn sm" onClick={() => { setMsg(""); setErr(""); setModal({ mode: "add" }); }}>+ Add Administrator</button>
+      </div>
+
+      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
         <table>
-          <thead><tr><th>Username</th><th>Role</th><th></th></tr></thead>
+          <thead><tr><th>Username</th><th>Role</th><th style={{ textAlign: "right" }}>Actions</th></tr></thead>
           <tbody>
+            {list.length === 0 && <tr><td colSpan={3} className="faint" style={{ padding: 16 }}>No administrators.</td></tr>}
             {list.map((a) => (
-              <React.Fragment key={a.username}>
-              <tr>
+              <tr key={a.username}>
                 <td style={{ fontWeight: 600 }}>{a.username}</td>
-                <td><span className="badge">{a.role}</span></td>
+                <td><span className={"badge" + (a.role === "superuser" ? " amber" : "")}>{a.role}</span></td>
                 <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                  <button className="btn ghost sm" onClick={() => openReset(a.username)} style={{ marginRight: 6 }}>Reset password</button>
+                  <button className="btn ghost sm" style={{ marginRight: 6 }}
+                          onClick={() => { setMsg(""); setErr(""); setModal({ mode: "reset", username: a.username }); }}>
+                    Reset password…</button>
                   <button className="btn ghost sm" onClick={() => remove(a.username)}>Remove</button>
                 </td>
               </tr>
-              {resetUser === a.username && (
-                <tr>
-                  <td colSpan={3} style={{ background: "var(--panel-2)" }}>
-                    <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-                      <span className="faint">New password for <strong>{a.username}</strong>:</span>
-                      <input style={{ flex: 1, minWidth: 160 }} type="password" autoFocus value={resetPw}
-                             placeholder="New password" onChange={(e) => setResetPw(e.target.value)}
-                             onKeyDown={(e) => { if (e.key === "Enter") submitReset(a.username); }} />
-                      <button className="btn sm" disabled={resetBusy || !resetPw} onClick={() => submitReset(a.username)}>
-                        {resetBusy ? <span className="spin" /> : "Set Password"}</button>
-                      <button className="btn ghost sm" onClick={() => setResetUser("")}>Cancel</button>
-                    </div>
-                  </td>
-                </tr>
-              )}
-              </React.Fragment>
             ))}
           </tbody>
         </table>
       </div>
-      <form className="card" onSubmit={add}>
-        <strong>Add administrator</strong>
-        <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 10 }}>
-          <input style={{ flex: 1, minWidth: 140 }} placeholder="Username" value={u} onChange={(e) => setU(e.target.value)} />
-          <input style={{ flex: 1, minWidth: 140 }} type="password" placeholder="Password" value={p} onChange={(e) => setP(e.target.value)} />
-          <select style={{ maxWidth: 150 }} value={role} onChange={(e) => setRole(e.target.value)}>
-            <option value="sysadmin">sysadmin</option>
-            <option value="superuser">superuser</option>
-          </select>
-          <button className="btn sm" disabled={!u.trim() || !p}>Add</button>
-        </div>
-        {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
+      {msg && <div className="ok-text" style={{ marginTop: 10 }}>{msg}</div>}
+      {err && <div className="error-box">{err}</div>}
+
+      {modal && <AdminModal mode={modal.mode} username={modal.username}
+                            onClose={() => setModal(null)} onDone={onDone} />}
+    </div>
+  );
+}
+
+// Shared dialog for creating an administrator and resetting one's password.
+// Both flows offer a one-click strong-password generator with show/copy, so an
+// "initial password" is always easy to produce and hand off.
+function AdminModal({ mode, username: fixedUser, onClose, onDone }) {
+  const isAdd = mode === "add";
+  const [username, setUsername] = useState(fixedUser || "");
+  const [role, setRole] = useState("sysadmin");
+  const [pw, setPw] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [show, setShow] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  function gen() { const p = generatePassword(); setPw(p); setConfirm(p); setShow(true); setErr(""); }
+  function copy() { navigator.clipboard?.writeText(pw).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }
+
+  async function submit() {
+    if (isAdd && !username.trim()) { setErr("Username is required."); return; }
+    if (!pw) { setErr("Enter or generate a password."); return; }
+    if (pw !== confirm) { setErr("Passwords don't match."); return; }
+    setBusy(true); setErr("");
+    try {
+      if (isAdd) { await api.addAdmin(username.trim(), pw, role); onDone(`Added ${username.trim()}.`); }
+      else { await api.resetAdminPassword(fixedUser, pw); onDone(`Password reset for ${fixedUser}. They must change it at next login.`); }
+    } catch (e) { setErr(e.message); setBusy(false); }
+  }
+
+  return (
+    <div className="modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal" style={{ maxWidth: 440 }}>
+        <h3>{isAdd ? "Add Administrator" : `Reset password — ${fixedUser}`}</h3>
+
+        {isAdd && (
+          <>
+            <label className="field"><span>Username</span>
+              <input autoFocus value={username} onChange={(e) => setUsername(e.target.value)} placeholder="e.g. alice" /></label>
+            <label className="field"><span>Role</span>
+              <select value={role} onChange={(e) => setRole(e.target.value)}>
+                <option value="sysadmin">Sysadmin — manages the fleet</option>
+                <option value="superuser">Superuser — also manages administrators</option>
+              </select></label>
+          </>
+        )}
+
+        <label className="field"><span>{isAdd ? "Initial password" : "New password"}</span>
+          <div className="row" style={{ gap: 8 }}>
+            <input style={{ flex: 1 }} type={show ? "text" : "password"} value={pw}
+                   onChange={(e) => setPw(e.target.value)} placeholder="Type or generate" />
+            <button type="button" className="btn ghost sm" onClick={() => setShow((s) => !s)} title={show ? "Hide" : "Show"}>{show ? "Hide" : "Show"}</button>
+            <button type="button" className="btn ghost sm" onClick={copy} disabled={!pw} title="Copy">{copied ? "Copied ✓" : "Copy"}</button>
+          </div>
+        </label>
+        <label className="field"><span>Confirm password</span>
+          <input type={show ? "text" : "password"} value={confirm}
+                 onChange={(e) => setConfirm(e.target.value)}
+                 onKeyDown={(e) => { if (e.key === "Enter") submit(); }} placeholder="Re-enter" /></label>
+
+        <button type="button" className="btn ghost sm" style={{ marginTop: 8 }} onClick={gen}>⚄ Generate strong password</button>
+
+        <p className="faint" style={{ marginTop: 12, marginBottom: 0 }}>
+          {isAdd
+            ? "The new administrator must change this password at first login. Copy it now — it isn't shown again."
+            : "The administrator must change this password at next login. Copy it now to hand it off."}
+        </p>
+
         {err && <div className="error-box">{err}</div>}
-      </form>
+        <div className="row" style={{ justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+          <button className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn" disabled={busy} onClick={submit}>
+            {busy ? <span className="spin" /> : (isAdd ? "Create Administrator" : "Reset Password")}</button>
+        </div>
+      </div>
     </div>
   );
 }

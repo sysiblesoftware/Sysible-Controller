@@ -290,10 +290,13 @@ def _raise_with_detail(r):
 
 def fetch_tasks(state):
     try:
+        # Send the secret in a header, not the query string, so it can't land
+        # in access/proxy logs. (The controller still accepts the legacy query
+        # param for older agents.)
         r = _request(
             "GET",
             f"/agents/{state['host_id']}/tasks",
-            params={"agent_secret": state["agent_secret"]},
+            headers={"X-Agent-Secret": state["agent_secret"]},
             timeout=10,
         )
         _raise_with_detail(r)

@@ -117,6 +117,17 @@ the controller safely.
 6. **Keep the host patched** and limit who can log in to the controller
    machine itself; local root there is equivalent to controlling the
    whole fleet.
+7. **Serve the web console over TLS.** Its session cookie is marked
+   `Secure` only when TLS is on (`SYSIBLE_WEBGUI_HTTPS_ONLY=1`, set
+   automatically by the installer's TLS setup) — don't run it over plain
+   HTTP. If you front it with a reverse proxy, set
+   `SYSIBLE_WEBGUI_TRUSTED_PROXY=1` so the login throttle reads the real
+   client IP from `X-Forwarded-For`; leave it unset for a direct bind so a
+   client can't spoof that header.
+8. **SSH host-key trust is TOFU.** SSH-managed hosts are added with
+   `StrictHostKeyChecking=accept-new` (the key is trusted on first
+   contact), so enroll hosts over a trusted network; pre-seed
+   `known_hosts` if you need strict pinning.
 
 ## On the browser console's attack surface
 

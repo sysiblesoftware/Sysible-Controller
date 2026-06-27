@@ -132,7 +132,7 @@ input, select, textarea {
   border: 1px solid var(--field-border); border-radius: 5px; font-size: 14px; outline: none;
 }
 input:focus, select:focus, textarea:focus { border-color: var(--btn-border); }
-input[type="checkbox"] { width: auto; accent-color: var(--green-bright); }
+input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 label.field { display: block; margin: 12px 0 0; }
 label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim); font-size: 13px; }
 .checkrow { display: flex; align-items: center; gap: 8px; margin-top: 12px; }

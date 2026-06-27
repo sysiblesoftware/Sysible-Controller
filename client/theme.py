@@ -95,19 +95,19 @@ QHeaderView::section {
 }
 
 QPushButton {
-    background-color: #3C4B64;
+    background-color: #5159d2;
     color: white;
-    border: 1px solid #506080;
+    border: 1px solid #6670e6;
     border-radius: 5px;
     padding: 6px;
 }
 
 QPushButton:hover {
-    background-color: #4C6285;
+    background-color: #6670e6;
 }
 
 QPushButton:pressed {
-    background-color: #23395D;
+    background-color: #434bc0;
 }
 
 QGroupBox {
@@ -263,19 +263,19 @@ QHeaderView::section {
 }
 
 QPushButton {
-    background-color: #2F6FED;
+    background-color: #4f46e5;
     color: white;
-    border: 1px solid #2557C7;
+    border: 1px solid #4038c4;
     border-radius: 5px;
     padding: 6px;
 }
 
 QPushButton:hover {
-    background-color: #4C84F0;
+    background-color: #5b54ea;
 }
 
 QPushButton:pressed {
-    background-color: #2557C7;
+    background-color: #4038c4;
 }
 
 QGroupBox {

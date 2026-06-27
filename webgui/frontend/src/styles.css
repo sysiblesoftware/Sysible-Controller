@@ -300,6 +300,12 @@ tr:hover td { background: var(--row-hover); }
   gap: 12px; margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--border); }
 .he-section-head h3 { font-size: 16px; font-weight: 700; margin: 0; }
 .he-portal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+/* Cleaner enrolled-host rows: name on top, address/last-seen muted below. */
+.he-host { align-items: center; padding: 7px 4px 7px 8px; gap: 9px; }
+.he-host .dot { flex-shrink: 0; }
+.he-host-body { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.he-host-name { font-size: 13px; color: var(--text); display: flex; align-items: center; }
+.he-host-meta { font-size: 11.5px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .linklike { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer;
   font: inherit; text-decoration: underline; }
 

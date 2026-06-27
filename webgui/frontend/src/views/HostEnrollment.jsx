@@ -34,6 +34,7 @@ export default function HostEnrollment() {
   const [portPort, setPortPort] = useState("");
   const [portalBusy, setPortalBusy] = useState("");
   const [tab, setTab] = useState("hosts");
+  const [sudoEnv, setSudoEnv] = useState("");
   // Portal administration
   const [history, setHistory] = useState([]);
   const [sessions, setSessions] = useState([]);
@@ -148,7 +149,6 @@ export default function HostEnrollment() {
     `&& unzip -o sysible-agent-bundle.zip -d sysible-agent-bundle ` +
     `&& cd sysible-agent-bundle && chmod +x run_agent.sh && sudo ./run_agent.sh`;
 
-  const envDefault = assignEnv && assignEnv !== NEW_ENV ? sudoDefaults[assignEnv] : undefined;
   const reachable = `https://${cfg.address || "<controller>"}:${curlPort}`;
 
   const TABS = [["hosts", "Enrolled Hosts"], ["enroll", "Enroll a Host"], ["portal", "Webserver Portal"]];
@@ -192,12 +192,17 @@ export default function HostEnrollment() {
                     {open ? "▾" : "▸"} {env}
                   </div>
                   {open && list.map((a) => (
-                    <label className="host-row" key={idOf(a)}>
+                    <label className="host-row he-host" key={idOf(a)}>
                       <input type="checkbox" checked={checked.includes(idOf(a))} onChange={() => toggle(idOf(a))} />
-                      <span>{a.hostname || a.host_id}</span>
-                      <span className="meta">{a.address || a.ip || ""}
-                        {a.requires_sudo_password ? " · pw-sudo" : ""}
-                        {a.last_seen != null ? ` · seen ${fmtSeen(a.last_seen)}` : ""}</span>
+                      <span className={"dot " + (a.online === false ? "bad" : a.online === true ? "ok" : "")}
+                            title={a.online === false ? "Offline" : a.online === true ? "Online" : ""} />
+                      <span className="he-host-body">
+                        <span className="he-host-name">{a.hostname || a.host_id}
+                          {a.requires_sudo_password && <span className="badge" style={{ marginLeft: 6, fontSize: 10 }}>pw-sudo</span>}
+                        </span>
+                        <span className="he-host-meta">{a.address || a.ip || "—"}
+                          {a.last_seen != null ? ` · seen ${fmtSeen(a.last_seen)}` : ""}</span>
+                      </span>
                     </label>
                   ))}
                 </div>
@@ -223,24 +228,35 @@ export default function HostEnrollment() {
             </div>
           </fieldset>
 
-          <fieldset className="tool-group-box"><legend>Sudo policy (selected host / environment)</legend>
+          <fieldset className="tool-group-box"><legend>Sudo policy</legend>
+            <div className="section-title" style={{ marginTop: 0 }}>For the checked host(s) — {checked.length} selected</div>
             <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
-              <span className="faint">Selected host(s):</span>
-              <button className="btn sm" onClick={() => setSudo(true)}>Requires Password</button>
-              <button className="btn sm" onClick={() => setSudo(false)}>Passwordless (NOPASSWD)</button>
+              <button className="btn sm" disabled={checked.length === 0} onClick={() => setSudo(true)}>Requires Password</button>
+              <button className="btn sm" disabled={checked.length === 0} onClick={() => setSudo(false)}>Passwordless (NOPASSWD)</button>
             </div>
-            {assignEnv && assignEnv !== NEW_ENV && (
-              <div className="row" style={{ marginTop: 10, gap: 8, flexWrap: "wrap" }}>
+
+            <div className="section-title">For an entire environment (new hosts inherit this)</div>
+            <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+              <select value={sudoEnv} onChange={(e) => setSudoEnv(e.target.value)} style={{ maxWidth: 200 }}>
+                <option value="">Choose environment…</option>
+                {envs.map((e) => <option key={e} value={e}>{e}</option>)}
+              </select>
+              {sudoEnv && (
                 <span className="faint">
-                  Environment '{assignEnv}' default: {envDefault ? "requires sudo password" : "passwordless"}
+                  currently {sudoDefaults[sudoEnv] ? "requires password" : "passwordless"}
                 </span>
-                <button className="btn sm ghost" onClick={() => run(() => api.setEnvSudoDefault(assignEnv, !envDefault),
-                  `Set ${assignEnv} default to ${!envDefault ? "password sudo" : "passwordless"}.`)}>
-                  Set Environment's Sudo Default
-                </button>
+              )}
+            </div>
+            {sudoEnv && (
+              <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+                <button className="btn sm" onClick={() => run(() => api.setEnvSudoDefault(sudoEnv, true),
+                  `Set ${sudoEnv} default to password sudo.`)}>Requires Password</button>
+                <button className="btn sm" onClick={() => run(() => api.setEnvSudoDefault(sudoEnv, false),
+                  `Set ${sudoEnv} default to passwordless.`)}>Passwordless (NOPASSWD)</button>
               </div>
             )}
-            <p className="faint" style={{ marginTop: 8 }}>
+
+            <p className="faint" style={{ marginTop: 10 }}>
               For password-sudo hosts, store your own sudo password from the “Sudo Password” button in the header.
             </p>
           </fieldset>

@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 
-// Sysible Controller Host Enrollment — mirrors the desktop page: agent bundle
-// (download + curl), enrolled hosts grouped by environment with multi-select,
-// environment assignment, and sudo policy (per host + per-environment default).
+// Host Enrollment — agent bundle (download + curl), enrolled hosts grouped by
+// environment with multi-select, environment assignment, sudo policy, AND the
+// full Webserver Portal administration (status/port/credentials/sessions/files),
+// since the portal exists to serve enrollment. One page, mirrors the desktop.
 
 function fmtSeen(v) {
   if (v === null || v === undefined || v === "") return "—";
@@ -13,6 +14,7 @@ function fmtSeen(v) {
   } else d = new Date(v);
   return isNaN(d.getTime()) ? String(v) : d.toLocaleString();
 }
+const fmtTime = fmtSeen;
 
 const NEW_ENV = "+ New environment…";
 
@@ -31,6 +33,13 @@ export default function HostEnrollment() {
   const [copied, setCopied] = useState(false);
   const [portPort, setPortPort] = useState("");
   const [portalBusy, setPortalBusy] = useState("");
+  // Portal administration
+  const [history, setHistory] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [uploads, setUploads] = useState([]);
+  const [downloads, setDownloads] = useState([]);
+  const [cur, setCur] = useState(""); const [nu, setNu] = useState("");
+  const [np, setNp] = useState(""); const [np2, setNp2] = useState("");
 
   function loadPortal() {
     api.portalStatus().then((s) => {
@@ -39,13 +48,17 @@ export default function HostEnrollment() {
       if (p) setPortPort(String(p));
     }).catch(() => {});
   }
+  function loadHistory() { api.portalLoginHistory().then((d) => setHistory(d.history || [])).catch(() => {}); }
+  function loadSessions() { api.portalSessions().then((d) => setSessions(d.sessions || [])).catch(() => {}); }
+  function loadUploads() { api.portalUploads().then((d) => setUploads(d.files || [])).catch(() => {}); }
+  function loadDownloads() { api.portalDownloads().then((d) => setDownloads(d.files || [])).catch(() => {}); }
   function load() {
     api.agents().then((d) => setAgents(d.agents || [])).catch((e) => setErr(e.message));
     api.environments().then((d) => setEnvs(d.environments || [])).catch(() => {});
     api.envSudoDefaults().then((d) => setSudoDefaults(d || {})).catch(() => {});
     api.edition().then(setEdition).catch(() => {});
-    loadPortal();
     api.controllerConfig().then((c) => setCfg(c || {})).catch(() => {});
+    loadPortal(); loadHistory(); loadSessions(); loadUploads(); loadDownloads();
   }
   useEffect(() => { load(); }, []);
 
@@ -55,6 +68,34 @@ export default function HostEnrollment() {
     catch (e) { setErr(e.message); }
     finally { setPortalBusy(""); }
   }
+  async function saveCreds() {
+    setErr(""); setMsg("");
+    if (np !== np2) { setErr("New portal passwords don't match."); return; }
+    setPortalBusy("creds");
+    try {
+      await api.portalSetCreds(nu.trim(), np, cur);
+      setMsg("Portal credentials saved."); setCur(""); setNu(""); setNp(""); setNp2("");
+      loadPortal(); loadHistory(); loadSessions();
+    } catch (e) { setErr(e.message); }
+    finally { setPortalBusy(""); }
+  }
+  async function removeCreds() {
+    if (!window.confirm("Remove portal login access? Nobody can log in until new credentials are saved.")) return;
+    setPortalBusy("remove"); setErr(""); setMsg("");
+    try { await api.portalRemoveCreds(cur); setMsg("Portal login access removed."); setCur(""); loadPortal(); }
+    catch (e) { setErr(e.message); }
+    finally { setPortalBusy(""); }
+  }
+  async function revoke(s) {
+    const id = s.id ?? s.session_id;
+    try { await api.portalRevokeSession(id); loadSessions(); } catch (e) { setErr(e.message); }
+  }
+  async function stageDownload(e) {
+    const file = e.target.files[0]; if (!file) return;
+    setErr(""); try { await api.portalStageDownload(file); loadDownloads(); } catch (e2) { setErr(e2.message); }
+    e.target.value = "";
+  }
+  const fname = (f) => (typeof f === "string" ? f : (f.name || f.filename || ""));
 
   const groups = useMemo(() => {
     const m = {};
@@ -64,7 +105,6 @@ export default function HostEnrollment() {
 
   const idOf = (a) => a.host_id || a.id;
   const toggle = (id) => setChecked((c) => c.includes(id) ? c.filter((x) => x !== id) : [...c, id]);
-  const checkedAgents = agents.filter((a) => checked.includes(idOf(a)));
 
   async function run(fn, okMsg) {
     setErr(""); setMsg("");
@@ -108,6 +148,7 @@ export default function HostEnrollment() {
     `&& cd sysible-agent-bundle && chmod +x run_agent.sh && sudo ./run_agent.sh`;
 
   const envDefault = assignEnv && assignEnv !== NEW_ENV ? sudoDefaults[assignEnv] : undefined;
+  const reachable = `https://${cfg.address || "<controller>"}:${curlPort}`;
 
   return (
     <div>
@@ -158,7 +199,7 @@ export default function HostEnrollment() {
           </div>
         </fieldset>
 
-        {/* RIGHT: actions */}
+        {/* RIGHT: enrollment actions */}
         <div className="he-actions">
           <fieldset className="tool-group-box"><legend>Agent Bundle</legend>
             <p className="faint" style={{ marginTop: 0 }}>
@@ -167,11 +208,7 @@ export default function HostEnrollment() {
             <a className="btn sm" href={api.agentBundleUrl()}>Download Agent Bundle</a>
           </fieldset>
 
-          <fieldset className="tool-group-box"><legend>Webserver Portal (for the curl download)</legend>
-            <p className="faint" style={{ marginTop: 0 }}>
-              The curl one-liner below pulls the agent bundle from the Webserver Portal, so the portal must be
-              running and reachable on this port. Start it while provisioning hosts; stop it when you're done.
-            </p>
+          <fieldset className="tool-group-box"><legend>Webserver Portal</legend>
             <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center" }}>
               <span className={"badge" + (portal.running ? " green" : "")}>{portal.running ? "Running" : "Stopped"}</span>
               <button className="btn sm" disabled={portalBusy || portal.running}
@@ -180,21 +217,22 @@ export default function HostEnrollment() {
               <button className="btn sm ghost" disabled={portalBusy || !portal.running}
                       onClick={() => portalAct("stop", () => api.portalStop(), "Portal stopped.")}>Stop Portal</button>
             </div>
+            {portal.running && <div className="faint" style={{ marginTop: 6 }}>Reachable at: {reachable}</div>}
             <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center", marginTop: 10 }}>
               <span className="faint">Port</span>
               <input type="number" style={{ maxWidth: 120 }} value={portPort} onChange={(e) => setPortPort(e.target.value)} />
               <button className="btn sm" disabled={portalBusy || !portPort}
                       onClick={() => portalAct("port", () => api.portalSetPort(Number(portPort)),
                         "Port saved — restart the portal if it's running.")}>Save Port</button>
-              {!portal.credentials_configured &&
-                <span className="faint">No portal login set yet — set one on the Webserver Portal page so curl can authenticate.</span>}
             </div>
+            {!portal.credentials_configured &&
+              <p className="faint" style={{ marginTop: 8 }}>No portal login set yet — set one under “Portal login” below so the curl download can authenticate.</p>}
           </fieldset>
 
           <fieldset className="tool-group-box"><legend>Command-Line Bundle Download (curl)</legend>
             <p className="faint" style={{ marginTop: 0 }}>
               For headless hosts: downloads, unzips, and runs the installer in one shot, authenticating with the
-              Webserver Portal login (curl -u). Replace <code>&lt;password&gt;</code> with the real portal password;
+              portal login (curl -u). Replace <code>&lt;password&gt;</code> with the real portal password;
               <code> -k</code> skips the self-signed-cert check; the install step needs sudo.
             </p>
             <div className="cmd-preview" style={{ whiteSpace: "pre-wrap" }}>{curlCmd}</div>
@@ -238,6 +276,137 @@ export default function HostEnrollment() {
             </p>
           </fieldset>
         </div>
+      </div>
+
+      {/* ===== Webserver Portal administration (credentials, sessions, files) ===== */}
+      <h3 className="he-section-title">Webserver Portal — login &amp; files</h3>
+      <p className="faint" style={{ marginTop: 0, maxWidth: 880 }}>
+        The portal serves HTTPS using the controller's self-signed cert, so a host operator's browser shows an
+        untrusted-certificate warning the first time — that's expected. Host operators sign in with the portal
+        login below to download the agent bundle or exchange files. Only run the portal while provisioning, on a
+        network you trust.
+      </p>
+
+      <div className="he-portal-grid">
+        <fieldset className="tool-group-box"><legend>Current portal login</legend>
+          {portal.credentials_configured ? (
+            <div className="muted" style={{ fontSize: 13 }}>
+              Username: <strong>{portal.username}</strong><br />
+              Last successful login: {fmtTime(portal.last_login)}<br />
+              Credentials last changed: {fmtTime(portal.last_changed)}
+            </div>
+          ) : <span className="faint">No portal credentials configured yet.</span>}
+        </fieldset>
+
+        <fieldset className="tool-group-box"><legend>Portal login (set / reset)</legend>
+          <p className="faint" style={{ marginTop: 0 }}>Enter the current password to confirm a change (leave blank if none is set yet).</p>
+          <label className="field"><span>Current password</span><input type="password" value={cur} onChange={(e) => setCur(e.target.value)} /></label>
+          <label className="field"><span>New username</span><input value={nu} onChange={(e) => setNu(e.target.value)} /></label>
+          <label className="field"><span>New password</span><input type="password" value={np} onChange={(e) => setNp(e.target.value)} /></label>
+          <label className="field"><span>Confirm new password</span><input type="password" value={np2} onChange={(e) => setNp2(e.target.value)} /></label>
+          <div className="row" style={{ marginTop: 12 }}>
+            <button className="btn sm" disabled={portalBusy === "creds" || !nu || !np} onClick={saveCreds}>
+              {portalBusy === "creds" ? <span className="spin" /> : "Save Credentials"}</button>
+            <button className="btn sm danger" disabled={portalBusy === "remove"} onClick={removeCreds}>Remove Login Access</button>
+          </div>
+        </fieldset>
+      </div>
+
+      <fieldset className="tool-group-box"><legend>Login History</legend>
+        <div className="spread" style={{ marginBottom: 8 }}>
+          <span className="faint">Every login attempt against the portal account, plus credential-reset events.</span>
+          <button className="btn ghost sm" onClick={loadHistory}>Refresh</button>
+        </div>
+        {history.length === 0 ? <div className="empty">No login history.</div> : (
+          <div style={{ maxHeight: 220, overflowY: "auto" }}>
+            <table>
+              <thead><tr><th>Time</th><th>Event</th><th>Username</th><th>IP Address</th></tr></thead>
+              <tbody>
+                {history.map((h, i) => (
+                  <tr key={h.id ?? i}>
+                    <td className="faint mono">{fmtTime(h.timestamp ?? h.time ?? h.created_at)}</td>
+                    <td>{h.event}</td><td>{h.username}</td>
+                    <td className="faint">{h.ip || h.ip_address || ""}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </fieldset>
+
+      <fieldset className="tool-group-box"><legend>Active Sessions</legend>
+        <div className="spread" style={{ marginBottom: 8 }}>
+          <span className="faint">Host operators currently logged into the portal. Revoking one logs that browser out immediately.</span>
+          <button className="btn ghost sm" onClick={loadSessions}>Refresh</button>
+        </div>
+        {sessions.length === 0 ? <div className="empty">No active sessions.</div> : (
+          <table>
+            <thead><tr><th>Logged In</th><th>Expires</th><th>IP Address</th><th></th></tr></thead>
+            <tbody>
+              {sessions.map((s, i) => (
+                <tr key={s.id ?? s.session_id ?? i}>
+                  <td className="faint mono">{fmtTime(s.created_at ?? s.logged_in ?? s.started_at)}</td>
+                  <td className="faint mono">{fmtTime(s.expires_at ?? s.expires)}</td>
+                  <td className="faint">{s.ip || s.ip_address || ""}</td>
+                  <td style={{ textAlign: "right" }}>
+                    <button className="btn ghost sm" onClick={() => revoke(s)}>Revoke</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </fieldset>
+
+      <div className="he-portal-grid">
+        <fieldset className="tool-group-box"><legend>Files Uploaded By Hosts</legend>
+          <div className="spread" style={{ marginBottom: 8 }}>
+            <span className="faint">Files host operators uploaded through the portal.</span>
+            <button className="btn ghost sm" onClick={loadUploads}>Refresh</button>
+          </div>
+          {uploads.length === 0 ? <div className="empty">No uploaded files.</div> : (
+            <table>
+              <tbody>
+                {uploads.map((f, i) => { const n = fname(f); return (
+                  <tr key={n || i}>
+                    <td>{n}</td>
+                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                      <a className="btn ghost sm" href={api.portalUploadUrl(n)}>Save</a>{" "}
+                      <button className="btn ghost sm" onClick={async () => { await api.portalUploadDelete(n); loadUploads(); }}>Delete</button>
+                    </td>
+                  </tr>
+                ); })}
+              </tbody>
+            </table>
+          )}
+        </fieldset>
+
+        <fieldset className="tool-group-box"><legend>Files Staged For Download</legend>
+          <div className="spread" style={{ marginBottom: 8 }}>
+            <span className="faint">Files staged for host operators to download.</span>
+            <div className="row">
+              <label className="btn ghost sm" style={{ cursor: "pointer" }}>
+                Add File…<input type="file" style={{ display: "none" }} onChange={stageDownload} />
+              </label>
+              <button className="btn ghost sm" onClick={loadDownloads}>Refresh</button>
+            </div>
+          </div>
+          {downloads.length === 0 ? <div className="empty">No staged files.</div> : (
+            <table>
+              <tbody>
+                {downloads.map((f, i) => { const n = fname(f); return (
+                  <tr key={n || i}>
+                    <td>{n}</td>
+                    <td style={{ textAlign: "right" }}>
+                      <button className="btn ghost sm" onClick={async () => { await api.portalDownloadDelete(n); loadDownloads(); }}>Delete</button>
+                    </td>
+                  </tr>
+                ); })}
+              </tbody>
+            </table>
+          )}
+        </fieldset>
       </div>
     </div>
   );

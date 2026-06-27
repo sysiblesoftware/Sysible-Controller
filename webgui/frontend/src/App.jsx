@@ -6,7 +6,6 @@ import ToolRunner from "./views/ToolRunner.jsx";
 import Connect from "./views/Connect.jsx";
 import LiveActivity from "./views/LiveActivity.jsx";
 import Settings from "./views/Settings.jsx";
-import Portal from "./views/Portal.jsx";
 import HostEnrollment from "./views/HostEnrollment.jsx";
 import SudoModal from "./components/SudoModal.jsx";
 import StandaloneTerminal from "./components/StandaloneTerminal.jsx";
@@ -16,7 +15,6 @@ const SECTIONS = {
   hosts: "Sysible Controller Host Enrollment",
   settings: "Sysible Controller Settings",
   connect: "Sysible Connect",
-  portal: "Webserver Portal Configuration",
   sysadmin: "System Administration",
   live: "Live Activity & Logs",
 };
@@ -115,7 +113,6 @@ export default function App() {
             {view === "sysadmin" && <ToolRunner openTool={target?.tool} openTab={target?.tab}
               onConsumed={() => setTarget(null)} />}
             {view === "connect" && <Connect />}
-            {view === "portal" && <Portal />}
             {view === "live" && <LiveActivity />}
           </>
         )}

@@ -9,8 +9,8 @@ export const REGISTRY = [
     keywords: ["settings", "administrators", "add administrator", "admin password policy", "audit log", "controller address", "controller port", "change my password", "controller settings", "version", "license"] },
   { title: "Sysible Connect", section: "connect",
     keywords: ["ssh", "ssh terminal", "remote terminal", "console", "connect to host", "environment tag", "sysible connect", "upload to host", "download from host", "file transfer", "terminal", "run command", "run script", "run a script", "ad hoc", "ad-hoc", "fleet command", "run on all hosts", "shell command", "reboot all", "power off", "restart agent", "check in", "ping"] },
-  { title: "Webserver Portal Configuration", section: "portal",
-    keywords: ["portal", "reset portal password", "portal credentials", "portal port", "login history", "portal sessions", "host operator login"] },
+  { title: "Webserver Portal (login, port & files)", section: "hosts",
+    keywords: ["portal", "webserver portal", "reset portal password", "portal credentials", "portal port", "login history", "portal sessions", "host operator login", "staged files", "uploaded files"] },
   // User & Group Administration tabs
   { title: "Create User", section: "sysadmin", tool: "User & Group Administration", tab: "create",
     keywords: ["create a user", "create user", "add user", "new user", "new account", "create account", "add a user"] },

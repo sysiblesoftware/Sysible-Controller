@@ -25,7 +25,6 @@ const TILES = [
   ["Sysible Controller Host Enrollment", "Download the agent bundle and manage the enrolled host fleet.", "server", "ico-teal", "hosts", true],
   ["Sysible Controller Settings", "Manage dashboard administrators, password policy, the controller's address/port, and the audit log.", "cog", "ico-slate", "settings", true],
   ["Sysible Connect", "Pop-out SSH/agent terminals with file upload & download, search, and saved output, plus one-click SSH enrollment.", "terminal", "ico-purple", "connect", false],
-  ["Webserver Portal Configuration", "Run the host-facing portal for agent downloads and file transfers.", "globe", "ico-coral", "portal", true],
   ["System Administration", "All host-management tools — users, services, storage, firewall, network, and more — across agent and SSH hosts.", "grid", "ico-amber", "sysadmin", false],
   ["Live Activity & Logs", "Live, attributed feed of who did what across the fleet, plus the controller's own log.", "stream", "ico-sky", "live", true],
 ];

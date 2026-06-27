@@ -278,49 +278,68 @@ export default function HostEnrollment() {
         </div>
       </div>
 
-      {/* ===== Webserver Portal administration (credentials, sessions, files) ===== */}
-      <h3 className="he-section-title">Webserver Portal — login &amp; files</h3>
+      {/* ===== Webserver Portal administration (login, sessions, files) ===== */}
+      <div className="he-section-head">
+        <h3>Webserver Portal — host-operator login &amp; files</h3>
+        <button className="btn ghost sm" onClick={() => { loadPortal(); loadHistory(); loadSessions(); loadUploads(); loadDownloads(); }}>Refresh</button>
+      </div>
       <p className="faint" style={{ marginTop: 0, maxWidth: 880 }}>
-        The portal serves HTTPS using the controller's self-signed cert, so a host operator's browser shows an
-        untrusted-certificate warning the first time — that's expected. Host operators sign in with the portal
-        login below to download the agent bundle or exchange files. Only run the portal while provisioning, on a
-        network you trust.
+        Host operators sign in with this login to download the agent bundle or exchange files. Run the portal only
+        while provisioning, on a trusted network.
       </p>
 
       <div className="he-portal-grid">
-        <fieldset className="tool-group-box"><legend>Current portal login</legend>
-          {portal.credentials_configured ? (
-            <div className="muted" style={{ fontSize: 13 }}>
-              Username: <strong>{portal.username}</strong><br />
-              Last successful login: {fmtTime(portal.last_login)}<br />
-              Credentials last changed: {fmtTime(portal.last_changed)}
-            </div>
-          ) : <span className="faint">No portal credentials configured yet.</span>}
-        </fieldset>
-
-        <fieldset className="tool-group-box"><legend>Portal login (set / reset)</legend>
-          <p className="faint" style={{ marginTop: 0 }}>Enter the current password to confirm a change (leave blank if none is set yet).</p>
-          <label className="field"><span>Current password</span><input type="password" value={cur} onChange={(e) => setCur(e.target.value)} /></label>
-          <label className="field"><span>New username</span><input value={nu} onChange={(e) => setNu(e.target.value)} /></label>
-          <label className="field"><span>New password</span><input type="password" value={np} onChange={(e) => setNp(e.target.value)} /></label>
-          <label className="field"><span>Confirm new password</span><input type="password" value={np2} onChange={(e) => setNp2(e.target.value)} /></label>
+        <fieldset className="tool-group-box"><legend>Portal login</legend>
+          <div className="muted" style={{ fontSize: 13, marginBottom: 10 }}>
+            {portal.credentials_configured
+              ? <>Current user: <strong>{portal.username}</strong> · last login {fmtTime(portal.last_login)}</>
+              : <span className="faint">No portal login set yet.</span>}
+          </div>
+          <div className="group-fields">
+            <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>New username</span>
+              <input value={nu} onChange={(e) => setNu(e.target.value)} /></label></div>
+            <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Current password (if set)</span>
+              <input type="password" value={cur} onChange={(e) => setCur(e.target.value)} /></label></div>
+          </div>
+          <div className="group-fields">
+            <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>New password</span>
+              <input type="password" value={np} onChange={(e) => setNp(e.target.value)} /></label></div>
+            <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Confirm new password</span>
+              <input type="password" value={np2} onChange={(e) => setNp2(e.target.value)} /></label></div>
+          </div>
           <div className="row" style={{ marginTop: 12 }}>
             <button className="btn sm" disabled={portalBusy === "creds" || !nu || !np} onClick={saveCreds}>
-              {portalBusy === "creds" ? <span className="spin" /> : "Save Credentials"}</button>
-            <button className="btn sm danger" disabled={portalBusy === "remove"} onClick={removeCreds}>Remove Login Access</button>
+              {portalBusy === "creds" ? <span className="spin" /> : "Save Login"}</button>
+            <button className="btn sm danger" disabled={portalBusy === "remove" || !portal.credentials_configured} onClick={removeCreds}>Remove Login</button>
           </div>
+        </fieldset>
+
+        <fieldset className="tool-group-box"><legend>Active Sessions</legend>
+          <p className="faint" style={{ marginTop: 0 }}>Operators currently signed in. Revoking one logs that browser out immediately.</p>
+          {sessions.length === 0 ? <div className="empty" style={{ padding: 20 }}>No active sessions.</div> : (
+            <table>
+              <thead><tr><th>Logged In</th><th>IP</th><th></th></tr></thead>
+              <tbody>
+                {sessions.map((s, i) => (
+                  <tr key={s.id ?? s.session_id ?? i}>
+                    <td className="faint mono">{fmtTime(s.created_at ?? s.logged_in ?? s.started_at)}</td>
+                    <td className="faint">{s.ip || s.ip_address || ""}</td>
+                    <td style={{ textAlign: "right" }}>
+                      <button className="btn ghost sm" onClick={() => revoke(s)}>Revoke</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </fieldset>
       </div>
 
       <fieldset className="tool-group-box"><legend>Login History</legend>
-        <div className="spread" style={{ marginBottom: 8 }}>
-          <span className="faint">Every login attempt against the portal account, plus credential-reset events.</span>
-          <button className="btn ghost sm" onClick={loadHistory}>Refresh</button>
-        </div>
-        {history.length === 0 ? <div className="empty">No login history.</div> : (
-          <div style={{ maxHeight: 220, overflowY: "auto" }}>
+        {history.length === 0 ? <div className="empty" style={{ padding: 16 }}>No login history.</div> : (
+          <div style={{ maxHeight: 200, overflowY: "auto" }}>
             <table>
-              <thead><tr><th>Time</th><th>Event</th><th>Username</th><th>IP Address</th></tr></thead>
+              <thead><tr><th>Time</th><th>Event</th><th>Username</th><th>IP</th></tr></thead>
               <tbody>
                 {history.map((h, i) => (
                   <tr key={h.id ?? i}>
@@ -335,37 +354,9 @@ export default function HostEnrollment() {
         )}
       </fieldset>
 
-      <fieldset className="tool-group-box"><legend>Active Sessions</legend>
-        <div className="spread" style={{ marginBottom: 8 }}>
-          <span className="faint">Host operators currently logged into the portal. Revoking one logs that browser out immediately.</span>
-          <button className="btn ghost sm" onClick={loadSessions}>Refresh</button>
-        </div>
-        {sessions.length === 0 ? <div className="empty">No active sessions.</div> : (
-          <table>
-            <thead><tr><th>Logged In</th><th>Expires</th><th>IP Address</th><th></th></tr></thead>
-            <tbody>
-              {sessions.map((s, i) => (
-                <tr key={s.id ?? s.session_id ?? i}>
-                  <td className="faint mono">{fmtTime(s.created_at ?? s.logged_in ?? s.started_at)}</td>
-                  <td className="faint mono">{fmtTime(s.expires_at ?? s.expires)}</td>
-                  <td className="faint">{s.ip || s.ip_address || ""}</td>
-                  <td style={{ textAlign: "right" }}>
-                    <button className="btn ghost sm" onClick={() => revoke(s)}>Revoke</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </fieldset>
-
       <div className="he-portal-grid">
         <fieldset className="tool-group-box"><legend>Files Uploaded By Hosts</legend>
-          <div className="spread" style={{ marginBottom: 8 }}>
-            <span className="faint">Files host operators uploaded through the portal.</span>
-            <button className="btn ghost sm" onClick={loadUploads}>Refresh</button>
-          </div>
-          {uploads.length === 0 ? <div className="empty">No uploaded files.</div> : (
+          {uploads.length === 0 ? <div className="empty" style={{ padding: 16 }}>No uploaded files.</div> : (
             <table>
               <tbody>
                 {uploads.map((f, i) => { const n = fname(f); return (
@@ -383,16 +374,12 @@ export default function HostEnrollment() {
         </fieldset>
 
         <fieldset className="tool-group-box"><legend>Files Staged For Download</legend>
-          <div className="spread" style={{ marginBottom: 8 }}>
-            <span className="faint">Files staged for host operators to download.</span>
-            <div className="row">
-              <label className="btn ghost sm" style={{ cursor: "pointer" }}>
-                Add File…<input type="file" style={{ display: "none" }} onChange={stageDownload} />
-              </label>
-              <button className="btn ghost sm" onClick={loadDownloads}>Refresh</button>
-            </div>
+          <div style={{ marginBottom: 8 }}>
+            <label className="btn ghost sm" style={{ cursor: "pointer" }}>
+              Add File…<input type="file" style={{ display: "none" }} onChange={stageDownload} />
+            </label>
           </div>
-          {downloads.length === 0 ? <div className="empty">No staged files.</div> : (
+          {downloads.length === 0 ? <div className="empty" style={{ padding: 16 }}>No staged files.</div> : (
             <table>
               <tbody>
                 {downloads.map((f, i) => { const n = fname(f); return (

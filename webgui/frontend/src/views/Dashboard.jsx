@@ -1,54 +1,58 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { api } from "../api.js";
 import { searchTasks } from "../featureSearch.js";
 
-// Inline SVG icons (stroke uses currentColor so the tint classes color them).
-const I = {
-  server: <><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><line x1="7" y1="7" x2="7" y2="7"/><line x1="7" y1="17" x2="7" y2="17"/></>,
-  cog: <><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></>,
-  terminal: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></>,
-  globe: <><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></>,
-  grid: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>,
-  stream: <><path d="M4 6h16M4 12h16M4 18h10"/></>,
-};
+// Fleet overview: at-a-glance metrics + recent activity. Navigation lives in
+// the sidebar, so this is a real home screen rather than a duplicate tile grid.
 
-function Icon({ name }) {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
-         stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      {I[name]}
-    </svg>
-  );
+function seenAgo(v) {
+  if (v === null || v === undefined || v === "") return Infinity;
+  let n = Number(v);
+  if (!isFinite(n)) { const d = new Date(v); n = isNaN(d) ? NaN : d.getTime() / 1000; }
+  if (!isFinite(n)) return Infinity;
+  if (n > 1e12) n /= 1000; // ms → s
+  return Date.now() / 1000 - n;
+}
+function fmtWhen(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  let n = Number(v); let d;
+  if (isFinite(n)) { if (n < 1e12) n *= 1000; d = new Date(n); } else d = new Date(v);
+  return isNaN(d.getTime()) ? String(v) : d.toLocaleString();
 }
 
-// (title, desc, icon, color-class, section-id-or-null, superuserOnly)
-const TILES = [
-  ["Sysible Controller Host Enrollment", "Download the agent bundle and manage the enrolled host fleet.", "server", "ico-teal", "hosts", true],
-  ["Sysible Controller Settings", "Manage dashboard administrators, password policy, the controller's address/port, and the audit log.", "cog", "ico-slate", "settings", true],
-  ["Sysible Connect", "Pop-out SSH/agent terminals with file upload & download, search, and saved output, plus one-click SSH enrollment.", "terminal", "ico-purple", "connect", false],
-  ["System Administration", "All host-management tools — users, services, storage, firewall, network, and more — across agent and SSH hosts.", "grid", "ico-amber", "sysadmin", false],
-  ["Live Activity & Logs", "Live, attributed feed of who did what across the fleet, plus the controller's own log.", "stream", "ico-sky", "live", true],
-];
+const ONLINE_WINDOW_S = 150;
 
-export default function Dashboard({ role, onOpen }) {
+export default function Dashboard({ role, edition, onOpen }) {
   const [q, setQ] = useState("");
+  const [agents, setAgents] = useState([]);
+  const [activity, setActivity] = useState([]);
   const isSuper = role === "superuser";
 
-  const tiles = useMemo(
-    () => TILES.filter(([,,,,, su]) => !su || isSuper),
-    [isSuper]
-  );
+  useEffect(() => {
+    api.agents().then((d) => setAgents(d.agents || [])).catch(() => {});
+    if (isSuper) api.activity(12).then((d) => setActivity(d.activity || [])).catch(() => {});
+  }, [isSuper]);
+
   const results = useMemo(() => searchTasks(q), [q]);
 
-  return (
-    <div>
-      <input
-        className="search-bar"
-        placeholder='Search for a task, e.g. "create a user" or "add a repository"…'
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-      />
+  const m = useMemo(() => {
+    const total = agents.length;
+    const online = agents.filter((a) => seenAgo(a.last_seen) <= ONLINE_WINDOW_S).length;
+    const envs = new Set(agents.map((a) => a.environment || "Unassigned")).size;
+    return { total, online, offline: total - online, envs };
+  }, [agents]);
 
-      {q.trim() ? (
+  const recent = useMemo(
+    () => [...activity].sort((a, b) => (b.id || 0) - (a.id || 0)).slice(0, 10),
+    [activity]
+  );
+
+  if (q.trim()) {
+    return (
+      <div>
+        <input className="search-bar" autoFocus
+               placeholder='Search for a task, e.g. "create a user" or "add a repository"…'
+               value={q} onChange={(e) => setQ(e.target.value)} />
         <div className="card" style={{ padding: 6 }}>
           {results.length === 0 ? (
             <div className="empty" style={{ padding: 16 }}>No matching task. Try “create a user”, “firewall”, “restart service”…</div>
@@ -57,27 +61,68 @@ export default function Dashboard({ role, onOpen }) {
                     onClick={() => onOpen(r.section, { tool: r.tool, tab: r.tab })}>
               <span style={{ fontWeight: 600 }}>{r.title}</span>
               <span className="faint" style={{ marginLeft: 8 }}>
-                {r.section === "sysadmin" && r.tool ? `System Administration › ${r.tool}` : sectionLabel(r.section)}
+                {r.section === "sysadmin" && r.tool ? `System Administration › ${r.tool}` : r.section}
               </span>
             </button>
           ))}
         </div>
-      ) : (
-        <div className="tiles">
-          {tiles.map(([title, desc, icon, cls, section]) => (
-            <button key={section} className="tile" onClick={() => onOpen(section)}>
-              <div className={"tile-ico " + cls}><Icon name={icon} /></div>
-              <h3>{title}</h3>
-              <p>{desc}</p>
-            </button>
-          ))}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <input className="search-bar"
+             placeholder='Search for a task, e.g. "create a user" or "add a repository"…'
+             value={q} onChange={(e) => setQ(e.target.value)} />
+
+      <div className="metric-row">
+        <div className="metric">
+          <div className="label">Hosts enrolled</div>
+          <div className="value">{m.total}{edition?.host_limit ? <span className="faint" style={{ fontSize: 14, fontWeight: 400 }}>/ {edition.host_limit}</span> : null}</div>
         </div>
-      )}
+        <div className="metric">
+          <div className="label">Online</div>
+          <div className="value">{m.online}<span className="dot ok" /></div>
+        </div>
+        <div className="metric">
+          <div className="label">Offline / stale</div>
+          <div className="value">{m.offline}{m.offline > 0 && <span className="dot bad" />}</div>
+        </div>
+        <div className="metric">
+          <div className="label">Environments</div>
+          <div className="value">{m.envs}</div>
+        </div>
+      </div>
+
+      <div className="overview-grid">
+        {isSuper && (
+          <div>
+            <div className="section-title">Recent activity</div>
+            <div className="overview-feed">
+              {recent.length === 0 ? (
+                <div className="empty" style={{ padding: 20 }}>No recent activity.</div>
+              ) : recent.map((e) => (
+                <div className="feed-row" key={e.id}>
+                  <span style={{ flex: 1 }}>
+                    <strong>{e.username || "—"}</strong> {e.description || "ran a command"}
+                    {e.host ? <span className="faint"> · {e.host}</span> : null}
+                  </span>
+                  <span className="feed-when">{fmtWhen(e.timestamp)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {!isSuper && (
+          <div className="card">
+            <strong>Welcome back</strong>
+            <p className="faint" style={{ marginTop: 8, marginBottom: 0 }}>
+              Use the navigation on the left, or the search box above, to jump straight to a tool.
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   );
-}
-
-function sectionLabel(s) {
-  return ({ hosts: "Host Enrollment", settings: "Settings", connect: "Sysible Connect",
-    portal: "Webserver Portal", live: "Live Activity & Logs" })[s] || s;
 }

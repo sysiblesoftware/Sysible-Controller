@@ -101,6 +101,16 @@ verbs too, scoped to named sources so a compromised controller can't
 - **`runas --user U --mode {plain|elevate} -- <shell>`** — the **optional**
   per-user mode (below). Off by default.
 
+**The `op` path is wired end to end** (one verb family, `service.*`, as proof):
+a `kind="op"` task carries a JSON verb spec (`{"op":"service.restart",
+"args":{"unit":"nginx.service"}}`); the client builds it with
+`queue_op_on_hosts(...)`; the agent's `run_op()` turns it into
+`sudo -n sysible-priv op --op service.restart --arg unit=nginx.service`; the
+dispatcher validates and runs `["systemctl","restart","nginx.service"]` —
+argv-only, **no `bash -c` anywhere**. Tested as a chain end to end. Migrating a
+real builder is then mechanical: swap its `queue_command_on_hosts(...)` shell
+call for `queue_op_on_hosts(...)`.
+
 ## Optional: per-user `runuser` (defense-in-depth mode)
 
 The original per-user model — `runuser` into the triggering admin's local

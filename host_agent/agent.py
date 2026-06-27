@@ -464,6 +464,30 @@ def run_command(cmd, run_as=None, become_password=None):
     return _exec(cmd, shell=True)
 
 
+def run_op(spec, become_password=None):
+    """RFC (dispatcher): run a vetted privileged OPERATION through the
+    dispatcher's `op` path instead of arbitrary shell. `spec` is
+    {"op": "service.restart", "args": {"unit": "nginx.service"}} (+ optional
+    "stdin" for a secret/file content). The agent sudo's ONLY the dispatcher;
+    the dispatcher validates the verb + args and runs the primitive as root.
+    There is no run_as here - an op IS the privileged action, not user shell."""
+    if not _PRIV_DISPATCHER:
+        return {"stdout": "", "returncode": 2,
+                "stderr": "[sysible] privileged dispatcher not configured (SYSIBLE_PRIV unset)"}
+    op = (spec or {}).get("op")
+    if not op:
+        return {"stdout": "", "returncode": 2, "stderr": "[sysible] op task missing 'op'"}
+    argv = ["sudo", "-n", _PRIV_DISPATCHER, "op", "--op", op]
+    for k, v in ((spec.get("args") or {}).items()):
+        argv += ["--arg", f"{k}={v}"]
+    # A secret (sudo/become password, file content) goes on the dispatcher's
+    # stdin, never argv. Prefer an explicit spec stdin, else the become password.
+    secret = spec.get("stdin")
+    if secret is None and become_password:
+        secret = become_password
+    return _exec(argv, input_data=(secret + "\n" if secret else None))
+
+
 def send_result(state, task_id, result):
     try:
         r = _request(
@@ -543,8 +567,15 @@ def loop(state):
                 print("[agent] running task", task_id)
 
                 try:
-                    result = run_command(task["command"], task.get("run_as"),
-                                         task.get("become_password"))
+                    # RFC (dispatcher): a kind="op" task carries a JSON verb
+                    # spec ({"op","args"}) run through the vetted dispatcher
+                    # path; everything else is the existing shell path.
+                    if task.get("kind") == "op":
+                        result = run_op(json.loads(task["command"]),
+                                        task.get("become_password"))
+                    else:
+                        result = run_command(task["command"], task.get("run_as"),
+                                             task.get("become_password"))
                     send_result(state, task_id, result)
                 except UnknownHostError:
                     raise

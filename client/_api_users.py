@@ -223,6 +223,24 @@ def queue_command_on_hosts(host_ids, command: str, kind: str = "command",
     return task_ids
 
 
+def _op_command(op: str, **args) -> str:
+    """Serialize a dispatcher verb call into the JSON 'command' a kind='op' task
+    carries (see host_agent/agent.py run_op + host_agent/sysible_priv.py)."""
+    import json
+    return json.dumps({"op": op, "args": {k: str(v) for k, v in args.items()}})
+
+
+def queue_op_on_hosts(host_ids, op: str, description: str = None,
+                      become_password: str = None, **args):
+    """RFC (dispatcher): queue a vetted privileged OPERATION instead of a shell
+    command, e.g. queue_op_on_hosts(ids, 'service.restart', unit='nginx.service').
+    The agent runs it through sysible-priv (argv-only, validated), not bash -c.
+    Migrating a command-builder is just swapping its queue_command_on_hosts call
+    for this."""
+    return queue_command_on_hosts(host_ids, _op_command(op, **args), kind="op",
+                                  description=description, become_password=become_password)
+
+
 def get_result_by_task(host_id: str, task_id: int):
     if task_id is None:
         return None

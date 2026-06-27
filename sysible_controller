@@ -340,6 +340,11 @@ cmd_webgui() {
       _stop_webgui
       echo "Web console stopped."
       ;;
+    restart)
+      _require_root "webgui restart"
+      _stop_webgui
+      _start_webgui
+      ;;
     status|"")
       if systemctl is-active --quiet "${WEBGUI_SERVICE}.service"; then
         ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -353,7 +358,7 @@ cmd_webgui() {
       journalctl -u "${WEBGUI_SERVICE}.service" -n 50 --no-pager
       ;;
     *)
-      echo "Usage: sysible_controller webgui {start|stop|status|logs}"
+      echo "Usage: sysible_controller webgui {start|stop|restart|status|logs}"
       exit 1
       ;;
   esac

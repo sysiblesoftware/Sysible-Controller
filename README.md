@@ -204,7 +204,7 @@ sysible_controller {start|stop|restart|status|logs|gui|webgui|reset-admin|destro
 | `status` | No | Backend systemd status, plus desktop GUI process state and web console state. |
 | `logs` | No | Tails the backend's live log stream. |
 | `gui` | Yes | Starts only the desktop GUI — the way back in described above. Needs a desktop session. |
-| `webgui {start\|stop\|status\|logs}` | Yes (start/stop) | Controls the browser console's `sysible-webgui` service independently of the backend. `start` builds the front end if needed and serves it over HTTPS on port 8800; `status`/`logs` report on it. |
+| `webgui {start\|stop\|restart\|status\|logs}` | Yes (start/stop/restart) | Controls the browser console's `sysible-webgui` service independently of the backend. `start` builds the front end if needed and serves it over HTTPS on port 8800; `restart` stops then starts it (picking up new code); `status`/`logs` report on it. |
 | `reset-admin [username] [password]` | Yes | Sets (or creates) a web-console administrator's password and prints it once in red. Use when the install-time default was skipped (admins already existed) or a password was lost. Username defaults to `admin`; the password is generated if omitted. The account must change it at next login. |
 | `destroy [--purge]` | Yes | Irreversible uninstall. Requires typing `destroy` to confirm; stops and disables both the `sysible-backend` and `sysible-webgui` services, backs up the database to `/tmp` first, and never touches already-enrolled hosts. `--purge` additionally removes the leftover `/tmp` database backups and the source checkout the installer was run from. |
 

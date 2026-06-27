@@ -344,6 +344,14 @@ def heartbeat(req: HeartbeatRequest):
 
     update_agent_heartbeat(req.host_id, req.ip, req.hostname)
 
+    # RFC (agent integrity, Tier 1): when the agent reports a self-measurement,
+    # compare it against this host's sealed baseline (trust-on-first-use) and
+    # quarantine on mismatch. evaluate() never raises, so integrity can't break
+    # the heartbeat path. Quarantine is enforced in poll_agent_tasks below.
+    if req.measurements is not None:
+        from backend import agent_integrity
+        agent_integrity.evaluate(req.host_id, req.measurements)
+
     # Catch up already-enrolled agents that predate SSH auto-enrollment.
     # Heartbeats are frequent, so gate on the cheap state read first:
     # only when a host has *never* been attempted (state is None) do we
@@ -477,6 +485,14 @@ def poll_agent_tasks(host_id: str, agent_secret: str = "",
     # Prefer the header (kept out of URLs/access logs); fall back to the query
     # param so already-deployed agents keep working.
     verify_agent(host_id, x_agent_secret or agent_secret)
+
+    # RFC (agent integrity): a quarantined host (its self-measurement diverged
+    # from its sealed baseline) keeps heartbeating but is handed NO work, so a
+    # tampered agent is cut off from dispatch. Enforced controller-side - the
+    # trust anchor the attacker doesn't control. Cleared by an admin rebaseline.
+    from backend import agent_integrity
+    if agent_integrity.is_quarantined(host_id):
+        return {"tasks": [], "quarantined": True}
 
     tasks = fetch_pending_tasks(host_id)
     # Attach any RAM-held become-password to its task, exactly once. Only this

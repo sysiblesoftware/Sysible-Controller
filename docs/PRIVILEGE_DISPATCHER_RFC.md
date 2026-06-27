@@ -137,6 +137,63 @@ only record of intent. So harden it as the crown jewel:
   hosts, and the dispatch channel (a fleet-wide RCE path by design). Treat its
   compromise as fleet compromise and defend accordingly.
 
+## Agent integrity & quarantine
+
+"Monitor the agent; if it's messed with, disable it." Same honesty as above:
+**a process can't reliably attest to its own integrity on a host an attacker
+controls** — with root, you can edit the agent, edit its checker, and forge a
+clean report. So two tiers, and enforcement on the controller:
+
+- **Tier 1 (achievable now):** detect accidental corruption, drift, version
+  skew, swapped files, and tampering by a *non-root* actor or a compromised
+  *non-root* agent process.
+- **Tier 2 (hardware root of trust):** detect tampering by an attacker with
+  root on the host — TPM remote attestation (measured boot / IMA-EVM quote the
+  controller verifies). The only thing robust against host-root; opt-in.
+
+**Prerequisite:** this is only meaningful *on top of the dispatcher*. Today the
+agent is root-equivalent and can rewrite itself + its checker, so monitoring
+would be theatre. Once the agent runs as the locked `sysible` user and can only
+escalate through vetted verbs, it can't modify its own code — so a Tier-1
+mismatch means something with real root touched the files.
+
+**Layered design**
+
+1. **Prevent.** Agent files root-owned, not writable by `sysible`, ideally
+   `chattr +i`; systemd hardening (`ProtectSystem=strict`, `ReadOnlyPaths`).
+   With the dispatcher, a compromised agent *process* can no longer rewrite its
+   own code or escalate to do so.
+2. **Detect (Tier 1).** The agent attaches a **self-measurement manifest**
+   (sha256 of its files + version) to its existing heartbeat. The **controller**
+   compares it to the host's **sealed baseline** and decides — raw measurements,
+   controller judges, not agent-self-judged.
+3. **Detect (Tier 2).** TPM quote in the heartbeat, controller-verified. Opt-in.
+4. **Enforce — controller-side ("disable").** On mismatch the controller
+   **quarantines** the host (keeps heartbeating, handed **no tasks**) and can
+   **revoke its `agent_secret`** (locks it out until re-enrolled) and alert.
+   Agent self-stop is a secondary honest-failure layer, not relied on against a
+   root attacker.
+
+**Enforcement belongs on the controller** — the trust anchor the attacker
+doesn't control. "Disable" stops the host *acting through Sysible*; it can't
+clean the box. A confirmed Tier-2 failure ⇒ quarantine → alert → **reimage**.
+
+**Prototype (this branch):**
+- `host_agent/agent_integrity.py` — `measure()`: hashes the agent's own files
+  (`agent.py`, `agent_integrity.py`, `sysible-priv`) + version; pure, never
+  raises. Attached to the heartbeat behind a guarded import (non-breaking).
+- `backend/agent_integrity.py` — seals a per-host baseline **trust-on-first-use**,
+  `compare()`/`evaluate()` flag mismatches, `is_quarantined()`, `rebaseline()`
+  for legitimate upgrades. JSON side-store, mirroring `agent_ssh_state.json`.
+- Wired additively: optional `measurements` on `HeartbeatRequest`; the heartbeat
+  endpoint evaluates; `poll_agent_tasks` returns **no tasks** for a quarantined
+  host. Tested end-to-end: clean passes, a changed file hash and a version skew
+  both quarantine, and rebaseline clears it.
+- **Production refinements (not in prototype):** seal the baseline from the exact
+  files the controller *ships in the bundle* (stronger than trust-on-first-use);
+  secret revocation + an admin "integrity failed / rebaseline" surface in the
+  UI; clone/replay detection via monotonic heartbeat sequence numbers.
+
 ## Honest limits
 
 1. **The validators are the boundary.** Any verb that puts a user-controlled

@@ -17,6 +17,11 @@ class HeartbeatRequest(BaseModel):
     agent_secret: str
     ip: Optional[str] = None
     hostname: Optional[str] = None
+    # RFC (agent integrity, Tier 1): the agent's self-measurement manifest
+    # (sha256 of its own files + version). Optional so older agents that don't
+    # send it keep working; when present the controller compares it to the
+    # host's sealed baseline and quarantines on mismatch.
+    measurements: Optional[dict] = None
 
 
 class SelfDisenrollRequest(BaseModel):

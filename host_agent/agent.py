@@ -37,6 +37,16 @@ import uuid
 
 import requests
 
+# RFC (agent integrity, Tier 1): self-measurement shipped alongside agent.py.
+# Guarded so the agent still runs if the module isn't present (e.g. an older
+# bundle) - it just won't report measurements and the controller won't seal a
+# baseline for it.
+try:
+    import agent_integrity
+    _HAVE_INTEGRITY = True
+except Exception:
+    _HAVE_INTEGRITY = False
+
 # Cap on stdout/stderr bytes kept from a single command - a runaway
 # command (e.g. `cat` on a huge file, a noisy build log) shouldn't be
 # able to balloon this process's memory or the JSON payload sent back
@@ -492,6 +502,10 @@ def heartbeat(state):
                 # without re-enrolling. gethostname() reflects the new
                 # name immediately after hostnamectl set-hostname.
                 "hostname": socket.gethostname(),
+                # RFC (agent integrity, Tier 1): self-measurement manifest the
+                # controller compares to this host's sealed baseline. Omitted
+                # entirely if the module isn't present, so it's non-breaking.
+                **({"measurements": agent_integrity.measure()} if _HAVE_INTEGRITY else {}),
             },
             timeout=10,
         )

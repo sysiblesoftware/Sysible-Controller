@@ -151,6 +151,10 @@ class CreateAdminDialog(QDialog):
 
         self.username = result.get("username", username)
         self.password = password
-        session.set_current_admin(self.username)
+        # The first account is always a superuser; record the role so the GUI
+        # shows superuser-only tiles (the token minted by setup is already
+        # stored in api.py, so superuser actions work without re-login).
+        self.role = result.get("role", "superuser")
+        session.set_current_admin(self.username, self.role)
 
         self.accept()

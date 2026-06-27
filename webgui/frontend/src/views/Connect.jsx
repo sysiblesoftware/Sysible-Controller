@@ -96,37 +96,40 @@ export default function Connect() {
         </div>
       </div>
 
-      {/* RIGHT: stacked sections */}
+      {/* RIGHT: selected host + collapsible actions on top, terminals below */}
       <div style={{ overflowY: "auto", paddingRight: 4 }}>
         {err && <div className="error-box">{err}</div>}
 
-        <Section title="Selected Host">
-          {sel ? (
+        {sel && (
+          <Section title="Selected Host">
             <SelectedHost host={sel} onTerminal={() => openTerm(sel)}
                           onChanged={(clearSel) => { if (clearSel) setSel(null); loadHosts(); }}
                           onErr={setErr} />
-          ) : <span className="faint">No host selected. Click a host; double-click to open its terminal.</span>}
-        </Section>
+          </Section>
+        )}
+
+        <div className="connect-actions">
+          <FleetActions hosts={hosts} checked={checked} onErr={setErr} />
+          {sel && <FileTransfer host={sel} onErr={setErr} />}
+          <SshEnroll onDone={loadHosts} onErr={setErr} />
+        </div>
 
         <Section title="Terminals">
           <TerminalDock ref={dock} />
         </Section>
-
-        <FleetActions hosts={hosts} checked={checked} onErr={setErr} />
-
-        {sel && <FileTransfer host={sel} onErr={setErr} />}
-
-        <SshEnroll onDone={loadHosts} onErr={setErr} />
-
-        <Section title="RDP to a Windows Host">
-          <div className="faint">
-            RDP opens a desktop client on <em>your</em> machine, so it runs from the
-            Sysible desktop app — a browser can't launch it directly. Use the desktop
-            client for RDP, or ask about adding a browser RDP gateway.
-          </div>
-        </Section>
       </div>
     </div>
+  );
+}
+
+// Collapsible panel for the secondary actions, collapsed by default so they
+// don't push the terminals down the page.
+function Collapsible({ title, children, defaultOpen = false }) {
+  return (
+    <details className="collapsible" {...(defaultOpen ? { open: true } : {})}>
+      <summary>{title}</summary>
+      <div className="card" style={{ marginTop: 8 }}>{children}</div>
+    </details>
   );
 }
 
@@ -203,7 +206,7 @@ function FleetActions({ hosts, checked, onErr }) {
   }
 
   return (
-    <Section title={`Fleet Actions (${scopeLabel} host${scopeN === 1 ? "" : "s"})`}>
+    <Collapsible title={`Fleet Actions (${scopeLabel} host${scopeN === 1 ? "" : "s"})`}>
       <label className="field" style={{ marginTop: 0 }}>
         <span>Run a script on all hosts</span>
         <textarea rows={2} value={script} onChange={(e) => setScript(e.target.value)}
@@ -236,7 +239,7 @@ function FleetActions({ hosts, checked, onErr }) {
           ))}
         </div>
       )}
-    </Section>
+    </Collapsible>
   );
 }
 
@@ -261,11 +264,14 @@ function FileTransfer({ host, onErr }) {
     window.location.href = api.downloadUrl(host.id, dnPath.trim());
   }
 
+  const [browse, setBrowse] = useState(null); // "upload" | "download" target for the picker
+
   return (
-    <Section title={`File Transfer — ${host.label}`}>
+    <Collapsible title={`File Transfer — ${host.label}`}>
       <form onSubmit={upload} className="row" style={{ flexWrap: "wrap", gap: 8 }}>
         <input style={{ flex: 2, minWidth: 160 }} placeholder="Remote destination path"
                value={remotePath} onChange={(e) => setRemotePath(e.target.value)} />
+        <button type="button" className="btn sm ghost" onClick={() => setBrowse("upload")}>Browse…</button>
         <input style={{ flex: 2, minWidth: 160 }} type="file"
                onChange={(e) => setFile(e.target.files[0] || null)} />
         <button className="btn sm" disabled={busy || !file || !remotePath.trim()}>Upload</button>
@@ -273,10 +279,79 @@ function FileTransfer({ host, onErr }) {
       <form onSubmit={download} className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 8 }}>
         <input style={{ flex: 3, minWidth: 200 }} placeholder="Remote file path to fetch"
                value={dnPath} onChange={(e) => setDnPath(e.target.value)} />
-        <button className="btn sm ghost" disabled={!dnPath.trim()}>Download</button>
+        <button type="button" className="btn sm ghost" onClick={() => setBrowse("download")}>Browse…</button>
+        <button className="btn sm" disabled={!dnPath.trim()}>Download</button>
       </form>
       {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
-    </Section>
+      {browse && (
+        <RemoteBrowse host={host} mode={browse} onErr={onErr}
+          onClose={() => setBrowse(null)}
+          onPick={(path) => { (browse === "upload" ? setRemotePath : setDnPath)(path); setBrowse(null); }} />
+      )}
+    </Collapsible>
+  );
+}
+
+// Lightweight remote file/folder picker: lists a directory on the host (via a
+// one-off `ls` exec) and lets you click into folders or pick an entry, so you
+// don't have to remember and type the full remote path. In "upload" mode a
+// folder is the selection (destination dir); in "download" mode a file is.
+function RemoteBrowse({ host, mode, onPick, onClose, onErr }) {
+  const [dir, setDir] = useState(".");
+  const [entries, setEntries] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function list(d) {
+    setBusy(true); setErr("");
+    const cmd = `cd '${d.replace(/'/g, "'\\''")}' 2>/dev/null && pwd && ls -1Ap`;
+    try {
+      const r = await api.fleet("script", [host.id], cmd);
+      const res = (r.results || [])[0] || {};
+      const out = (res.stdout || "");
+      const lines = out.split("\n").filter((l) => l !== "");
+      if (lines.length === 0) { setErr(res.stderr || "Could not read that directory."); return; }
+      const cwd = lines.shift();
+      setDir(cwd);
+      setEntries(lines);
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+  useEffect(() => { list("."); /* eslint-disable-next-line */ }, []);
+
+  const join = (name) => (dir.endsWith("/") ? dir + name : dir + "/" + name);
+
+  return (
+    <div className="modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal" style={{ maxWidth: 560, textAlign: "left" }}>
+        <h3 style={{ textAlign: "left", marginBottom: 4 }}>{mode === "upload" ? "Choose destination folder" : "Choose file to download"}</h3>
+        <div className="faint mono" style={{ fontSize: 12, marginBottom: 8, wordBreak: "break-all" }}>{host.label}:{dir}</div>
+        {err && <div className="error-box">{err}</div>}
+        <div style={{ maxHeight: "46vh", overflowY: "auto", border: "1px solid var(--border)", borderRadius: 6 }}>
+          {busy ? <div className="empty" style={{ padding: 20 }}><span className="spin" /></div>
+            : entries.map((name) => {
+                const isDir = name.endsWith("/");
+                const clean = isDir ? name.slice(0, -1) : name;
+                return (
+                  <div key={name} className="host-row" style={{ cursor: "pointer", justifyContent: "space-between" }}
+                       onClick={() => { if (isDir) list(name === "../" ? join("..") : join(clean)); else if (mode === "download") onPick(join(clean)); }}
+                       onDoubleClick={() => { if (isDir && mode === "upload") onPick(join(clean)); }}>
+                    <span>{isDir ? "📁 " : "📄 "}{clean}</span>
+                    {isDir && mode === "upload" &&
+                      <button type="button" className="btn ghost sm" onClick={(e) => { e.stopPropagation(); onPick(join(clean)); }}>Use this folder</button>}
+                  </div>
+                );
+              })}
+        </div>
+        <div className="row" style={{ justifyContent: "space-between", marginTop: 12 }}>
+          <span className="faint">{mode === "upload" ? "Click a folder to open it; use the button to pick it." : "Click a folder to open it; click a file to pick it."}</span>
+          <div className="row" style={{ gap: 8 }}>
+            {mode === "upload" && <button className="btn sm" onClick={() => onPick(dir)}>Use “{dir}”</button>}
+            <button className="btn ghost sm" onClick={onClose}>Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -304,7 +379,7 @@ function SshEnroll({ onDone, onErr }) {
   }
 
   return (
-    <Section title="SSH to a New Host (Not Yet Joined)">
+    <Collapsible title="SSH to a New Host (Not Yet Joined)">
       <p className="faint" style={{ marginTop: 0 }}>
         Only needed once per host. The password installs the controller key, then is discarded.
       </p>
@@ -321,6 +396,6 @@ function SshEnroll({ onDone, onErr }) {
       </form>
       {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
       {key && <div className="cmd-preview" style={{ marginTop: 8 }}>{key}</div>}
-    </Section>
+    </Collapsible>
   );
 }

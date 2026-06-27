@@ -188,6 +188,10 @@ or, with no terminal at all, click the **Sysible Controller** icon in your appli
 
 The Sysible Controller GUI is a Linux desktop application. Rather than install it on a Windows workstation, an admin can run it **on the controller** and have its window appear on their own machine over SSH X11 forwarding — the GUI runs where it already lives, only the display is forwarded.
 
+![The Sysible Controller GUI running on a Windows desktop over SSH X11 forwarding — PuTTY plus a local X server (VcXsrv), no Windows install of the client](docs/screenshots/screenshot_remote_gui_x11.png)
+
+> The Sysible Controller administrator login, forwarded from the controller to a Windows desktop with PuTTY's X11 forwarding and a local X server (VcXsrv) — `sysible_controller gui` run over the PuTTY session, no client installed on Windows.
+
 This is **opt-in** and off by default (a base install never alters the controller's SSH configuration). To turn it on:
 
 ```bash

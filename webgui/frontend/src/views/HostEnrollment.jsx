@@ -33,6 +33,7 @@ export default function HostEnrollment() {
   const [copied, setCopied] = useState(false);
   const [portPort, setPortPort] = useState("");
   const [portalBusy, setPortalBusy] = useState("");
+  const [tab, setTab] = useState("hosts");
   // Portal administration
   const [history, setHistory] = useState([]);
   const [sessions, setSessions] = useState([]);
@@ -150,6 +151,8 @@ export default function HostEnrollment() {
   const envDefault = assignEnv && assignEnv !== NEW_ENV ? sudoDefaults[assignEnv] : undefined;
   const reachable = `https://${cfg.address || "<controller>"}:${curlPort}`;
 
+  const TABS = [["hosts", "Enrolled Hosts"], ["enroll", "Enroll a Host"], ["portal", "Webserver Portal"]];
+
   return (
     <div>
       {edition.host_limit != null && (
@@ -157,11 +160,19 @@ export default function HostEnrollment() {
           {(edition.edition || "Community")} edition — {edition.host_count ?? agents.length}/{edition.host_limit} hosts used
         </div>
       )}
+
+      <div className="tabs" style={{ marginBottom: 16 }}>
+        {TABS.map(([k, l]) => (
+          <button key={k} className={tab === k ? "active" : ""} onClick={() => setTab(k)}>{l}</button>
+        ))}
+      </div>
+
       {err && <div className="error-box">{err}</div>}
       {msg && <div className="ok-text" style={{ marginBottom: 10 }}>{msg}</div>}
 
+      {/* ============================ TAB: ENROLLED HOSTS ============================ */}
+      {tab === "hosts" && (
       <div className="he-2col">
-        {/* LEFT: enrolled hosts */}
         <fieldset className="tool-group-box he-hosts">
           <legend>Enrolled Hosts (grouped by environment)</legend>
           <div className="ctl-row" style={{ marginBottom: 8, flexWrap: "wrap" }}>
@@ -172,7 +183,7 @@ export default function HostEnrollment() {
             <button className="btn ghost sm" onClick={load}>Refresh</button>
           </div>
           <div style={{ flex: 1, overflowY: "auto" }}>
-            {agents.length === 0 && <div className="faint" style={{ padding: 8 }}>No hosts enrolled yet.</div>}
+            {agents.length === 0 && <div className="faint" style={{ padding: 8 }}>No hosts enrolled yet — use the “Enroll a Host” tab.</div>}
             {groups.map(([env, list]) => {
               const open = !collapsed[env];
               return (
@@ -199,53 +210,7 @@ export default function HostEnrollment() {
           </div>
         </fieldset>
 
-        {/* RIGHT: enrollment actions */}
         <div className="he-actions">
-          <fieldset className="tool-group-box"><legend>Agent Bundle</legend>
-            <p className="faint" style={{ marginTop: 0 }}>
-              The ready-to-run bundle, built on demand. Each download bakes in a fresh, one-time enrollment token.
-            </p>
-            <a className="btn sm" href={api.agentBundleUrl()}>Download Agent Bundle</a>
-          </fieldset>
-
-          <fieldset className="tool-group-box"><legend>Webserver Portal</legend>
-            <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-              <span className={"badge" + (portal.running ? " green" : "")}>{portal.running ? "Running" : "Stopped"}</span>
-              <button className="btn sm" disabled={portalBusy || portal.running}
-                      onClick={() => portalAct("start", async () => {
-                        const r = await api.portalStart();
-                        if (r && r.running === false) throw new Error(r.error || "The portal failed to start.");
-                        return r;
-                      }, "Portal started.")}>
-                {portalBusy === "start" ? <span className="spin" /> : "Start Portal"}</button>
-              <button className="btn sm ghost" disabled={portalBusy || !portal.running}
-                      onClick={() => portalAct("stop", () => api.portalStop(), "Portal stopped.")}>Stop Portal</button>
-            </div>
-            {portal.running && <div className="faint" style={{ marginTop: 6 }}>Reachable at: {reachable}</div>}
-            <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center", marginTop: 10 }}>
-              <span className="faint">Port</span>
-              <input type="number" style={{ maxWidth: 120 }} value={portPort} onChange={(e) => setPortPort(e.target.value)} />
-              <button className="btn sm" disabled={portalBusy || !portPort}
-                      onClick={() => portalAct("port", () => api.portalSetPort(Number(portPort)),
-                        "Port saved — restart the portal if it's running.")}>Save Port</button>
-            </div>
-            {!portal.credentials_configured &&
-              <p className="faint" style={{ marginTop: 8 }}>No portal login set yet — set one under “Portal login” below so the curl download can authenticate.</p>}
-          </fieldset>
-
-          <fieldset className="tool-group-box"><legend>Command-Line Bundle Download (curl)</legend>
-            <p className="faint" style={{ marginTop: 0 }}>
-              For headless hosts: downloads, unzips, and runs the installer in one shot, authenticating with the
-              portal login (curl -u). Replace <code>&lt;password&gt;</code> with the real portal password;
-              <code> -k</code> skips the self-signed-cert check; the install step needs sudo.
-            </p>
-            <div className="cmd-preview" style={{ whiteSpace: "pre-wrap" }}>{curlCmd}</div>
-            <button className="btn sm ghost" style={{ marginTop: 8 }}
-                    onClick={() => navigator.clipboard?.writeText(curlCmd).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })}>
-              {copied ? "Copied ✓" : "Copy to Clipboard"}
-            </button>
-          </fieldset>
-
           <fieldset className="tool-group-box"><legend>Environment</legend>
             <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
               <select value={assignEnv} onChange={(e) => setAssignEnv(e.target.value)} style={{ maxWidth: 220 }}>
@@ -281,19 +246,76 @@ export default function HostEnrollment() {
           </fieldset>
         </div>
       </div>
+      )}
 
-      {/* ===== Webserver Portal administration (login, sessions, files) ===== */}
-      <div className="he-section-head">
-        <h3>Webserver Portal — host-operator login &amp; files</h3>
-        <button className="btn ghost sm" onClick={() => { loadPortal(); loadHistory(); loadSessions(); loadUploads(); loadDownloads(); }}>Refresh</button>
+      {/* ============================ TAB: ENROLL A HOST ============================ */}
+      {tab === "enroll" && (
+      <div style={{ maxWidth: 760 }}>
+        <fieldset className="tool-group-box" style={{ marginTop: 0 }}><legend>Download the agent bundle</legend>
+          <p className="faint" style={{ marginTop: 0 }}>
+            The ready-to-run bundle, built on demand — each download bakes in a fresh, one-time enrollment token.
+            Copy it to the target host, unzip, and run <code>./run_agent.sh</code>.
+          </p>
+          <a className="btn sm" href={api.agentBundleUrl()}>Download Agent Bundle</a>
+        </fieldset>
+
+        <fieldset className="tool-group-box"><legend>Headless install (curl one-liner)</legend>
+          <p className="faint" style={{ marginTop: 0 }}>
+            For terminal-only hosts: downloads, unzips, and runs the installer in one shot, authenticating with the
+            portal login (curl -u). Replace <code>&lt;password&gt;</code> with the real portal password; <code>-k</code> skips
+            the self-signed-cert check; the install step needs sudo.
+          </p>
+          <div className="cmd-preview" style={{ whiteSpace: "pre-wrap" }}>{curlCmd}</div>
+          <button className="btn sm ghost" style={{ marginTop: 8 }}
+                  onClick={() => navigator.clipboard?.writeText(curlCmd).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })}>
+            {copied ? "Copied ✓" : "Copy to Clipboard"}
+          </button>
+          <p className="faint" style={{ marginTop: 10 }}>
+            The curl download needs the Webserver Portal {portal.running
+              ? <>running (it is) with a login set.</>
+              : <>running — start it and set a login on the <button className="linklike" onClick={() => setTab("portal")}>Webserver Portal</button> tab.</>}
+          </p>
+        </fieldset>
       </div>
-      <p className="faint" style={{ marginTop: 0, maxWidth: 880 }}>
-        Host operators sign in with this login to download the agent bundle or exchange files. Run the portal only
-        while provisioning, on a trusted network.
-      </p>
+      )}
 
-      <div className="he-portal-grid">
-        <fieldset className="tool-group-box"><legend>Portal login</legend>
+      {/* ============================ TAB: WEBSERVER PORTAL ============================ */}
+      {tab === "portal" && (
+      <div>
+        <div className="he-section-head" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
+          <h3>Webserver Portal</h3>
+          <button className="btn ghost sm" onClick={() => { loadPortal(); loadHistory(); loadSessions(); loadUploads(); loadDownloads(); }}>Refresh</button>
+        </div>
+        <p className="faint" style={{ marginTop: 0, maxWidth: 880 }}>
+          Host operators sign in with this login to download the agent bundle or exchange files. Run the portal only
+          while provisioning, on a trusted network.
+        </p>
+
+        <fieldset className="tool-group-box" style={{ marginTop: 0 }}><legend>Status &amp; port</legend>
+            <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+              <span className={"badge" + (portal.running ? " green" : "")}>{portal.running ? "Running" : "Stopped"}</span>
+              <button className="btn sm" disabled={portalBusy || portal.running}
+                      onClick={() => portalAct("start", async () => {
+                        const r = await api.portalStart();
+                        if (r && r.running === false) throw new Error(r.error || "The portal failed to start.");
+                        return r;
+                      }, "Portal started.")}>
+                {portalBusy === "start" ? <span className="spin" /> : "Start Portal"}</button>
+              <button className="btn sm ghost" disabled={portalBusy || !portal.running}
+                      onClick={() => portalAct("stop", () => api.portalStop(), "Portal stopped.")}>Stop Portal</button>
+            </div>
+            {portal.running && <div className="faint" style={{ marginTop: 6 }}>Reachable at: {reachable}</div>}
+            <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center", marginTop: 10 }}>
+              <span className="faint">Port</span>
+              <input type="number" style={{ maxWidth: 120 }} value={portPort} onChange={(e) => setPortPort(e.target.value)} />
+              <button className="btn sm" disabled={portalBusy || !portPort}
+                      onClick={() => portalAct("port", () => api.portalSetPort(Number(portPort)),
+                        "Port saved — restart the portal if it's running.")}>Save Port</button>
+            </div>
+          </fieldset>
+
+        <div className="he-portal-grid">
+        <fieldset className="tool-group-box" style={{ marginTop: 0 }}><legend>Portal login</legend>
           <div className="muted" style={{ fontSize: 13, marginBottom: 10 }}>
             {portal.credentials_configured
               ? <>Current user: <strong>{portal.username}</strong> · last login {fmtTime(portal.last_login)}</>
@@ -398,7 +420,9 @@ export default function HostEnrollment() {
             </table>
           )}
         </fieldset>
+        </div>
       </div>
+      )}
     </div>
   );
 }

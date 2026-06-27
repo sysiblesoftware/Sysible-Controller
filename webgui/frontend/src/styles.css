@@ -300,6 +300,8 @@ tr:hover td { background: var(--row-hover); }
   gap: 12px; margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--border); }
 .he-section-head h3 { font-size: 16px; font-weight: 700; margin: 0; }
 .he-portal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.linklike { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer;
+  font: inherit; text-decoration: underline; }
 @media (max-width: 820px) { .he-portal-grid { grid-template-columns: 1fr; } }
 
 /* ---------- Tool page: host tree | actions | results (3 columns) ---------- */

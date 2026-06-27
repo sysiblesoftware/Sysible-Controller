@@ -63,7 +63,6 @@ export default function ResultsPane({ results, setResults, expanded, onToggleExp
               <div className="result">
                 <div className="rh"><strong>{cur.label}</strong>
                   <span className="faint mono" style={{ fontSize: 11 }}>{new Date(cur.at).toLocaleTimeString()}</span></div>
-                {cur.command && <div className="cmd-preview" style={{ margin: "8px 0" }}>{cur.command}</div>}
                 {cur.results.map((r, j) => (
                   <div key={j} style={{ borderTop: "1px solid var(--border)" }}>
                     <div className="rh"><span className={"dot " + (r.ok ? "ok" : "bad")} /><span>{r.host}</span>

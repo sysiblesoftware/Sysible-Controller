@@ -298,8 +298,16 @@ class HostEnrollmentPage(QWidget):
         self.remove_btn = QPushButton("Disenroll Host")
         self.remove_btn.clicked.connect(self.disenroll_host)
 
+        self.revoke_btn = QPushButton("Revoke Agent")
+        self.revoke_btn.setToolTip(
+            "Lock this host out: revoke its agent secret so it can't talk to the "
+            "controller (no heartbeat, no commands) until it's re-enrolled. Use if "
+            "a host is suspected compromised or failed its integrity check.")
+        self.revoke_btn.clicked.connect(self.revoke_agent_action)
+
         buttons.addWidget(self.refresh_btn)
         buttons.addWidget(self.remove_btn)
+        buttons.addWidget(self.revoke_btn)
 
         layout.addLayout(buttons)
 
@@ -428,8 +436,20 @@ class HostEnrollmentPage(QWidget):
 
     def _add_agent_item(self, agent):
         name = agent.get("hostname") or agent["host_id"]
-        item = QListWidgetItem(f"    {name}")
+        # RFC (agent integrity): flag a locked-out (revoked) or quarantined
+        # (self-measurement diverged from its sealed baseline) host in red so
+        # the operator sees it in the list, not just the detail panel.
+        flag = None
+        if agent.get("revoked"):
+            flag = "REVOKED"
+        elif agent.get("integrity_quarantined"):
+            flag = "INTEGRITY FAILED"
+        label = f"    {name}" + (f"  [{flag}]" if flag else "")
+        item = QListWidgetItem(label)
         item.setData(Qt.UserRole, agent)
+        if flag:
+            from PySide6.QtGui import QColor
+            item.setForeground(QColor("#f0c0bc"))
         self.agent_list.addItem(item)
 
     def _reselect(self, host_id):
@@ -727,6 +747,42 @@ class HostEnrollmentPage(QWidget):
     # teardown, and the script remains available as the manual
     # fallback.
     # =====================================================
+    def revoke_agent_action(self):
+        if not self.selected_agent:
+            QMessageBox.information(self, "Revoke agent", "Select a host first.")
+            return
+
+        host_id = self.selected_agent["host_id"]
+        name = self.selected_agent.get("hostname") or host_id
+
+        reply = QMessageBox.warning(
+            self,
+            "Revoke agent — lock this host out",
+            f"Revoke the agent secret for “{name}”?\n\n"
+            "Every request from this host (heartbeat, command poll, results) is "
+            "rejected immediately — it is cut off from the controller and runs "
+            "no further dispatched work. Use this if the host is suspected "
+            "compromised or failed its integrity check.\n\n"
+            "To bring it back you must RE-ENROLL it (generate a new enrollment "
+            "token and run the agent installer on the host), which mints a fresh "
+            "secret and clears the revocation. This does not stop the agent "
+            "process on the host or clean the machine — if it was actually "
+            "compromised, reimage it.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            api.revoke_agent(host_id)
+        except Exception as e:
+            QMessageBox.critical(self, "Revoke failed", str(e))
+            return
+
+        self.disenroll_status.setText(f"Revoked {name} — locked out until re-enrolled.")
+        self.refresh()
+
     def disenroll_host(self):
         if not self.selected_agent:
             return

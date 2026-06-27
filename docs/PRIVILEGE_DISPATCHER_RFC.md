@@ -197,11 +197,15 @@ clean the box. A confirmed Tier-2 failure ⇒ quarantine → alert → **reimage
   it also drops the integrity baseline so a re-enrolled/reimaged host re-seals.
   A genuine re-enroll (valid single-use token, admin-authorized) mints a fresh
   secret and clears revocation. Tested: revoke locks out, re-enroll restores.
+- **Admin surface (Qt GUI).** Host Enrollment now flags `REVOKED` /
+  `INTEGRITY FAILED` hosts in red in the list (via `revoked` +
+  `integrity_quarantined` on the `/agents` response) and has a **Revoke Agent**
+  button with a stern confirm explaining lock-out + re-enroll recovery.
 - **Production refinements (not in prototype):** seal the baseline from the exact
   files the controller *ships in the bundle* (stronger than trust-on-first-use);
-  an admin "integrity failed → rebaseline / revoke" surface in the GUI/web
-  console (the API is here; the button isn't); auto-revoke-on-mismatch as an
-  opt-in policy; clone/replay detection via monotonic heartbeat sequence numbers.
+  **web-console parity** for the revoke button + a **rebaseline** action in the
+  UI; auto-revoke-on-mismatch as an opt-in policy; clone/replay detection via
+  monotonic heartbeat sequence numbers.
 
 ## Honest limits
 

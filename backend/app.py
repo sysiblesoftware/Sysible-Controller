@@ -608,11 +608,16 @@ def get_controller_log_route(lines: int = 400):
 @app.get("/agents", dependencies=[Depends(require_api_key)])
 def get_agents():
 
+    from backend import agent_integrity
     agents = list_agents()
     for a in agents:
         st = get_agent_ssh_state(a.get("host_id"))
         # "enabled" | "pending" | "sshd_missing" | "error" | None
         a["ssh_terminal_state"] = (st or {}).get("status")
+        # RFC (agent integrity): so the GUI can flag a host whose self-
+        # measurement diverged from its sealed baseline ('revoked' already
+        # comes from list_agents).
+        a["integrity_quarantined"] = agent_integrity.is_quarantined(a.get("host_id"))
 
     return {
         "agents": agents

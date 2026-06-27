@@ -107,7 +107,7 @@ export default function App() {
           <img className="rail-mark" src="/sysible_logo.png" alt=""
                onError={(e) => { e.target.style.display = "none"; e.target.nextSibling.style.display = "flex"; }} />
           <span className="rail-mark-fallback" style={{ display: "none" }}>S</span>
-          <span className="rail-name">Sysible</span>
+          <span className="rail-name">Sysible Controller</span>
         </div>
 
         <div className="rail-nav">

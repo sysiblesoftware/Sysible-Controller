@@ -108,6 +108,15 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
+    # Migration: agent secret revocation. 0 = active; 1 = revoked, so every
+    # authenticated agent request (heartbeat/poll/result) is rejected until an
+    # admin re-enrolls the host (which mints a fresh secret and clears this).
+    # The hard "lock this host out" control - see revoke_agent / verify_agent.
+    try:
+        cur.execute("ALTER TABLE agents ADD COLUMN revoked INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+
     # -----------------------------------------------------
     # Environments (dev/stage/prod, etc.)
     # An editable, admin-managed list rather than a fixed enum - used
@@ -535,7 +544,10 @@ def create_or_update_agent(
         status=excluded.status,
         last_seen=excluded.last_seen,
         agent_secret=excluded.agent_secret,
-        ip=excluded.ip
+        ip=excluded.ip,
+        -- A genuine re-enroll (valid single-use token, admin-authorized) clears
+        -- a prior revocation: the host is being deliberately let back in.
+        revoked=0
     """,
     (
         host_id,
@@ -600,7 +612,7 @@ def list_agents():
 
     cur.execute("""
     SELECT host_id, hostname, platform, kernel, status, last_seen, environment, ip,
-           requires_sudo_password
+           requires_sudo_password, revoked
     FROM agents
     ORDER BY hostname
     """)
@@ -657,6 +669,28 @@ def get_agent_secret(host_id):
     conn.close()
 
     return row[0] if row else None
+
+
+def revoke_agent(host_id):
+    """Revoke a host's agent secret - the hard lock-out. Every authenticated
+    request (verify_agent) then fails until the host is re-enrolled with a fresh
+    single-use token. Returns True if a row was affected."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("UPDATE agents SET revoked=1 WHERE host_id=?", (host_id,))
+    conn.commit()
+    changed = cur.rowcount
+    conn.close()
+    return changed > 0
+
+
+def is_agent_revoked(host_id):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT revoked FROM agents WHERE host_id=?", (host_id,))
+    row = cur.fetchone()
+    conn.close()
+    return bool(row and row[0])
 
 
 def agent_exists(host_id):

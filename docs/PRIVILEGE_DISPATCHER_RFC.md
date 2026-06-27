@@ -189,10 +189,19 @@ clean the box. A confirmed Tier-2 failure ⇒ quarantine → alert → **reimage
   endpoint evaluates; `poll_agent_tasks` returns **no tasks** for a quarantined
   host. Tested end-to-end: clean passes, a changed file hash and a version skew
   both quarantine, and rebaseline clears it.
+- **Secret revocation (the hard lock-out).** A `revoked` flag on the agent
+  (`db.revoke_agent`/`is_agent_revoked`) makes `verify_agent` reject **every**
+  authenticated request (403), so a revoked host can't heartbeat/poll/report at
+  all — the escalation from quarantine ("no tasks") to "cannot talk to the
+  controller." Exposed as `POST /agents/{host_id}/revoke` (superuser-gated);
+  it also drops the integrity baseline so a re-enrolled/reimaged host re-seals.
+  A genuine re-enroll (valid single-use token, admin-authorized) mints a fresh
+  secret and clears revocation. Tested: revoke locks out, re-enroll restores.
 - **Production refinements (not in prototype):** seal the baseline from the exact
   files the controller *ships in the bundle* (stronger than trust-on-first-use);
-  secret revocation + an admin "integrity failed / rebaseline" surface in the
-  UI; clone/replay detection via monotonic heartbeat sequence numbers.
+  an admin "integrity failed → rebaseline / revoke" surface in the GUI/web
+  console (the API is here; the button isn't); auto-revoke-on-mismatch as an
+  opt-in policy; clone/replay detection via monotonic heartbeat sequence numbers.
 
 ## Honest limits
 

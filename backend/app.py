@@ -19,6 +19,8 @@ from backend.db import (
     list_agents,
     delete_agent,
     get_agent_secret,
+    revoke_agent,
+    is_agent_revoked,
     agent_exists,
     queue_task,
     fetch_pending_tasks,
@@ -142,6 +144,14 @@ def verify_agent(host_id: str, agent_secret: str):
 
     if not agent_exists(host_id):
         raise HTTPException(status_code=404, detail="Unknown host_id")
+
+    # Revoked hosts are locked out regardless of a correct secret, until an
+    # admin re-enrolls them (which mints a fresh secret and clears revocation).
+    if is_agent_revoked(host_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Agent secret revoked - re-enroll this host to restore it.",
+        )
 
     expected = get_agent_secret(host_id)
 
@@ -621,6 +631,32 @@ def remove_agent(host_id: str):
         "status": "removed",
         "host_id": host_id
     }
+
+
+@app.post("/agents/{host_id}/revoke", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def revoke_agent_route(host_id: str,
+                       x_admin_token: str = Header(default=None, alias="X-Sysible-Admin-Token")):
+    """Hard lock-out: invalidate the host's agent secret so every authenticated
+    request (heartbeat/poll/result) is rejected until an admin re-enrolls it
+    with a fresh single-use token. This is the escalation from an integrity
+    quarantine ('no tasks') to 'cannot talk to the controller at all'. The
+    sealed integrity baseline is dropped too, so a re-enrolled/reimaged host
+    re-seals cleanly."""
+    if not agent_exists(host_id):
+        raise HTTPException(status_code=404, detail="Unknown host_id")
+
+    revoke_agent(host_id)
+    from backend import agent_integrity
+    agent_integrity.rebaseline(host_id)
+
+    actor = None
+    if x_admin_token:
+        from backend.db import resolve_admin_token
+        admin = resolve_admin_token(x_admin_token)
+        actor = admin["username"] if admin else None
+    log_admin_audit("agent_secret_revoked", actor or "superuser", f"host {host_id}")
+
+    return {"status": "revoked", "host_id": host_id}
 
 
 # =========================================================

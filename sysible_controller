@@ -408,7 +408,7 @@ PY
   fi
   local action u p
   action="$(echo "$out" | cut -f1)"; u="$(echo "$out" | cut -f2)"; p="$(echo "$out" | cut -f3)"
-  local R='\033[1;31m' Z='\033[0m'   # bold red / reset
+  local R='\033[1;91m' Z='\033[0m'   # bold bright red / reset
   echo "==================================================================="
   echo -e "${R} Web console admin ${action}:${Z}"
   echo -e "${R}     username:  $u${Z}"

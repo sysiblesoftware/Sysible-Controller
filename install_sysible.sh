@@ -466,7 +466,7 @@ echo "   Web console (GUI)  : sudo sysible_controller webgui start   ->  https:/
 echo "   Desktop GUI client : sysible_controller gui   (needs a desktop session)"
 echo "==================================================================="
 if [[ "$SEEDED_ADMIN" == "created" ]]; then
-  R='\033[1;31m'; Z='\033[0m'   # bold red / reset
+  R='\033[1;91m'; Z='\033[0m'   # bold bright red / reset
   echo ""
   echo -e "${R} WEB CONSOLE LOGIN (default admin created for this fresh install):${Z}"
   echo -e "${R}     username:  $DEFAULT_ADMIN_USER${Z}"

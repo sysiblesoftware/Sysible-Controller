@@ -1415,6 +1415,18 @@ if _FRONTEND_DIST.exists():
     def spa(full_path: str):
         if full_path.startswith("api/"):
             return JSONResponse({"detail": "Not found"}, status_code=404)
+        # Serve real root-level static files from dist (the logo, favicon, etc.)
+        # that aren't under /assets — otherwise the catch-all would hand back
+        # index.html and the <img> would 404. Resolve and confine to dist so a
+        # crafted path can't escape it.
+        if full_path:
+            candidate = (_FRONTEND_DIST / full_path).resolve()
+            try:
+                candidate.relative_to(_FRONTEND_DIST.resolve())
+                if candidate.is_file():
+                    return FileResponse(candidate)
+            except ValueError:
+                pass
         index = _FRONTEND_DIST / "index.html"
         if index.exists():
             return FileResponse(index)

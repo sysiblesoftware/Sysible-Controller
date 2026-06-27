@@ -173,9 +173,6 @@ class HomeWindow(QWidget):
              "file upload & download, run a script on all hosts, plus fleet power controls: "
              "reboot, power off, or restart the agent everywhere.",
              self.open_remote, "fa5s.terminal", "purple", False),
-            ("Webserver Portal Configuration",
-             "Run the host-facing portal for agent downloads and file transfers.",
-             self.open_portal, "fa5s.globe", "coral", True),
             ("System Administration",
              "User & group administration and system health/log checks across agent and SSH hosts.",
              self.open_system_admin, "fa5s.th-large", "amber", False),

@@ -147,6 +147,16 @@ class HostEnrollmentPage(QWidget):
         portal_port_row.addStretch()
         layout.addLayout(portal_port_row)
 
+        portal_admin_row = QHBoxLayout()
+        self.portal_admin_btn = QPushButton("Manage Portal Login & Files…")
+        self.portal_admin_btn.clicked.connect(self.open_portal_admin)
+        portal_admin_row.addWidget(self.portal_admin_btn)
+        portal_admin_hint = QLabel("Set the host-operator login, review login history and sessions, and manage the file pools.")
+        theme.style_hint_label(portal_admin_hint)
+        portal_admin_hint.setWordWrap(True)
+        portal_admin_row.addWidget(portal_admin_hint, 1)
+        layout.addLayout(portal_admin_row)
+
         curl_label = QLabel("Command-Line Bundle Download (curl)")
         curl_label.setStyleSheet("font-size:18px;font-weight:bold;")
         layout.addWidget(curl_label)
@@ -601,6 +611,22 @@ class HostEnrollmentPage(QWidget):
             QMessageBox.critical(self, "Error", str(e))
         self._refresh_portal_status()
         self._refresh_curl_command()
+
+    def open_portal_admin(self):
+        # The detailed portal admin (credentials, login history, sessions, file
+        # pools) opens here from Host Enrollment - the portal is no longer a
+        # separate top-level tile.
+        from client.webserver_portal_page import WebserverPortalPage
+        if getattr(self, "_portal_admin_window", None) is None:
+            self._portal_admin_window = WebserverPortalPage()
+        self._portal_admin_window.show()
+        self._portal_admin_window.raise_()
+        self._portal_admin_window.activateWindow()
+        if hasattr(self._portal_admin_window, "refresh"):
+            try:
+                self._portal_admin_window.refresh()
+            except Exception:
+                pass
 
     def save_portal_port(self):
         try:

@@ -184,6 +184,36 @@ sudo sysible_controller gui
 
 or, with no terminal at all, click the **Sysible Controller** icon in your application menu — it prompts graphically for the admin/root password and reopens the dashboard against the already-running backend.
 
+## Remote GUI access over SSH (PuTTY / X11)
+
+The Sysible Controller GUI is a Linux desktop application. Rather than install it on a Windows workstation, an admin can run it **on the controller** and have its window appear on their own machine over SSH X11 forwarding — the GUI runs where it already lives, only the display is forwarded.
+
+This is **opt-in** and off by default (a base install never alters the controller's SSH configuration). To turn it on:
+
+```bash
+sudo sysible_controller enable-remote-gui
+```
+
+That installs `xauth`, installs the Qt `libxcb-cursor0` / `xcb-util-cursor` library the GUI needs, sets `X11Forwarding yes` in `/etc/ssh/sshd_config` (backing the file up first), and reloads sshd. Then, from a **Windows** admin's machine:
+
+1. Install and start an X server — **VcXsrv** or **X410** — on **display 0** ("Multiple windows", "Disable access control"), and leave it running. (Or use **MobaXterm**, which bundles an X server and SSH client together and needs no separate X-server setup.)
+2. In **PuTTY**: *Connection → SSH → X11 → tick "Enable X11 forwarding"*, then open a session to the controller as a normal admin user.
+3. At the shell, run `sysible_controller gui` — **not** with `sudo`. The Sysible window opens on the Windows desktop. Keep the PuTTY session open while you use it — closing it closes the forwarded window.
+
+From **Linux/macOS**, the equivalent is `ssh -Y user@<controller>` then `sysible_controller gui` (macOS needs **XQuartz** running locally).
+
+Run `sudo sysible_controller disable-remote-gui` to turn it back off. Note this forwards Sysible's *own* GUI from the controller; it is independent of the "RDP To A Windows Host" action, which connects your local machine directly to a Windows host.
+
+**Troubleshooting.** Before launching the GUI, confirm forwarding is live: `echo $DISPLAY` should print `localhost:10.0` (not empty, and not `:0` — `:0` is the controller's own console, the wrong screen), and `xeyes` should open a window. Common pitfalls:
+
+| Symptom | Cause / fix |
+|---|---|
+| `echo $DISPLAY` is empty | Forwarding not requested — reconnect with `ssh -Y` (or tick PuTTY's X11 box). You must open a *new* session. |
+| `DISPLAY` is `:0` | Don't set `DISPLAY` by hand; let sshd set it. Remove any `export DISPLAY=:0` from your shell profile. |
+| `PuTTY X11 proxy: ... Connection refused` | No X server running on Windows — start VcXsrv on **display 0**. |
+| `PuTTY X11 proxy: No authorisation provided` | You ran the GUI with `sudo` (root has no X cookie). Run `sysible_controller gui` as your **own user**. |
+| `Could not load the Qt platform plugin "xcb"` / `libxcb-cursor0 is needed` | Missing GUI dependency — `enable-remote-gui` now installs it; otherwise `sudo apt-get install -y libxcb-cursor0` (or `dnf install -y xcb-util-cursor`). |
+
 ## Logging out
 
 The dashboard header shows who's signed in and a **Log Out** button (also on the tray menu). Logging out revokes the current session's login token on the controller, closes the dashboard and every open tool window, and returns to the login screen — all without stopping the backend, so another administrator can sign straight in. This is distinct from **Quit** (tray menu), which exits the GUI process entirely, and from `sysible_controller stop`, which stops the backend service too.
@@ -193,7 +223,7 @@ The **web console** has the same header **Log Out** button; it clears the browse
 ## CLI reference
 
 ```
-sysible_controller {start|stop|restart|status|logs|gui|webgui|reset-admin|destroy}
+sysible_controller {start|stop|restart|status|logs|gui|webgui|reset-admin|enable-remote-gui|disable-remote-gui|destroy}
 ```
 
 | Command | Root? | What it does |
@@ -203,9 +233,11 @@ sysible_controller {start|stop|restart|status|logs|gui|webgui|reset-admin|destro
 | `restart` | Yes | `stop` then `start`. |
 | `status` | No | Backend systemd status, plus desktop GUI process state and web console state. |
 | `logs` | No | Tails the backend's live log stream. |
-| `gui` | Yes | Starts only the desktop GUI — the way back in described above. Needs a desktop session. |
+| `gui` | Yes | Starts only the desktop GUI — the way back in described above. Needs a desktop session, or an SSH X11 session (see **Remote GUI access over SSH** above). |
 | `webgui {start\|stop\|restart\|status\|logs}` | Yes (start/stop/restart) | Controls the browser console's `sysible-webgui` service independently of the backend. `start` builds the front end if needed and serves it over HTTPS on port 8800; `restart` stops then starts it (picking up new code); `status`/`logs` report on it. |
 | `reset-admin [username] [password]` | Yes | Sets (or creates) a web-console administrator's password and prints it once in red. Use when the install-time default was skipped (admins already existed) or a password was lost. Username defaults to `admin`; the password is generated if omitted. The account must change it at next login. |
+| `enable-remote-gui` | Yes | Turns on SSH X11 forwarding (installs `xauth` + `libxcb-cursor0`, sets `X11Forwarding yes`, reloads sshd) so admins can run the desktop GUI over SSH/PuTTY. Opt-in; a base install does not change sshd. |
+| `disable-remote-gui` | Yes | Reverts the above (`X11Forwarding no`, reloads sshd). |
 | `destroy [--purge]` | Yes | Irreversible uninstall. Requires typing `destroy` to confirm; stops and disables both the `sysible-backend` and `sysible-webgui` services, backs up the database to `/tmp` first, and never touches already-enrolled hosts. `--purge` additionally removes the leftover `/tmp` database backups and the source checkout the installer was run from. |
 
 ## Documentation

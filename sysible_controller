@@ -292,8 +292,20 @@ cmd_stop() {
 
 cmd_restart() {
   _require_root restart
+
+  # Remember whether the web console was up, so a full restart brings it back
+  # instead of silently leaving it down (cmd_stop stops it as part of cleanup).
+  local webgui_was_up=0
+  systemctl is-active --quiet "${WEBGUI_SERVICE}.service" && webgui_was_up=1
+
   cmd_stop
   cmd_start
+
+  if [[ "$webgui_was_up" == "1" ]]; then
+    echo ""
+    echo "Restarting the web console (it was running before)..."
+    _start_webgui
+  fi
 }
 
 cmd_status() {

@@ -177,7 +177,7 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
   border-left-color: var(--accent); border-radius: 0 8px 8px 0;
 }
 .rail-item.active svg { color: var(--accent); opacity: 1; }
-.rail-footer { margin-top: auto; display: flex; flex-direction: column; gap: 10px;
+.rail-footer { margin-top: 18px; display: flex; flex-direction: column; gap: 10px;
   padding-top: 14px; border-top: 1px solid var(--border); }
 .rail-edition { color: var(--text-dim); font-size: 12px; text-align: center;
   border: 1px solid var(--border); border-radius: 7px; padding: 6px 10px; }

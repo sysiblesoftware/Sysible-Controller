@@ -355,6 +355,30 @@ def _exec(argv, shell=False, input_data=None):
         return {"stdout": "", "stderr": str(e), "returncode": -1}
 
 
+# RFC (privilege-dispatcher prototype): when set, this points at the single
+# sudo-allowlisted helper (sysible-priv). With it configured, the agent reaches
+# privileged work ONLY through `sudo -n <dispatcher> ...` instead of
+# `sudo bash`/`sudo runuser` - so the agent's sudoers can shrink from
+# `NOPASSWD: ALL` to `NOPASSWD: /opt/sysible-agent/priv/sysible-priv`. Unset =
+# today's behaviour, unchanged.
+_PRIV_DISPATCHER = os.environ.get("SYSIBLE_PRIV")
+
+
+def _run_via_dispatcher(user, cmd, become_password=None):
+    """Run `cmd` as `user` through the privileged dispatcher. Mirrors
+    _run_as_user's try-unprivileged-then-escalate, but the ONLY thing the agent
+    sudo's is the dispatcher. (The `runas` path still runs arbitrary shell as
+    the *user*; root-only primitives would go through the dispatcher's vetted
+    `op` verbs once the command builders emit them - see sysible_priv.py.)"""
+    base = ["sudo", "-n", _PRIV_DISPATCHER, "runas", "--user", user]
+    first = _exec(base + ["--mode", "plain", "--", cmd])
+    combined = (first["stderr"] or "") + "\n" + (first["stdout"] or "")
+    if first["returncode"] == 0 or not _looks_like_privilege_error(combined):
+        return first
+    stdin = (become_password + "\n") if become_password else None
+    return _exec(base + ["--mode", "elevate", "--", cmd], input_data=stdin)
+
+
 def _run_as_user(user, cmd, become_password=None):
     """RBAC: run `cmd` as local user `user`. Tried as that user first, so
     read-only commands work even for a user with no sudo; on a privilege
@@ -371,6 +395,11 @@ def _run_as_user(user, cmd, become_password=None):
                        f"sudo policy you want) on this host."),
             "returncode": 126,
         }
+
+    # RFC: when a dispatcher is configured and the agent is non-root (the
+    # --unprivileged 'sysible' deployment), route through the single sudo entry.
+    if _PRIV_DISPATCHER and os.geteuid() != 0:
+        return _run_via_dispatcher(user, cmd, become_password)
 
     root = os.geteuid() == 0
     plain = (["runuser", "-u", user, "--", "bash", "-c", cmd] if root

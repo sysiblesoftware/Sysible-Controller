@@ -13,17 +13,22 @@ this dispatcher validates.
 
 It runs as root (sudo'd by the agent) and exposes two subcommands:
 
-  runas  - drop to a target local user and run a shell string AS THAT USER.
-           This is the read / user-level path (the bulk of Sysible's
-           commands). It is deliberately NOT a root boundary: whatever the
-           target user can do via their own sudo, they can still do here.
-           The boundary for this path is each user's local sudo policy,
-           exactly as today - we've only centralised it.
+  op     - PRIMARY PATH. Run ONE vetted operation from the fixed OPS table
+           below, argv-only (never a shell), with every argument validated
+           first. This is the only way to reach root through the dispatcher,
+           and it covers both privileged WRITES (service.restart, user.create,
+           ...) and privileged READS (log.read, journal.read) - root reads are
+           arbitrary shell today, so they have to become verbs too. Unknown
+           verb => refused. In the default common-user deployment, non-root
+           reads run as the locked 'sysible' agent account directly and never
+           touch this path at all.
 
-  op     - run ONE vetted root primitive from the fixed OPS table below,
-           argv-only (never a shell), with every argument validated first.
-           This is the path that actually needs root, and the only way to
-           reach root through this dispatcher. Unknown verb => refused.
+  runas  - OPTIONAL per-user (defense-in-depth) mode, off by default. Drop to a
+           target local user and run a shell string AS THAT USER, so the host's
+           own sudo logs name the real admin and per-user host sudo policies
+           apply. Deliberately NOT a root boundary by itself: whatever the
+           target user can do via their own sudo, they can still do here.
+           Enabled only for shops that want host-side dual audit.
 
 Secrets (a user's become/sudo password, file contents) are read from STDIN,
 never argv/env, so they never appear in `ps` or logs.
@@ -171,6 +176,48 @@ def _op_file_write(a, stdin_secret):
     return []  # already done, no argv to run
 
 
+def _clamp_lines(s, default=200, cap=5000):
+    try:
+        n = int(s)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(n, cap))
+
+
+# Privileged READS are arbitrary shell today (e.g. `tail /var/log/secure`,
+# `journalctl -u sshd`) and need root - so they become verbs too, scoped to a
+# named-source allowlist rather than a free path, so a compromised controller
+# can't `log.read source=/etc/shadow`.
+_LOG_SOURCES = {
+    "auth": ["/var/log/auth.log", "/var/log/secure"],
+    "syslog": ["/var/log/syslog", "/var/log/messages"],
+    "kernel": ["/var/log/kern.log"],
+}
+
+
+def _op_log_read(a):
+    src = a.get("source")
+    candidates = _LOG_SOURCES.get(src)
+    if not candidates:
+        raise Reject(f"unknown log source {src!r}; allowed: {sorted(_LOG_SOURCES)}")
+    path = next((p for p in candidates if os.path.exists(p)), None)
+    if not path:
+        raise Reject(f"no log file present for source {src!r} on this host")
+    return [["tail", "-n", str(_clamp_lines(a.get("lines"))), path]]
+
+
+def _op_journal_read(a):
+    argv = ["journalctl", "--no-pager", "-n", str(_clamp_lines(a.get("lines")))]
+    if a.get("unit"):
+        argv += ["-u", v_unit(a["unit"])]
+    if a.get("priority"):
+        pri = a["priority"]
+        if pri not in ("emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"):
+            raise Reject(f"invalid journal priority: {pri!r}")
+        argv += ["-p", pri]
+    return [argv]
+
+
 # verb -> handler. Handlers return a list of (argv) or (argv, stdin) to run.
 OPS = {
     "service.start":   lambda a, s: _op_service("start", a),
@@ -185,6 +232,8 @@ OPS = {
     "power.reboot":    lambda a, s: _op_power("reboot", a),
     "power.poweroff":  lambda a, s: _op_power("poweroff", a),
     "file.write":      lambda a, s: (_op_file_write(a, s) or []),
+    "log.read":        lambda a, s: _op_log_read(a),
+    "journal.read":    lambda a, s: _op_journal_read(a),
 }
 
 

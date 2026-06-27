@@ -29,16 +29,32 @@ export default function HostEnrollment() {
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
   const [copied, setCopied] = useState(false);
+  const [portPort, setPortPort] = useState("");
+  const [portalBusy, setPortalBusy] = useState("");
 
+  function loadPortal() {
+    api.portalStatus().then((s) => {
+      setPortal(s || {});
+      const p = s && (s.configured_port || s.port);
+      if (p) setPortPort(String(p));
+    }).catch(() => {});
+  }
   function load() {
     api.agents().then((d) => setAgents(d.agents || [])).catch((e) => setErr(e.message));
     api.environments().then((d) => setEnvs(d.environments || [])).catch(() => {});
     api.envSudoDefaults().then((d) => setSudoDefaults(d || {})).catch(() => {});
     api.edition().then(setEdition).catch(() => {});
-    api.portalStatus().then((s) => setPortal(s || {})).catch(() => {});
+    loadPortal();
     api.controllerConfig().then((c) => setCfg(c || {})).catch(() => {});
   }
   useEffect(() => { load(); }, []);
+
+  async function portalAct(key, fn, okMsg) {
+    setPortalBusy(key); setErr(""); setMsg("");
+    try { await fn(); if (okMsg) setMsg(okMsg); loadPortal(); }
+    catch (e) { setErr(e.message); }
+    finally { setPortalBusy(""); }
+  }
 
   const groups = useMemo(() => {
     const m = {};
@@ -83,7 +99,7 @@ export default function HostEnrollment() {
 
   // curl one-liner (built from portal status + controller config)
   const curlHost = cfg.address || "<this machine's address>";
-  const curlPort = portal.configured_port || portal.port || 443;
+  const curlPort = portPort || portal.configured_port || portal.port || 8090;
   const curlUser = portal.credentials_configured ? portal.username : "<username>";
   const curlCmd =
     `curl -k -sS -f -u '${curlUser}:<password>' -o sysible-agent-bundle.zip ` +
@@ -149,6 +165,30 @@ export default function HostEnrollment() {
               The ready-to-run bundle, built on demand. Each download bakes in a fresh, one-time enrollment token.
             </p>
             <a className="btn sm" href={api.agentBundleUrl()}>Download Agent Bundle</a>
+          </fieldset>
+
+          <fieldset className="tool-group-box"><legend>Webserver Portal (for the curl download)</legend>
+            <p className="faint" style={{ marginTop: 0 }}>
+              The curl one-liner below pulls the agent bundle from the Webserver Portal, so the portal must be
+              running and reachable on this port. Start it while provisioning hosts; stop it when you're done.
+            </p>
+            <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+              <span className={"badge" + (portal.running ? " green" : "")}>{portal.running ? "Running" : "Stopped"}</span>
+              <button className="btn sm" disabled={portalBusy || portal.running}
+                      onClick={() => portalAct("start", () => api.portalStart(), "Portal started.")}>
+                {portalBusy === "start" ? <span className="spin" /> : "Start Portal"}</button>
+              <button className="btn sm ghost" disabled={portalBusy || !portal.running}
+                      onClick={() => portalAct("stop", () => api.portalStop(), "Portal stopped.")}>Stop Portal</button>
+            </div>
+            <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center", marginTop: 10 }}>
+              <span className="faint">Port</span>
+              <input type="number" style={{ maxWidth: 120 }} value={portPort} onChange={(e) => setPortPort(e.target.value)} />
+              <button className="btn sm" disabled={portalBusy || !portPort}
+                      onClick={() => portalAct("port", () => api.portalSetPort(Number(portPort)),
+                        "Port saved — restart the portal if it's running.")}>Save Port</button>
+              {!portal.credentials_configured &&
+                <span className="faint">No portal login set yet — set one on the Webserver Portal page so curl can authenticate.</span>}
+            </div>
           </fieldset>
 
           <fieldset className="tool-group-box"><legend>Command-Line Bundle Download (curl)</legend>

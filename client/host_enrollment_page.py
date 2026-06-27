@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QComboBox,
     QInputDialog,
+    QLineEdit,
     QTextEdit,
     QMessageBox,
     QFileDialog,
@@ -103,6 +104,49 @@ class HostEnrollmentPage(QWidget):
         # the portal must be running with login credentials set (configure
         # that on the Webserver Portal page).
         # =====================================================
+        # =====================================================
+        # WEBSERVER PORTAL (for the curl download)
+        # The curl one-liner below pulls the agent bundle from the portal's
+        # /cli/bundle endpoint, so the portal must be running on the right
+        # port. Manage that right here instead of a separate page.
+        # =====================================================
+        portal_label = QLabel("Webserver Portal (for the curl download)")
+        portal_label.setStyleSheet("font-size:18px;font-weight:bold;")
+        layout.addWidget(portal_label)
+
+        portal_hint = QLabel(
+            "The curl one-liner below downloads the agent bundle from the "
+            "Webserver Portal, so the portal must be running and reachable on "
+            "this port. Start it while provisioning hosts; stop it when you're done."
+        )
+        theme.style_hint_label(portal_hint)
+        portal_hint.setWordWrap(True)
+        layout.addWidget(portal_hint)
+
+        self.portal_status_label = QLabel("Portal: …")
+        layout.addWidget(self.portal_status_label)
+
+        portal_buttons = QHBoxLayout()
+        self.portal_start_btn = QPushButton("Start Portal")
+        self.portal_start_btn.clicked.connect(self.start_portal)
+        self.portal_stop_btn = QPushButton("Stop Portal")
+        self.portal_stop_btn.clicked.connect(self.stop_portal)
+        portal_buttons.addWidget(self.portal_start_btn)
+        portal_buttons.addWidget(self.portal_stop_btn)
+        portal_buttons.addStretch()
+        layout.addLayout(portal_buttons)
+
+        portal_port_row = QHBoxLayout()
+        portal_port_row.addWidget(QLabel("Port:"))
+        self.portal_port_input = QLineEdit()
+        self.portal_port_input.setMaximumWidth(100)
+        portal_port_row.addWidget(self.portal_port_input)
+        self.portal_save_port_btn = QPushButton("Save Port")
+        self.portal_save_port_btn.clicked.connect(self.save_portal_port)
+        portal_port_row.addWidget(self.portal_save_port_btn)
+        portal_port_row.addStretch()
+        layout.addLayout(portal_port_row)
+
         curl_label = QLabel("Command-Line Bundle Download (curl)")
         curl_label.setStyleSheet("font-size:18px;font-weight:bold;")
         layout.addWidget(curl_label)
@@ -328,6 +372,7 @@ class HostEnrollmentPage(QWidget):
             QMessageBox.critical(self, "Error", str(e))
             return
 
+        self._refresh_portal_status()
         self._refresh_curl_command()
         self._populate_combo()
         self._update_env_sudo_label()
@@ -518,6 +563,63 @@ class HostEnrollmentPage(QWidget):
             return
         self.refresh()
 
+    # =====================================================
+    # WEBSERVER PORTAL CONTROLS (rolled into this page)
+    # =====================================================
+    def _refresh_portal_status(self):
+        try:
+            status = api.get_portal_status()
+        except Exception:
+            status = {}
+        running = bool(status.get("running"))
+        port = status.get("configured_port") or status.get("port")
+        text = "Portal: Running" if running else "Portal: Stopped"
+        if port:
+            text += f" (port {port})"
+        if not status.get("credentials_configured"):
+            text += "  -  no portal login set yet (set one to authenticate curl)"
+        self.portal_status_label.setText(text)
+        self.portal_start_btn.setEnabled(not running)
+        self.portal_stop_btn.setEnabled(running)
+        if port and not self.portal_port_input.text().strip():
+            self.portal_port_input.setText(str(port))
+
+    def start_portal(self):
+        try:
+            result = api.start_portal()
+            if isinstance(result, dict) and not result.get("running") and result.get("error"):
+                QMessageBox.critical(self, "Portal failed to start", result["error"])
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+        self._refresh_portal_status()
+        self._refresh_curl_command()
+
+    def stop_portal(self):
+        try:
+            api.stop_portal()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+        self._refresh_portal_status()
+        self._refresh_curl_command()
+
+    def save_portal_port(self):
+        try:
+            port = int(self.portal_port_input.text().strip())
+        except ValueError:
+            QMessageBox.warning(self, "Invalid port", "Port must be a number.")
+            return
+        if not (1 <= port <= 65535):
+            QMessageBox.warning(self, "Invalid port", "Port must be between 1 and 65535.")
+            return
+        try:
+            api.set_portal_port(port)
+            QMessageBox.information(self, "Saved",
+                                    f"Portal port set to {port}. Restart the portal if it's running.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+        self._refresh_portal_status()
+        self._refresh_curl_command()
+
     def _refresh_curl_command(self):
         """Build the one-line curl install command from the portal's status and
         the controller address. Mirrors the Webserver Portal page's data
@@ -533,7 +635,7 @@ class HostEnrollmentPage(QWidget):
             config = {}
 
         host = config.get("address") or "<this machine's address>"
-        port = status.get("configured_port") or status.get("port") or 443
+        port = status.get("configured_port") or status.get("port") or 8090
         user = status.get("username") if status.get("credentials_configured") else "<username>"
 
         self.curl_text.setPlainText(

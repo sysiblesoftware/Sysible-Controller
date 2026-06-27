@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QGroupBox,
     QApplication,
+    QScrollArea,
 )
 
 from client import api
@@ -58,7 +59,18 @@ class HostEnrollmentPage(QWidget):
         self.disenroll_poll_timer = QTimer()
         self.disenroll_poll_timer.timeout.connect(self._poll_disenroll)
 
-        layout = QVBoxLayout()
+        # Scroll-wrap the whole page: with the full Webserver Portal admin now
+        # inline (credentials, login history, sessions, file pools) the page is
+        # tall, so it scrolls like Settings rather than overflowing the window.
+        _outer = QVBoxLayout()
+        self.setLayout(_outer)
+        _scroll = QScrollArea()
+        _scroll.setWidgetResizable(True)
+        _scroll.setFrameShape(QScrollArea.NoFrame)
+        _outer.addWidget(_scroll)
+        _content = QWidget()
+        layout = QVBoxLayout(_content)
+        _scroll.setWidget(_content)
 
         # =====================================================
         # TITLE
@@ -105,57 +117,21 @@ class HostEnrollmentPage(QWidget):
         # that on the Webserver Portal page).
         # =====================================================
         # =====================================================
-        # WEBSERVER PORTAL (for the curl download)
-        # The curl one-liner below pulls the agent bundle from the portal's
-        # /cli/bundle endpoint, so the portal must be running on the right
-        # port. Manage that right here instead of a separate page.
+        # WEBSERVER PORTAL (full admin, inline)
+        # The portal serves the agent bundle the curl one-liner below downloads
+        # (its /cli/bundle endpoint) and the host-operator file pools. Its
+        # complete administration - status, port, login credentials, login
+        # history, sessions, and file pools - is embedded here so Host
+        # Enrollment is one page (parity with the web console), instead of a
+        # separate "Webserver Portal Configuration" window.
         # =====================================================
-        portal_label = QLabel("Webserver Portal (for the curl download)")
+        portal_label = QLabel("Webserver Portal")
         portal_label.setStyleSheet("font-size:18px;font-weight:bold;")
         layout.addWidget(portal_label)
 
-        portal_hint = QLabel(
-            "The curl one-liner below downloads the agent bundle from the "
-            "Webserver Portal, so the portal must be running and reachable on "
-            "this port. Start it while provisioning hosts; stop it when you're done."
-        )
-        theme.style_hint_label(portal_hint)
-        portal_hint.setWordWrap(True)
-        layout.addWidget(portal_hint)
-
-        self.portal_status_label = QLabel("Portal: …")
-        layout.addWidget(self.portal_status_label)
-
-        portal_buttons = QHBoxLayout()
-        self.portal_start_btn = QPushButton("Start Portal")
-        self.portal_start_btn.clicked.connect(self.start_portal)
-        self.portal_stop_btn = QPushButton("Stop Portal")
-        self.portal_stop_btn.clicked.connect(self.stop_portal)
-        portal_buttons.addWidget(self.portal_start_btn)
-        portal_buttons.addWidget(self.portal_stop_btn)
-        portal_buttons.addStretch()
-        layout.addLayout(portal_buttons)
-
-        portal_port_row = QHBoxLayout()
-        portal_port_row.addWidget(QLabel("Port:"))
-        self.portal_port_input = QLineEdit()
-        self.portal_port_input.setMaximumWidth(100)
-        portal_port_row.addWidget(self.portal_port_input)
-        self.portal_save_port_btn = QPushButton("Save Port")
-        self.portal_save_port_btn.clicked.connect(self.save_portal_port)
-        portal_port_row.addWidget(self.portal_save_port_btn)
-        portal_port_row.addStretch()
-        layout.addLayout(portal_port_row)
-
-        portal_admin_row = QHBoxLayout()
-        self.portal_admin_btn = QPushButton("Manage Portal Login & Files…")
-        self.portal_admin_btn.clicked.connect(self.open_portal_admin)
-        portal_admin_row.addWidget(self.portal_admin_btn)
-        portal_admin_hint = QLabel("Set the host-operator login, review login history and sessions, and manage the file pools.")
-        theme.style_hint_label(portal_admin_hint)
-        portal_admin_hint.setWordWrap(True)
-        portal_admin_row.addWidget(portal_admin_hint, 1)
-        layout.addLayout(portal_admin_row)
+        from client.webserver_portal_page import WebserverPortalPage
+        self.portal_panel = WebserverPortalPage(embedded=True)
+        layout.addWidget(self.portal_panel)
 
         curl_label = QLabel("Command-Line Bundle Download (curl)")
         curl_label.setStyleSheet("font-size:18px;font-weight:bold;")
@@ -307,8 +283,6 @@ class HostEnrollmentPage(QWidget):
         theme.style_hint_label(self.disenroll_status)
         layout.addWidget(self.disenroll_status)
 
-        self.setLayout(layout)
-
         bus.host_removed.connect(self.refresh)
 
         self.refresh()
@@ -382,7 +356,10 @@ class HostEnrollmentPage(QWidget):
             QMessageBox.critical(self, "Error", str(e))
             return
 
-        self._refresh_portal_status()
+        try:
+            self.portal_panel.refresh()
+        except Exception:
+            pass
         self._refresh_curl_command()
         self._populate_combo()
         self._update_env_sudo_label()
@@ -572,79 +549,6 @@ class HostEnrollmentPage(QWidget):
             QMessageBox.critical(self, "Error", str(e))
             return
         self.refresh()
-
-    # =====================================================
-    # WEBSERVER PORTAL CONTROLS (rolled into this page)
-    # =====================================================
-    def _refresh_portal_status(self):
-        try:
-            status = api.get_portal_status()
-        except Exception:
-            status = {}
-        running = bool(status.get("running"))
-        port = status.get("configured_port") or status.get("port")
-        text = "Portal: Running" if running else "Portal: Stopped"
-        if port:
-            text += f" (port {port})"
-        if not status.get("credentials_configured"):
-            text += "  -  no portal login set yet (set one to authenticate curl)"
-        self.portal_status_label.setText(text)
-        self.portal_start_btn.setEnabled(not running)
-        self.portal_stop_btn.setEnabled(running)
-        if port and not self.portal_port_input.text().strip():
-            self.portal_port_input.setText(str(port))
-
-    def start_portal(self):
-        try:
-            result = api.start_portal()
-            if isinstance(result, dict) and not result.get("running") and result.get("error"):
-                QMessageBox.critical(self, "Portal failed to start", result["error"])
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
-        self._refresh_portal_status()
-        self._refresh_curl_command()
-
-    def stop_portal(self):
-        try:
-            api.stop_portal()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
-        self._refresh_portal_status()
-        self._refresh_curl_command()
-
-    def open_portal_admin(self):
-        # The detailed portal admin (credentials, login history, sessions, file
-        # pools) opens here from Host Enrollment - the portal is no longer a
-        # separate top-level tile.
-        from client.webserver_portal_page import WebserverPortalPage
-        if getattr(self, "_portal_admin_window", None) is None:
-            self._portal_admin_window = WebserverPortalPage()
-        self._portal_admin_window.show()
-        self._portal_admin_window.raise_()
-        self._portal_admin_window.activateWindow()
-        if hasattr(self._portal_admin_window, "refresh"):
-            try:
-                self._portal_admin_window.refresh()
-            except Exception:
-                pass
-
-    def save_portal_port(self):
-        try:
-            port = int(self.portal_port_input.text().strip())
-        except ValueError:
-            QMessageBox.warning(self, "Invalid port", "Port must be a number.")
-            return
-        if not (1 <= port <= 65535):
-            QMessageBox.warning(self, "Invalid port", "Port must be between 1 and 65535.")
-            return
-        try:
-            api.set_portal_port(port)
-            QMessageBox.information(self, "Saved",
-                                    f"Portal port set to {port}. Restart the portal if it's running.")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
-        self._refresh_portal_status()
-        self._refresh_curl_command()
 
     def _refresh_curl_command(self):
         """Build the one-line curl install command from the portal's status and

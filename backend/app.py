@@ -1076,7 +1076,17 @@ def admin_setup(body: AdminSetupRequest):
 
     log_admin_audit("administrator_added", username, "first-run setup (superuser)")
 
-    return {"username": username, "status": "created", "role": "superuser"}
+    # Creating the first admin also logs them in: mint the same RBAC identity
+    # token /admin/login issues, so the GUI can immediately perform superuser
+    # actions (controller config, host enrollment, ...) without a redundant
+    # log-out/log-in. Without this the client entered the dashboard with no
+    # token and every superuser call 401'd until the operator re-authenticated.
+    role = "superuser"
+    token = secrets.token_hex(32)
+    create_admin_token(token, username, role, time.time() + 12 * 60 * 60)
+    record_administrator_login(username)
+
+    return {"username": username, "status": "created", "role": role, "token": token}
 
 
 # Defense-in-depth brute-force throttle for the GUI admin login. This

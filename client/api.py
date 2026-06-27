@@ -321,7 +321,13 @@ def admin_setup_required():
 
 
 def admin_setup(username: str, password: str):
-    return _request("POST", "/admin/setup", json={"username": username, "password": password})
+    result = _request("POST", "/admin/setup", json={"username": username, "password": password})
+    # Creating the first admin logs them straight in - capture the RBAC token
+    # the backend now returns so superuser actions work immediately, exactly
+    # as admin_login() does. Without this the GUI held no token after setup.
+    if isinstance(result, dict) and result.get("token"):
+        set_admin_token(result["token"])
+    return result
 
 
 def admin_login(username: str, password: str):

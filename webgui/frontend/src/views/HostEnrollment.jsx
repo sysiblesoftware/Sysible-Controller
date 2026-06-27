@@ -212,7 +212,11 @@ export default function HostEnrollment() {
             <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center" }}>
               <span className={"badge" + (portal.running ? " green" : "")}>{portal.running ? "Running" : "Stopped"}</span>
               <button className="btn sm" disabled={portalBusy || portal.running}
-                      onClick={() => portalAct("start", () => api.portalStart(), "Portal started.")}>
+                      onClick={() => portalAct("start", async () => {
+                        const r = await api.portalStart();
+                        if (r && r.running === false) throw new Error(r.error || "The portal failed to start.");
+                        return r;
+                      }, "Portal started.")}>
                 {portalBusy === "start" ? <span className="spin" /> : "Start Portal"}</button>
               <button className="btn sm ghost" disabled={portalBusy || !portal.running}
                       onClick={() => portalAct("stop", () => api.portalStop(), "Portal stopped.")}>Stop Portal</button>

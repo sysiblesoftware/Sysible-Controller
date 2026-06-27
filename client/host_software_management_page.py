@@ -188,9 +188,9 @@ class HostSoftwareManagementPage(QWidget):
         # important action here, so it reads as the primary button rather
         # than sitting flush with Install/Remove.
         btn_update.setStyleSheet(
-            "QPushButton { font-weight: bold; background-color: #2f6fed; color: #ffffff; "
-            "border: 1px solid #2a63d0; border-radius: 4px; padding: 6px 14px; }"
-            "QPushButton:hover { background-color: #2a63d0; }"
+            "QPushButton { font-weight: bold; background-color: #3C4B64; color: #ffffff; "
+            "border: 1px solid #506080; border-radius: 4px; padding: 6px 14px; }"
+            "QPushButton:hover { background-color: #4C6285; }"
         )
         for b in (btn_install, btn_remove, btn_update):
             row1.addWidget(b)

@@ -553,6 +553,12 @@ def cmd_set_umask_policy(value: str) -> str:
 
 
 def cmd_set_sudo_policy(timestamp_timeout=None, require_password=None, group: str = "sudo") -> str:
+    # Empty group (the web Environmental Policies form sends "") would produce a
+    # malformed "% ALL=..." sudoers line; default it to the conventional sudo
+    # group. Validate the charset since it's written into a sudoers file.
+    group = (group or "").strip() or "sudo"
+    if not all(c.isalnum() or c in "_-" for c in group):
+        raise ValueError("Sudo group may only contain letters, numbers, dashes, and underscores.")
     lines = []
     if timestamp_timeout is not None:
         lines.append(f"Defaults timestamp_timeout={int(timestamp_timeout)}")
@@ -566,9 +572,13 @@ def cmd_set_sudo_policy(timestamp_timeout=None, require_password=None, group: st
     dest = "/etc/sudoers.d/sysible-policy"
     quoted_tmp = shlex.quote(tmp)
     quoted_dest = shlex.quote(dest)
+    # The heredoc must be wrapped in a { ...; } group: a bare "&&" on the line
+    # after the heredoc terminator is a bash syntax error, which previously made
+    # this whole command fail to run. Grouping lets the &&-chain gate on the
+    # cat succeeding.
     return (
-        f"cat > {quoted_tmp} <<'SYSIBLE_EOF'\n{body}SYSIBLE_EOF\n"
-        f"&& chmod 440 {quoted_tmp} "
+        f"{{ cat > {quoted_tmp} <<'SYSIBLE_EOF'\n{body}SYSIBLE_EOF\n"
+        f"}} && chmod 440 {quoted_tmp} "
         f"&& visudo -c -f {quoted_tmp} "
         f"&& mv {quoted_tmp} {quoted_dest} "
         f"&& chown root:root {quoted_dest} "

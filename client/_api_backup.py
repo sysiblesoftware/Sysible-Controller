@@ -89,7 +89,7 @@ def cmd_configure_backup_schedule(source: str, dest_dir: str, cron_expr: str) ->
         "chmod +x /usr/local/sbin/sysible-backup.sh && "
         f"printf '%s root /usr/local/sbin/sysible-backup.sh\\n' {shlex.quote(cron_expr)} "
         "> /etc/cron.d/sysible-backup && "
-        f"echo 'Scheduled backup of {source} to {dest_dir} on cron: {cron_expr}'"
+        f"printf 'Scheduled backup of %s to %s on cron: %s\\n' {qs} {qd} {shlex.quote(cron_expr)}"
     )
 
 
@@ -107,7 +107,7 @@ def cmd_create_snapshot(vg: str, lv: str, snap_name: str, size: str) -> str:
         "if ! command -v lvcreate >/dev/null 2>&1; then "
         'echo "LVM tools (lvcreate) not installed on this host." >&2; exit 1; fi; '
         f"lvcreate -s -n {qsnap} -L {qsize} {origin} && "
-        f"echo 'Snapshot {snap_name} created from {vg}/{lv}.'"
+        f"printf 'Snapshot %s created from %s/%s.\\n' {qsnap} {shlex.quote(vg)} {shlex.quote(lv)}"
     )
 
 

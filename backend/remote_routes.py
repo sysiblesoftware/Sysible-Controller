@@ -305,11 +305,15 @@ def agent_ssh_enable_command(public_key: str) -> str:
     """Root shell one-liner the agent runs: install the controller key
     into root's authorized_keys (idempotently) and report whether an
     SSH server is up. Never touches packages or services."""
-    key = public_key.strip().replace("'", "")  # ssh pubkeys never contain quotes
+    # shlex.quote rather than the old strip-quotes-and-single-quote trick, to
+    # match the enroll_ssh install path and be safe by construction regardless
+    # of what's in the key (it's the controller's own pubkey, but defense in
+    # depth costs nothing here).
+    key = shlex.quote(public_key.strip())
     return (
         "mkdir -p /root/.ssh && chmod 700 /root/.ssh; "
-        f"grep -qxF '{key}' /root/.ssh/authorized_keys 2>/dev/null || "
-        f"echo '{key}' >> /root/.ssh/authorized_keys; "
+        f"grep -qxF {key} /root/.ssh/authorized_keys 2>/dev/null || "
+        f"echo {key} >> /root/.ssh/authorized_keys; "
         "chmod 600 /root/.ssh/authorized_keys; "
         "if systemctl is-active --quiet sshd 2>/dev/null "
         "|| systemctl is-active --quiet ssh 2>/dev/null "

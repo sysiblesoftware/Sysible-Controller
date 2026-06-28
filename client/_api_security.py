@@ -236,7 +236,7 @@ def cmd_selinux_restore_context(path: str, recursive: bool = False) -> str:
     return (
         _SELINUX_MISSING +
         f"restorecon {flag}-v {shlex.quote(path)} 2>&1 "
-        f"&& echo 'Restored SELinux file context for {path} {scope}.'"
+        f"&& printf 'Restored SELinux file context for %s {scope}.\\n' {shlex.quote(path)}"
     )
 
 
@@ -267,7 +267,7 @@ def cmd_selinux_add_fcontext(path_regex: str, file_type: str) -> str:
         _SEMANAGE_MISSING +
         f"semanage fcontext -a -t {file_type} {q_path} 2>&1 "
         f"&& restorecon -Rv {q_path} 2>&1; "
-        f"echo 'File context rule added for {path_regex} -> {file_type}.'"
+        f"printf 'File context rule added for %s -> {file_type}.\\n' {q_path}"
     )
 
 
@@ -278,7 +278,7 @@ def cmd_selinux_remove_fcontext(path_regex: str, file_type: str) -> str:
     return (
         _SEMANAGE_MISSING +
         f"semanage fcontext -d -t {file_type} {q_path} 2>&1 "
-        f"&& echo 'File context rule removed for {path_regex} ({file_type}).'"
+        f"&& printf 'File context rule removed for %s ({file_type}).\\n' {q_path}"
     )
 
 
@@ -342,12 +342,24 @@ def _build_sshd_set_option_script(key: str, value: str) -> str:
     apply it."""
     q_cfg = shlex.quote(_SSHD_CONFIG)
     q_bak = shlex.quote(_SSHD_CONFIG + ".bak")
+    # `key` is a validated identifier (alnum/_-), safe to inline into the sed
+    # pattern. `value` is free text - it can legitimately contain '/' (e.g. a
+    # Banner path) or spaces, and must never be inlined into sed's replacement
+    # (a '/' breaks the delimiter) or into the shell (a single quote would break
+    # out of the surrounding quoting and run arbitrary code as root). Carry it
+    # through a single-quoted shell variable instead, and never feed it to sed.
+    #
+    # sshd uses the FIRST occurrence of a keyword, so delete every existing
+    # uncommented line for this key and append ours - that makes ours
+    # authoritative regardless of where an old one sat.
+    qk = shlex.quote(key)
+    qv = shlex.quote(value)
     return (
         f"cp {q_cfg} {q_bak} 2>&1; "
-        f"if grep -qE '^[[:space:]]*{key}[[:space:]]' {q_cfg}; then "
-        f"sed -i -E 's/^[[:space:]]*{key}[[:space:]].*/{key} {value}/' {q_cfg}; "
-        f"else printf '\\n{key} {value}\\n' >> {q_cfg}; fi; "
-        f"if sshd -t 2>&1; then echo 'sshd_config: {key} set to {value}. Reload sshd to apply.'; "
+        f"v={qv}; "
+        f"sed -i -E '/^[[:space:]]*{key}[[:space:]]/d' {q_cfg}; "
+        f"printf '%s %s\\n' {qk} \"$v\" >> {q_cfg}; "
+        f"if sshd -t 2>&1; then printf 'sshd_config: %s set to %s. Reload sshd to apply.\\n' {qk} \"$v\"; "
         f"else echo 'New config failed validation - restoring previous sshd_config.' >&2; cp {q_bak} {q_cfg}; exit 1; fi"
     )
 
@@ -576,12 +588,18 @@ def cmd_set_pwquality_option(key: str, value) -> str:
     key = _validate_identifier(key, "Option")
     value = _validate_nonempty_line(str(value), "Value")
     q_file = shlex.quote("/etc/security/pwquality.conf")
+    # `key` is a validated identifier (safe to inline into the sed pattern);
+    # `value` is free text and must never be inlined into sed/printf (a '/'
+    # breaks the delimiter, a single quote breaks out and runs as root). Carry
+    # it via a single-quoted shell var, and delete-then-append so our line is
+    # the only one for this key.
+    qk = shlex.quote(key)
+    qv = shlex.quote(value)
     return (
-        f"touch {q_file} && "
-        f"if grep -qE '^[[:space:]]*{key}[[:space:]]*=' {q_file}; then "
-        f"sed -i -E 's/^[[:space:]]*{key}[[:space:]]*=.*/{key} = {value}/' {q_file}; "
-        f"else printf '{key} = {value}\\n' >> {q_file}; fi; "
-        f"echo 'pwquality.conf: {key} set to {value}.'"
+        f"touch {q_file}; v={qv}; "
+        f"sed -i -E '/^[[:space:]]*{key}[[:space:]]*=/d' {q_file}; "
+        f"printf '%s = %s\\n' {qk} \"$v\" >> {q_file}; "
+        f"printf 'pwquality.conf: %s set to %s.\\n' {qk} \"$v\""
     )
 
 

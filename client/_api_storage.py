@@ -279,7 +279,7 @@ def cmd_create_partition_table(device: str, label_type: str = "gpt") -> str:
         "if ! command -v parted >/dev/null 2>&1; then "
         "echo 'parted is not installed on this host (package: parted).' >&2; exit 1; fi; "
         f"parted -s {q_dev} mklabel {label_type} 2>&1 "
-        f"&& echo 'Created a {label_type} partition table on {device}.'"
+        f"&& printf 'Created a %s partition table on %s.\\n' {label_type} {q_dev}"
     )
 
 
@@ -313,7 +313,7 @@ def cmd_delete_partition(device: str, part_number) -> str:
         "echo 'parted is not installed on this host (package: parted).' >&2; exit 1; fi; "
         f"parted -s {q_dev} rm {part_number} 2>&1; "
         f"partprobe {q_dev} 2>/dev/null; "
-        f"echo 'Removed partition {part_number} from {device}.'"
+        f"printf 'Removed partition %s from %s.\\n' {part_number} {q_dev}"
     )
 
 
@@ -330,7 +330,7 @@ def cmd_resize_partition(device: str, part_number, end: str) -> str:
         "echo 'parted is not installed on this host (package: parted).' >&2; exit 1; fi; "
         f"parted -s {q_dev} resizepart {part_number} {shlex.quote(end)} 2>&1; "
         f"partprobe {q_dev} 2>/dev/null; "
-        f"echo 'Resized partition {part_number} on {device} - remember to grow/shrink the filesystem inside it next.'"
+        f"printf 'Resized partition %s on %s - remember to grow/shrink the filesystem inside it next.\\n' {part_number} {q_dev}"
     )
 
 
@@ -585,7 +585,7 @@ def cmd_create_raid_array(raid_device: str, level: str, devices: str) -> str:
         "if ! command -v mdadm >/dev/null 2>&1; then "
         "echo 'mdadm is not installed on this host (package: mdadm).' >&2; exit 1; fi; "
         f"mdadm --create {q_raid} --level={level} --raid-devices={len(dev_list)} {q_devs} --run 2>&1 "
-        f"&& echo 'Created {raid_device} (RAID{level}, {len(dev_list)} member(s)) - check RAID Status for sync progress.'"
+        f"&& printf 'Created %s (RAID{level}, {len(dev_list)} member(s)) - check RAID Status for sync progress.\\n' {q_raid}"
     )
 
 
@@ -645,7 +645,7 @@ def cmd_create_swap_file(path: str, size_mb, persist: bool = True) -> str:
         f"&& chmod 600 {q_path} "
         f"&& mkswap {q_path} 2>&1 "
         f"&& swapon {q_path} 2>&1 "
-        f"&& echo 'Swap file {path} ({size_mb}MB) created and activated.'"
+        f"&& printf 'Swap file %s ({size_mb}MB) created and activated.\\n' {q_path}"
     )
     if persist:
         q_line = shlex.quote(f"{path}\tnone\tswap\tsw\t0\t0")
@@ -671,13 +671,13 @@ def cmd_resize_swap_file(path: str, size_mb, persist: bool = True) -> str:
     size_mb = _validate_int_range(size_mb, 1, 1_048_576, "Size (MB)")
     q_path = shlex.quote(path)
     cmd = (
-        f"if [ ! -f {q_path} ]; then echo '{path} does not exist - use Create Swap File for a new swap file.' >&2; exit 1; fi; "
+        f"if [ ! -f {q_path} ]; then printf '%s does not exist - use Create Swap File for a new swap file.\\n' {q_path} >&2; exit 1; fi; "
         f"swapoff {q_path} 2>/dev/null; "
         f"(fallocate -l {size_mb}M {q_path} 2>/dev/null || dd if=/dev/zero of={q_path} bs=1M count={size_mb} 2>&1) "
         f"&& chmod 600 {q_path} "
         f"&& mkswap {q_path} 2>&1 "
         f"&& swapon {q_path} 2>&1 "
-        f"&& echo 'Swap file {path} resized to {size_mb}MB and reactivated.'"
+        f"&& printf 'Swap file %s resized to {size_mb}MB and reactivated.\\n' {q_path}"
     )
     if persist:
         q_line = shlex.quote(f"{path}\tnone\tswap\tsw\t0\t0")
@@ -698,7 +698,7 @@ def cmd_create_swap_partition(device: str, persist: bool = True) -> str:
     cmd = (
         f"mkswap {q_dev} 2>&1 "
         f"&& swapon {q_dev} 2>&1 "
-        f"&& echo 'Swap partition {device} created and activated.'"
+        f"&& printf 'Swap partition %s created and activated.\\n' {q_dev}"
     )
     if persist:
         q_line = shlex.quote(f"{device}\tnone\tswap\tsw\t0\t0")
@@ -716,7 +716,7 @@ def cmd_disable_swap(target: str, remove_fstab: bool = False) -> str:
     remove_fstab, also strips any matching /etc/fstab line."""
     target = _validate_path(target, "Swap file or device")
     q_target = shlex.quote(target)
-    cmd = f"swapoff {q_target} 2>&1 && echo 'Swap on {target} deactivated.'"
+    cmd = f"swapoff {q_target} 2>&1 && printf 'Swap on %s deactivated.\\n' {q_target}"
     if remove_fstab:
         cmd += (
             f" && cp /etc/fstab /etc/fstab.bak.$(date +%s) "

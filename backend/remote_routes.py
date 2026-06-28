@@ -189,6 +189,85 @@ def _ensure_controller_key() -> str:
     return CONTROLLER_PUB_KEY_PATH.read_text().strip()
 
 
+# Controller-side SSH known_hosts backing trust-on-first-use (TOFU)
+# verification of managed hosts. The FIRST time the controller connects to a
+# host (SSH enrollment - where the operator supplied the password - or the
+# agent-channel-authenticated key install) its host key is recorded here; every
+# LATER connection is checked against that pinned key, so a host that presents a
+# DIFFERENT key (a possible man-in-the-middle, or a rebuilt box) is refused
+# instead of being silently re-trusted the way paramiko's AutoAddPolicy did.
+# One file shared by every SSH path - the paramiko sites below and exec_remote's
+# OpenSSH CLI (via -o UserKnownHostsFile) - so a key pinned by one is honoured
+# by all. Same dir/permissions (0600, root-only) convention as the controller
+# private key.
+KNOWN_HOSTS_PATH = REMOTE_KEY_DIR / "known_hosts"
+
+
+def _ensure_known_hosts_file():
+    REMOTE_KEY_DIR.mkdir(parents=True, exist_ok=True)
+    if not KNOWN_HOSTS_PATH.exists():
+        KNOWN_HOSTS_PATH.touch()
+    try:
+        os.chmod(KNOWN_HOSTS_PATH, 0o600)
+    except OSError:
+        pass
+
+
+def _forget_known_host(ip: str):
+    """Drop any pinned host-key entry for `ip` from the TOFU known_hosts, so a
+    legitimately rebuilt or reassigned machine can re-enroll at the same IP
+    without tripping the changed-key check. Called when a host is removed.
+    Entries are written unhashed (HashKnownHosts=no / paramiko's plain format),
+    so a textual match on the first field is sufficient."""
+    if not ip or not KNOWN_HOSTS_PATH.exists():
+        return
+    try:
+        kept = []
+        for line in KNOWN_HOSTS_PATH.read_text().splitlines():
+            if not line.strip():
+                continue
+            names = line.split(" ", 1)[0].split(",")
+            if ip in names or f"[{ip}]:22" in names:
+                continue
+            kept.append(line)
+        KNOWN_HOSTS_PATH.write_text("".join(l + "\n" for l in kept))
+        os.chmod(KNOWN_HOSTS_PATH, 0o600)
+    except OSError:
+        pass
+
+
+def _new_ssh_client():
+    """A paramiko SSHClient wired for TOFU host-key verification against
+    KNOWN_HOSTS_PATH instead of the old AutoAddPolicy() (which accepted any key,
+    every time, with no verification - the MITM gap this closes).
+
+    Behaviour: a host already in known_hosts is verified - paramiko raises
+    BadHostKeyException and the connection is refused if the presented key
+    doesn't match the pinned one. A first-seen host is pinned (its key recorded,
+    0600) and allowed - trust on first use. The policy class is defined here
+    rather than at module scope because paramiko is an optional import that may
+    not be installed."""
+    import paramiko
+
+    class _PinOnFirstUse(paramiko.MissingHostKeyPolicy):
+        def missing_host_key(self, client, hostname, key):
+            client.get_host_keys().add(hostname, key.get_name(), key)
+            try:
+                client.save_host_keys(str(KNOWN_HOSTS_PATH))
+                os.chmod(KNOWN_HOSTS_PATH, 0o600)
+            except OSError:
+                pass
+
+    _ensure_known_hosts_file()
+    client = paramiko.SSHClient()
+    try:
+        client.load_host_keys(str(KNOWN_HOSTS_PATH))
+    except OSError:
+        pass
+    client.set_missing_host_key_policy(_PinOnFirstUse())
+    return client
+
+
 @router.get("/controller-key")
 def get_controller_key():
     """Public key text only - safe to display/copy in the GUI for
@@ -364,8 +443,12 @@ def list_hosts():
 @router.delete("/hosts/{name}", dependencies=[Depends(require_superuser)])
 def delete_host(name: str):
     hosts = load_hosts()
-    hosts.pop(name, None)
+    removed = hosts.pop(name, None)
     save_hosts(hosts)
+    # Forget the pinned SSH host key too, so a rebuilt box can re-enroll at the
+    # same IP without a manual known_hosts edit.
+    if removed and removed.get("ip"):
+        _forget_known_host(removed["ip"])
     return {"deleted": True}
 
 
@@ -421,8 +504,7 @@ def enroll_ssh(body: EnrollSSHRequest):
             detail="paramiko is not installed - password-based SSH enrollment is unavailable"
         )
 
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client = _new_ssh_client()
 
     quoted_key = shlex.quote(public_key)
 
@@ -447,6 +529,17 @@ def enroll_ssh(body: EnrollSSHRequest):
         if exit_status != 0:
             raise HTTPException(status_code=400, detail=stderr.read().decode())
 
+    except paramiko.BadHostKeyException as e:
+        # This IP is already pinned in known_hosts with a DIFFERENT key than the
+        # host is now presenting. Either the IP now points at a different
+        # machine (rebuilt/reassigned), or someone is intercepting the
+        # connection. Refuse rather than silently re-trust.
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Host key for {body.ip} does not match the key pinned on first "
+                    f"contact - possible man-in-the-middle, or the machine at this IP "
+                    f"was rebuilt/reassigned. If you trust the change, remove the pinned "
+                    f"entry for this IP from {KNOWN_HOSTS_PATH} and enroll again. ({e})"))
     except paramiko.AuthenticationException:
         raise HTTPException(status_code=401, detail="SSH authentication failed")
     except OSError as e:
@@ -498,6 +591,12 @@ def exec_remote(name: str, body: ExecRequest, request: Request):
     target = f"{host['user']}@{host['ip']}"
     key_path = host.get("key_path") or str(CONTROLLER_KEY_PATH)
 
+    # Share the one TOFU trust store with the paramiko paths above, rather than
+    # using root's default ~/.ssh/known_hosts: a key pinned during enrollment or
+    # a terminal session is then honoured here too (and vice versa).
+    # accept-new = pin a first-seen host, but refuse a CHANGED key (exit 255).
+    _ensure_known_hosts_file()
+
     try:
         result = subprocess.run(
             [
@@ -506,6 +605,8 @@ def exec_remote(name: str, body: ExecRequest, request: Request):
                 "-o", "IdentitiesOnly=yes",
                 "-o", "BatchMode=yes",
                 "-o", "StrictHostKeyChecking=accept-new",
+                "-o", f"UserKnownHostsFile={KNOWN_HOSTS_PATH}",
+                "-o", "HashKnownHosts=no",
                 "-o", "ConnectTimeout=10",
                 target, body.cmd
             ],
@@ -608,8 +709,7 @@ def open_terminal(name: str, request: Request):
     if admin_user and admin_user != ssh_user:
         become = _become_user_command(ssh_user, admin_user)
 
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client = _new_ssh_client()
 
     try:
         client.connect(
@@ -627,6 +727,14 @@ def open_terminal(name: str, request: Request):
         else:
             channel = client.invoke_shell(term="xterm", width=120, height=32)
         channel.settimeout(0.0)  # non-blocking - /terminal/read polls instead of blocking
+    except paramiko.BadHostKeyException as e:
+        client.close()
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Host key for {host['ip']} does not match the key pinned on first "
+                    f"contact - possible man-in-the-middle, or the host was rebuilt. "
+                    f"If you trust the change, remove its entry from {KNOWN_HOSTS_PATH} "
+                    f"and reconnect. ({e})"))
     except paramiko.AuthenticationException:
         client.close()
         raise HTTPException(status_code=401, detail="SSH authentication failed")
@@ -796,8 +904,7 @@ def _connect_sftp(name: str):
     host = hosts[name]
     key_path = host.get("key_path") or str(CONTROLLER_KEY_PATH)
 
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client = _new_ssh_client()
 
     try:
         client.connect(
@@ -807,6 +914,14 @@ def _connect_sftp(name: str):
             timeout=10,
         )
         sftp = client.open_sftp()
+    except paramiko.BadHostKeyException as e:
+        client.close()
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Host key for {host['ip']} does not match the key pinned on first "
+                    f"contact - possible man-in-the-middle, or the host was rebuilt. "
+                    f"If you trust the change, remove its entry from {KNOWN_HOSTS_PATH} "
+                    f"and retry. ({e})"))
     except paramiko.AuthenticationException:
         client.close()
         raise HTTPException(status_code=401, detail="SSH authentication failed")

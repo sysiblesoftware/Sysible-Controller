@@ -247,9 +247,9 @@ sysible_controller {start|stop|restart|status|logs|gui|webgui|reset-admin|enable
 
 ## Documentation
 
-For a fast visual tour, the [`Sysible_Controller_Quickstart.html`](Sysible_Controller_Quickstart.html) guide gives a screenshot and a three-step how-to for every screen — also available as a PDF: [`Sysible_Controller_Quickstart.pdf`](Sysible_Controller_Quickstart.pdf).
+For a fast visual tour, the [`Sysible_Controller_Quickstart.html`](Sysible_Controller_Quickstart.html) guide gives a screenshot and a three-step how-to for every screen.
 
-The full administrator and user guide — installation walkthrough, every screen with an accurate screenshot, and a numbered recipe for every button in the product — lives in [`Sysible_Controller_Documentation.html`](Sysible_Controller_Documentation.html), with a print/offline PDF at [`Sysible_Controller_Documentation.pdf`](Sysible_Controller_Documentation.pdf).
+The full administrator and user guide — installation walkthrough, every screen with an accurate screenshot, and a numbered recipe for every button in the product — lives in [`Sysible_Controller_Documentation.html`](Sysible_Controller_Documentation.html).
 
 ## Project structure
 

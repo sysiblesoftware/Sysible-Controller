@@ -495,9 +495,26 @@ def cmd_install_ufw() -> str:
 def cmd_list_listening_ports() -> str:
     """Every actually-listening TCP/UDP socket on the host, with the owning
     process - independent of which firewall is in use. Answers 'what ports are
-    open on this box right now?' rather than 'what does the firewall allow?'."""
+    open on this box right now?' rather than 'what does the firewall allow?'.
+
+    The raw `ss -tulpn` output is hard to read, so it's reformatted into an
+    aligned PROTO / PORT / LISTEN ADDRESS / PROCESS table sorted by port.
+    (Process names only show when run with enough privilege; otherwise '-'.)"""
+    awk = (
+        "awk '{proto=$1; la=$5; nc=split(la,a,\":\"); port=a[nc]; "
+        "addr=substr(la,1,length(la)-length(port)-1); if(addr==\"*\")addr=\"0.0.0.0\"; "
+        "proc=\"-\"; pid=\"\"; "
+        "if(match($0,/\"[^\"]+\"/)){proc=substr($0,RSTART+1,RLENGTH-2)} "
+        "if(match($0,/pid=[0-9]+/)){pid=substr($0,RSTART+4,RLENGTH-4)} "
+        "ps=proc; if(pid!=\"\")ps=ps\" (pid \"pid\")\"; "
+        "printf \"%-5s %-7s %-26s %s\\n\", toupper(proto), port, addr, ps}'"
+    )
     return (
-        "if command -v ss >/dev/null 2>&1; then ss -tulpn 2>&1; "
-        "elif command -v netstat >/dev/null 2>&1; then netstat -tulpn 2>&1; "
+        "if command -v ss >/dev/null 2>&1; then "
+        "printf \"%-5s %-7s %-26s %s\\n\" PROTO PORT \"LISTEN ADDRESS\" PROCESS; "
+        "printf \"%-5s %-7s %-26s %s\\n\" ----- ---- \"--------------\" -------; "
+        "ss -H -tulpn 2>/dev/null | " + awk + " | sort -k2 -n; "
+        "elif command -v netstat >/dev/null 2>&1; then "
+        "echo '(ss unavailable; raw netstat output)'; netstat -tulpn 2>&1; "
         "else echo 'Neither ss nor netstat is available on this host.' >&2; exit 1; fi"
     )

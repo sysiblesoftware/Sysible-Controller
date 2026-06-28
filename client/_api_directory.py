@@ -314,6 +314,8 @@ def cmd_configure_ldap_client(server: str, base_dn: str, use_ldaps: bool = True)
         raise ValueError("LDAP server must be a hostname or IP.")
     if not base_dn:
         raise ValueError("Base DN is required (e.g. dc=example,dc=com).")
+    if "\n" in base_dn or "\r" in base_dn:
+        raise ValueError("Base DN cannot span multiple lines.")
     scheme = "ldaps" if use_ldaps else "ldap"
     start_tls = "False" if use_ldaps else "True"
     conf = (
@@ -334,5 +336,5 @@ def cmd_configure_ldap_client(server: str, base_dn: str, use_ldaps: bool = True)
         "cat > /etc/sssd/sssd.conf <<'SYS_SSSD'\n" + conf + "SYS_SSSD\n"
         "chmod 600 /etc/sssd/sssd.conf && "
         "systemctl restart sssd 2>&1 && systemctl enable sssd 2>/dev/null; "
-        f"echo 'Configured SSSD for {scheme}://{server} (base {base_dn}) and restarted SSSD.'"
+        f"printf 'Configured SSSD for {scheme}://%s (base %s) and restarted SSSD.\\n' {shlex.quote(server)} {shlex.quote(base_dn)}"
     )

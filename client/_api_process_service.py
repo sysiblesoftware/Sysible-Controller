@@ -270,14 +270,17 @@ def cmd_troubleshoot_service(name: str) -> str:
     status, whether it shows up in systemd's --failed list, and its
     last 100 log lines."""
     unit = shlex.quote(_service_unit(name))
-    plain_name = _service_unit(name)
+    # The service name is free text (_service_unit doesn't restrict the
+    # charset), so it must be quoted everywhere - including the informational
+    # echo headers, where a single quote would otherwise break out and run as
+    # root. printf '%s' with the quoted unit keeps the headers safe.
     return (
-        f"echo '== systemctl status {plain_name} ==' && "
+        f"printf '== systemctl status %s ==\\n' {unit} && "
         f"systemctl status {unit} --no-pager -l 2>&1; "
         f"echo && echo '== Currently in the --failed list? ==' && "
         f"(systemctl --failed --no-legend 2>/dev/null | grep -F {unit} "
         "|| echo 'Not currently in the failed list.'); "
-        f"echo && echo '== Last 100 log lines (journalctl -u {plain_name}) ==' && "
+        f"printf '\\n== Last 100 log lines (journalctl -u %s) ==\\n' {unit} && "
         f"journalctl -u {unit} -n 100 --no-pager 2>&1"
     )
 

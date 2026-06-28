@@ -9,7 +9,6 @@ from client.dashboard_card import DashboardCard
 from client.host_enrollment_page import HostEnrollmentPage
 from client.admin_configuration_page import AdminConfigurationPage
 from client.remote_administration_page import RemoteAdministrationPage
-from client.webserver_portal_page import WebserverPortalPage
 from client.system_administration_page import SystemAdministrationPage
 from client.live_log_page import LiveLogPage
 from client.branding import LOGO_PATH
@@ -173,9 +172,6 @@ class HomeWindow(QWidget):
              "file upload & download, run a script on all hosts, plus fleet power controls: "
              "reboot, power off, or restart the agent everywhere.",
              self.open_remote, "fa5s.terminal", "purple", False),
-            ("Webserver Portal Configuration",
-             "Run the host-facing portal for agent downloads and file transfers.",
-             self.open_portal, "fa5s.globe", "coral", True),
             ("System Administration",
              "User & group administration and system health/log checks across agent and SSH hosts.",
              self.open_system_admin, "fa5s.th-large", "amber", False),
@@ -205,7 +201,6 @@ class HomeWindow(QWidget):
         self.host_window = None
         self.admin_config_window = None
         self.remote_window = None
-        self.portal_window = None
         self.system_admin_window = None
         self.live_log_window = None
 
@@ -312,11 +307,10 @@ class HomeWindow(QWidget):
         return self.remote_window
 
     def open_portal(self):
-        if self.portal_window is None:
-            self.portal_window = WebserverPortalPage()
-        self.portal_window.show()
-        self.portal_window.raise_()
-        return self.portal_window
+        # The Webserver Portal admin is now embedded in the Host Enrollment
+        # page (parity with the web console), so there's no standalone portal
+        # window - feature-search "Webserver Portal" jumps there instead.
+        return self.open_hosts()
 
     def open_live_log(self):
         if self.live_log_window is None:

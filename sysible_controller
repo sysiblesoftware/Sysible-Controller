@@ -7,7 +7,7 @@
 # business being a systemd service - it's one human's desktop app,
 # not a daemon.
 #
-# Usage: sysible_controller {start|stop|restart|status|logs|gui|destroy}
+# Usage: sysible_controller {start|stop|restart|status|logs|gui|webgui|reset-admin|enable-remote-gui|disable-remote-gui|destroy}
 
 BASE="/opt/sysible"
 VENV="$BASE/venv"
@@ -82,11 +82,23 @@ _fetch_api_key() {
 
   if [[ $EUID -eq 0 ]]; then
     SYSIBLE_API_KEY="$(cat "$BASE/api_key.txt" 2>/dev/null)"
-  elif command -v pkexec >/dev/null 2>&1; then
-    SYSIBLE_API_KEY="$(pkexec cat "$BASE/api_key.txt" 2>/dev/null)"
   else
-    echo "Run as root, or install pkexec, to read $BASE/api_key.txt: sudo sysible_controller gui"
-    exit 1
+    # One-shot elevation just for this read - the Qt GUI itself still runs
+    # unprivileged on the caller's own $DISPLAY. pkexec suits a graphical
+    # desktop (polkit's agent draws the prompt), but a remote SSH/PuTTY
+    # session usually has no such agent, so fall back to sudo, which prompts
+    # in the terminal instead. This is what makes `sysible_controller gui`
+    # work over an X11-forwarded SSH session, not just at the local console.
+    if command -v pkexec >/dev/null 2>&1; then
+      SYSIBLE_API_KEY="$(pkexec cat "$BASE/api_key.txt" 2>/dev/null)"
+    fi
+    if [[ -z "$SYSIBLE_API_KEY" ]] && command -v sudo >/dev/null 2>&1; then
+      SYSIBLE_API_KEY="$(sudo cat "$BASE/api_key.txt" 2>/dev/null)"
+    fi
+    if [[ -z "$SYSIBLE_API_KEY" ]]; then
+      echo "Run as root, or install pkexec/sudo, to read $BASE/api_key.txt: sudo sysible_controller gui"
+      exit 1
+    fi
   fi
 
   if [[ -z "$SYSIBLE_API_KEY" ]]; then
@@ -179,6 +191,36 @@ _stop_gui() {
 }
 
 # =========================================================
+# WEB CONSOLE (browser-based, headless-friendly GUI)
+# Managed by backend/webgui_manager.py - which handles building the front
+# end, the persistent cookie secret, TLS (reusing the controller's own
+# cert), health-gated startup, and stop. We drive it from the same venv the
+# backend uses so it can import the controller's client.* modules. This is
+# what gives a headless controller a GUI: a browser, not a desktop app.
+# Best-effort: a web-console hiccup never blocks the controller itself.
+# Set SYSIBLE_WEBGUI=0 to opt out of auto-start.
+# =========================================================
+# The web console runs as its own systemd service (sysible-webgui), separate
+# from the backend and the desktop GUI, so it can be started/stopped on its own.
+WEBGUI_SERVICE="sysible-webgui"
+
+_start_webgui() {
+  if ! systemctl list-unit-files "${WEBGUI_SERVICE}.service" >/dev/null 2>&1 \
+     || ! systemctl cat "${WEBGUI_SERVICE}.service" >/dev/null 2>&1; then
+    echo "Web console service not installed. Run 'sudo $BASE/install_sysible.sh' first."
+    return 1
+  fi
+  echo "Starting web console (${WEBGUI_SERVICE})..."
+  systemctl enable --now "${WEBGUI_SERVICE}.service" 2>/dev/null
+  local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  echo "  Web console: https://${ip:-<this-host>}:8800/"
+}
+
+_stop_webgui() {
+  systemctl disable --now "${WEBGUI_SERVICE}.service" >/dev/null 2>&1 || true
+}
+
+# =========================================================
 # Readiness wait + "is this actually current code" self-check -
 # needed since systemd reporting the unit as "active" only means the
 # process launched, not that uvicorn finished binding and serving
@@ -216,15 +258,19 @@ cmd_start() {
   echo "Starting $SERVICE..."
   systemctl start "$SERVICE"
   _wait_for_backend
-  _start_gui
 
   echo ""
-  echo "Sysible Controller is running. 'sysible_controller status' to check, 'sysible_controller logs' to tail the backend."
+  echo "Controller backend is running. The web console and desktop GUI are"
+  echo "separate services, started on their own:"
+  echo "   Web console : sudo sysible_controller webgui start"
+  echo "   Desktop GUI : sysible_controller gui"
+  echo "'sysible_controller status' to check, 'sysible_controller logs' to tail the backend."
 }
 
 cmd_stop() {
   _require_root stop
 
+  _stop_webgui
   _stop_gui
 
   echo "Stopping $SERVICE..."
@@ -258,8 +304,20 @@ cmd_stop() {
 
 cmd_restart() {
   _require_root restart
+
+  # Remember whether the web console was up, so a full restart brings it back
+  # instead of silently leaving it down (cmd_stop stops it as part of cleanup).
+  local webgui_was_up=0
+  systemctl is-active --quiet "${WEBGUI_SERVICE}.service" && webgui_was_up=1
+
   cmd_stop
   cmd_start
+
+  if [[ "$webgui_was_up" == "1" ]]; then
+    echo ""
+    echo "Restarting the web console (it was running before)..."
+    _start_webgui
+  fi
 }
 
 cmd_status() {
@@ -270,6 +328,16 @@ cmd_status() {
   else
     echo "GUI client: not running (see $GUI_LOG_FILE for the last launch attempt's output, if any)"
   fi
+  "$VENV/bin/python" - "$BASE" 2>/dev/null <<'PY' || true
+import sys
+sys.path.insert(0, sys.argv[1])
+from backend import webgui_manager as m
+s = m.status()
+if s.get("running"):
+    print(f"Web console: running ({s.get('scheme')} port {s.get('port')}, PID {s.get('pid')})")
+else:
+    print("Web console: not running")
+PY
 }
 
 cmd_logs() {
@@ -282,15 +350,210 @@ cmd_gui() {
   _start_gui
 }
 
+cmd_webgui() {
+  # Manual control of the browser-based console, independent of the
+  # controller's own start/stop. Root: it reads the TLS key and writes its
+  # pid/secret under $RUN_DIR, same as the backend.
+  case "$2" in
+    start)
+      _require_root "webgui start"
+      _start_webgui
+      ;;
+    stop)
+      _require_root "webgui stop"
+      _stop_webgui
+      echo "Web console stopped."
+      ;;
+    restart)
+      _require_root "webgui restart"
+      _stop_webgui
+      _start_webgui
+      ;;
+    status|"")
+      if systemctl is-active --quiet "${WEBGUI_SERVICE}.service"; then
+        ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+        echo "Web console: running (${WEBGUI_SERVICE}) -> https://${ip:-<this-host>}:8800/"
+      else
+        echo "Web console: not running. Start it with 'sysible_controller webgui start'."
+      fi
+      systemctl status "${WEBGUI_SERVICE}.service" --no-pager 2>/dev/null | head -5 || true
+      ;;
+    logs)
+      journalctl -u "${WEBGUI_SERVICE}.service" -n 50 --no-pager
+      ;;
+    *)
+      echo "Usage: sysible_controller webgui {start|stop|restart|status|logs}"
+      exit 1
+      ;;
+  esac
+}
+
+cmd_reset_admin() {
+  # Set (or create) a web-console administrator's password. Use when the
+  # default install-time admin was skipped (admins already existed) or the
+  # password was lost. Username defaults to 'admin'; password is generated
+  # unless given. Prints the credentials once.
+  _require_root "reset-admin"
+  local user="${2:-admin}"
+  local pass="$3"
+  local out
+  out="$("$VENV/bin/python" - "$BASE" "$user" "$pass" <<'PY' 2>/dev/null
+import sys, secrets
+sys.path.insert(0, sys.argv[1])
+from backend.db import add_administrator, update_administrator_password, list_administrators
+from backend import portal_auth
+user = sys.argv[2] or "admin"
+pw = sys.argv[3] or secrets.token_urlsafe(9)
+salt, h = portal_auth.hash_password(pw)
+existing = {a.get("username") for a in list_administrators()}
+if user in existing:
+    update_administrator_password(user, h, salt, must_change_password=1)
+    print(f"reset\t{user}\t{pw}")
+else:
+    add_administrator(user, h, salt, must_change_password=1, created_by="reset-admin", role="superuser")
+    print(f"created\t{user}\t{pw}")
+PY
+)"
+  if [[ -z "$out" ]]; then
+    echo "ERROR: could not reset the admin (is the controller installed at $BASE?)."
+    exit 1
+  fi
+  local action u p
+  action="$(echo "$out" | cut -f1)"; u="$(echo "$out" | cut -f2)"; p="$(echo "$out" | cut -f3)"
+  local R='\033[1;91m' Z='\033[0m'   # bold bright red / reset
+  echo "==================================================================="
+  echo -e "${R} Web console admin ${action}:${Z}"
+  echo -e "${R}     username:  $u${Z}"
+  echo -e "${R}     password:  $p${Z}"
+  echo -e "${R} Log in at the web console, then change it (Settings -> My Account).${Z}"
+  echo "==================================================================="
+}
+
+# =========================================================
+# REMOTE GUI ACCESS (SSH X11 forwarding)
+# Lets an admin run the Sysible Controller GUI over an SSH session - the
+# window renders on the admin's own machine - so a Windows admin can use
+# the full GUI through PuTTY (with an X server like VcXsrv) instead of
+# installing the client on Windows. This is opt-in: a base install does
+# NOT touch sshd, since enabling X11 forwarding is a security-posture
+# choice the operator should make deliberately.
+# =========================================================
+_install_xauth() {
+  # xauth is what sshd uses to set up the forwarded display's cookie; with
+  # it missing, X11 forwarding silently fails with "cannot open display".
+  command -v xauth >/dev/null 2>&1 && return 0
+  echo "Installing xauth (needed for SSH X11 forwarding)..."
+  if command -v dnf >/dev/null 2>&1; then dnf install -y xorg-x11-xauth
+  elif command -v yum >/dev/null 2>&1; then yum install -y xorg-x11-xauth
+  elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install -y xauth
+  elif command -v apt-get >/dev/null 2>&1; then apt-get install -y xauth
+  else return 1; fi
+}
+
+_install_qt_xcb_deps() {
+  # Qt 6.5+ (PySide6, which the GUI uses) refuses to load its 'xcb' platform
+  # plugin without libxcb-cursor - the GUI then dies with "Could not load the
+  # Qt platform plugin xcb" no matter how good the display is. On a headless
+  # controller the GUI is normally never run locally, so this runtime dep is
+  # often absent until someone runs it over a forwarded X session. Best-effort
+  # so a packaging quirk never aborts enabling remote GUI.
+  echo "Ensuring the Qt xcb cursor library is present (needed by the GUI over X)..."
+  if command -v dnf >/dev/null 2>&1; then dnf install -y xcb-util-cursor
+  elif command -v yum >/dev/null 2>&1; then yum install -y xcb-util-cursor
+  elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install -y libxcb-cursor0
+  elif command -v apt-get >/dev/null 2>&1; then apt-get install -y libxcb-cursor0
+  else echo "NOTE: install your distro's libxcb-cursor0 / xcb-util-cursor by hand if the GUI won't start."; fi
+}
+
+_reload_sshd() {
+  systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null \
+    || systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null \
+    || echo "NOTE: could not reload the SSH service automatically - reload it yourself for the change to take effect."
+}
+
+_sshd_set_x11() {  # $1 = yes|no
+  local cfg=/etc/ssh/sshd_config val="$1"
+  if [[ ! -f "$cfg" ]]; then
+    echo "No $cfg found - is an SSH server (openssh-server) installed on this controller?"
+    return 1
+  fi
+  # One-time backup before we ever edit it, so the original is recoverable.
+  [[ -f "$cfg.sysible.bak" ]] || cp "$cfg" "$cfg.sysible.bak" 2>/dev/null || true
+  # sshd takes the FIRST value of a keyword, so edit the first existing
+  # (possibly commented) X11Forwarding line in place rather than appending a
+  # second one that would be ignored. Append only if none exists at all.
+  if grep -Eq '^[[:space:]]*#?[[:space:]]*X11Forwarding\b' "$cfg"; then
+    sed -ri "0,/^[[:space:]]*#?[[:space:]]*X11Forwarding\b.*/s//X11Forwarding $val/" "$cfg"
+  else
+    printf '\n# Added by sysible_controller enable-remote-gui\nX11Forwarding %s\n' "$val" >> "$cfg"
+  fi
+}
+
+cmd_enable_remote_gui() {
+  _require_root enable-remote-gui
+  echo "Enabling remote GUI access (SSH X11 forwarding)..."
+  _install_xauth || echo "WARNING: could not install xauth automatically - install it by hand, or X11 forwarding will fail."
+  command -v xauth >/dev/null 2>&1 || echo "NOTE: xauth is still not present; forwarding won't work until it is."
+  _install_qt_xcb_deps
+  _sshd_set_x11 yes || exit 1
+  _reload_sshd
+  cat <<'MSG'
+
+Remote GUI access is ENABLED.
+
+A Windows admin can now use the Sysible Controller GUI without installing
+it on Windows:
+  1. Install and start an X server on Windows (VcXsrv or X410). Start it on
+     display 0 ("Multiple windows", "Disable access control") and leave it
+     running. (Tip: MobaXterm bundles an X server + SSH and needs no setup.)
+  2. In PuTTY: Connection > SSH > X11 > tick "Enable X11 forwarding",
+     then open a session to this controller as a normal admin user.
+  3. At the shell prompt, run:   sysible_controller gui
+     NOT with sudo - the GUI must run as your own user so it can use your
+     forwarded display (sudo runs it as root, which has no X cookie -> the
+     window never appears). It will prompt once for your password just to
+     read the API key; that's expected. Keep the session open while you use
+     it - closing it closes the window.
+
+Verify forwarding before launching:  echo $DISPLAY  should show
+localhost:10.0 (not empty, not :0), and  xeyes  should open a window.
+
+Linux/macOS admins can do the same with:  ssh -Y user@<controller>
+then  sysible_controller gui  (macOS needs XQuartz running locally).
+
+To turn this back off:  sudo sysible_controller disable-remote-gui
+MSG
+}
+
+cmd_disable_remote_gui() {
+  _require_root disable-remote-gui
+  echo "Disabling remote GUI access (SSH X11 forwarding)..."
+  _sshd_set_x11 no || exit 1
+  _reload_sshd
+  echo "Remote GUI access is DISABLED. (xauth, if installed, was left in place.)"
+}
+
 cmd_destroy() {
   _require_root destroy
 
+  # --purge: also remove the leftover DB backup(s) in /tmp and the source
+  # checkout the installer was run from (recorded at install time). Captured
+  # here, before $BASE is deleted below.
+  local PURGE=0
+  [[ "$2" == "--purge" ]] && PURGE=1
+  local SRC=""
+  [[ -f "$BASE/.install_src" ]] && SRC="$(cat "$BASE/.install_src" 2>/dev/null)"
+
   echo "==================================================================="
   echo " THIS WILL PERMANENTLY REMOVE SYSIBLE FROM THIS MACHINE:"
-  echo "   - stop and disable the $SERVICE systemd service"
+  echo "   - stop and disable the $SERVICE and ${WEBGUI_SERVICE} services"
   echo "   - delete $BASE (database, TLS certificate, admin API key -"
   echo "     everything)"
   echo "   - remove this 'sysible_controller' command"
+  if [[ "$PURGE" == "1" ]]; then
+    echo "   - PURGE: also delete /tmp DB backups and the source checkout"
+    [[ -n "$SRC" ]] && echo "            ($SRC)"
+  fi
   echo ""
   echo " Enrolled hosts' agents are NOT touched by this - their own"
   echo " sysible-agent systemd services keep running and will just start"
@@ -310,17 +573,27 @@ cmd_destroy() {
 
   echo "Disabling and removing $SERVICE..."
   systemctl disable --now "$SERVICE" 2>/dev/null
-  rm -f "/etc/systemd/system/$SERVICE.service"
+  systemctl disable --now "${WEBGUI_SERVICE}.service" 2>/dev/null
+  rm -f "/etc/systemd/system/$SERVICE.service" "/etc/systemd/system/${WEBGUI_SERVICE}.service"
   systemctl daemon-reload
 
   DB_FILE="$BASE/backend/sysible.db"
-  if [[ -f "$DB_FILE" ]]; then
+  if [[ -f "$DB_FILE" && "$PURGE" != "1" ]]; then
     BACKUP="/tmp/sysible-backup-$(date +%Y%m%d%H%M%S).db"
     cp -f "$DB_FILE" "$BACKUP" 2>/dev/null && echo "Database backed up to $BACKUP (this copy is left behind on purpose - delete it yourself once you're sure you don't need it)."
   fi
 
   echo "Removing $BASE..."
   rm -rf "$BASE"
+
+  if [[ "$PURGE" == "1" ]]; then
+    echo "Purging leftover DB backups in /tmp..."
+    rm -f /tmp/sysible-backup-*.db
+    if [[ -n "$SRC" && -d "$SRC" && "$SRC" != "/" && "$SRC" != "$BASE" && "$SRC" != "$HOME" ]]; then
+      echo "Removing source checkout $SRC..."
+      rm -rf "$SRC"
+    fi
+  fi
 
   # $BASE covers everything installed under it, but the application
   # menu launcher lives outside $BASE in the system-wide applications
@@ -391,9 +664,13 @@ case "$1" in
   status)  cmd_status ;;
   logs)    cmd_logs ;;
   gui)     cmd_gui ;;
+  webgui)  cmd_webgui "$@" ;;
+  reset-admin) cmd_reset_admin "$@" ;;
+  enable-remote-gui)  cmd_enable_remote_gui ;;
+  disable-remote-gui) cmd_disable_remote_gui ;;
   destroy) cmd_destroy ;;
   *)
-    echo "Usage: sysible_controller {start|stop|restart|status|logs|gui|destroy}"
+    echo "Usage: sysible_controller {start|stop|restart|status|logs|gui|webgui|reset-admin|enable-remote-gui|disable-remote-gui|destroy}"
     exit 1
     ;;
 esac

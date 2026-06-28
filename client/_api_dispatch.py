@@ -193,7 +193,8 @@ def _dedupe_same_ip(entries):
     return result
 
 
-def run_on_entry(entry, command: str, kind: str = "command", description: str = None):
+def run_on_entry(entry, command: str, kind: str = "command", description: str = None,
+                 become_password: str = None):
     """Run `command` on one merged-host entry (as produced by
     list_merged_hosts()). SSH executes synchronously over exec_remote()
     - the result is ready immediately. Agent dispatch is async - only a
@@ -209,18 +210,28 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
     """
     entry = _underlying_entry(entry)
 
-    # For a host flagged 'password sudo', supply the operator's stored sudo
-    # password so the agent can elevate via `sudo -S` (no NOPASSWD needed).
-    # Looked up per host with a global fallback; None for NOPASSWD hosts, so
-    # the password is never sent to a host that doesn't need it.
-    become_password = None
-    if entry.get("requires_sudo_password"):
+    # Resolve the sudo (become) password.
+    #
+    # If the caller already supplied one - e.g. the web console resolves it from
+    # its controller-side store and passes it in - ALWAYS honour it; never
+    # discard it. Only when none was supplied do we fall back to the desktop's
+    # workstation-local store, and only for a host flagged password-sudo.
+    #
+    # The previous code did `else: become_password = None`, which silently
+    # zeroed ANY caller-supplied password whenever this entry's flag was
+    # missing/stale - and SSH (and merged-resolved-to-SSH) entries never carried
+    # the flag. That's exactly what broke the web console: the password was
+    # resolved correctly upstream, then thrown away here. Passing a password to a
+    # host that doesn't need it is harmless - the agent's `sudo -S` just ignores
+    # it under NOPASSWD - so honouring an explicit password is always safe.
+    if not become_password and entry.get("requires_sudo_password"):
         try:
             from client import become_credentials
             become_password = become_credentials.get_password(entry.get("label", ""))
         except Exception:
             become_password = None
 
+    if entry.get("requires_sudo_password"):
         # Fail fast with a clear instruction instead of dispatching a command
         # that will just bounce off `sudo` for lack of a password. This host is
         # marked "sudo requires a password" but none is stored for the

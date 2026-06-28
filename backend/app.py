@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 import json
 import secrets
@@ -93,6 +93,7 @@ from backend.models.portal_models import (
     ChangeAdminCredentialsRequest,
     AddAdministratorRequest,
     ForcePasswordChangeRequest,
+    ResetAdministratorPasswordRequest,
 )
 from backend.models.policy_models import (
     SetEnvironmentalPolicyRequest,
@@ -471,9 +472,11 @@ def _describe_command(command: str) -> str:
 
 
 @app.get("/agents/{host_id}/tasks")
-def poll_agent_tasks(host_id: str, agent_secret: str):
-
-    verify_agent(host_id, agent_secret)
+def poll_agent_tasks(host_id: str, agent_secret: str = "",
+                     x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
+    # Prefer the header (kept out of URLs/access logs); fall back to the query
+    # param so already-deployed agents keep working.
+    verify_agent(host_id, x_agent_secret or agent_secret)
 
     tasks = fetch_pending_tasks(host_id)
     # Attach any RAM-held become-password to its task, exactly once. Only this
@@ -1194,9 +1197,11 @@ def admin_logout(request: Request):
     return {"status": "ok"}
 
 
-@app.get("/admin/administrators", dependencies=[Depends(require_api_key)])
+@app.get("/admin/administrators", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def list_administrators_route():
-    """Username, account metadata only - never password hash/salt."""
+    """Username, account metadata only - never password hash/salt.
+    Superuser-gated: the administrator roster is a superuser surface (a
+    sysadmin has no business enumerating the other admins and their roles)."""
 
     return {"administrators": list_administrators()}
 
@@ -1326,9 +1331,36 @@ def force_admin_password_change(body: ForcePasswordChangeRequest):
     return {"username": body.username, "status": "updated"}
 
 
-@app.get("/admin/audit-log", dependencies=[Depends(require_api_key)])
-def get_admin_audit_log_route(limit: int = 200):
+@app.post("/admin/administrators/{username}/password",
+          dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def reset_administrator_password_route(username: str, body: ResetAdministratorPasswordRequest):
+    """Superuser resets ANOTHER administrator's password without knowing the
+    target's current password. The target must change it on next login."""
 
+    admin = get_administrator(username)
+
+    if admin is None:
+        raise HTTPException(status_code=404, detail="No such administrator")
+
+    if not body.new_password:
+        raise HTTPException(status_code=400, detail="Password cannot be empty")
+
+    ok, message = validate_password_against_policy(body.new_password, get_admin_password_policy())
+    if not ok:
+        raise HTTPException(status_code=400, detail=message)
+
+    salt, password_hash = portal_auth.hash_password(body.new_password)
+    update_administrator_password(username, password_hash, salt, must_change_password=1)
+
+    log_admin_audit("password_reset", username,
+                    f"reset by {body.actor}" if body.actor else "reset by superuser")
+
+    return {"username": username, "status": "reset"}
+
+
+@app.get("/admin/audit-log", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def get_admin_audit_log_route(limit: int = 200):
+    # Superuser-gated: login attempts and administrator-account changes.
     return {"entries": get_admin_audit_log(limit)}
 
 

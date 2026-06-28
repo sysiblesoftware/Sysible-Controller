@@ -9,12 +9,14 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QComboBox,
     QInputDialog,
+    QLineEdit,
     QTextEdit,
     QMessageBox,
     QFileDialog,
     QAbstractItemView,
     QGroupBox,
     QApplication,
+    QScrollArea,
 )
 
 from client import api
@@ -57,7 +59,18 @@ class HostEnrollmentPage(QWidget):
         self.disenroll_poll_timer = QTimer()
         self.disenroll_poll_timer.timeout.connect(self._poll_disenroll)
 
-        layout = QVBoxLayout()
+        # Scroll-wrap the whole page: with the full Webserver Portal admin now
+        # inline (credentials, login history, sessions, file pools) the page is
+        # tall, so it scrolls like Settings rather than overflowing the window.
+        _outer = QVBoxLayout()
+        self.setLayout(_outer)
+        _scroll = QScrollArea()
+        _scroll.setWidgetResizable(True)
+        _scroll.setFrameShape(QScrollArea.NoFrame)
+        _outer.addWidget(_scroll)
+        _content = QWidget()
+        layout = QVBoxLayout(_content)
+        _scroll.setWidget(_content)
 
         # =====================================================
         # TITLE
@@ -103,6 +116,23 @@ class HostEnrollmentPage(QWidget):
         # the portal must be running with login credentials set (configure
         # that on the Webserver Portal page).
         # =====================================================
+        # =====================================================
+        # WEBSERVER PORTAL (full admin, inline)
+        # The portal serves the agent bundle the curl one-liner below downloads
+        # (its /cli/bundle endpoint) and the host-operator file pools. Its
+        # complete administration - status, port, login credentials, login
+        # history, sessions, and file pools - is embedded here so Host
+        # Enrollment is one page (parity with the web console), instead of a
+        # separate "Webserver Portal Configuration" window.
+        # =====================================================
+        portal_label = QLabel("Webserver Portal")
+        portal_label.setStyleSheet("font-size:18px;font-weight:bold;")
+        layout.addWidget(portal_label)
+
+        from client.webserver_portal_page import WebserverPortalPage
+        self.portal_panel = WebserverPortalPage(embedded=True)
+        layout.addWidget(self.portal_panel)
+
         curl_label = QLabel("Command-Line Bundle Download (curl)")
         curl_label.setStyleSheet("font-size:18px;font-weight:bold;")
         layout.addWidget(curl_label)
@@ -253,8 +283,6 @@ class HostEnrollmentPage(QWidget):
         theme.style_hint_label(self.disenroll_status)
         layout.addWidget(self.disenroll_status)
 
-        self.setLayout(layout)
-
         bus.host_removed.connect(self.refresh)
 
         self.refresh()
@@ -328,6 +356,10 @@ class HostEnrollmentPage(QWidget):
             QMessageBox.critical(self, "Error", str(e))
             return
 
+        try:
+            self.portal_panel.refresh()
+        except Exception:
+            pass
         self._refresh_curl_command()
         self._populate_combo()
         self._update_env_sudo_label()
@@ -533,7 +565,7 @@ class HostEnrollmentPage(QWidget):
             config = {}
 
         host = config.get("address") or "<this machine's address>"
-        port = status.get("configured_port") or status.get("port") or 443
+        port = status.get("configured_port") or status.get("port") or 8090
         user = status.get("username") if status.get("credentials_configured") else "<username>"
 
         self.curl_text.setPlainText(

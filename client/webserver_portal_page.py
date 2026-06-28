@@ -47,11 +47,17 @@ class WebserverPortalPage(QWidget):
     manage the username/password a remote host operator logs in with
     to download an agent bundle."""
 
-    def __init__(self):
+    def __init__(self, embedded=False):
         super().__init__()
 
-        self.setWindowTitle("Webserver Portal Configuration")
-        self.resize(820, 760)
+        # `embedded`: rendered inline inside the Host Enrollment page (which
+        # supplies its own page header + scroll area) rather than as a
+        # standalone window. In that mode we add our sections straight to our
+        # own layout, with no title/header/scroll chrome of our own.
+        self._embedded = embedded
+        if not embedded:
+            self.setWindowTitle("Webserver Portal Configuration")
+            self.resize(820, 760)
 
         # Whether the Reset Login Credentials form below needs to
         # require + verify a current password - true once any
@@ -59,29 +65,34 @@ class WebserverPortalPage(QWidget):
         # never had any (see refresh()).
         self._credentials_configured = False
 
-        outer = QVBoxLayout()
-        self.setLayout(outer)
+        if embedded:
+            layout = QVBoxLayout()
+            layout.setContentsMargins(0, 0, 0, 0)
+            self.setLayout(layout)
+        else:
+            outer = QVBoxLayout()
+            self.setLayout(outer)
 
-        outer.addLayout(make_page_header("Webserver Portal Configuration", font_size=22, logo_height=32))
+            outer.addLayout(make_page_header("Webserver Portal Configuration", font_size=22, logo_height=32))
 
-        # Everything below the title lives inside a scroll area instead
-        # of directly in the page's layout. With 8 stacked sections (two
-        # of them tables) and no explicit size here before, the window's
-        # natural minimum height came out taller than most screens - the
-        # maximize button had no room left to expand into (looked dead)
-        # and dragging the border down hit that same oversized minimum
-        # almost immediately (looked unresizable). Wrapping the content
-        # in a QScrollArea, like Sysible Controller Settings and the other long
-        # stacked pages already do, decouples the window's size from the
-        # content's total height.
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        outer.addWidget(scroll)
+            # Everything below the title lives inside a scroll area instead
+            # of directly in the page's layout. With 8 stacked sections (two
+            # of them tables) and no explicit size here before, the window's
+            # natural minimum height came out taller than most screens - the
+            # maximize button had no room left to expand into (looked dead)
+            # and dragging the border down hit that same oversized minimum
+            # almost immediately (looked unresizable). Wrapping the content
+            # in a QScrollArea, like Sysible Controller Settings and the other long
+            # stacked pages already do, decouples the window's size from the
+            # content's total height.
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QScrollArea.NoFrame)
+            outer.addWidget(scroll)
 
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        scroll.setWidget(content)
+            content = QWidget()
+            layout = QVBoxLayout(content)
+            scroll.setWidget(content)
 
         warning = QLabel(
             "The portal serves HTTPS using the same self-signed cert as\n"

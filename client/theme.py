@@ -263,19 +263,19 @@ QHeaderView::section {
 }
 
 QPushButton {
-    background-color: #2F6FED;
+    background-color: #3C4B64;
     color: white;
-    border: 1px solid #2557C7;
+    border: 1px solid #506080;
     border-radius: 5px;
     padding: 6px;
 }
 
 QPushButton:hover {
-    background-color: #4C84F0;
+    background-color: #4C6285;
 }
 
 QPushButton:pressed {
-    background-color: #2557C7;
+    background-color: #23395D;
 }
 
 QGroupBox {
@@ -557,5 +557,21 @@ def set_theme_mode(mode):
     if app is not None:
         apply_theme(app, mode)
 
+    # Notify every live listener. Wrap each call so one failing listener can't
+    # halt the rest - the classic symptom is a widget from a closed window whose
+    # underlying C++ object is gone (RuntimeError), which previously stopped the
+    # loop early and left everything registered after it (e.g. the dashboard
+    # cards) stuck on the old mode's colors. Drop dead listeners as we find them.
+    dead = []
     for callback in list(_theme_listeners):
-        callback()
+        try:
+            callback()
+        except RuntimeError:
+            dead.append(callback)
+        except Exception:
+            pass
+    for callback in dead:
+        try:
+            _theme_listeners.remove(callback)
+        except ValueError:
+            pass

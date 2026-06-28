@@ -98,7 +98,7 @@ def cmd_mount_nfs(server: str, export_path: str, mount_point: str,
     cmd = (
         "if ! command -v mount.nfs >/dev/null 2>&1 && ! ls /sbin/mount.nfs* >/dev/null 2>&1; then "
         "echo 'NFS client not installed - install nfs-common (Debian/Ubuntu) or nfs-utils (RHEL/SUSE) first.' >&2; exit 1; fi; "
-        f"mkdir -p {q_mnt} && mount -t nfs -o {q_opts} {q_src} {q_mnt} && echo 'Mounted {src} at {mount_point}.'"
+        f"mkdir -p {q_mnt} && mount -t nfs -o {q_opts} {q_src} {q_mnt} && printf 'Mounted %s at %s.\\n' {q_src} {q_mnt}"
     )
     if persist:
         fstab_line = f"{src} {mount_point} nfs {opts} 0 0"
@@ -125,9 +125,13 @@ def cmd_mount_cifs(server: str, share: str, mount_point: str, username: str = ""
         raise ValueError("Share name is required (the part after //server/).")
     unc = f"//{server}/{share}"
     opts = (options or "").strip()
-    extra = f",{opts}" if opts else ""
+    extra = f",{opts}" if opts else ""   # for the fstab line only (whole line is shlex-quoted below)
     q_unc, q_mnt = shlex.quote(unc), shlex.quote(mount_point)
     q_user, q_pass = shlex.quote(username or "guest"), shlex.quote(password or "")
+    # User-supplied mount options must NOT be inlined into the mount command
+    # raw - a space/';' in them would otherwise run arbitrary code as root.
+    # Carry them through a single-quoted shell var and append to -o only if set.
+    q_opts = shlex.quote(opts)
     pre = (
         "if ! command -v mount.cifs >/dev/null 2>&1 && ! ls /sbin/mount.cifs >/dev/null 2>&1; then "
         "echo 'CIFS client not installed - install cifs-utils first.' >&2; exit 1; fi; "
@@ -141,8 +145,8 @@ def cmd_mount_cifs(server: str, share: str, mount_point: str, username: str = ""
             pre +
             f"mkdir -p /etc/sysible-cifs && cred={q_cred}; "
             f"printf 'username=%s\\npassword=%s\\n' {q_user} {q_pass} > \"$cred\" && chmod 600 \"$cred\"; "
-            f"mount -t cifs -o credentials=\"$cred\"{extra} {q_unc} {q_mnt} && "
-            f"echo 'Mounted {unc} at {mount_point}.' && "
+            f"O={q_opts}; mount -t cifs -o \"credentials=$cred${{O:+,$O}}\" {q_unc} {q_mnt} && "
+            f"printf 'Mounted %s at %s.\\n' {q_unc} {q_mnt} && "
             f"{{ grep -qsF {shlex.quote(mount_point + ' cifs')} /etc/fstab "
             f"|| printf '%s\\n' {shlex.quote(fstab_line)} >> /etc/fstab; echo 'Persisted to /etc/fstab.'; }}"
         )
@@ -150,8 +154,8 @@ def cmd_mount_cifs(server: str, share: str, mount_point: str, username: str = ""
         pre +
         "cred=$(mktemp) && chmod 600 \"$cred\"; "
         f"printf 'username=%s\\npassword=%s\\n' {q_user} {q_pass} > \"$cred\"; "
-        f"mount -t cifs -o credentials=\"$cred\"{extra} {q_unc} {q_mnt}; rc=$?; rm -f \"$cred\"; "
-        f"if [ \"$rc\" -eq 0 ]; then echo 'Mounted {unc} at {mount_point}.'; else echo 'CIFS mount failed.' >&2; exit \"$rc\"; fi"
+        f"O={q_opts}; mount -t cifs -o \"credentials=$cred${{O:+,$O}}\" {q_unc} {q_mnt}; rc=$?; rm -f \"$cred\"; "
+        f"if [ \"$rc\" -eq 0 ]; then printf 'Mounted %s at %s.\\n' {q_unc} {q_mnt}; else echo 'CIFS mount failed.' >&2; exit \"$rc\"; fi"
     )
 
 

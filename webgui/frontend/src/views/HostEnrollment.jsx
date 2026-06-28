@@ -134,9 +134,17 @@ export default function HostEnrollment() {
 
   async function disenrollChecked() {
     if (checked.length === 0) { setErr("Check one or more hosts first."); return; }
-    if (!window.confirm(`Disenroll ${checked.length} host(s)? Their agents keep running but stop being managed.`)) return;
-    await run(async () => { for (const id of checked) await api.removeHost(id); setChecked([]); },
-      `Disenrolled ${checked.length} host(s).`);
+    if (!window.confirm(`Disenroll ${checked.length} host(s)? If a host is online its agent service is stopped and removed first; if it's offline the enrollment is dropped here and you'll need to run disenroll_agent.sh on it directly.`)) return;
+    await run(async () => {
+      const warnings = [];
+      for (const id of checked) {
+        const r = await api.removeHost(id);
+        const t = r && r.teardown;
+        if (t && !t.ok) warnings.push(`${t.host || id}: ${t.error || t.stderr || "agent service teardown did not confirm"}`);
+      }
+      setChecked([]);
+      if (warnings.length) throw new Error("Disenrolled, but service teardown was not confirmed on:\n" + warnings.join("\n"));
+    }, `Disenrolled ${checked.length} host(s).`);
   }
 
   // curl one-liner (built from portal status + controller config)

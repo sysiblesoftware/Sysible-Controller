@@ -576,7 +576,60 @@ def set_host_environment(host_id: str, body: HostEnvRequest, request: Request,
 
 @app.delete("/api/host/{host_id}")
 def remove_host(host_id: str, request: Request, user: str = Depends(require_login)):
-    return _wrap(lambda: _as_admin(request, lambda: api.disenroll_agent(host_id) or {"removed": True}))
+    """Disenroll an agent host. Matches the desktop Host Enrollment "Remove"
+    flow (client/host_enrollment_page.py): first ask the host's agent to tear
+    down its own systemd service + files (cmd_uninstall_agent_service), then
+    drop the enrollment on the controller *regardless* of whether that teardown
+    succeeded. Without the teardown step the web console used to leave the agent
+    running and heartbeating with no controller record behind it.
+
+    Like the desktop, if the host is flagged password-sudo but the admin has no
+    stored sudo password, abort before disenrolling (there's nothing to elevate
+    the teardown with) and tell them how to proceed - rather than silently
+    dropping the record and orphaning a still-running service."""
+    token = _session_token(request)
+
+    # Find this host's agent dispatch entry so we can run the teardown on it.
+    # agent_only=True: the teardown is an agent-service action; an SSH-only
+    # "host" has no Sysible agent to uninstall.
+    try:
+        entry = next(
+            (e for e in dispatch.list_merged_hosts(agent_only=True)
+             if e.get("id") == host_id
+             or (e.get("agent_entry") or {}).get("id") == host_id),
+            None,
+        )
+    except Exception:
+        entry = None
+
+    teardown = None
+    if entry is not None:
+        agent_entry = entry.get("agent_entry") or entry
+        if agent_entry.get("requires_sudo_password") and not sudo_store.resolve(
+                user, entry.get("label", "")):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"'{entry.get('label', host_id)}' is set to require a sudo password, "
+                    "so tearing down its agent service needs your stored sudo password - "
+                    "but none is saved. Set it from the \"Sudo Password\" button in the "
+                    "header and disenroll again, or run disenroll_agent.sh on the host "
+                    "directly."
+                ),
+            )
+        become = sudo_store.resolve(user, entry.get("label", ""))
+        # Best-effort: a failed/timed-out teardown (e.g. the host is offline)
+        # must not block removing the enrollment record - mirror the desktop's
+        # "removed regardless" behaviour. Surface the outcome to the caller.
+        teardown = _dispatch_one(
+            agent_entry, api.cmd_uninstall_agent_service(), "command",
+            become, token, "Uninstall agent service (disenroll)")
+
+    result = _wrap(lambda: _as_admin(
+        request, lambda: api.disenroll_agent(host_id) or {"removed": True}))
+    if isinstance(result, dict):
+        result["teardown"] = teardown
+    return result
 
 
 class SudoRequiredRequest(BaseModel):

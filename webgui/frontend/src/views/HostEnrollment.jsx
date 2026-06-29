@@ -175,8 +175,11 @@ export default function HostEnrollment() {
         ))}
       </div>
 
-      {err && <div className="error-box">{err}</div>}
-      {msg && <div className="ok-text" style={{ marginBottom: 10 }}>{msg}</div>}
+      {/* On the Enrolled Hosts tab the status banner is rendered down in the
+          actions column instead (under the buttons that triggered it); other
+          tabs keep it here at the top. */}
+      {tab !== "hosts" && err && <div className="error-box">{err}</div>}
+      {tab !== "hosts" && msg && <div className="ok-text" style={{ marginBottom: 10 }}>{msg}</div>}
 
       {/* ============================ TAB: ENROLLED HOSTS ============================ */}
       {tab === "hosts" && (
@@ -268,6 +271,11 @@ export default function HostEnrollment() {
               For password-sudo hosts, store your own sudo password from the “Sudo Password” button in the header.
             </p>
           </fieldset>
+
+          {/* Status for the actions in this column shows here, under the buttons,
+              rather than at the top of the page — easier to notice where you clicked. */}
+          {err && <div className="error-box">{err}</div>}
+          {msg && <div className="ok-text" style={{ marginTop: 4 }}>{msg}</div>}
         </div>
       </div>
       )}

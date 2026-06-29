@@ -86,6 +86,8 @@ class LiveLogPage(QWidget):
         self.resize(820, 620)
 
         self._last_id = 0  # highest activity id seen, for incremental polling
+        self._env_of = {}    # host label -> environment (fleet inventory)
+        self._env_all = {}   # environment -> set of all its host labels
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
@@ -178,6 +180,7 @@ class LiveLogPage(QWidget):
             return
         if not entries:
             return
+        self._refresh_host_inventory()
         for e in entries:
             self._last_id = max(self._last_id, e.get("id", 0))
         # The same action dispatched to several hosts is logged once per host
@@ -189,6 +192,53 @@ class LiveLogPage(QWidget):
             self._add_activity_group(g)
         self.status.setText(
             f"{self.activity.count()} event(s) — last update {time.strftime('%H:%M:%S')}")
+
+    def _refresh_host_inventory(self):
+        """Best-effort fleet inventory (host label -> environment, environment ->
+        all its labels) so _summarize_hosts can collapse a host list to
+        'all <env> servers' / 'all servers (all environments)'. Data-driven, so
+        any environment the operator adds (systest, gcp1, ...) works
+        automatically. On failure the maps stay empty and we fall back to a
+        plain host list."""
+        env_of, env_all = {}, {}
+        try:
+            for e in api.list_merged_hosts(agent_only=False):
+                label = e.get("label")
+                if not label:
+                    continue
+                env = e.get("environment") or "Unassigned"
+                env_of[label] = env
+                env_all.setdefault(env, set()).add(label)
+        except Exception:
+            pass
+        self._env_of, self._env_all = env_of, env_all
+
+    def _summarize_hosts(self, hosts):
+        """Mirror of the web console's summarizeHosts: collapse a group's host
+        list using the inventory. Whole fleet -> 'all servers (all
+        environments)'; a fully-covered environment -> 'all <env> servers';
+        otherwise list the hosts (per environment)."""
+        sel = list(dict.fromkeys(h for h in hosts if h))
+        if not sel:
+            return ""
+        if len(sel) == 1:
+            return sel[0]
+        env_of, env_all = self._env_of, self._env_all
+        if not env_of:
+            return f"{len(sel)} hosts: {', '.join(sel)}"
+        known = [h for h in sel if h in env_of]
+        if len(known) == len(env_of) and len(known) == len(sel):
+            return "all servers (all environments)"
+        by_env, unknown = {}, []
+        for h in sel:
+            (by_env.setdefault(env_of[h], []) if h in env_of else unknown).append(h)
+        parts = []
+        for env, hs in by_env.items():
+            parts.append(f"all {env} servers" if len(hs) == len(env_all[env])
+                         else ", ".join(hs))
+        if unknown:
+            parts.append(", ".join(unknown))
+        return ", ".join(parts)
 
     # Entries sharing user + description + command and landing within this many
     # seconds of each other are treated as one action across multiple hosts.
@@ -232,10 +282,9 @@ class LiveLogPage(QWidget):
         desc = g.get("description") or ""
         if not hosts:
             on = ""
-        elif len(hosts) == 1:
-            on = f"  on {hosts[0]}"
         else:
-            on = f"  on {len(hosts)} hosts: {', '.join(hosts)}"
+            summary = self._summarize_hosts(hosts)
+            on = f"  on {summary}" if summary else ""
         item = QListWidgetItem(f"{ts}   {user}  —  {desc}{on}")
         # Keep an entry dict (incl. the complete command + every host) on the
         # item so a double-click can show it in full - see _show_entry_details.

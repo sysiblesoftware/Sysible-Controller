@@ -126,6 +126,21 @@ export default function HostEnrollment() {
       `Assigned ${checked.length} host(s) to ${env || "(unassigned)"}.`);
   }
 
+  async function removeEnvironment() {
+    const env = assignEnv;
+    if (!env || env === NEW_ENV) { setErr("Pick an environment from the dropdown to remove."); return; }
+    // Don't orphan hosts: an environment with hosts still in it must be emptied
+    // first (reassign them with Set Environment).
+    const inUse = agents.filter((a) => (a.environment || "") === env).length;
+    if (inUse > 0) {
+      setErr(`Can't remove '${env}' — ${inUse} host(s) are still assigned to it. Reassign them (Set Environment) first.`);
+      return;
+    }
+    if (!window.confirm(`Remove the environment '${env}'? It has no hosts assigned.`)) return;
+    await run(async () => { await api.deleteEnvironment(env); setAssignEnv(""); },
+      `Removed environment '${env}'.`);
+  }
+
   async function setSudo(required) {
     if (checked.length === 0) { setErr("Check one or more hosts first."); return; }
     await run(async () => { for (const id of checked) await api.setHostSudo(id, required); },
@@ -235,6 +250,9 @@ export default function HostEnrollment() {
                 <option value={NEW_ENV}>{NEW_ENV}</option>
               </select>
               <button className="btn sm" onClick={assignEnvironment}>Set Environment</button>
+              <button className="btn ghost sm" onClick={removeEnvironment}
+                      disabled={!assignEnv || assignEnv === NEW_ENV}
+                      title="Delete the selected environment (must have no hosts assigned)">Remove environment</button>
               <span className="faint">Applies to {checked.length} checked host(s).</span>
             </div>
           </fieldset>

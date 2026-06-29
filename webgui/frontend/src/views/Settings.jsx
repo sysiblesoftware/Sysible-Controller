@@ -27,11 +27,35 @@ export default function Settings() {
 function useErr() { const [err, setErr] = useState(""); return [err, setErr]; }
 
 // Strong random password: crypto RNG over an unambiguous charset (no 0/O/1/l/I).
-function generatePassword(len = 16) {
-  const charset = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%^&*-_=+";
-  const out = new Uint32Array(len);
-  (window.crypto || window.msCrypto).getRandomValues(out);
-  return Array.from(out, (n) => charset[n % charset.length]).join("");
+// Generate a password that ALWAYS satisfies the admin policy: one guaranteed
+// char from each required class, padded to at least the policy's minlen, then
+// shuffled — mirroring backend/policy.py so the value never fails the policy
+// check the Add/Reset request runs. Without a policy it guarantees all four
+// classes (the default admin policy), which is always safe.
+function generatePassword(policy) {
+  const p = policy || {};
+  const lower = "abcdefghijkmnpqrstuvwxyz";   // no ambiguous l
+  const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";   // no ambiguous I, O
+  const digits = "23456789";                   // no ambiguous 0, 1
+  const symbols = "!@#$%^&*-_=+";
+  const pool = lower + upper + digits + symbols;
+  const rnd = (n) => crypto.getRandomValues(new Uint32Array(1))[0] % n;
+  const pick = (set) => set[rnd(set.length)];
+
+  const required = [];
+  if ((p.lcredit ?? -1) < 0) required.push(lower);
+  if ((p.ucredit ?? -1) < 0) required.push(upper);
+  if ((p.dcredit ?? -1) < 0) required.push(digits);
+  if ((p.ocredit ?? -1) < 0) required.push(symbols);
+
+  const length = Math.max(16, p.minlen || 12);
+  const chars = required.map(pick);
+  while (chars.length < length) chars.push(pick(pool));
+  for (let i = chars.length - 1; i > 0; i--) {   // Fisher–Yates shuffle
+    const j = rnd(i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join("");
 }
 
 function Admins() {
@@ -118,7 +142,12 @@ function AdminModal({ mode, username: fixedUser, onClose, onDone }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  function gen() { const p = generatePassword(); setPw(p); setConfirm(p); setShow(true); setErr(""); }
+  async function gen() {
+    let policy = null;
+    try { policy = await api.passwordPolicy(); } catch { /* fall back to all-classes default */ }
+    const p = generatePassword(policy);
+    setPw(p); setConfirm(p); setShow(true); setErr("");
+  }
   function copy() { navigator.clipboard?.writeText(pw).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }
 
   async function submit() {

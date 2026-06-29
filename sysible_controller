@@ -398,12 +398,13 @@ cmd_reset_admin() {
   local pass="$3"
   local out
   out="$("$VENV/bin/python" - "$BASE" "$user" "$pass" <<'PY' 2>/dev/null
-import sys, secrets
+import sys
 sys.path.insert(0, sys.argv[1])
-from backend.db import add_administrator, update_administrator_password, list_administrators
+from backend.db import add_administrator, update_administrator_password, list_administrators, get_admin_password_policy
 from backend import portal_auth
+from backend.policy import generate_compliant_password
 user = sys.argv[2] or "admin"
-pw = sys.argv[3] or secrets.token_urlsafe(9)
+pw = sys.argv[3] or generate_compliant_password(get_admin_password_policy())
 salt, h = portal_auth.hash_password(pw)
 existing = {a.get("username") for a in list_administrators()}
 if user in existing:

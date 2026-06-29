@@ -11,6 +11,43 @@ already checked would let anything bypass it.
 """
 
 import re
+import secrets
+import string
+
+
+def generate_compliant_password(policy: dict = None, length: int = 16) -> str:
+    """Generate a random password that ALWAYS satisfies `policy` (same
+    minlen/dcredit/ucredit/lcredit/ocredit shape as
+    validate_password_against_policy): one guaranteed character from each
+    required class, padded from the full pool to at least the policy's minlen,
+    then shuffled. Used for the seeded default admin, `reset-admin`, and any
+    server-side generated admin password, so a generated value never fails the
+    policy check that immediately follows."""
+    # An empty/None policy defaults to "require all four classes" (the default
+    # admin policy) so a generated password is always strong even if the caller
+    # somehow has no policy to hand.
+    policy = policy or {"minlen": 12, "dcredit": -1, "ucredit": -1, "lcredit": -1, "ocredit": -1}
+    minlen = policy.get("minlen", 12)
+    length = max(length, minlen)
+
+    lower, upper, digits = string.ascii_lowercase, string.ascii_uppercase, string.digits
+    symbols = "!@#$%^&*()-_=+[]{}"
+    pool = lower + upper + digits + symbols
+
+    required = []
+    if policy.get("lcredit", 0) < 0:
+        required.append(lower)
+    if policy.get("ucredit", 0) < 0:
+        required.append(upper)
+    if policy.get("dcredit", 0) < 0:
+        required.append(digits)
+    if policy.get("ocredit", 0) < 0:
+        required.append(symbols)
+
+    chars = [secrets.choice(p) for p in required]
+    chars += [secrets.choice(pool) for _ in range(max(length - len(chars), 0))]
+    secrets.SystemRandom().shuffle(chars)
+    return "".join(chars)
 
 
 def validate_password_against_policy(password: str, policy: dict):

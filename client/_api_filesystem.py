@@ -105,6 +105,27 @@ def cmd_list_directory(path: str = "", show_hidden: bool = True) -> str:
     return f"ls {flags} --color=never 2>&1"
 
 
+_VIEW_FILE_CAP = 1_000_000  # bytes shown before truncating
+
+
+def cmd_view_file(path: str) -> str:
+    """Show a file's contents (read-only - safe on any file, including
+    critical system files like /etc/fstab; viewing never modifies anything).
+    Caps output at ~1 MB and refuses a directory, so it can't flood the
+    results pane with a huge or binary file."""
+    path = _validate_path(path, "File path")
+    q = shlex.quote(path)
+    cap = _VIEW_FILE_CAP
+    return (
+        f"if [ ! -e {q} ]; then printf 'No such file: %s\\n' {q} >&2; exit 1; fi; "
+        f"if [ -d {q} ]; then printf '%s is a directory - use List Directory.\\n' {q} >&2; exit 1; fi; "
+        f"head -c {cap} -- {q}; "
+        f"_sz=$(wc -c < {q} 2>/dev/null || echo 0); "
+        f"if [ \"$_sz\" -gt {cap} ] 2>/dev/null; then "
+        f"printf '\\n...[truncated: file is %s bytes; showing the first %s]\\n' \"$_sz\" {cap}; fi"
+    )
+
+
 def cmd_create_directory(path: str, mode: str = "") -> str:
     """mkdir -p - safe to call on a path that already exists, and
     creates any missing parent directories along the way."""

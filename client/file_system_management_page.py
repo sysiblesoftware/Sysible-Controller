@@ -168,6 +168,11 @@ class FileSystemManagementPage(QWidget):
         btn_list_dir = QPushButton("List Directory")
         btn_list_dir.clicked.connect(self.run_list_directory)
         list_row.addWidget(btn_list_dir)
+        btn_view_file = QPushButton("View File")
+        btn_view_file.setToolTip("Show a file's contents (read-only; safe on any file, "
+                                 "including system files). Output is capped at ~1 MB.")
+        btn_view_file.clicked.connect(self.run_view_file)
+        list_row.addWidget(btn_view_file)
         _g1.addLayout(list_row)
 
         create_row = QHBoxLayout()
@@ -908,6 +913,15 @@ class FileSystemManagementPage(QWidget):
             QMessageBox.warning(self, "Invalid input", str(e))
             return
         self._run_fs_command(cmd, "List Directory")
+
+    def run_view_file(self):
+        path = self.list_dir_path_input.text().strip()
+        try:
+            cmd = api.cmd_view_file(path)
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid input", str(e))
+            return
+        self._run_fs_command(cmd, "View File")
 
     def run_create_directory(self):
         try:

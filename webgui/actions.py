@@ -422,6 +422,8 @@ _register(Action(name="sec_install_lynis", tool="Security Administration",
 _register(Action(name="fs_list_dir", tool="File System Management", label="List directory",
     params=[Param("path", "Path", default="/", help="e.g. /opt")],
     build=lambda p: api.cmd_list_directory(_s(p, "path", "/") or "/")))
+_register(Action(name="fs_view", tool="File System Management", label="View file",
+    params=[Param("path", "Path")], build=lambda p: api.cmd_view_file(_s(p, "path"))))
 _register(Action(name="fs_mkdir", tool="File System Management", label="Create directory",
     params=[Param("path", "Path")], build=lambda p: api.cmd_create_directory(_s(p, "path"))))
 _register(Action(name="fs_rmdir", tool="File System Management", label="Remove directory",
@@ -1371,7 +1373,7 @@ _LAYOUT: dict[str, list] = {
         ("Support & Reports", "Support", ["health_support_info", "health_sos_report", "health_install_sos", "health_install_auditd"]),
     ],
     "File System Management": [
-        ("Directories and Files", "Directories & Files", ["fs_list_dir", "fs_mkdir", "fs_rmdir", "fs_copy", "fs_move", "fs_rename"]),
+        ("Directories and Files", "Directories & Files", ["fs_list_dir", "fs_view", "fs_mkdir", "fs_rmdir", "fs_copy", "fs_move", "fs_rename"]),
         ("Permissions, Ownership and Links", "Permissions & Ownership", ["fs_chmod", "fs_chown", "fs_show_acl", "fs_set_acl"]),
         ("Permissions, Ownership and Links", "Links", ["fs_symlink", "fs_hardlink"]),
         ("Mount / Unmount", "Mount / Unmount", ["fs_mount", "fs_unmount"]),

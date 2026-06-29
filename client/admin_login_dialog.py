@@ -153,6 +153,7 @@ class AdminLoginDialog(QDialog):
         self.password = password
         self.role = result.get("role")
         self.must_change_password = bool(result.get("must_change_password"))
-        session.set_current_admin(self.username, self.role)
+        session.set_current_admin(self.username, self.role,
+                                  sudo_connect=bool(result.get("sudo_connect")))
 
         self.accept()

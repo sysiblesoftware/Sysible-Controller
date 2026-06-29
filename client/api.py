@@ -390,6 +390,15 @@ def reset_administrator_password(username: str, new_password: str, actor: str = 
     )
 
 
+def set_administrator_sudo_connect(username: str, allowed: bool, actor: str = ""):
+    """Superuser-only: grant/revoke this admin's use of the Sysible Connect
+    terminal's 'Send sudo password' button."""
+    return _request(
+        "POST", f"/admin/administrators/{quote(username)}/sudo-connect",
+        json={"allowed": bool(allowed), "actor": actor},
+    )
+
+
 def get_admin_audit_log(limit: int = 200):
     return _request("GET", "/admin/audit-log", params={"limit": limit}).get("entries", [])
 

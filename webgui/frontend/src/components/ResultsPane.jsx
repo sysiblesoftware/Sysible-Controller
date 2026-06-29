@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import HostResults from "./HostResults.jsx";
 
 // Shared dynamic results panel used by the bespoke tool pages so they match the
 // generic ToolPage: draggable width, expand/collapse to fill the pane, and one
@@ -63,14 +64,7 @@ export default function ResultsPane({ results, setResults, expanded, onToggleExp
               <div className="result">
                 <div className="rh"><strong>{cur.label}</strong>
                   <span className="faint mono" style={{ fontSize: 11 }}>{new Date(cur.at).toLocaleTimeString()}</span></div>
-                {cur.results.map((r, j) => (
-                  <div key={j} style={{ borderTop: "1px solid var(--border)" }}>
-                    <div className="rh"><span className={"dot " + (r.ok ? "ok" : "bad")} /><span>{r.host}</span>
-                      {r.code != null && <span className="faint">exit {r.code}</span>}
-                      {r.error && <span className="badge amber">{r.error}</span>}</div>
-                    {(r.stdout || r.stderr) && <pre>{r.stdout}{r.stderr}</pre>}
-                  </div>
-                ))}
+                <HostResults rows={cur.results} />
               </div>
             )}
           </div>

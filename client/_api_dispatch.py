@@ -437,6 +437,43 @@ def cmd_restart_agent() -> str:
     )
 
 
+def cmd_metrics_snapshot() -> str:
+    """Compact, machine-parseable one-line health snapshot for the dashboard
+    fleet overview. Prints a single SYSMETRICS|k=v|... line so the controller
+    can parse per-host disk/mem/load/failed + a verdict without scraping the
+    verbose health-check text. Plain POSIX sh, cross-distro."""
+    return (
+        # Worst disk use% among real volumes (skip pseudo/removable/image FS).
+        "disk=$(df -P 2>/dev/null | awk 'NR>1 && $1!~/^(tmpfs|devtmpfs|overlay|squashfs)$/ "
+        "&& $6!~/^(\\/dev|\\/proc|\\/sys|\\/run|\\/snap|\\/media|\\/cdrom)/ "
+        "{gsub(/%/,\"\",$5); if($5+0>m){m=$5+0; mt=$6}} END{print m+0\"|\"(mt?mt:\"/\")}'); "
+        "diskpct=${disk%%|*}; diskmnt=${disk#*|}; "
+        # Memory used% from /proc/meminfo.
+        "mem=$(awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{if(t>0)printf \"%d\",(t-a)*100/t; else print 0}' /proc/meminfo 2>/dev/null); "
+        "load1=$(awk '{print $1}' /proc/loadavg 2>/dev/null); "
+        "cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1); "
+        "failed=$(systemctl --failed --no-legend 2>/dev/null | wc -l | tr -d ' '); [ -z \"$failed\" ] && failed=0; "
+        # Names of the failed/crashed units (first few) so the card can say WHICH.
+        "units=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | head -4 | paste -sd, - 2>/dev/null); [ -z \"$units\" ] && units=-; "
+        # Overall systemd state: 'degraded' means a unit failed (incl. at boot),
+        # 'maintenance'/'starting' are also not-healthy. 'running' is good.
+        "sysd=$(systemctl is-system-running 2>/dev/null); [ -z \"$sysd\" ] && sysd=unknown; "
+        # OOM kills / oom-killer events in the kernel ring buffer (agent is root).
+        "oom=$(dmesg -t 2>/dev/null | grep -ciE 'out of memory|killed process|oom-killer'); [ -z \"$oom\" ] && oom=0; "
+        "up=$(awk '{print int($1)}' /proc/uptime 2>/dev/null); "
+        # Verdict: any warning signal -> WARNING; the worst ones -> CRITICAL.
+        "v=OK; "
+        "[ \"${diskpct:-0}\" -ge 80 ] 2>/dev/null && v=WARNING; "
+        "[ \"${failed:-0}\" -ge 1 ] 2>/dev/null && v=WARNING; "
+        "[ \"$sysd\" = degraded ] && v=WARNING; "
+        "[ \"${oom:-0}\" -ge 1 ] 2>/dev/null && v=WARNING; "
+        "[ \"${diskpct:-0}\" -ge 90 ] 2>/dev/null && v=CRITICAL; "
+        "[ \"${failed:-0}\" -ge 3 ] 2>/dev/null && v=CRITICAL; "
+        "printf 'SYSMETRICS|verdict=%s|disk=%s|mount=%s|mem=%s|load1=%s|cores=%s|failed=%s|uptime=%s|sysd=%s|units=%s|oom=%s\\n' "
+        "\"$v\" \"${diskpct:-0}\" \"${diskmnt:-/}\" \"${mem:-0}\" \"${load1:-0}\" \"${cores:-1}\" \"${failed:-0}\" \"${up:-0}\" \"${sysd:-unknown}\" \"${units:--}\" \"${oom:-0}\""
+    )
+
+
 def cmd_health_check() -> str:
     """A single combined command that has the *host itself* score a few
     signals (disk usage, failed systemd units, load average relative to

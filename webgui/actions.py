@@ -422,12 +422,15 @@ _register(Action(name="sec_install_lynis", tool="Security Administration",
 _register(Action(name="fs_list_dir", tool="File System Management", label="List directory",
     params=[Param("path", "Path", default="/", help="e.g. /opt")],
     build=lambda p: api.cmd_list_directory(_s(p, "path", "/") or "/")))
+_register(Action(name="fs_view", tool="File System Management", label="View file",
+    params=[Param("path", "Path")], build=lambda p: api.cmd_view_file(_s(p, "path"))))
 _register(Action(name="fs_mkdir", tool="File System Management", label="Create directory",
     params=[Param("path", "Path")], build=lambda p: api.cmd_create_directory(_s(p, "path"))))
 _register(Action(name="fs_rmdir", tool="File System Management", label="Remove directory",
     danger=True, params=[Param("path", "Path"),
                          Param("recursive", "Recursive", type="checkbox", default=False, required=False)],
-    build=lambda p: api.cmd_remove_directory(_s(p, "path"), _b(p, "recursive"))))
+    build=lambda p: api.cmd_remove_directory(_s(p, "path"), _b(p, "recursive"),
+                                             allow_critical=_b(p, "allow_critical", False))))
 _register(Action(name="fs_copy", tool="File System Management", label="Copy",
     params=[Param("source", "Source"), Param("destination", "Destination")],
     build=lambda p: api.cmd_copy_file(_s(p, "source"), _s(p, "destination"))))
@@ -1119,8 +1122,10 @@ _register(Action(name="fs_mount", tool="File System Management", label="Mount fi
     build=lambda p: api.cmd_mount_filesystem(_s(p, "device"), _s(p, "mount_point"),
                                              _s(p, "fstype"), _s(p, "options"))))
 _register(Action(name="fs_unmount", tool="File System Management", label="Unmount",
+    danger=True,
     params=[Param("target", "Target"), Param("force", "Force", type="checkbox", default=False, required=False)],
-    build=lambda p: api.cmd_unmount_filesystem(_s(p, "target"), _b(p, "force"))))
+    build=lambda p: api.cmd_unmount_filesystem(_s(p, "target"), _b(p, "force"),
+                                               allow_critical=_b(p, "allow_critical", False))))
 _register(Action(name="fs_add_fstab", tool="File System Management", label="Add fstab entry",
     params=[Param("device", "Device"), Param("mount_point", "Mount point"), Param("fstype", "FS type"),
             Param("options", "Options", default="defaults", required=False),
@@ -1130,7 +1135,8 @@ _register(Action(name="fs_add_fstab", tool="File System Management", label="Add 
         _s(p, "options", "defaults") or "defaults", _i(p, "dump", 0), _i(p, "pass_num", 0))))
 _register(Action(name="fs_remove_fstab", tool="File System Management", label="Remove fstab entry",
     danger=True, params=[Param("mount_point", "Mount point")],
-    build=lambda p: api.cmd_remove_fstab_entry(_s(p, "mount_point"))))
+    build=lambda p: api.cmd_remove_fstab_entry(_s(p, "mount_point"),
+                                               allow_critical=_b(p, "allow_critical", False))))
 _register(Action(name="fs_resize", tool="File System Management", label="Resize filesystem",
     params=[Param("target", "Target"), Param("new_size", "New size", required=False, help="blank = grow to max")],
     build=lambda p: api.cmd_resize_filesystem(_s(p, "target"), _s(p, "new_size"))))
@@ -1367,7 +1373,7 @@ _LAYOUT: dict[str, list] = {
         ("Support & Reports", "Support", ["health_support_info", "health_sos_report", "health_install_sos", "health_install_auditd"]),
     ],
     "File System Management": [
-        ("Directories and Files", "Directories & Files", ["fs_list_dir", "fs_mkdir", "fs_rmdir", "fs_copy", "fs_move", "fs_rename"]),
+        ("Directories and Files", "Directories & Files", ["fs_list_dir", "fs_view", "fs_mkdir", "fs_rmdir", "fs_copy", "fs_move", "fs_rename"]),
         ("Permissions, Ownership and Links", "Permissions & Ownership", ["fs_chmod", "fs_chown", "fs_show_acl", "fs_set_acl"]),
         ("Permissions, Ownership and Links", "Links", ["fs_symlink", "fs_hardlink"]),
         ("Mount / Unmount", "Mount / Unmount", ["fs_mount", "fs_unmount"]),

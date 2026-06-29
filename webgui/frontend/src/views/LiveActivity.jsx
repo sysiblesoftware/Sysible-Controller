@@ -35,6 +35,41 @@ function groupActivity(entries) {
   return groups.sort((a, b) => b.id - a.id); // newest first
 }
 
+// Summarize a group's host list using the fleet inventory so a combined entry
+// reads "all servers (all environments)" / "all dev servers" instead of a long
+// hostname list. `inv` is /api/hosts ({label, environment}).
+function summarizeHosts(hostnames, inv) {
+  const sel = [...new Set((hostnames || []).filter(Boolean))];
+  if (sel.length === 0) return "";
+  if (sel.length === 1) return sel[0];
+  if (!inv || inv.length === 0) return `${sel.length} hosts: ${sel.join(", ")}`;
+
+  const envOf = {};                 // hostname -> environment
+  const envAll = {};                // environment -> Set of all its hostnames
+  for (const h of inv) {
+    const env = h.environment || "Unassigned";
+    envOf[h.label] = env;
+    (envAll[env] ||= new Set()).add(h.label);
+  }
+
+  const known = sel.filter((h) => h in envOf);
+  // Every host in the fleet → "all servers (all environments)".
+  if (known.length === inv.length && known.length === sel.length) {
+    return "all servers (all environments)";
+  }
+
+  const byEnv = {};                 // environment -> selected hostnames
+  const unknown = [];
+  for (const h of sel) (h in envOf ? (byEnv[envOf[h]] ||= []) : unknown).push(h);
+
+  const parts = Object.keys(byEnv).map((env) =>
+    byEnv[env].length === envAll[env].size
+      ? `all ${env} servers`        // whole environment covered
+      : byEnv[env].join(", "));     // partial — list the hosts
+  if (unknown.length) parts.push(unknown.join(", "));
+  return parts.join(", ");
+}
+
 export default function LiveActivity() {
   const [tab, setTab] = useState("activity");
   const [activity, setActivity] = useState([]);
@@ -43,7 +78,10 @@ export default function LiveActivity() {
   const [auto, setAuto] = useState(true);
   const [detail, setDetail] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [hostInv, setHostInv] = useState([]);  // fleet inventory for env-aware host labels
   const timer = useRef(null);
+
+  useEffect(() => { api.hosts().then((d) => setHostInv(d.hosts || [])).catch(() => {}); }, []);
 
   async function load() {
     try {
@@ -91,7 +129,7 @@ export default function LiveActivity() {
                     title="Click to see the exact command">
                   <td className="faint mono">{fmtTime(a.timestamp)}</td>
                   <td>{a.username || "(unknown)"}</td>
-                  <td>{a.hosts.length <= 1 ? (a.hosts[0] || "") : `${a.hosts.length} hosts: ${a.hosts.join(", ")}`}</td>
+                  <td title={a.hosts.join(", ")}>{summarizeHosts(a.hosts, hostInv)}</td>
                   <td>{a.description || ""}</td>
                 </tr>
               ))}

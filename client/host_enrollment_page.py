@@ -212,6 +212,13 @@ class HostEnrollmentPage(QWidget):
         self.set_env_btn.clicked.connect(self.set_environment)
         env_row.addWidget(self.set_env_btn)
 
+        self.remove_env_btn = QPushButton("Remove Environment")
+        self.remove_env_btn.setToolTip(
+            "Delete the selected environment. It must have no hosts assigned - "
+            "reassign them first.")
+        self.remove_env_btn.clicked.connect(self.remove_environment)
+        env_row.addWidget(self.remove_env_btn)
+
         layout.addLayout(env_row)
 
         # --- Sudo policy (a host attribute: does its sudo need a password?) ---
@@ -617,6 +624,32 @@ class HostEnrollmentPage(QWidget):
                 self, "Some hosts failed",
                 f"Set environment failed for {len(failures)} of {len(agents)} host(s):\n\n"
                 + "\n".join(failures))
+
+    def remove_environment(self):
+        env = self.env_combo.currentText().strip()
+        if not env or env == _NEW_ENV_OPTION:
+            QMessageBox.information(self, "No environment",
+                                   "Pick an environment from the dropdown to remove.")
+            return
+        # Don't orphan hosts: the environment must be empty first.
+        in_use = sum(1 for a in self.agents if (a.get("environment") or "") == env)
+        if in_use > 0:
+            QMessageBox.warning(
+                self, "Environment in use",
+                f"Can't remove '{env}' - {in_use} host(s) are still assigned to it.\n\n"
+                "Reassign them (Set Environment) first.")
+            return
+        if QMessageBox.question(
+                self, "Remove environment",
+                f"Remove the environment '{env}'? It has no hosts assigned.",
+                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        try:
+            api.delete_environment(env)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+            return
+        self.refresh()
 
     # =====================================================
     # DISENROLL

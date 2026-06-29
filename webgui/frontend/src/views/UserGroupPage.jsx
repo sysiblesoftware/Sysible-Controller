@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
+import HostResults from "../components/HostResults.jsx";
 
 // Faithful rebuild of the desktop User & Group Administration page: host tree
 // with checkboxes + live sync (left), users-on-selected-host (middle), and
@@ -234,13 +235,7 @@ export default function UserGroupPage({ initialTab } = {}) {
         {results && (
           <div className="result" style={{ marginTop: 14 }}>
             <div className="rh"><strong>{results.label}</strong></div>
-            {results.results.map((r, i) => (
-              <div key={i} style={{ borderTop: i ? "1px solid var(--border)" : "none" }}>
-                <div className="rh"><span className={"dot " + (r.ok ? "ok" : "bad")} /><span>{r.host}</span>
-                  {r.code != null && <span className="faint">exit {r.code}</span>}</div>
-                {(r.stdout || r.stderr) && <pre>{r.stdout}{r.stderr}</pre>}
-              </div>
-            ))}
+            <HostResults rows={results.results} />
           </div>
         )}
       </div>

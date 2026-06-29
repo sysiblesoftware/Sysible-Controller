@@ -7,6 +7,8 @@ from PySide6.QtCore import Qt, QTimer
 
 from client import api
 from client import result_banner
+from client import session
+from client import system_paths
 from client import theme
 from client.events import bus
 from client.theme import STATUS_NEUTRAL_COLOR, STATUS_SUCCESS_COLOR, STATUS_ERROR_COLOR
@@ -166,6 +168,11 @@ class FileSystemManagementPage(QWidget):
         btn_list_dir = QPushButton("List Directory")
         btn_list_dir.clicked.connect(self.run_list_directory)
         list_row.addWidget(btn_list_dir)
+        btn_view_file = QPushButton("View File")
+        btn_view_file.setToolTip("Show a file's contents (read-only; safe on any file, "
+                                 "including system files). Output is capped at ~1 MB.")
+        btn_view_file.clicked.connect(self.run_view_file)
+        list_row.addWidget(btn_view_file)
         _g1.addLayout(list_row)
 
         create_row = QHBoxLayout()
@@ -907,6 +914,15 @@ class FileSystemManagementPage(QWidget):
             return
         self._run_fs_command(cmd, "List Directory")
 
+    def run_view_file(self):
+        path = self.list_dir_path_input.text().strip()
+        try:
+            cmd = api.cmd_view_file(path)
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid input", str(e))
+            return
+        self._run_fs_command(cmd, "View File")
+
     def run_create_directory(self):
         try:
             cmd = api.cmd_create_directory(
@@ -917,10 +933,38 @@ class FileSystemManagementPage(QWidget):
             return
         self._run_fs_command(cmd, "Create Directory")
 
+    def _critical_path_guard(self, path, action_desc):
+        """For a destructive op (delete/unmount/fstab-remove) on `path`, returns
+        (proceed, allow_critical). Safe paths pass straight through. A
+        system-critical path is BLOCKED for non-superusers, and a superuser gets
+        a red warning they must explicitly confirm (returning allow_critical=True
+        so the builder lets it through)."""
+        reason = system_paths.system_critical_reason(path)
+        if not reason:
+            return True, False
+        if not session.is_superuser():
+            QMessageBox.critical(
+                self, "Blocked — system-critical path",
+                f"{reason}\n\nOnly a superuser can {action_desc} a system-critical path.")
+            return False, False
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("⚠ System-critical path")
+        box.setText(reason)
+        box.setInformativeText(
+            f"{action_desc.capitalize()} of this path can break the host and is "
+            "almost always a mistake.\n\nProceed anyway?")
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        box.setDefaultButton(QMessageBox.No)
+        return (box.exec() == QMessageBox.Yes), True
+
     def run_remove_directory(self):
         path = self.remove_dir_path_input.text().strip()
         recursive = self.remove_dir_recursive_check.isChecked()
-        if recursive:
+        proceed, allow_critical = self._critical_path_guard(path, "delete")
+        if not proceed:
+            return
+        if recursive and not allow_critical:
             confirm = QMessageBox.question(
                 self, "Confirm recursive removal",
                 f"Recursively remove '{path}' and everything inside it on all checked hosts?\n"
@@ -930,7 +974,7 @@ class FileSystemManagementPage(QWidget):
             if confirm != QMessageBox.Yes:
                 return
         try:
-            cmd = api.cmd_remove_directory(path, recursive)
+            cmd = api.cmd_remove_directory(path, recursive, allow_critical=allow_critical)
         except ValueError as e:
             QMessageBox.warning(self, "Invalid input", str(e))
             return
@@ -1081,7 +1125,10 @@ class FileSystemManagementPage(QWidget):
     def run_unmount_filesystem(self):
         target = self.unmount_target_input.text().strip()
         force = self.unmount_force_check.isChecked()
-        if force:
+        proceed, allow_critical = self._critical_path_guard(target, "unmount")
+        if not proceed:
+            return
+        if force and not allow_critical:
             confirm = QMessageBox.question(
                 self, "Confirm forced unmount",
                 f"Force-unmount '{target}' on all checked hosts even if it's busy?",
@@ -1090,7 +1137,7 @@ class FileSystemManagementPage(QWidget):
             if confirm != QMessageBox.Yes:
                 return
         try:
-            cmd = api.cmd_unmount_filesystem(target, force)
+            cmd = api.cmd_unmount_filesystem(target, force, allow_critical=allow_critical)
         except ValueError as e:
             QMessageBox.warning(self, "Invalid input", str(e))
             return
@@ -1160,15 +1207,19 @@ class FileSystemManagementPage(QWidget):
 
     def run_remove_fstab_entry(self):
         mount_point = self.fstab_remove_mount_point_input.text().strip()
-        confirm = QMessageBox.question(
-            self, "Confirm fstab entry removal",
-            f"Remove the /etc/fstab entry for '{mount_point}' on all checked hosts?",
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if confirm != QMessageBox.Yes:
+        proceed, allow_critical = self._critical_path_guard(mount_point, "remove the fstab entry for")
+        if not proceed:
             return
+        if not allow_critical:
+            confirm = QMessageBox.question(
+                self, "Confirm fstab entry removal",
+                f"Remove the /etc/fstab entry for '{mount_point}' on all checked hosts?",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if confirm != QMessageBox.Yes:
+                return
         try:
-            cmd = api.cmd_remove_fstab_entry(mount_point)
+            cmd = api.cmd_remove_fstab_entry(mount_point, allow_critical=allow_critical)
         except ValueError as e:
             QMessageBox.warning(self, "Invalid input", str(e))
             return

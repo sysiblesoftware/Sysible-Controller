@@ -52,6 +52,7 @@ from backend.db import (
     get_administrator,
     add_administrator,
     remove_administrator,
+    set_administrator_sudo_connect,
     update_administrator_password,
     update_administrator_username,
     record_administrator_login,
@@ -94,6 +95,7 @@ from backend.models.portal_models import (
     AddAdministratorRequest,
     ForcePasswordChangeRequest,
     ResetAdministratorPasswordRequest,
+    SetSudoConnectRequest,
 )
 from backend.models.policy_models import (
     SetEnvironmentalPolicyRequest,
@@ -1176,6 +1178,9 @@ def admin_login(body: AdminLoginRequest, request: Request):
         "role": role,
         "token": token,
         "must_change_password": bool(admin["must_change_password"]),
+        # Per-admin opt-in for the Sysible Connect terminal's "Send sudo
+        # password" button (granted by a superuser). Both front ends read this.
+        "sudo_connect": bool(admin.get("sudo_connect")),
     }
 
 
@@ -1258,6 +1263,24 @@ def remove_administrator_route(username: str, actor: str = ""):
     log_admin_audit("administrator_removed", username, f"removed by {actor}" if actor else "")
 
     return {"username": username, "status": "removed"}
+
+
+@app.post("/admin/administrators/{username}/sudo-connect",
+          dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def set_administrator_sudo_connect_route(username: str, body: SetSudoConnectRequest):
+    """Superuser-gated: grant or revoke an administrator's access to the
+    Sysible Connect terminal's "Send sudo password" button. Off by default;
+    applies to every account (a superuser can grant their own)."""
+    if get_administrator(username) is None:
+        raise HTTPException(status_code=404, detail="No such administrator")
+
+    set_administrator_sudo_connect(username, body.allowed)
+    log_admin_audit(
+        "sudo_connect_set", username,
+        f"{'granted' if body.allowed else 'revoked'}"
+        + (f" by {body.actor}" if body.actor else ""))
+
+    return {"username": username, "sudo_connect": bool(body.allowed)}
 
 
 @app.post("/admin/credentials", dependencies=[Depends(require_api_key)])

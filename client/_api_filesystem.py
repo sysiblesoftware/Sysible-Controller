@@ -49,6 +49,21 @@ def _reject_dangerous_path(path: str, label: str = "Path") -> None:
         )
 
 
+def _reject_critical_path(path: str, allow_critical: bool, label: str = "Path") -> None:
+    """Refuses deletion of a system-critical file/dir/mount (the exhaustive set
+    in client/system_paths) unless `allow_critical` is set - which the front
+    ends only pass after a superuser explicitly confirms the warning. Sysadmins
+    can never set it, so for them this is a hard block."""
+    if allow_critical:
+        return
+    from client import system_paths
+    reason = system_paths.system_critical_reason(path)
+    if reason:
+        raise ValueError(
+            f"{label}: {reason} Only a superuser can delete it, after confirming the warning."
+        )
+
+
 _SAFE_USERGROUP_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
 
@@ -90,6 +105,27 @@ def cmd_list_directory(path: str = "", show_hidden: bool = True) -> str:
     return f"ls {flags} --color=never 2>&1"
 
 
+_VIEW_FILE_CAP = 1_000_000  # bytes shown before truncating
+
+
+def cmd_view_file(path: str) -> str:
+    """Show a file's contents (read-only - safe on any file, including
+    critical system files like /etc/fstab; viewing never modifies anything).
+    Caps output at ~1 MB and refuses a directory, so it can't flood the
+    results pane with a huge or binary file."""
+    path = _validate_path(path, "File path")
+    q = shlex.quote(path)
+    cap = _VIEW_FILE_CAP
+    return (
+        f"if [ ! -e {q} ]; then printf 'No such file: %s\\n' {q} >&2; exit 1; fi; "
+        f"if [ -d {q} ]; then printf '%s is a directory - use List Directory.\\n' {q} >&2; exit 1; fi; "
+        f"head -c {cap} -- {q}; "
+        f"_sz=$(wc -c < {q} 2>/dev/null || echo 0); "
+        f"if [ \"$_sz\" -gt {cap} ] 2>/dev/null; then "
+        f"printf '\\n...[truncated: file is %s bytes; showing the first %s]\\n' \"$_sz\" {cap}; fi"
+    )
+
+
 def cmd_create_directory(path: str, mode: str = "") -> str:
     """mkdir -p - safe to call on a path that already exists, and
     creates any missing parent directories along the way."""
@@ -101,12 +137,14 @@ def cmd_create_directory(path: str, mode: str = "") -> str:
     return f"mkdir -p {q_path} 2>&1"
 
 
-def cmd_remove_directory(path: str, recursive: bool = False) -> str:
-    """rmdir for an empty directory, or `rm -rf` if `recursive` is set
-    - refuses outright against a top-level system directory either
-    way."""
+def cmd_remove_directory(path: str, recursive: bool = False,
+                         allow_critical: bool = False) -> str:
+    """rmdir for an empty directory, or `rm -rf` if `recursive` is set.
+    Refuses against a system-critical file/dir/mount (see client/system_paths)
+    unless `allow_critical` is set — which the UIs only pass after a superuser
+    confirms the warning."""
     path = _validate_path(path, "Directory path")
-    _reject_dangerous_path(path, "Directory path")
+    _reject_critical_path(path, allow_critical, "Directory path")
     q_path = shlex.quote(path)
     if recursive:
         return f"rm -rf {q_path} 2>&1"

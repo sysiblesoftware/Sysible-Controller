@@ -309,7 +309,7 @@ fi
 # random password, flagged must-change. Printed once at the end of install.
 # =========================================================
 DEFAULT_ADMIN_USER="admin"
-DEFAULT_ADMIN_PASS="$($VENV/bin/python -c 'import secrets;print(secrets.token_urlsafe(9))')"
+DEFAULT_ADMIN_PASS="$($VENV/bin/python -c 'from backend.policy import generate_compliant_password; from backend.db import get_admin_password_policy; print(generate_compliant_password(get_admin_password_policy()))')"
 SEEDED_ADMIN="$($VENV/bin/python - "$DEFAULT_ADMIN_USER" "$DEFAULT_ADMIN_PASS" <<'PY'
 import sys
 from backend.db import count_administrators, add_administrator

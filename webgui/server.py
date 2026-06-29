@@ -288,6 +288,10 @@ def login(body: LoginRequest, request: Request):
     request.session.clear()
     request.session["user"] = body.username.strip()
     request.session["role"] = result.get("role") or "superuser"
+    # Per-admin opt-in for the Sysible Connect terminal's "Send sudo password"
+    # button (granted by a superuser). Enforced server-side in the terminal ws
+    # sudo handler below.
+    request.session["sudo_connect"] = bool(result.get("sudo_connect"))
     # Keep the controller-issued admin token (encrypted) so the BFF can call
     # superuser-gated controller routes on this admin's behalf. Encrypted with
     # a server-side key, so it's unreadable from the cookie and never echoed.
@@ -296,6 +300,7 @@ def login(body: LoginRequest, request: Request):
     return {
         "username": body.username.strip(),
         "role": request.session["role"],
+        "sudo_connect": request.session["sudo_connect"],
         "must_change_password": bool(result.get("must_change_password")),
     }
 
@@ -361,7 +366,29 @@ def me(request: Request):
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return {"username": user, "role": request.session.get("role") or "superuser"}
+    return {
+        "username": user,
+        "role": request.session.get("role") or "superuser",
+        "sudo_connect": bool(request.session.get("sudo_connect")),
+    }
+
+
+class PathCriticalRequest(BaseModel):
+    paths: list[str] = []
+
+
+@app.post("/api/path-critical")
+def path_critical(body: PathCriticalRequest, user: str = Depends(require_login)):
+    """Classify whether any of `paths` is a system-critical file/mount, so the
+    UI can warn (superuser) or block (sysadmin) before a delete/unmount/fstab
+    removal. Single source of truth = client/system_paths (shared with the
+    desktop GUI and the cmd_* builder backstop)."""
+    from client import system_paths
+    for p in body.paths:
+        reason = system_paths.system_critical_reason(p)
+        if reason:
+            return {"critical": True, "path": system_paths.normalize(p), "reason": reason}
+    return {"critical": False, "path": "", "reason": ""}
 
 
 # ----------------------------------------------------------------------
@@ -419,6 +446,96 @@ def hosts(user: str = Depends(require_login)):
             "online": online,
         })
     return {"hosts": out}
+
+
+def _parse_sysmetrics(text):
+    """Parse the one-line `SYSMETRICS|k=v|...` snapshot (client._api_dispatch
+    .cmd_metrics_snapshot) into a dict, or None if not present."""
+    for line in (text or "").splitlines():
+        if line.startswith("SYSMETRICS|"):
+            d = {}
+            for kv in line.split("|")[1:]:
+                if "=" in kv:
+                    k, v = kv.split("=", 1)
+                    d[k] = v
+
+            def num(k, cast):
+                try:
+                    return cast(d[k])
+                except (KeyError, TypeError, ValueError):
+                    return None
+            units = d.get("units", "-")
+            return {
+                "verdict": d.get("verdict", "OK"),
+                "disk": num("disk", int), "mount": d.get("mount", "/"),
+                "mem": num("mem", int), "load1": num("load1", float),
+                "cores": num("cores", int) or 1, "failed": num("failed", int) or 0,
+                "uptime": num("uptime", int) or 0,
+                "sysd": d.get("sysd", ""),
+                "units": [] if units in ("-", "", None) else units.split(","),
+                "oom": num("oom", int) or 0,
+            }
+    return None
+
+
+@app.get("/api/fleet-health")
+def fleet_health(user: str = Depends(require_login)):
+    """Snapshot health for the dashboard fleet overview: run the compact
+    metrics command on every reachable host (in parallel) and return parsed
+    per-host disk/mem/load/failed + a verdict. Offline agent hosts are reported
+    without probing (so the sweep can't hang on them); read-only, dispatched
+    without an admin token so it isn't attributed/logged as an operator action."""
+    import concurrent.futures
+    import time as _t
+    try:
+        entries = dispatch.list_merged_hosts(agent_only=False)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+
+    try:
+        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+    except Exception:
+        last_seen = {}
+    now = _t.time()
+    cmd = api.cmd_metrics_snapshot()
+
+    def agent_id_of(e):
+        if e["kind"] == "agent":
+            return e["id"]
+        if e["kind"] == "merged":
+            return (e.get("agent_entry") or {}).get("id") or e["id"]
+        return None
+
+    def probe(e):
+        base = {"host": e.get("label"), "environment": e.get("environment") or "Unassigned"}
+        aid = agent_id_of(e)
+        ls = last_seen.get(aid) if aid else None
+        online = (bool(ls and (now - ls) <= 20)) if aid else None
+        # Don't probe an agent host we already know is offline — avoids waiting
+        # out the task timeout on a host that won't answer.
+        if aid is not None and not online:
+            return {**base, "online": False, "ok": False, "verdict": "OFFLINE", "error": "offline"}
+        # The metrics command is read-only and runs as the agent (root) / SSH
+        # user with no sudo, so it must NOT be gated on a stored become-password.
+        # Clear the password-sudo flag on a copy of the entry so run_on_entry
+        # doesn't fail-fast on password-sudo hosts (the controller, where this
+        # runs, has no operator become-password to supply).
+        pe = {**e, "requires_sudo_password": False}
+        if e.get("agent_entry"):
+            pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+        r = _dispatch_one(pe, cmd, "command", None, None, None)  # no token: read-only, unlogged
+        m = _parse_sysmetrics((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
+        return {
+            **base,
+            "online": True if m else online,
+            "ok": bool(r.get("ok")) and m is not None,
+            "error": None if m else (r.get("error") or "no metrics returned"),
+            **(m or {}),
+        }
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
+        hosts = list(ex.map(probe, entries)) if entries else []
+    return {"hosts": hosts}
 
 
 @app.get("/api/environments")
@@ -732,6 +849,19 @@ def reset_admin_password(username: str, body: AdminPasswordReset, request: Reque
                          user: str = Depends(require_login)):
     return _wrap(lambda: _as_admin(request, lambda: api.reset_administrator_password(
         username, body.new_password, actor=user)))
+
+
+class AdminSudoConnect(BaseModel):
+    allowed: bool
+
+
+@app.post("/api/admins/{username}/sudo-connect")
+def set_admin_sudo_connect(username: str, body: AdminSudoConnect, request: Request,
+                           user: str = Depends(require_login)):
+    # Superuser-gated on the controller (via the admin token in _as_admin):
+    # grant/revoke the account's Sysible Connect "Send sudo password" button.
+    return _wrap(lambda: _as_admin(request, lambda: api.set_administrator_sudo_connect(
+        username, body.allowed, actor=user)))
 
 
 @app.get("/api/password-policy")
@@ -1169,6 +1299,13 @@ def run_tool(action_name: str, body: RunRequest, request: Request, user: str = D
     if spec is None:
         raise HTTPException(status_code=404, detail=f"Unknown action: {action_name}")
 
+    # The system-critical override (allow_critical) may only ever be honoured for
+    # a superuser. Strip it for anyone else so a sysadmin can't bypass the
+    # builder's critical-path block by crafting the request; the builder then
+    # refuses a critical path with a clear error.
+    if body.params.get("allow_critical") and request.session.get("role") != "superuser":
+        body.params = {**body.params, "allow_critical": False}
+
     try:
         command = spec.build(body.params)
     except KeyError as e:
@@ -1424,6 +1561,13 @@ async def terminal_ws(ws: WebSocket):
                     await asyncio.to_thread(api.resize_terminal, session_id,
                                             int(msg["cols"]), int(msg["rows"]))
                 elif t == "sudo":
+                    # Opt-in, granted per-account by a superuser. Enforce it
+                    # server-side (the button is also hidden client-side): never
+                    # inject the password for an account that hasn't been granted.
+                    if not (ws.scope.get("session") or {}).get("sudo_connect"):
+                        await ws.send_json({"t": "o", "d":
+                            "\r\n[sudo on Connect is not enabled for your account — ask a superuser to grant it in Settings → Administrators]\r\n"})
+                        continue
                     # Inject the operator's stored sudo password (host scope wins
                     # over fleet default) + Enter — for an interactive sudo prompt.
                     pw = sudo_store.resolve(ws_user, ws_label)

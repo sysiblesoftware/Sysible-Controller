@@ -108,6 +108,8 @@ from backend.remote_routes import (
     _ensure_controller_key,
     agent_ssh_enable_command,
     register_agent_ssh_host,
+    forget_agent_ssh_host,
+    sync_agent_ssh_environment,
     ssh_host_exists,
     get_agent_ssh_state,
     set_agent_ssh_state,
@@ -632,7 +634,18 @@ def get_agents():
 @app.delete("/agents/{host_id}", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def remove_agent(host_id: str):
 
+    # Look up the agent's identity BEFORE deleting it, so we can also clean up
+    # the auto-created SSH record (register_agent_ssh_host) that would otherwise
+    # linger in hosts.json as an orphan "Unassigned" host.
+    agent = _find_agent(host_id)
+
     delete_agent(host_id)
+
+    if agent:
+        try:
+            forget_agent_ssh_host(agent.get("hostname"), agent.get("ip"))
+        except Exception:
+            pass
 
     return {
         "status": "removed",
@@ -655,7 +668,15 @@ def self_disenroll(host_id: str, req: SelfDisenrollRequest):
 
     verify_agent(req.host_id, req.agent_secret)
 
+    agent = _find_agent(req.host_id)
+
     delete_agent(req.host_id)
+
+    if agent:
+        try:
+            forget_agent_ssh_host(agent.get("hostname"), agent.get("ip"))
+        except Exception:
+            pass
 
     return {
         "status": "disenrolled",
@@ -676,6 +697,15 @@ def set_agent_environment_route(host_id: str, body: SetEnvironmentRequest):
         raise HTTPException(status_code=404, detail="Unknown host_id")
 
     set_agent_environment(host_id, body.environment)
+
+    # Keep the agent's auto-created SSH record's environment in sync so the two
+    # records don't diverge (e.g. show as assigned vs. Unassigned).
+    agent = _find_agent(host_id)
+    if agent:
+        try:
+            sync_agent_ssh_environment(agent.get("hostname"), agent.get("ip"), body.environment)
+        except Exception:
+            pass
 
     return {
         "host_id": host_id,

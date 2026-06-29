@@ -377,6 +377,49 @@ def register_agent_ssh_host(name: str, ip: str, environment: str = ""):
     save_hosts(hosts)
 
 
+def forget_agent_ssh_host(name: str = None, ip: str = None):
+    """Remove the auto-created SSH record for an agent host (and forget its
+    pinned host key) when that agent is disenrolled. Without this the SSH
+    record register_agent_ssh_host() created lingers in hosts.json as an
+    orphan — showing up as a separate, usually 'Unassigned' host everywhere
+    that lists merged hosts (fleet health, Sysible Connect, the tools). Matches
+    by record name first, then by IP, so it cleans up even if the host was
+    renamed after auto-enrollment. Returns the number of records removed."""
+    hosts = load_hosts()
+    ip_n = _norm_ip(ip) if ip else ""
+    victims = [
+        n for n, h in hosts.items()
+        if (name and n == name) or (ip_n and _norm_ip(h.get("ip")) == ip_n)
+    ]
+    for n in victims:
+        removed = hosts.pop(n, None)
+        if removed and removed.get("ip"):
+            _forget_known_host(removed["ip"])
+    if victims:
+        save_hosts(hosts)
+    return len(victims)
+
+
+def sync_agent_ssh_environment(name: str = None, ip: str = None, environment: str = ""):
+    """Keep an agent host's auto-created SSH record tagged with the same
+    environment as the agent, so reassigning the agent's environment doesn't
+    leave the SSH side stale (the merged view prefers the agent's value, but an
+    out-of-sync SSH record still misleads anything that reads it directly).
+    Matches by name first, then IP. No-op if there's no SSH record. Returns the
+    number of records updated."""
+    hosts = load_hosts()
+    ip_n = _norm_ip(ip) if ip else ""
+    updated = 0
+    for n, h in hosts.items():
+        if (name and n == name) or (ip_n and _norm_ip(h.get("ip")) == ip_n):
+            if h.get("environment", "") != (environment or ""):
+                h["environment"] = environment or ""
+                updated += 1
+    if updated:
+        save_hosts(hosts)
+    return updated
+
+
 def _load_agent_ssh_state():
     if _AGENT_SSH_STATE_FILE.exists():
         try:

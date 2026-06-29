@@ -511,7 +511,15 @@ def fleet_health(user: str = Depends(require_login)):
         # out the task timeout on a host that won't answer.
         if aid is not None and not online:
             return {**base, "online": False, "ok": False, "verdict": "OFFLINE", "error": "offline"}
-        r = _dispatch_one(e, cmd, "command", None, None, None)  # no token: read-only, unlogged
+        # The metrics command is read-only and runs as the agent (root) / SSH
+        # user with no sudo, so it must NOT be gated on a stored become-password.
+        # Clear the password-sudo flag on a copy of the entry so run_on_entry
+        # doesn't fail-fast on password-sudo hosts (the controller, where this
+        # runs, has no operator become-password to supply).
+        pe = {**e, "requires_sudo_password": False}
+        if e.get("agent_entry"):
+            pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+        r = _dispatch_one(pe, cmd, "command", None, None, None)  # no token: read-only, unlogged
         m = _parse_sysmetrics((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
         return {
             **base,

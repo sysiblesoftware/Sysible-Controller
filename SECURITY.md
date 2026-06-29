@@ -94,6 +94,21 @@ the controller safely.
   controller (Fernet, `0600` key), namespaced per administrator, and fed
   to `sudo -S` over stdin only — never on the command line, in the
   environment, the database, or logs.
+- The terminal's **"Send sudo password" button is opt-in per administrator**:
+  off by default, granted only by a superuser. The web console enforces it
+  server-side (the inject request is refused for accounts that lack the grant),
+  so it isn't merely a hidden button.
+
+**Destructive-action guards**
+- **System-critical paths** (`/`, `/etc`, `/etc/fstab`, `/boot`, `/usr`,
+  init/systemd binaries, …) are protected from delete / unmount / fstab-removal:
+  sysadmins are blocked outright, and a superuser is warned and must confirm.
+  The check lives in the `cmd_*` builders (`client/system_paths.py`), so it
+  holds for every front end and even a crafted API request — the override flag
+  is honoured only for a confirmed superuser.
+- **Generated passwords always satisfy the admin password policy** (the
+  seeded/`reset-admin`/web generators guarantee the required character classes
+  and length), so a generated value can't fail the policy check that follows.
 
 ## Deploying safely — read this
 

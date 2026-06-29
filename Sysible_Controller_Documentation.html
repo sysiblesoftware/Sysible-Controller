@@ -274,6 +274,8 @@
 <li>Every host managed over SSH is authenticated with a <strong>dedicated SSH key pair</strong> the controller generates and manages itself, rather than relying on shared or stored passwords.</li>
 <li>The controller <strong>verifies each SSH host's key on a trust-on-first-use basis</strong>: the key is pinned on first contact and checked on every later connection (command exec, the interactive terminal, and file transfer all share one controller-side <code>known_hosts</code>). A <em>changed</em> host key &mdash; a possible man-in-the-middle, or a rebuilt machine &mdash; is refused rather than silently re-trusted, and removing a host forgets its pinned key so a legitimate rebuild can re-enroll.</li>
 <li>Every agent enrollment uses a <strong>single-use enrollment token</strong> baked into its downloadable bundle, so a bundle cannot be silently reused to enroll a second, unintended host.</li>
+<li><strong>System-critical paths are guarded against destructive actions.</strong> Deleting, unmounting, or removing the <code>/etc/fstab</code> entry of a critical system file or mount (<code>/</code>, <code>/etc</code>, <code>/etc/fstab</code>, <code>/boot</code>, <code>/usr</code>, the init/systemd binaries, and so on) is <strong>blocked outright for Sysadmins</strong> and requires an <strong>explicit Superuser confirmation</strong>. The check lives in the command builders, so it holds across every front end (and even a hand-crafted API request).</li>
+<li>The terminal's <strong>&ldquo;Send sudo password&rdquo; button is opt-in per administrator</strong> &mdash; off by default, granted only by a Superuser in Settings &rarr; Administrators, and enforced on the server (not just hidden in the UI).</li>
 </ul>
 </div>
 
@@ -453,7 +455,7 @@ sudo ./install_sysible.sh</pre>
 </figure>
 <figcaption>Live Activity &amp; Logs — a human-readable feed of who did what across the fleet, alongside the controller's own service log.</figcaption>
 <ul>
-<li><strong>Activity</strong> — a chronological feed of operator actions across the fleet: who did it, on which host(s), and a short human-readable summary (for example <em>Create user 'jdoe' on 2 hosts: web-01, db-01</em>, <em>Locked 'test2' on dev1</em>, <em>Ran ad-hoc command/script on 3 hosts: …</em>). The same action dispatched to several hosts is <strong>collapsed into a single row that lists every host</strong> — rather than one near-identical row per host — by grouping entries with the same operator, summary, and command within a short window. Routine background bookkeeping — the periodic user-sync and SSH-enable probes — is deliberately excluded so the feed reflects real operator intent.</li>
+<li><strong>Activity</strong> — a chronological feed of operator actions across the fleet: who did it, on which host(s), and a short human-readable summary (for example <em>Create user 'jdoe' on 2 hosts: web-01, db-01</em>, <em>Locked 'test2' on dev1</em>, <em>Ran ad-hoc command/script on 3 hosts: …</em>). The same action dispatched to several hosts is <strong>collapsed into a single row</strong> — rather than one near-identical row per host — with the hosts summarized by <strong>environment</strong> (for example <em>all prod servers</em>, or <em>all servers (all environments)</em> when an action spans the whole fleet; a partial set falls back to the host names), by grouping entries with the same operator, summary, and command within a short window. Routine background bookkeeping — the periodic user-sync and SSH-enable probes — is deliberately excluded so the feed reflects real operator intent.</li>
 <li><strong>Controller Log</strong> — a live tail of the backend service's own log, for diagnosing the controller itself.</li>
 </ul>
 <p><strong>Double-click any activity entry</strong> to pop out an <em>Activity Detail</em> window showing who/what/where/when and the <strong>complete command or script</strong> that ran (the feed row only shows a one-line summary, since a script can be many lines), with a <strong>Copy command</strong> button. Both tabs auto-refresh, with a manual <strong>Refresh now</strong> as well, and the activity feed can be cleared from the view.</p>
@@ -501,7 +503,7 @@ sudo ./run_agent.sh</pre>
 <p>It needs the Webserver Portal <strong>running with login credentials set</strong> (configured on the Webserver Portal page); the command is pre-filled here with the controller's address, the portal port, and the portal username. <code>-k</code> skips the self-signed-certificate check and the final install step needs <code>sudo</code>.</p>
 
 <h2>Environment tagging</h2>
-<p>Hosts can be organized into <strong>environments</strong> — labels such as "Production," "Staging," or "Development." Environments are entirely optional; an unassigned host is listed under an "Unassigned" heading. Select a host, use the <strong>Environment</strong> dropdown (choose <strong>"+ New environment..."</strong> to create one on the fly), and click <strong>Set Environment</strong> to apply it. The same environment list is shared elsewhere in the application, including Sysible Connect's SSH-enrollment flow.</p>
+<p>Hosts can be organized into <strong>environments</strong> — labels such as "Production," "Staging," or "Development." Environments are entirely optional; an unassigned host is listed under an "Unassigned" heading. Select a host, use the <strong>Environment</strong> dropdown (choose <strong>"+ New environment..."</strong> to create one on the fly), and click <strong>Set Environment</strong> to apply it. The same environment list is shared elsewhere in the application, including Sysible Connect's SSH-enrollment flow. To delete an environment, select it in the dropdown and click <strong>Remove Environment</strong>; it must have no hosts still assigned (reassign them first), so removing an environment never orphans a host.</p>
 <p><strong>Bulk assignment.</strong> You don't have to set environments one host at a time. <strong>Shift-click</strong> or <strong>Ctrl/Cmd-click</strong> to select several hosts in the Enrolled Hosts list, pick an environment, and <strong>Set Environment</strong> applies it to all of them at once — handy when a batch of newly enrolled hosts all belong to the same environment.</p>
 
 <h2>Sudo policy — passwordless or password ("become")</h2>
@@ -895,12 +897,15 @@ sudo ./run_agent.sh</pre>
 <h3>Directories and Files</h3>
 <table class="ref">
 <tr><th>Action</th><th>What it does</th></tr>
+<tr><td>List Directory</td><td>Shows a long listing of a directory (read-only, safe anywhere).</td></tr>
+<tr><td>View File</td><td>Shows a file's contents read-only — output capped at ~1&nbsp;MB so a huge or binary file can't flood the results pane. Safe on any file, including system files like <code>/etc/fstab</code>: viewing never changes anything, so it is <em>not</em> subject to the critical-path guard below.</td></tr>
 <tr><td>Create Directory</td><td>Creates a directory at a given path, including any missing parents.</td></tr>
 <tr><td>Remove Directory</td><td>Removes a directory at a given path.</td></tr>
 <tr><td>Copy</td><td>Copies a file or directory to a destination path.</td></tr>
 <tr><td>Move</td><td>Moves a file or directory to a destination path.</td></tr>
 <tr><td>Rename</td><td>Renames a file or directory in place.</td></tr>
 </table>
+<div class="note"><b>System-critical paths are protected.</b> Removing a directory (and, on the Mount tabs, unmounting or removing the <code>/etc/fstab</code> entry of) a critical system file or mount — <code>/</code>, <code>/etc</code>, <code>/etc/fstab</code>, <code>/boot</code>, <code>/usr</code>, and the like — is <strong>blocked for Sysadmins</strong> and requires an <strong>explicit Superuser confirmation</strong>. The guard lives in the command builders, so it applies in both front ends regardless of how the action is triggered.</div>
 
 <h3>Permissions, Ownership and Links</h3>
 <table class="ref">

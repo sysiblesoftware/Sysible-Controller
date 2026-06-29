@@ -414,10 +414,109 @@ sudo ./install_sysible.sh</pre>
 <p>Typing into the search bar at the top of the Dashboard matches against a curated list of common tasks — things like <strong>create a user</strong>, <strong>add a repository</strong>, <strong>restart a service</strong>, or <strong>reset password</strong> — and lists the matching task(s) below it as you type. Pressing Return, or clicking a result, opens the right tile directly; for tasks that live under System Administration's sub-tiles, it opens straight through to that sub-tile, and for User &amp; Group Administration tasks it lands on the specific tab (Create User, Account, Password, Groups, or Reports) rather than leaving you to find it. This saves having to already know which of the Dashboard's tiles — or, for anything under System Administration, which of its eighteen sub-tiles — a given task lives under.</p>
 
 <figure class="mock">
-  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Sysible Controller</span></div>
-  <img src="docs/screenshots/screenshot_dashboard.png" alt="The Dashboard — a search box over a single column of tiles, each opening its own popout window." style="display:block;width:100%;height:auto;">
+  <div class="titlebar"><span class="r"></span><span class="y"></span><span class="g"></span><span class="label">Sysible Console — https://&lt;controller&gt;:8800/</span></div>
+  <svg viewBox="0 0 1440 720" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif" role="img" aria-label="The web console Dashboard: a left navigation rail and a fleet-health overview grouped by environment.">
+    <rect width="1440" height="720" fill="#17191d"/>
+    <!-- left rail -->
+    <rect width="212" height="720" fill="#1b1d22"/>
+    <line x1="212" y1="0" x2="212" y2="720" stroke="#2c3038"/>
+    <rect x="20" y="24" width="26" height="26" rx="6" fill="#2a2f3e"/>
+    <text x="20" y="34" font-size="11" fill="#8c95cf" font-weight="700"> </text>
+    <text x="54" y="32" font-size="13" fill="#e7e9ec" font-weight="600">Sysible</text>
+    <text x="54" y="48" font-size="13" fill="#e7e9ec" font-weight="600">Controller</text>
+    <!-- nav -->
+    <rect x="12" y="80" width="188" height="30" rx="6" fill="#23262d"/>
+    <text x="40" y="100" font-size="13" fill="#e7e9ec" font-weight="600">Dashboard</text>
+    <text x="40" y="136" font-size="13" fill="#9ba1aa">Performance</text>
+    <text x="40" y="172" font-size="13" fill="#9ba1aa">Host Enrollment</text>
+    <text x="40" y="205" font-size="13" fill="#9ba1aa">System</text>
+    <text x="40" y="221" font-size="13" fill="#9ba1aa">Administration Tools</text>
+    <text x="40" y="258" font-size="13" fill="#9ba1aa">Connect</text>
+    <text x="40" y="294" font-size="13" fill="#9ba1aa">Activity &amp; Logs</text>
+    <text x="40" y="330" font-size="13" fill="#9ba1aa">Settings</text>
+    <rect x="12" y="394" width="188" height="26" rx="13" fill="#23262d"/>
+    <text x="106" y="411" font-size="11" fill="#9ba1aa" text-anchor="middle">Community · 4/10 hosts</text>
+    <circle cx="28" cy="446" r="13" fill="#2a2f3e"/><text x="28" y="450" font-size="9" fill="#8c95cf" text-anchor="middle">AD</text>
+    <text x="50" y="442" font-size="12" fill="#e7e9ec" font-weight="600">admin</text>
+    <text x="50" y="457" font-size="11" fill="#9ba1aa">superuser</text>
+    <rect x="12" y="474" width="150" height="26" rx="6" fill="none" stroke="#3a3f49"/>
+    <text x="30" y="491" font-size="12" fill="#e7e9ec">Sudo Password</text>
+    <rect x="168" y="474" width="32" height="26" rx="6" fill="none" stroke="#3a3f49"/><text x="184" y="491" font-size="13" fill="#9ba1aa" text-anchor="middle">☾</text>
+    <rect x="12" y="510" width="188" height="26" rx="6" fill="none" stroke="#3a3f49"/><text x="106" y="527" font-size="12" fill="#e7e9ec" text-anchor="middle">Log Out</text>
+    <!-- header -->
+    <text x="244" y="40" font-size="22" fill="#e7e9ec" font-weight="700">Dashboard</text>
+    <text x="372" y="40" font-size="12" fill="#9ba1aa">Signed in as admin · superuser</text>
+    <!-- search -->
+    <rect x="244" y="74" width="1168" height="40" rx="8" fill="#1e2127" stroke="#2c3038"/>
+    <text x="262" y="99" font-size="13" fill="#6c727b">Search for a task, e.g. "create a user" or "add a repository"…</text>
+    <!-- metric cards -->
+    <g>
+      <rect x="244" y="138" width="278" height="74" rx="8" fill="#1e2127" stroke="#2c3038"/>
+      <text x="262" y="164" font-size="11" fill="#9ba1aa">Hosts enrolled</text>
+      <text x="262" y="194" font-size="22" fill="#e7e9ec" font-weight="700">4 <tspan font-size="13" fill="#9ba1aa" font-weight="400">/ 10</tspan></text>
+      <rect x="535" y="138" width="278" height="74" rx="8" fill="#1e2127" stroke="#2c3038"/>
+      <text x="553" y="164" font-size="11" fill="#9ba1aa">Online</text>
+      <text x="553" y="194" font-size="22" fill="#e7e9ec" font-weight="700">4</text><circle cx="583" cy="187" r="5" fill="#4ec07a"/>
+      <rect x="826" y="138" width="278" height="74" rx="8" fill="#1e2127" stroke="#2c3038"/>
+      <text x="844" y="164" font-size="11" fill="#9ba1aa">Offline / stale</text>
+      <text x="844" y="194" font-size="22" fill="#e7e9ec" font-weight="700">0</text>
+      <rect x="1117" y="138" width="295" height="74" rx="8" fill="#1e2127" stroke="#2c3038"/>
+      <text x="1135" y="164" font-size="11" fill="#9ba1aa">Environments</text>
+      <text x="1135" y="194" font-size="22" fill="#e7e9ec" font-weight="700">3</text>
+    </g>
+    <!-- fleet health -->
+    <rect x="244" y="232" width="1168" height="180" rx="8" fill="#1e2127" stroke="#2c3038"/>
+    <text x="262" y="262" font-size="14" fill="#e7e9ec" font-weight="600">Fleet health</text>
+    <text x="1300" y="262" font-size="11" fill="#9ba1aa" text-anchor="end">updated 3:57 PM · Auto · Refresh</text>
+    <!-- donut -->
+    <g transform="translate(303,335)">
+      <circle r="34" fill="none" stroke="#2c3038" stroke-width="13"/>
+      <circle r="34" fill="none" stroke="#4ec07a" stroke-width="13" stroke-dasharray="160 214" transform="rotate(-90)"/>
+      <circle r="34" fill="none" stroke="#e0a83a" stroke-width="13" stroke-dasharray="53 321" stroke-dashoffset="-160" transform="rotate(-90)"/>
+      <text y="6" font-size="20" fill="#e7e9ec" font-weight="700" text-anchor="middle">4</text>
+    </g>
+    <g font-size="12">
+      <circle cx="368" cy="305" r="4" fill="#4ec07a"/><text x="380" y="309" fill="#e7e9ec">3 OK</text>
+      <circle cx="368" cy="325" r="4" fill="#e0a83a"/><text x="380" y="329" fill="#e7e9ec">1 warning</text>
+      <circle cx="368" cy="345" r="4" fill="#e06c6c"/><text x="380" y="349" fill="#e7e9ec">0 critical</text>
+      <circle cx="368" cy="365" r="4" fill="#7a7a7a"/><text x="380" y="369" fill="#e7e9ec">0 offline</text>
+    </g>
+    <!-- env cards -->
+    <g>
+      <rect x="466" y="292" width="300" height="100" rx="8" fill="none" stroke="#2c3038"/>
+      <text x="482" y="312" font-size="10" fill="#9ba1aa">▶</text>
+      <circle cx="500" cy="308" r="4" fill="#e0a83a"/><text x="512" y="312" font-size="13" fill="#e7e9ec" font-weight="600">Prod</text><text x="556" y="312" font-size="11" fill="#9ba1aa">2 hosts</text>
+      <text x="482" y="338" font-size="11" fill="#9ba1aa">disk</text><rect x="512" y="331" width="190" height="7" rx="3" fill="#2c3038"/><rect x="512" y="331" width="107" height="7" rx="3" fill="#e0a83a"/><text x="750" y="338" font-size="11" fill="#9ba1aa" text-anchor="end">56%</text>
+      <text x="482" y="356" font-size="11" fill="#9ba1aa">mem</text><rect x="512" y="349" width="190" height="7" rx="3" fill="#2c3038"/><rect x="512" y="349" width="93" height="7" rx="3" fill="#4ec07a"/><text x="750" y="356" font-size="11" fill="#9ba1aa" text-anchor="end">49%</text>
+      <text x="482" y="380" font-size="11" fill="#e0a83a">1 crashed service · 1 degraded systemd</text>
+
+      <rect x="778" y="292" width="300" height="100" rx="8" fill="none" stroke="#2c3038"/>
+      <text x="794" y="312" font-size="10" fill="#9ba1aa">▶</text>
+      <circle cx="812" cy="308" r="4" fill="#4ec07a"/><text x="824" y="312" font-size="13" fill="#e7e9ec" font-weight="600">Dev</text><text x="862" y="312" font-size="11" fill="#9ba1aa">1 host</text>
+      <text x="794" y="338" font-size="11" fill="#9ba1aa">disk</text><rect x="824" y="331" width="190" height="7" rx="3" fill="#2c3038"/><rect x="824" y="331" width="72" height="7" rx="3" fill="#4ec07a"/><text x="1062" y="338" font-size="11" fill="#9ba1aa" text-anchor="end">38%</text>
+      <text x="794" y="356" font-size="11" fill="#9ba1aa">mem</text><rect x="824" y="349" width="190" height="7" rx="3" fill="#2c3038"/><rect x="824" y="349" width="40" height="7" rx="3" fill="#4ec07a"/><text x="1062" y="356" font-size="11" fill="#9ba1aa" text-anchor="end">21%</text>
+
+      <rect x="1090" y="292" width="306" height="100" rx="8" fill="none" stroke="#2c3038"/>
+      <text x="1106" y="312" font-size="10" fill="#9ba1aa">▶</text>
+      <circle cx="1124" cy="308" r="4" fill="#4ec07a"/><text x="1136" y="312" font-size="13" fill="#e7e9ec" font-weight="600">Stage</text><text x="1184" y="312" font-size="11" fill="#9ba1aa">1 host</text>
+      <text x="1106" y="338" font-size="11" fill="#9ba1aa">disk</text><rect x="1136" y="331" width="196" height="7" rx="3" fill="#2c3038"/><rect x="1136" y="331" width="74" height="7" rx="3" fill="#4ec07a"/><text x="1380" y="338" font-size="11" fill="#9ba1aa" text-anchor="end">38%</text>
+      <text x="1106" y="356" font-size="11" fill="#9ba1aa">mem</text><rect x="1136" y="349" width="196" height="7" rx="3" fill="#2c3038"/><rect x="1136" y="349" width="41" height="7" rx="3" fill="#4ec07a"/><text x="1380" y="356" font-size="11" fill="#9ba1aa" text-anchor="end">21%</text>
+    </g>
+    <!-- recent activity -->
+    <text x="244" y="446" font-size="11" fill="#6c727b" letter-spacing="1">RECENT ACTIVITY</text>
+    <g font-size="12">
+      <rect x="244" y="458" width="1168" height="1" fill="#2c3038"/>
+      <text x="262" y="486" fill="#e7e9ec"><tspan font-weight="600">admin</tspan> <tspan fill="#9ba1aa">Ran fleet script · stage1</tspan></text><text x="1394" y="486" fill="#6c727b" text-anchor="end">3:48:12 PM</text>
+      <rect x="244" y="500" width="1168" height="1" fill="#23262d"/>
+      <text x="262" y="528" fill="#e7e9ec"><tspan font-weight="600">admin</tspan> <tspan fill="#9ba1aa">Ran fleet script · prod2</tspan></text><text x="1394" y="528" fill="#6c727b" text-anchor="end">3:48:11 PM</text>
+      <rect x="244" y="542" width="1168" height="1" fill="#23262d"/>
+      <text x="262" y="570" fill="#e7e9ec"><tspan font-weight="600">admin</tspan> <tspan fill="#9ba1aa">Ran fleet script · prod1</tspan></text><text x="1394" y="570" fill="#6c727b" text-anchor="end">3:48:08 PM</text>
+      <rect x="244" y="584" width="1168" height="1" fill="#23262d"/>
+      <text x="262" y="612" fill="#e7e9ec"><tspan font-weight="600">admin</tspan> <tspan fill="#9ba1aa">Ran fleet script · dev1</tspan></text><text x="1394" y="612" fill="#6c727b" text-anchor="end">3:48:07 PM</text>
+    </g>
+  </svg>
 </figure>
-<figcaption>The Dashboard — a search box over a single column of tiles, each opening its own popout window.</figcaption>
+<figcaption>The web console Dashboard — a left navigation rail beside the fleet-health overview: live host/environment counts, an OK/Warning/Critical donut, and a card per environment (Prod, Dev, Stage) with disk/memory meters and problem signals, over a recent-activity feed.</figcaption>
 
 <h2>Light and dark theme</h2>
 <p>A small pill-shaped switch in the top-right of the Dashboard header toggles the entire interface between a <strong>dark</strong> theme (the default) and a <strong>light</strong> theme. Clicking the sun or moon re-skins every window already on screen — the Dashboard and any open tool popouts — immediately, with no restart, and the choice is remembered the next time you launch the GUI. The toggle deliberately uses plain sun/moon glyphs rather than an icon font, so it always stays usable as the way back out of light mode even if the icon font is unavailable.</p>

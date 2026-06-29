@@ -25,7 +25,7 @@ const NAV = [
   { key: null, label: "Dashboard", icon: "grid", su: false },
   { key: "perf", label: "Performance", icon: "chart", su: false },
   { key: "hosts", label: "Host Enrollment", icon: "server", su: true },
-  { key: "sysadmin", label: "Administration", icon: "tools", su: false },
+  { key: "sysadmin", label: "System Administration Tools", icon: "tools", su: false },
   { key: "connect", label: "Connect", icon: "terminal", su: false },
   { key: "live", label: "Activity & Logs", icon: "activity", su: true },
   { key: "settings", label: "Settings", icon: "cog", su: true },

@@ -192,6 +192,7 @@ function FleetActions({ hosts, checked, onErr }) {
   const [running, setRunning] = useState("");
   const [results, setResults] = useState(null);
   const [script, setScript] = useState("");
+  const [sudoPw, setSudoPw] = useState("");
 
   // Act on checked hosts; if none are checked, fall back to the whole fleet.
   const targets = checked.length ? checked : [];
@@ -201,7 +202,9 @@ function FleetActions({ hosts, checked, onErr }) {
   async function act(action, confirmMsg, command) {
     if (confirmMsg && !window.confirm(`${confirmMsg} (${scopeLabel} host${scopeN === 1 ? "" : "s"})`)) return;
     setRunning(action); setResults(null); onErr("");
-    try { setResults(await api.fleet(action, targets, command)); }
+    // The inline sudo password only makes sense for the script action (the
+    // others run as root via the agent); send it only there.
+    try { setResults(await api.fleet(action, targets, command, action === "script" ? sudoPw : "")); }
     catch (e) { onErr(e.message); }
     finally { setRunning(""); }
   }
@@ -212,6 +215,12 @@ function FleetActions({ hosts, checked, onErr }) {
         <span>Run a script on all hosts</span>
         <textarea rows={2} value={script} onChange={(e) => setScript(e.target.value)}
                   placeholder="e.g. uname -a && uptime" />
+      </label>
+      <label className="field" style={{ marginTop: 8 }}>
+        <span>Sudo password <span className="faint">(optional — only for hosts that require one this run)</span></span>
+        <input type="password" autoComplete="off" value={sudoPw}
+               onChange={(e) => setSudoPw(e.target.value)}
+               placeholder="Leave blank to use your stored sudo password" />
       </label>
       <div className="row" style={{ marginTop: 8, flexWrap: "wrap" }}>
         <button className="btn sm" disabled={running || !script.trim()}

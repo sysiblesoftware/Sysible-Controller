@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit, QMessageBox, QTabWidget,
+    QLineEdit,
 )
 
 from client import theme
@@ -36,6 +37,15 @@ class AutomationPage(FleetToolPage):
         self.script_input.setStyleSheet("font-family: monospace;")
         self.script_input.setMinimumHeight(180)
         g.addWidget(self.script_input)
+
+        sudo_row = QHBoxLayout()
+        sudo_label = QLabel("Sudo password (optional):")
+        self.sudo_input = QLineEdit()
+        self.sudo_input.setEchoMode(QLineEdit.Password)
+        self.sudo_input.setPlaceholderText("Only for hosts that require a sudo password — blank uses your stored one")
+        sudo_row.addWidget(sudo_label)
+        sudo_row.addWidget(self.sudo_input, 1)
+        g.addLayout(sudo_row)
 
         row = QHBoxLayout()
         btn = QPushButton("Run on Checked Hosts")
@@ -74,4 +84,7 @@ class AutomationPage(FleetToolPage):
         )
         if confirm != QMessageBox.Yes:
             return
-        self.run_command(script, "Ran ad-hoc command/script")
+        # Optional per-run sudo password for password-sudo hosts; blank falls
+        # back to the workstation-local store inside api.run_on_entry.
+        become = self.sudo_input.text() or None
+        self.run_command(script, "Ran ad-hoc command/script", become_password=become)

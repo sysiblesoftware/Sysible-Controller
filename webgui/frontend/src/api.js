@@ -115,8 +115,8 @@ export const api = {
   clearSudo: (scope) =>
     req("/api/sudo", { method: "DELETE", body: { scope } }),
   // Sysible Connect
-  fleet: (action, targets, command) =>
-    req("/api/fleet", { method: "POST", body: { action, targets, command } }),
+  fleet: (action, targets, command, sudoPassword = "") =>
+    req("/api/fleet", { method: "POST", body: { action, targets, command, sudo_password: sudoPassword } }),
   checkin: () => req("/api/checkin", { method: "POST" }),
   controllerKey: () => req("/api/controller-key"),
   enrollSsh: (payload) => req("/api/enroll-ssh", { method: "POST", body: payload }),

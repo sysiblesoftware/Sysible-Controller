@@ -613,6 +613,10 @@ class FleetRequest(BaseModel):
     action: str                 # reboot | poweroff | restart_agent | script
     command: str = ""           # used when action == "script"
     targets: list[str] = []     # host ids; empty = all hosts
+    # Optional sudo password to use for THIS run on password-sudo hosts, for
+    # operators who don't keep one stored. Transient: used only to elevate via
+    # the agent's `sudo -S` (stdin), never persisted, logged, or echoed back.
+    sudo_password: str = ""
 
 
 @app.post("/api/fleet")
@@ -644,7 +648,9 @@ def fleet(body: FleetRequest, request: Request, user: str = Depends(require_logi
             results.append({"host": tid, "ok": False, "error": "host not found",
                             "stdout": "", "stderr": "", "code": None})
             continue
-        become = sudo_store.resolve(user, entry.get("label", ""))
+        # An inline password supplied for this run wins; otherwise fall back to
+        # this admin's stored password (host scope over fleet default).
+        become = body.sudo_password or sudo_store.resolve(user, entry.get("label", ""))
         results.append(_dispatch_one(entry, command, "command", become, token, desc))
     return {"action": body.action, "command": command, "results": results}
 

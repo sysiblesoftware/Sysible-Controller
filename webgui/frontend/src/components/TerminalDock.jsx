@@ -1,5 +1,6 @@
-import React, { useRef, useState, useImperativeHandle, forwardRef } from "react";
+import React, { useRef, useState, useEffect, useImperativeHandle, forwardRef } from "react";
 import TerminalSession from "./TerminalSession.jsx";
+import { api } from "../api.js";
 
 // Multi-terminal dock: several concurrent host shells as tabs, each an
 // independent persistent TerminalSession. A toolbar drives the active session
@@ -12,6 +13,10 @@ const TerminalDock = forwardRef(function TerminalDock(_props, ref) {
   const [find, setFind] = useState("");
   const nextId = useRef(1);
   const handles = useRef({}); // id -> imperative handle
+  // Per-account opt-in (granted by a superuser) for the Send Sudo Password
+  // button. Off by default; the server also enforces this on the ws side.
+  const [canSudo, setCanSudo] = useState(false);
+  useEffect(() => { api.me().then((d) => setCanSudo(!!d.sudo_connect)).catch(() => {}); }, []);
 
   function open(hostId, label) {
     const id = nextId.current++;
@@ -57,7 +62,10 @@ const TerminalDock = forwardRef(function TerminalDock(_props, ref) {
       </div>
 
       <div className="term-toolbar">
-        <button className="btn sm" onClick={act((h) => h.sendSudo())} title="Type your stored sudo password + Enter into this shell">
+        <button className="btn sm" disabled={!canSudo} onClick={act((h) => h.sendSudo())}
+                title={canSudo
+                  ? "Type your stored sudo password + Enter into this shell"
+                  : "Disabled: a superuser must grant your account 'Sudo on Connect' (Settings → Administrators)."}>
           Send Sudo Password
         </button>
         <button className="btn ghost sm" onClick={act((h) => h.sendCtrlC())} title="Interrupt the running command">Send Ctrl+C</button>

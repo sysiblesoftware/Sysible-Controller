@@ -288,6 +288,10 @@ def login(body: LoginRequest, request: Request):
     request.session.clear()
     request.session["user"] = body.username.strip()
     request.session["role"] = result.get("role") or "superuser"
+    # Per-admin opt-in for the Sysible Connect terminal's "Send sudo password"
+    # button (granted by a superuser). Enforced server-side in the terminal ws
+    # sudo handler below.
+    request.session["sudo_connect"] = bool(result.get("sudo_connect"))
     # Keep the controller-issued admin token (encrypted) so the BFF can call
     # superuser-gated controller routes on this admin's behalf. Encrypted with
     # a server-side key, so it's unreadable from the cookie and never echoed.
@@ -296,6 +300,7 @@ def login(body: LoginRequest, request: Request):
     return {
         "username": body.username.strip(),
         "role": request.session["role"],
+        "sudo_connect": request.session["sudo_connect"],
         "must_change_password": bool(result.get("must_change_password")),
     }
 
@@ -361,7 +366,11 @@ def me(request: Request):
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return {"username": user, "role": request.session.get("role") or "superuser"}
+    return {
+        "username": user,
+        "role": request.session.get("role") or "superuser",
+        "sudo_connect": bool(request.session.get("sudo_connect")),
+    }
 
 
 # ----------------------------------------------------------------------
@@ -732,6 +741,19 @@ def reset_admin_password(username: str, body: AdminPasswordReset, request: Reque
                          user: str = Depends(require_login)):
     return _wrap(lambda: _as_admin(request, lambda: api.reset_administrator_password(
         username, body.new_password, actor=user)))
+
+
+class AdminSudoConnect(BaseModel):
+    allowed: bool
+
+
+@app.post("/api/admins/{username}/sudo-connect")
+def set_admin_sudo_connect(username: str, body: AdminSudoConnect, request: Request,
+                           user: str = Depends(require_login)):
+    # Superuser-gated on the controller (via the admin token in _as_admin):
+    # grant/revoke the account's Sysible Connect "Send sudo password" button.
+    return _wrap(lambda: _as_admin(request, lambda: api.set_administrator_sudo_connect(
+        username, body.allowed, actor=user)))
 
 
 @app.get("/api/password-policy")
@@ -1424,6 +1446,13 @@ async def terminal_ws(ws: WebSocket):
                     await asyncio.to_thread(api.resize_terminal, session_id,
                                             int(msg["cols"]), int(msg["rows"]))
                 elif t == "sudo":
+                    # Opt-in, granted per-account by a superuser. Enforce it
+                    # server-side (the button is also hidden client-side): never
+                    # inject the password for an account that hasn't been granted.
+                    if not (ws.scope.get("session") or {}).get("sudo_connect"):
+                        await ws.send_json({"t": "o", "d":
+                            "\r\n[sudo on Connect is not enabled for your account — ask a superuser to grant it in Settings → Administrators]\r\n"})
+                        continue
                     # Inject the operator's stored sudo password (host scope wins
                     # over fleet default) + Enter — for an interactive sudo prompt.
                     pw = sudo_store.resolve(ws_user, ws_label)

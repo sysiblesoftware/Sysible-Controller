@@ -74,6 +74,7 @@ _PROMPT_RED = "#F14C4C"
 _PROMPT_TOKEN_RE = re.compile(r"[A-Za-z_][\w.\-]*@[A-Za-z0-9][\w.\-]*")
 
 from client import api
+from client import session
 from client.branding import make_page_header
 from client.events import bus
 from client import theme
@@ -963,10 +964,18 @@ class TerminalPopout(QWidget):
         btn_save.setToolTip("Save the terminal's text to a file.")
         btn_save.clicked.connect(self.save_output)
         btn_sudo = QPushButton("Send sudo password")
-        btn_sudo.setToolTip(
-            "Type your stored sudo password at a password prompt (so you don't need "
-            "passwordless sudo). The password is stored encrypted on this machine; "
-            "click to set it the first time.")
+        # Opt-in, granted per-account by a superuser (Settings -> Administrators).
+        # Off by default for everyone; disable the button when not granted.
+        if session.can_send_sudo():
+            btn_sudo.setToolTip(
+                "Type your stored sudo password at a password prompt (so you don't need "
+                "passwordless sudo). The password is stored encrypted on this machine; "
+                "click to set it the first time.")
+        else:
+            btn_sudo.setEnabled(False)
+            btn_sudo.setToolTip(
+                "Disabled: a superuser must grant your account 'Sudo on Connect' "
+                "(Settings -> Administrators) before you can send a sudo password here.")
         btn_sudo.clicked.connect(self.send_sudo_password)
         btn_font_dec = QPushButton("A-")
         btn_font_dec.setMaximumWidth(36)
@@ -1169,6 +1178,15 @@ class TerminalPopout(QWidget):
         the first click prompts to set it. Sent followed by Enter."""
         from client import become_credentials
         from PySide6.QtWidgets import QInputDialog, QLineEdit
+
+        # Defense in depth: the button is disabled when not granted, but never
+        # send a sudo password if this account hasn't been opted in.
+        if not session.can_send_sudo():
+            QMessageBox.information(
+                self, "Not enabled",
+                "A superuser must grant your account 'Sudo on Connect' "
+                "(Settings -> Administrators) before you can send a sudo password here.")
+            return
 
         host = self.entry.get("label", "")
         password = become_credentials.get_password(host)

@@ -598,9 +598,10 @@ class AdminConfigurationPage(QWidget):
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        self.admin_table = QTableWidget(0, 5)
+        self.admin_table = QTableWidget(0, 6)
         self.admin_table.setHorizontalHeaderLabels(
-            ["Username", "Role", "Created By", "Last Login", "Must Change Password"])
+            ["Username", "Role", "Created By", "Last Login", "Must Change Password",
+             "Sudo on Connect"])
         self.admin_table.verticalHeader().setVisible(False)
         self.admin_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.admin_table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -617,8 +618,15 @@ class AdminConfigurationPage(QWidget):
         self.remove_admin_btn = QPushButton("Remove Selected Administrator")
         self.remove_admin_btn.clicked.connect(self.remove_selected_administrator)
 
+        self.toggle_sudo_connect_btn = QPushButton("Toggle Sudo-on-Connect (Selected)")
+        self.toggle_sudo_connect_btn.setToolTip(
+            "Grant or revoke the selected administrator's use of the Sysible Connect "
+            "terminal's 'Send sudo password' button. Off by default; superuser only.")
+        self.toggle_sudo_connect_btn.clicked.connect(self.toggle_sudo_connect_selected)
+
         admin_buttons.addWidget(admin_refresh_btn)
         admin_buttons.addWidget(self.remove_admin_btn)
+        admin_buttons.addWidget(self.toggle_sudo_connect_btn)
         layout.addLayout(admin_buttons)
 
         # -- Add Administrator --
@@ -722,6 +730,11 @@ class AdminConfigurationPage(QWidget):
             self.admin_table.setItem(
                 row, 4, QTableWidgetItem("Yes" if admin.get("must_change_password") else "No")
             )
+            # Per-account opt-in for the Sysible Connect terminal's "Send sudo
+            # password" button (granted here by a superuser).
+            self.admin_table.setItem(
+                row, 5, QTableWidgetItem("Yes" if admin.get("sudo_connect") else "No")
+            )
 
         current = session.get_current_admin()
         if current:
@@ -776,6 +789,31 @@ class AdminConfigurationPage(QWidget):
 
         self.refresh_administrators()
 
+    def toggle_sudo_connect_selected(self):
+        selected = self.admin_table.selectedItems()
+        if not selected:
+            QMessageBox.warning(self, "No selection",
+                                "Select an administrator to change.")
+            return
+
+        row = selected[0].row()
+        username = self.admin_table.item(row, 0).text()
+        currently = self.admin_table.item(row, 5).text().strip().lower() == "yes"
+
+        try:
+            api.set_administrator_sudo_connect(
+                username, not currently, actor=session.get_current_admin() or "")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+            return
+
+        self.refresh_administrators()
+        QMessageBox.information(
+            self, "Updated",
+            f"Sudo on Connect {'enabled' if not currently else 'disabled'} for '{username}'."
+            + ("\n\nThey'll need to log out and back in for it to take effect in their session."
+               if not currently else ""))
+
     def save_credentials(self):
         acting_username = session.get_current_admin()
         if not acting_username:
@@ -805,7 +843,10 @@ class AdminConfigurationPage(QWidget):
             QMessageBox.critical(self, "Error", str(e))
             return
 
-        session.set_current_admin(new_username)
+        # Preserve this session's role + sudo-connect grant across a self-rename
+        # (otherwise they'd silently reset to the defaults).
+        session.set_current_admin(new_username, session.get_current_role(),
+                                  sudo_connect=session.can_send_sudo())
 
         self.current_password_input.clear()
         self.new_password_input.clear()

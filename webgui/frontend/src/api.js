@@ -54,6 +54,8 @@ export const api = {
     req(`/api/admins/${encodeURIComponent(username)}`, { method: "DELETE" }),
   resetAdminPassword: (username, new_password) =>
     req(`/api/admins/${encodeURIComponent(username)}/password`, { method: "POST", body: { new_password } }),
+  setAdminSudoConnect: (username, allowed) =>
+    req(`/api/admins/${encodeURIComponent(username)}/sudo-connect`, { method: "POST", body: { allowed } }),
   passwordPolicy: () => req("/api/password-policy"),
   setPasswordPolicy: (policy) =>
     req("/api/password-policy", { method: "POST", body: policy }),

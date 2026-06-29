@@ -71,3 +71,10 @@ class ResetAdministratorPasswordRequest(BaseModel):
     # is required to change it on their next login.
     new_password: str
     actor: str = ""  # username of the superuser performing the reset, for the audit log
+
+
+class SetSudoConnectRequest(BaseModel):
+    # Superuser-initiated grant/revoke of an administrator's access to the
+    # Sysible Connect terminal's "Send sudo password" button.
+    allowed: bool
+    actor: str = ""  # username of the superuser making the change, for the audit log

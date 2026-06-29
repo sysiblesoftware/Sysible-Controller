@@ -336,7 +336,8 @@ def init_db():
         created REAL,
         created_by TEXT,
         last_login REAL,
-        role TEXT DEFAULT 'superuser'
+        role TEXT DEFAULT 'superuser',
+        sudo_connect INTEGER DEFAULT 0
     )
     """)
 
@@ -344,8 +345,14 @@ def init_db():
     # Default 'superuser' so an existing single admin keeps full access
     # rather than being silently downgraded and locked out of management.
     cur.execute("PRAGMA table_info(administrators)")
-    if "role" not in {c[1] for c in cur.fetchall()}:
+    _admin_cols = {c[1] for c in cur.fetchall()}
+    if "role" not in _admin_cols:
         cur.execute("ALTER TABLE administrators ADD COLUMN role TEXT DEFAULT 'superuser'")
+    # Migration: per-admin opt-in for the Sysible Connect terminal's "Send sudo
+    # password" button. Default 0 (off) - it's an opt-in a superuser grants,
+    # so existing admins start without it until explicitly enabled.
+    if "sudo_connect" not in _admin_cols:
+        cur.execute("ALTER TABLE administrators ADD COLUMN sudo_connect INTEGER DEFAULT 0")
 
     # One-time migration + default-seed, run only while `administrators`
     # is still empty so this never re-fires (e.g. after an admin is
@@ -1332,7 +1339,7 @@ def list_administrators():
     cur = conn.cursor()
 
     cur.execute("""
-    SELECT username, must_change_password, created, created_by, last_login, role
+    SELECT username, must_change_password, created, created_by, last_login, role, sudo_connect
     FROM administrators
     ORDER BY created ASC
     """)
@@ -1364,6 +1371,19 @@ def set_administrator_role(username, role):
     conn = _connect()
     cur = conn.cursor()
     cur.execute("UPDATE administrators SET role=? WHERE username=?", (role, username))
+    conn.commit()
+    changed = cur.rowcount
+    conn.close()
+    return changed > 0
+
+
+def set_administrator_sudo_connect(username, allowed):
+    """Grant/revoke this admin's access to the Sysible Connect terminal's
+    "Send sudo password" button. Superuser-gated at the route layer."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("UPDATE administrators SET sudo_connect=? WHERE username=?",
+                (1 if allowed else 0, username))
     conn.commit()
     changed = cur.rowcount
     conn.close()

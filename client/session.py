@@ -11,12 +11,14 @@
 
 _current_username = None
 _current_role = None
+_current_sudo_connect = False
 
 
-def set_current_admin(username: str, role: str = None):
-    global _current_username, _current_role
+def set_current_admin(username: str, role: str = None, sudo_connect: bool = False):
+    global _current_username, _current_role, _current_sudo_connect
     _current_username = username
     _current_role = role
+    _current_sudo_connect = bool(sudo_connect)
 
 
 def get_current_admin():
@@ -35,7 +37,16 @@ def is_superuser():
     return _current_role in (None, "superuser")
 
 
+def can_send_sudo():
+    """Whether this admin may use the Sysible Connect terminal's 'Send sudo
+    password' button. Opt-in, granted per-account by a superuser - defaults
+    to False (unlike is_superuser()'s permissive default) so the button stays
+    off until explicitly enabled."""
+    return _current_sudo_connect
+
+
 def clear_current_admin():
-    global _current_username, _current_role
+    global _current_username, _current_role, _current_sudo_connect
     _current_username = None
     _current_role = None
+    _current_sudo_connect = False

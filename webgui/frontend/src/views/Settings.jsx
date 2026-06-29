@@ -48,6 +48,17 @@ function Admins() {
     try { await api.removeAdmin(name); setMsg(`Removed ${name}.`); load(); } catch (e) { setErr(e.message); }
   }
 
+  async function toggleSudo(a) {
+    setErr(""); setMsg("");
+    const next = !a.sudo_connect;
+    try {
+      await api.setAdminSudoConnect(a.username, next);
+      setMsg(`Sudo on Connect ${next ? "enabled" : "disabled"} for ${a.username}.`
+        + (next ? " They must re-log in for it to apply." : ""));
+      load();
+    } catch (e) { setErr(e.message); }
+  }
+
   function onDone(text) { setModal(null); setMsg(text); setErr(""); load(); }
 
   return (
@@ -59,14 +70,21 @@ function Admins() {
 
       <div className="card" style={{ padding: 0, overflow: "hidden" }}>
         <table>
-          <thead><tr><th>Username</th><th>Role</th><th style={{ textAlign: "right" }}>Actions</th></tr></thead>
+          <thead><tr><th>Username</th><th>Role</th><th>Sudo on Connect</th><th style={{ textAlign: "right" }}>Actions</th></tr></thead>
           <tbody>
-            {list.length === 0 && <tr><td colSpan={3} className="faint" style={{ padding: 16 }}>No administrators.</td></tr>}
+            {list.length === 0 && <tr><td colSpan={4} className="faint" style={{ padding: 16 }}>No administrators.</td></tr>}
             {list.map((a) => (
               <tr key={a.username}>
                 <td style={{ fontWeight: 600 }}>{a.username}</td>
                 <td><span className={"badge" + (a.role === "superuser" ? " amber" : "")}>{a.role}</span></td>
+                <td>{a.sudo_connect
+                  ? <span className="ok-text">Yes</span>
+                  : <span className="faint">No</span>}</td>
                 <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                  <button className="btn ghost sm" style={{ marginRight: 6 }}
+                          onClick={() => toggleSudo(a)}
+                          title="Grant or revoke this account's Sysible Connect 'Send sudo password' button">
+                    {a.sudo_connect ? "Revoke sudo" : "Grant sudo"}</button>
                   <button className="btn ghost sm" style={{ marginRight: 6 }}
                           onClick={() => { setMsg(""); setErr(""); setModal({ mode: "reset", username: a.username }); }}>
                     Reset password…</button>

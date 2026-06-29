@@ -61,17 +61,19 @@ class _DispatchWorker(QThread):
 
     done = Signal(object)
 
-    def __init__(self, entries, command, description=None):
+    def __init__(self, entries, command, description=None, become_password=None):
         super().__init__()
         self._entries = entries
         self._command = command
         self._description = description
+        self._become_password = become_password
 
     def run(self):
         def work(entry):
             try:
                 return _entry_key(entry), entry, api.run_on_entry(
-                    entry, self._command, description=self._description)
+                    entry, self._command, description=self._description,
+                    become_password=self._become_password)
             except Exception as e:  # never let one host kill the whole batch
                 return _entry_key(entry), entry, {
                     "sync": True, "stdout": "", "stderr": str(e),
@@ -234,7 +236,11 @@ class FleetToolPage(QWidget):
                 it.setCheckState(Qt.Unchecked)
 
     # ---- dispatch + results ----
-    def run_command(self, command, label):
+    def run_command(self, command, label, become_password=None):
+        """Dispatch `command` to every checked host. `become_password`, when
+        given, is used to elevate on password-sudo hosts for this run only
+        (caller-supplied wins over the workstation-local store; see
+        api.run_on_entry); it's never persisted by this page."""
         entries = self.checked_entries()
         if not entries:
             QMessageBox.information(self, "No hosts checked", "Check one or more target hosts first.")
@@ -250,7 +256,8 @@ class FleetToolPage(QWidget):
         # then build the result tabs back here on the main thread.
         if not hasattr(self, "_dispatch_workers"):
             self._dispatch_workers = []
-        worker = _DispatchWorker(entries, command, description=label)
+        worker = _DispatchWorker(entries, command, description=label,
+                                 become_password=become_password)
         worker.done.connect(lambda res, lbl=label: self._on_dispatch_done(res, lbl))
         # Keep a reference until the thread fully finishes so it isn't garbage
         # collected mid-run if another action is launched right after.

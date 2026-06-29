@@ -112,6 +112,12 @@ def get_agents():
     return _request("GET", "/agents").get("agents", [])
 
 
+def get_metrics_timeseries(window=3600):
+    """Per-host performance time-series (load/mem/disk) for the last `window`
+    seconds. Returns {"hosts": [...], "window": int, "now": float}."""
+    return _request("GET", f"/metrics/timeseries?window={int(window)}")
+
+
 def get_edition():
     """Edition + host-cap info, e.g. {"edition": "community", "host_limit": 10,
     "host_count": 3}. host_limit is None on an unlimited (Enterprise) build.

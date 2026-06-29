@@ -7,7 +7,7 @@
 # business being a systemd service - it's one human's desktop app,
 # not a daemon.
 #
-# Usage: sysible_controller {start|stop|restart|status|logs|gui|webgui|reset-admin|enable-remote-gui|disable-remote-gui|destroy}
+# Usage: sysible_controller {start|stop|restart|update|status|logs|gui|webgui|reset-admin|enable-remote-gui|disable-remote-gui|destroy}
 
 BASE="/opt/sysible"
 VENV="$BASE/venv"
@@ -318,6 +318,112 @@ cmd_restart() {
     echo "Restarting the web console (it was running before)..."
     _start_webgui
   fi
+}
+
+# =========================================================
+# UPDATE (pull latest code + redeploy)
+# The service always runs out of $BASE, which is a *copy* the installer
+# rsync'd from the git checkout - so a plain `git pull` in the checkout
+# never changes what's running. This command does the whole redeploy in
+# one shot: pull the recorded checkout, re-sync it into $BASE (preserving
+# the venv/DB/key/certs/run dir exactly like the installer), and restart.
+# The built front end (webgui/frontend/dist) isn't tracked in git, so the
+# --delete sync removes the stale bundle and start_webgui.sh rebuilds it
+# when the web console comes back up.
+# =========================================================
+cmd_update() {
+  _require_root update
+
+  local SRC=""
+  [[ -f "$BASE/.install_src" ]] && SRC="$(cat "$BASE/.install_src" 2>/dev/null)"
+  if [[ -z "$SRC" || ! -d "$SRC" ]]; then
+    echo "ERROR: can't find the source checkout to update from"
+    echo "       (its path is recorded in $BASE/.install_src at install time)."
+    echo "Re-run the installer from your git checkout instead:"
+    echo "   cd <your-checkout> && sudo git pull && sudo ./install_sysible.sh"
+    exit 1
+  fi
+
+  echo "Updating Sysible Controller from $SRC ..."
+
+  # 1) Refresh the checkout (best-effort - skip cleanly if it isn't a git repo).
+  if [[ -d "$SRC/.git" ]] && command -v git >/dev/null 2>&1; then
+    echo "Pulling latest code (git) ..."
+    if ! git -C "$SRC" pull --ff-only; then
+      echo "ERROR: 'git pull' failed in $SRC - resolve it there, then re-run update."
+      exit 1
+    fi
+  else
+    echo "NOTE: $SRC is not a git checkout - redeploying whatever code is there now."
+  fi
+
+  # 2) Sync into $BASE. Excludes MUST match install_sysible.sh so the live
+  #    venv, database, API key, host records, SSH keys, certs, and run dir are
+  #    never clobbered. --delete clears stale files (incl. the old dist/).
+  if [[ "$SRC" != "$BASE" ]]; then
+    if ! command -v rsync >/dev/null 2>&1; then
+      echo "ERROR: rsync not found - run 'sudo $SRC/install_sysible.sh' instead."
+      exit 1
+    fi
+    echo "Syncing code into $BASE ..."
+    rsync -a --delete \
+      --exclude venv \
+      --exclude run \
+      --exclude logs \
+      --exclude '*.db' \
+      --exclude api_key.txt \
+      --exclude hosts.json \
+      --exclude remote_keys \
+      --exclude agent_state.json \
+      --exclude certs \
+      --exclude '__pycache__' \
+      --exclude '*.pyc' \
+      --exclude '.git' \
+      "$SRC"/ "$BASE"/
+    # rsync --delete removes BASE-only files not present in the checkout,
+    # including .install_src itself - rewrite it so the NEXT update still works
+    # (install_sysible.sh does the same after its own sync).
+    echo "$SRC" > "$BASE/.install_src" 2>/dev/null || true
+  fi
+
+  # Refresh the installed CLI wrapper too - rsync only updated $BASE's copy,
+  # not the /usr/local/bin one we're running from. Atomic mv (not cp-in-place)
+  # so replacing the very script in flight can't corrupt this execution: the
+  # old inode stays open for the rest of THIS run; the new code applies next time.
+  local self="/usr/local/bin/sysible_controller"
+  if [[ -f "$BASE/sysible_controller" && -e "$self" ]]; then
+    if cp -f "$BASE/sysible_controller" "$self.new" 2>/dev/null; then
+      chmod 755 "$self.new" 2>/dev/null
+      mv -f "$self.new" "$self" 2>/dev/null \
+        && echo "Refreshed $self (new CLI applies on next run)." \
+        || { rm -f "$self.new" 2>/dev/null; echo "NOTE: could not replace $self."; }
+    fi
+  fi
+
+  # 3) Refresh Python deps in case requirements changed (best-effort).
+  if [[ -x "$VENV/bin/pip" ]]; then
+    echo "Updating Python dependencies ..."
+    "$VENV/bin/pip" install -q -r "$BASE/requirements.txt" \
+      || echo "NOTE: backend dependency refresh hit an issue - check $BASE/requirements.txt."
+    if [[ -f "$BASE/webgui/requirements.txt" ]]; then
+      "$VENV/bin/pip" install -q -r "$BASE/webgui/requirements.txt" \
+        || echo "NOTE: web-console dependency refresh hit an issue."
+    fi
+  fi
+
+  # 4) Restart. cmd_restart brings the backend back and, if the web console was
+  #    running, restarts it too - which rebuilds the front end that step 2 cleared.
+  echo "Restarting services ..."
+  cmd_restart
+
+  echo ""
+  echo "Update complete."
+  echo "If the web console was running, it is rebuilding its front end now"
+  echo "(the first load after an update can take a few extra seconds)."
+  echo "Then hard-refresh your browser (Ctrl/Cmd+Shift+R) to drop the old bundle."
+  echo ""
+  echo "NOTE: managed hosts run their own copy of the agent - to pick up agent"
+  echo "      changes, redeploy the agent to each host (re-run its installer)."
 }
 
 cmd_status() {
@@ -662,6 +768,7 @@ case "$1" in
   start)   cmd_start ;;
   stop)    cmd_stop ;;
   restart) cmd_restart ;;
+  update)  cmd_update ;;
   status)  cmd_status ;;
   logs)    cmd_logs ;;
   gui)     cmd_gui ;;
@@ -671,7 +778,7 @@ case "$1" in
   disable-remote-gui) cmd_disable_remote_gui ;;
   destroy) cmd_destroy ;;
   *)
-    echo "Usage: sysible_controller {start|stop|restart|status|logs|gui|webgui|reset-admin|enable-remote-gui|disable-remote-gui|destroy}"
+    echo "Usage: sysible_controller {start|stop|restart|update|status|logs|gui|webgui|reset-admin|enable-remote-gui|disable-remote-gui|destroy}"
     exit 1
     ;;
 esac

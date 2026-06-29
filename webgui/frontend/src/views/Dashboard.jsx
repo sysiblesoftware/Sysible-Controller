@@ -77,6 +77,64 @@ function FleetHostCard({ h }) {
   );
 }
 
+// One card per environment: a rolled-up health summary (worst verdict, per-
+// verdict host counts, peak disk/mem, aggregated problem signals) that expands
+// to the individual host cards. Environment-first, mirroring the Performance
+// view, so the dashboard reads as "how is each environment doing" rather than a
+// flat wall of hosts.
+function EnvHealthCard({ group }) {
+  const [open, setOpen] = useState(false);
+  const v = group.verdict;
+  const Count = ({ k, color }) => group.counts[k] > 0 ? (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+      <span className="dot" style={{ background: color }} />{group.counts[k]}
+    </span>
+  ) : null;
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+      <button onClick={() => setOpen((o) => !o)}
+        style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                 gap: 8, padding: "8px 10px", background: "none", border: "none", cursor: "pointer",
+                 color: "var(--text)", textAlign: "left", font: "inherit" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .15s",
+                         fontSize: 10, opacity: 0.6 }}>▶</span>
+          <span className="dot" style={{ background: VERDICT_COLOR[v] || VERDICT_COLOR.OFFLINE }} />
+          <strong style={{ whiteSpace: "nowrap" }}>{group.env}</strong>
+          <span className="faint" style={{ fontSize: 11 }}>
+            {group.hosts.length} host{group.hosts.length === 1 ? "" : "s"}
+          </span>
+        </span>
+        <span className="faint row" style={{ fontSize: 11, gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <Count k="OK" color={VERDICT_COLOR.OK} />
+          <Count k="WARNING" color={VERDICT_COLOR.WARNING} />
+          <Count k="CRITICAL" color={VERDICT_COLOR.CRITICAL} />
+          <Count k="OFFLINE" color={VERDICT_COLOR.OFFLINE} />
+        </span>
+      </button>
+      <div style={{ padding: "0 10px 8px" }}>
+        <Meter label="disk" pct={group.disk} />
+        <Meter label="mem" pct={group.mem} />
+        {(group.failed > 0 || group.oom > 0 || group.degraded > 0) && (
+          <div style={{ fontSize: 12, marginTop: 4, color: VERDICT_COLOR.WARNING }}>
+            {[
+              group.failed > 0 && `${group.failed} crashed service${group.failed > 1 ? "s" : ""}`,
+              group.oom > 0 && `${group.oom} OOM kill${group.oom > 1 ? "s" : ""}`,
+              group.degraded > 0 && `${group.degraded} degraded systemd`,
+            ].filter(Boolean).join(" · ")}
+          </div>
+        )}
+      </div>
+      {open && (
+        <div style={{ padding: "0 10px 10px", display: "grid", gap: 8,
+                      borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+          {group.hosts.map((h) => <FleetHostCard key={h.host} h={h} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Fleet overview: at-a-glance metrics + recent activity. Navigation lives in
 // the sidebar, so this is a real home screen rather than a duplicate tile grid.
 
@@ -143,17 +201,49 @@ export default function Dashboard({ role, edition, onOpen }) {
     return () => clearInterval(t);
   }, [fleetAuto, loadFleet]);
 
+  const order = { CRITICAL: 0, WARNING: 1, OFFLINE: 2, OK: 3 };
+
   const fleetSummary = useMemo(() => {
     const counts = { OK: 0, WARNING: 0, CRITICAL: 0, OFFLINE: 0 };
     for (const h of fleet) {
       const v = (h.verdict || "OK").toUpperCase();
       counts[v] = (counts[v] || 0) + 1;
     }
-    const order = { CRITICAL: 0, WARNING: 1, OFFLINE: 2, OK: 3 };
-    const sorted = [...fleet].sort((a, b) =>
-      (order[(a.verdict || "OK").toUpperCase()] ?? 9) - (order[(b.verdict || "OK").toUpperCase()] ?? 9)
-      || (b.disk || 0) - (a.disk || 0));
-    return { counts, sorted };
+    return { counts };
+  }, [fleet]);
+
+  // Roll the per-host snapshot up to one entry per environment: verdict counts,
+  // worst verdict, peak disk/mem, and summed problem signals; hosts kept (sorted
+  // worst-first) so an env card can expand to them. Envs themselves sorted
+  // worst-first so trouble surfaces at the top.
+  const fleetByEnv = useMemo(() => {
+    const g = {};
+    for (const h of fleet) {
+      const env = h.environment || "Unassigned";
+      const e = g[env] || (g[env] = {
+        env, hosts: [], counts: { OK: 0, WARNING: 0, CRITICAL: 0, OFFLINE: 0 },
+        disk: null, mem: null, failed: 0, oom: 0, degraded: 0,
+      });
+      e.hosts.push(h);
+      const v = (h.verdict || "OK").toUpperCase();
+      e.counts[v] = (e.counts[v] || 0) + 1;
+      if (h.disk != null) e.disk = Math.max(e.disk ?? 0, h.disk);
+      if (h.mem != null) e.mem = Math.max(e.mem ?? 0, h.mem);
+      e.failed += h.failed || 0;
+      e.oom += h.oom || 0;
+      if (h.sysd && h.sysd !== "running" && h.sysd !== "unknown") e.degraded += 1;
+    }
+    const envs = Object.values(g).map((e) => {
+      e.verdict = e.counts.CRITICAL > 0 ? "CRITICAL"
+        : e.counts.WARNING > 0 ? "WARNING"
+        : e.counts.OK > 0 ? "OK" : "OFFLINE";
+      e.hosts.sort((a, b) =>
+        (order[(a.verdict || "OK").toUpperCase()] ?? 9) - (order[(b.verdict || "OK").toUpperCase()] ?? 9)
+        || (b.disk || 0) - (a.disk || 0));
+      return e;
+    });
+    envs.sort((a, b) => (order[a.verdict] ?? 9) - (order[b.verdict] ?? 9) || a.env.localeCompare(b.env));
+    return envs;
   }, [fleet]);
 
   if (q.trim()) {
@@ -239,8 +329,8 @@ export default function Dashboard({ role, edition, onOpen }) {
                 <span><span className="dot" style={{ background: VERDICT_COLOR.OFFLINE }} /> {fleetSummary.counts.OFFLINE} offline</span>
               </div>
             </div>
-            <div style={{ flex: 1, minWidth: 300, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(270px, 1fr))", gap: 10 }}>
-              {fleetSummary.sorted.map((h) => <FleetHostCard key={h.host} h={h} />)}
+            <div style={{ flex: 1, minWidth: 300, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
+              {fleetByEnv.map((e) => <EnvHealthCard key={e.env} group={e} />)}
             </div>
           </div>
         )}

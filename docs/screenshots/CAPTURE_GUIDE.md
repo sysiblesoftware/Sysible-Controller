@@ -47,6 +47,19 @@ then `https://<controller>:8800/`), capture the browser at a comparable window
 size. Note it looks different from the desktop GUI — if you switch, switch
 *all* of them for consistency.
 
+**Web-console-only screens worth capturing** (these features live in the browser
+console, not the desktop GUI — so they have no shot in the table below yet):
+
+- `screenshot_fleet_health.png` — Dashboard → **Fleet health**: the OK/Warning/
+  Critical donut and the **per-environment** cards (expand one to show its hosts).
+- `screenshot_performance.png` — the **Performance** view: environment-first
+  CPU/memory/disk line charts; capture both the overview (one line per
+  environment) and a drilled-in environment (one line per host) if you want both.
+  Needs an up-to-date agent on a couple of hosts so the graphs have data.
+
+If you add these, drop them in this folder and tell me — I'll wire them into the
+README/HTML at the right spots.
+
 ## After capturing
 
 Drop the new PNGs in this folder (same filenames) and tell me — I'll re-verify

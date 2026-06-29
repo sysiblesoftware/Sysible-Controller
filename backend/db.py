@@ -142,6 +142,38 @@ def init_db():
         )
 
     # -----------------------------------------------------
+    # Metric samples (fleet performance time-series)
+    #
+    # Lightweight rolling history fed by the agent itself: each agent
+    # samples a few cheap numbers (load, memory %, worst-disk %) and
+    # piggybacks them on its heartbeat at most every
+    # SYSIBLE_METRICS_INTERVAL seconds (NOT every heartbeat - see
+    # host_agent/agent.py). The controller appends one row per sample
+    # and prunes anything older than the retention window on write, so
+    # the table stays bounded (~a couple thousand rows per host/day).
+    # Read back by the web console's Performance view, grouped by
+    # environment with per-host drill-down.
+    #
+    # Deliberately not a foreign key to agents: a disenroll deletes the
+    # agent row but old samples just age out via the retention prune, so
+    # a brief post-removal window can't error on an orphan reference.
+    # -----------------------------------------------------
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS metric_samples (
+        host_id TEXT NOT NULL,
+        ts REAL NOT NULL,
+        load1 REAL,
+        cores INTEGER,
+        mem INTEGER,
+        disk INTEGER,
+        PRIMARY KEY (host_id, ts)
+    )
+    """)
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_metric_samples_ts ON metric_samples(ts)"
+    )
+
+    # -----------------------------------------------------
     # Enrollment Tokens
     #
     # bound_host_id/last_used (migrated in below) let an already-used
@@ -646,9 +678,87 @@ def delete_agent(host_id):
         "DELETE FROM agent_results WHERE host_id=?",
         (host_id,)
     )
+    cur.execute(
+        "DELETE FROM metric_samples WHERE host_id=?",
+        (host_id,)
+    )
 
     conn.commit()
     conn.close()
+
+
+# =========================================================
+# METRIC SAMPLES (fleet performance time-series)
+# =========================================================
+# Keep ~26h of history so the web console can offer up to a 24h window
+# with a little headroom; everything older is pruned on write.
+METRIC_RETENTION_S = 26 * 3600
+
+
+def insert_metric_sample(host_id, ts, load1, cores, mem, disk):
+    """Append one performance sample for a host and prune anything past the
+    retention window. Called from the heartbeat path (only when the agent
+    actually attached metrics, i.e. at most once per SYSIBLE_METRICS_INTERVAL),
+    so the write rate is low enough not to add meaningful heartbeat contention.
+    """
+    conn = _connect()
+    cur = conn.cursor()
+    # INSERT OR REPLACE: the (host_id, ts) PK makes a duplicate timestamp
+    # (e.g. a retried heartbeat) idempotent rather than an error.
+    cur.execute(
+        "INSERT OR REPLACE INTO metric_samples (host_id, ts, load1, cores, mem, disk) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (host_id, float(ts), load1, cores, mem, disk),
+    )
+    cur.execute(
+        "DELETE FROM metric_samples WHERE ts < ?",
+        (float(ts) - METRIC_RETENTION_S,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_metric_samples(window_s=3600):
+    """Return per-host performance time-series within the last `window_s`
+    seconds, joined to the agent inventory for hostname/environment. Shape:
+    [{host_id, hostname, environment, samples: [{t, load1, cores, mem, disk}, ...]}]
+    with samples in ascending time order. Hosts with no samples in the window
+    are omitted."""
+    window_s = max(60, min(int(window_s or 3600), METRIC_RETENTION_S))
+    cutoff = time.time() - window_s
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT s.host_id, s.ts, s.load1, s.cores, s.mem, s.disk,
+               a.hostname, a.environment
+        FROM metric_samples s
+        LEFT JOIN agents a ON a.host_id = s.host_id
+        WHERE s.ts >= ?
+        ORDER BY s.host_id, s.ts
+        """,
+        (cutoff,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    by_host = {}
+    for r in rows:
+        h = by_host.get(r["host_id"])
+        if h is None:
+            h = {
+                "host_id": r["host_id"],
+                "hostname": r["hostname"] or r["host_id"],
+                "environment": r["environment"] or "Unassigned",
+                "samples": [],
+            }
+            by_host[r["host_id"]] = h
+        h["samples"].append({
+            "t": r["ts"], "load1": r["load1"], "cores": r["cores"],
+            "mem": r["mem"], "disk": r["disk"],
+        })
+    return list(by_host.values())
 
 
 def get_agent_secret(host_id):

@@ -16,6 +16,8 @@ from backend.db import (
     consume_enroll_token,
     create_or_update_agent,
     update_agent_heartbeat,
+    insert_metric_sample,
+    get_metric_samples,
     list_agents,
     delete_agent,
     get_agent_secret,
@@ -106,6 +108,8 @@ from backend.remote_routes import (
     _ensure_controller_key,
     agent_ssh_enable_command,
     register_agent_ssh_host,
+    forget_agent_ssh_host,
+    sync_agent_ssh_environment,
     ssh_host_exists,
     get_agent_ssh_state,
     set_agent_ssh_state,
@@ -346,6 +350,26 @@ def heartbeat(req: HeartbeatRequest):
 
     update_agent_heartbeat(req.host_id, req.ip, req.hostname)
 
+    # Persist a performance sample if this heartbeat carried one (newer agents
+    # attach one ~once per SYSIBLE_METRICS_INTERVAL). Wrapped so a malformed
+    # payload or a transient write error can never fail the heartbeat itself -
+    # losing one sample is harmless; a 500 here would spam the agent log.
+    if req.metrics:
+        try:
+            def _num(key, cast):
+                v = req.metrics.get(key)
+                return None if v is None else cast(v)
+            insert_metric_sample(
+                req.host_id,
+                time.time(),
+                _num("load1", float),
+                _num("cores", int),
+                _num("mem", int),
+                _num("disk", int),
+            )
+        except Exception:
+            pass
+
     # Catch up already-enrolled agents that predate SSH auto-enrollment.
     # Heartbeats are frequent, so gate on the cheap state read first:
     # only when a host has *never* been attempted (state is None) do we
@@ -581,6 +605,15 @@ def get_controller_log_route(lines: int = 400):
 # =========================================================
 # INVENTORY
 # =========================================================
+@app.get("/metrics/timeseries", dependencies=[Depends(require_api_key)])
+def get_metrics_timeseries(window: int = 3600):
+    """Per-host performance time-series (load/mem/disk) for the last `window`
+    seconds, grouped for the web console's Performance view. Read-only; the
+    samples are reported by the agents themselves on heartbeat."""
+    hosts = get_metric_samples(window)
+    return {"hosts": hosts, "window": window, "now": time.time()}
+
+
 @app.get("/agents", dependencies=[Depends(require_api_key)])
 def get_agents():
 
@@ -601,7 +634,18 @@ def get_agents():
 @app.delete("/agents/{host_id}", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def remove_agent(host_id: str):
 
+    # Look up the agent's identity BEFORE deleting it, so we can also clean up
+    # the auto-created SSH record (register_agent_ssh_host) that would otherwise
+    # linger in hosts.json as an orphan "Unassigned" host.
+    agent = _find_agent(host_id)
+
     delete_agent(host_id)
+
+    if agent:
+        try:
+            forget_agent_ssh_host(agent.get("hostname"), agent.get("ip"))
+        except Exception:
+            pass
 
     return {
         "status": "removed",
@@ -624,7 +668,15 @@ def self_disenroll(host_id: str, req: SelfDisenrollRequest):
 
     verify_agent(req.host_id, req.agent_secret)
 
+    agent = _find_agent(req.host_id)
+
     delete_agent(req.host_id)
+
+    if agent:
+        try:
+            forget_agent_ssh_host(agent.get("hostname"), agent.get("ip"))
+        except Exception:
+            pass
 
     return {
         "status": "disenrolled",
@@ -645,6 +697,15 @@ def set_agent_environment_route(host_id: str, body: SetEnvironmentRequest):
         raise HTTPException(status_code=404, detail="Unknown host_id")
 
     set_agent_environment(host_id, body.environment)
+
+    # Keep the agent's auto-created SSH record's environment in sync so the two
+    # records don't diverge (e.g. show as assigned vs. Unassigned).
+    agent = _find_agent(host_id)
+    if agent:
+        try:
+            sync_agent_ssh_environment(agent.get("hostname"), agent.get("ip"), body.environment)
+        except Exception:
+            pass
 
     return {
         "host_id": host_id,

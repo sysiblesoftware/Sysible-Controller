@@ -538,6 +538,17 @@ def fleet_health(user: str = Depends(require_login)):
     return {"hosts": hosts}
 
 
+@app.get("/api/fleet-metrics")
+def fleet_metrics(window: int = 3600, user: str = Depends(require_login)):
+    """Per-host performance time-series for the Performance view: load/mem/disk
+    history reported by the agents on heartbeat, grouped by host with the
+    environment label attached. Read-only; just proxies the controller."""
+    try:
+        return api.get_metrics_timeseries(window)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+
+
 @app.get("/api/environments")
 def environments(user: str = Depends(require_login)):
     try:
@@ -602,6 +613,10 @@ class FleetRequest(BaseModel):
     action: str                 # reboot | poweroff | restart_agent | script
     command: str = ""           # used when action == "script"
     targets: list[str] = []     # host ids; empty = all hosts
+    # Optional sudo password to use for THIS run on password-sudo hosts, for
+    # operators who don't keep one stored. Transient: used only to elevate via
+    # the agent's `sudo -S` (stdin), never persisted, logged, or echoed back.
+    sudo_password: str = ""
 
 
 @app.post("/api/fleet")
@@ -633,7 +648,9 @@ def fleet(body: FleetRequest, request: Request, user: str = Depends(require_logi
             results.append({"host": tid, "ok": False, "error": "host not found",
                             "stdout": "", "stderr": "", "code": None})
             continue
-        become = sudo_store.resolve(user, entry.get("label", ""))
+        # An inline password supplied for this run wins; otherwise fall back to
+        # this admin's stored password (host scope over fleet default).
+        become = body.sudo_password or sudo_store.resolve(user, entry.get("label", ""))
         results.append(_dispatch_one(entry, command, "command", become, token, desc))
     return {"action": body.action, "command": command, "results": results}
 

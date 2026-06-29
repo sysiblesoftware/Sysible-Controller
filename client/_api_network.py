@@ -23,16 +23,42 @@ def _require_nmcli_fragment() -> str:
     """Shell fragment that exits with a clear stderr message instead
     of a bare "command not found" if either nmcli itself isn't
     installed, or NetworkManager is installed but not actually
-    running."""
+    running. The message is distro-aware: on a host running wicked
+    (the SUSE/SLES default) it says so explicitly, since installing
+    NetworkManager isn't the only option there."""
     return (
         "if ! command -v nmcli >/dev/null 2>&1; then "
+        "if command -v wicked >/dev/null 2>&1 || systemctl is-active --quiet wicked 2>/dev/null; then "
+        "echo 'This host uses wicked (the SUSE/SLES default), not NetworkManager, so "
+        "the nmcli-based network *configuration* actions do not apply here. Diagnostics "
+        "and the read-only views (Show IP Config, List Devices/Connections) still work. "
+        "To use these configuration actions, install and enable NetworkManager "
+        "(zypper in NetworkManager && systemctl enable --now NetworkManager) - note that "
+        "switching the active stack can disrupt connectivity, so do it at the console.' >&2; exit 1; "
+        "else "
         "echo 'NetworkManager (nmcli) is not installed on this host - network "
         "configuration here is standardized on NetworkManager, so install/enable "
-        "it on this host first.' >&2; exit 1; fi; "
+        "it on this host first.' >&2; exit 1; fi; fi; "
         "if ! nmcli -t -f RUNNING general status 2>/dev/null | grep -q '^running$'; then "
         "echo 'NetworkManager is installed on this host but is not running "
         "(check: systemctl status NetworkManager) - start and enable it before "
         "configuring networking here.' >&2; exit 1; fi; "
+    )
+
+
+def _net_read_fragment(nmcli_inner: str, ip_inner: str) -> str:
+    """Read-only network views work on any stack: use nmcli when it's
+    actually running (NetworkManager hosts), otherwise fall back to
+    iproute2's `ip`, which every modern Linux host (incl. wicked-based
+    SUSE) ships. This keeps Show IP Config / List Devices / List
+    Connections useful even where configuration is managed by wicked."""
+    return (
+        "if command -v nmcli >/dev/null 2>&1 && "
+        "nmcli -t -f RUNNING general status 2>/dev/null | grep -q '^running$'; then "
+        f"{nmcli_inner}; "
+        "elif command -v ip >/dev/null 2>&1; then "
+        f"{ip_inner}; "
+        "else echo 'No network inspection tool found (nmcli/ip).' >&2; exit 1; fi"
     )
 
 
@@ -174,19 +200,21 @@ def cmd_tcpdump_capture(iface: str = "", count=50, timeout_s=10, filter_expr: st
 # --- addressing / DHCP / MTU (nmcli) -------------------------------------
 
 def cmd_list_connections() -> str:
-    return f"{_require_nmcli_fragment()}nmcli connection show 2>&1"
+    # On wicked there are no NM "connection profiles"; the closest read-only
+    # answer is the set of interfaces (which the config UI targets by name).
+    return _net_read_fragment("nmcli connection show 2>&1", "ip -br link show 2>&1")
 
 
 def cmd_list_devices() -> str:
-    return f"{_require_nmcli_fragment()}nmcli device status 2>&1"
+    return _net_read_fragment("nmcli device status 2>&1", "ip -br addr show 2>&1")
 
 
 def cmd_show_ip_config(iface: str = "") -> str:
     iface_value = (iface or "").strip()
     if iface_value:
         q = shlex.quote(_validate_iface(iface_value))
-        return f"{_require_nmcli_fragment()}nmcli device show {q} 2>&1"
-    return f"{_require_nmcli_fragment()}nmcli device show 2>&1"
+        return _net_read_fragment(f"nmcli device show {q} 2>&1", f"ip addr show {q} 2>&1")
+    return _net_read_fragment("nmcli device show 2>&1", "ip addr show 2>&1")
 
 
 def cmd_configure_static_ip(connection: str, ip_cidr: str, gateway: str = "", dns: str = "") -> str:

@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { api } from "./api.js";
 import Login from "./views/Login.jsx";
 import Dashboard from "./views/Dashboard.jsx";
+import Performance from "./views/Performance.jsx";
 import ToolRunner from "./views/ToolRunner.jsx";
 import Connect from "./views/Connect.jsx";
 import LiveActivity from "./views/LiveActivity.jsx";
@@ -12,6 +13,7 @@ import StandaloneTerminal from "./components/StandaloneTerminal.jsx";
 
 const SECTIONS = {
   hosts: "Host Enrollment",
+  perf: "Fleet Performance",
   sysadmin: "System Administration",
   connect: "Sysible Connect",
   live: "Live Activity & Logs",
@@ -21,8 +23,9 @@ const SECTIONS = {
 // Left-rail navigation. `su` = superuser-only (matches the desktop role gating).
 const NAV = [
   { key: null, label: "Dashboard", icon: "grid", su: false },
+  { key: "perf", label: "Performance", icon: "chart", su: false },
   { key: "hosts", label: "Host Enrollment", icon: "server", su: true },
-  { key: "sysadmin", label: "Administration", icon: "tools", su: false },
+  { key: "sysadmin", label: "System Administration Tools", icon: "tools", su: false },
   { key: "connect", label: "Connect", icon: "terminal", su: false },
   { key: "live", label: "Activity & Logs", icon: "activity", su: true },
   { key: "settings", label: "Settings", icon: "cog", su: true },
@@ -34,6 +37,7 @@ const ICONS = {
   tools: <><path d="M3 21h4L17 11l-4-4L3 17v4z"/><path d="M14.5 5.5l4 4"/></>,
   terminal: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></>,
   activity: <><path d="M4 12h4l2-6 4 12 2-6h4"/></>,
+  chart: <><path d="M4 19V5M4 19h16M8 16l3-4 3 3 4-6"/></>,
   cog: <><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></>,
 };
 
@@ -147,6 +151,7 @@ export default function App() {
         <div className="main-scroll">
           {view === null && <Dashboard role={role} edition={edition}
             onOpen={(section, opts) => { setView(section); setTarget(opts || null); }} />}
+          {view === "perf" && <Performance />}
           {view === "hosts" && <HostEnrollment />}
           {view === "settings" && <Settings />}
           {view === "sysadmin" && <ToolRunner openTool={target?.tool} openTab={target?.tab}

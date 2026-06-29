@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel
 
@@ -17,6 +17,10 @@ class HeartbeatRequest(BaseModel):
     agent_secret: str
     ip: Optional[str] = None
     hostname: Optional[str] = None
+    # Optional performance sample (load1/cores/mem/disk). Sent by newer agents
+    # at most once per SYSIBLE_METRICS_INTERVAL, not on every heartbeat; older
+    # agents omit it entirely. See host_agent/agent.py's _sample_metrics().
+    metrics: Optional[Dict[str, Any]] = None
 
 
 class SelfDisenrollRequest(BaseModel):

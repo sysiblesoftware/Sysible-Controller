@@ -60,8 +60,17 @@ function FleetHostCard({ h }) {
           <Meter label="mem" pct={h.mem} />
           <div className="faint" style={{ fontSize: 12, marginTop: 4 }}>
             load {h.load1 ?? "—"} / {h.cores} core{h.cores === 1 ? "" : "s"}
-            {h.failed ? ` · ${h.failed} failed unit${h.failed > 1 ? "s" : ""}` : ""}
           </div>
+          {(h.failed > 0 || (h.units && h.units.length) || h.oom > 0 || (h.sysd && h.sysd !== "running")) && (
+            <div style={{ fontSize: 12, marginTop: 4, color: VERDICT_COLOR.WARNING }}>
+              {h.failed > 0 && (
+                <div>{h.failed} crashed service{h.failed > 1 ? "s" : ""}
+                  {h.units && h.units.length ? `: ${h.units.join(", ")}${h.failed > h.units.length ? "…" : ""}` : ""}</div>
+              )}
+              {h.oom > 0 && <div>{h.oom} OOM kill{h.oom > 1 ? "s" : ""} (out-of-memory)</div>}
+              {h.sysd && h.sysd !== "running" && h.sysd !== "unknown" && <div>systemd: {h.sysd}</div>}
+            </div>
+          )}
         </>
       )}
     </div>

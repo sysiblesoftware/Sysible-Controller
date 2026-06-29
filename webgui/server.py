@@ -464,12 +464,16 @@ def _parse_sysmetrics(text):
                     return cast(d[k])
                 except (KeyError, TypeError, ValueError):
                     return None
+            units = d.get("units", "-")
             return {
                 "verdict": d.get("verdict", "OK"),
                 "disk": num("disk", int), "mount": d.get("mount", "/"),
                 "mem": num("mem", int), "load1": num("load1", float),
                 "cores": num("cores", int) or 1, "failed": num("failed", int) or 0,
                 "uptime": num("uptime", int) or 0,
+                "sysd": d.get("sysd", ""),
+                "units": [] if units in ("-", "", None) else units.split(","),
+                "oom": num("oom", int) or 0,
             }
     return None
 

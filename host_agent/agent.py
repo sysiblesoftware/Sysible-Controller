@@ -67,6 +67,13 @@ STATE_FILE = os.getenv("SYSIBLE_AGENT_STATE", "/var/lib/sysible/agent_state.json
 # back to back) doesn't pay this delay between each one either.
 POLL_INTERVAL = float(os.getenv("SYSIBLE_POLL_INTERVAL", "1.5"))
 
+# How often the agent samples and reports performance metrics (load, memory,
+# worst-disk %). Deliberately decoupled from POLL_INTERVAL: heartbeats fire
+# every ~1.5s, but a metrics row only needs to land roughly once a minute -
+# that keeps the controller's time-series table small while still giving the
+# Performance graphs usable resolution. Set <=0 to disable reporting entirely.
+METRICS_INTERVAL = float(os.getenv("SYSIBLE_METRICS_INTERVAL", "60"))
+
 # =========================================================
 # TLS
 # The controller's cert is self-signed (LAN-only, no public domain),
@@ -446,26 +453,125 @@ def send_result(state, task_id, result):
 # =========================================================
 # LOOP
 # =========================================================
-def heartbeat(state):
+# Skip pseudo / virtual / image-backed filesystems when scoring disk use, so
+# a 100%-full read-only squashfs or a tmpfs doesn't masquerade as a failing
+# disk. Mirrors the mountpoint/fstype filtering in cmd_metrics_snapshot.
+_DISK_SKIP_FSTYPES = {
+    "tmpfs", "devtmpfs", "overlay", "squashfs", "iso9660", "udf",
+    "proc", "sysfs", "cgroup", "cgroup2", "devpts", "mqueue", "debugfs",
+    "tracefs", "securityfs", "pstore", "bpf", "configfs", "fusectl",
+    "autofs", "binfmt_misc", "hugetlbfs", "ramfs", "nsfs", "efivarfs",
+}
+_DISK_SKIP_PREFIXES = ("/proc", "/sys", "/run", "/dev", "/snap", "/media",
+                       "/run/media", "/cdrom")
+
+
+def _worst_disk_pct():
+    """Highest used% across real, writable local filesystems (df-style:
+    used / (used + available)). Returns an int 0-100, or None if nothing
+    scoreable was found."""
+    worst = None
     try:
-        r = _request(
-            "POST",
-            "/agents/heartbeat",
-            json={
-                "host_id": state["host_id"],
-                "agent_secret": state["agent_secret"],
-                # Re-sent on every heartbeat, not just enroll, so a
-                # DHCP-reassigned IP keeps the controller's Address
-                # column accurate without needing a full re-enroll.
-                "ip": _local_ip(),
-                # Likewise re-read each heartbeat so a hostname change
-                # (e.g. via Set Hostname) shows up in the inventory
-                # without re-enrolling. gethostname() reflects the new
-                # name immediately after hostnamectl set-hostname.
-                "hostname": socket.gethostname(),
-            },
-            timeout=10,
-        )
+        with open("/proc/mounts") as f:
+            mounts = f.readlines()
+    except OSError:
+        return None
+    seen = set()
+    for line in mounts:
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        mnt, fstype = parts[1], parts[2]
+        if fstype in _DISK_SKIP_FSTYPES:
+            continue
+        if any(mnt == p or mnt.startswith(p + "/") for p in _DISK_SKIP_PREFIXES):
+            continue
+        if mnt in seen:
+            continue
+        seen.add(mnt)
+        try:
+            st = os.statvfs(mnt)
+        except OSError:
+            continue
+        used = st.f_blocks - st.f_bfree
+        avail = st.f_bavail
+        denom = used + avail
+        if denom <= 0:
+            continue
+        pct = int(round(used * 100.0 / denom))
+        if worst is None or pct > worst:
+            worst = pct
+    return worst
+
+
+def _sample_metrics():
+    """A cheap pure-Python performance snapshot: 1-min load, core count,
+    memory used%, and worst-disk%. Best-effort - any failure yields None so
+    a metrics hiccup never disturbs the heartbeat itself."""
+    try:
+        with open("/proc/loadavg") as f:
+            load1 = float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        load1 = None
+
+    cores = os.cpu_count() or 1
+
+    mem = None
+    try:
+        total = avail = None
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    total = float(line.split()[1])
+                elif line.startswith("MemAvailable:"):
+                    avail = float(line.split()[1])
+                if total is not None and avail is not None:
+                    break
+        if total and total > 0 and avail is not None:
+            mem = int(round((total - avail) * 100.0 / total))
+    except (OSError, ValueError, IndexError):
+        mem = None
+
+    disk = _worst_disk_pct()
+
+    if load1 is None and mem is None and disk is None:
+        return None
+    return {"load1": load1, "cores": cores, "mem": mem, "disk": disk}
+
+
+# Timestamp of the last metrics report, so heartbeat() can rate-limit to
+# METRICS_INTERVAL instead of attaching a sample to every 1.5s heartbeat.
+_last_metrics_at = 0.0
+
+
+def heartbeat(state):
+    global _last_metrics_at
+    body = {
+        "host_id": state["host_id"],
+        "agent_secret": state["agent_secret"],
+        # Re-sent on every heartbeat, not just enroll, so a
+        # DHCP-reassigned IP keeps the controller's Address
+        # column accurate without needing a full re-enroll.
+        "ip": _local_ip(),
+        # Likewise re-read each heartbeat so a hostname change
+        # (e.g. via Set Hostname) shows up in the inventory
+        # without re-enrolling. gethostname() reflects the new
+        # name immediately after hostnamectl set-hostname.
+        "hostname": socket.gethostname(),
+    }
+
+    # Attach a performance sample at most once per METRICS_INTERVAL. Most
+    # heartbeats carry none, so the controller's time-series table grows at
+    # roughly one row per host per interval rather than per heartbeat.
+    now = time.time()
+    if METRICS_INTERVAL > 0 and (now - _last_metrics_at) >= METRICS_INTERVAL:
+        metrics = _sample_metrics()
+        if metrics is not None:
+            body["metrics"] = metrics
+            _last_metrics_at = now
+
+    try:
+        r = _request("POST", "/agents/heartbeat", json=body, timeout=10)
         _raise_with_detail(r)
     except requests.RequestException as e:
         print("[agent] heartbeat failed:", e)

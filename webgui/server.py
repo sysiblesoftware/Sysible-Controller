@@ -538,6 +538,17 @@ def fleet_health(user: str = Depends(require_login)):
     return {"hosts": hosts}
 
 
+@app.get("/api/fleet-metrics")
+def fleet_metrics(window: int = 3600, user: str = Depends(require_login)):
+    """Per-host performance time-series for the Performance view: load/mem/disk
+    history reported by the agents on heartbeat, grouped by host with the
+    environment label attached. Read-only; just proxies the controller."""
+    try:
+        return api.get_metrics_timeseries(window)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+
+
 @app.get("/api/environments")
 def environments(user: str = Depends(require_login)):
     try:

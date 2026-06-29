@@ -238,6 +238,11 @@ export default function UserGroupPage({ initialTab } = {}) {
               <div key={i} style={{ borderTop: i ? "1px solid var(--border)" : "none" }}>
                 <div className="rh"><span className={"dot " + (r.ok ? "ok" : "bad")} /><span>{r.host}</span>
                   {r.code != null && <span className="faint">exit {r.code}</span>}</div>
+                {/* Dispatch-level failures (e.g. "you haven't stored your sudo
+                    password", host unreachable, timed out) arrive in r.error with
+                    empty stdout/stderr — show them so the host isn't just a bare
+                    red dot. */}
+                {r.error && <div className="error-box" style={{ margin: "6px 0 0" }}>{r.error}</div>}
                 {(r.stdout || r.stderr) && <pre>{r.stdout}{r.stderr}</pre>}
               </div>
             ))}

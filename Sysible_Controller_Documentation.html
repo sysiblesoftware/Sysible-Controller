@@ -346,6 +346,8 @@ sudo ./install_sysible.sh</pre>
 
 <div class="warn"><b>Finishing up</b>The installer's final output tells you exactly where the admin API key lives (<code>/opt/sysible/api_key.txt</code>, mode 600, root-only) and where the TLS certificate is (<code>/opt/sysible/certs/server.crt</code>). Copy that certificate file — never the <code>.key</code> file — to any machine that will run the GUI client (if not this same machine) and to every host that will run the agent, pointing each at it via <code>SYSIBLE_CA_CERT</code> so they can verify the controller instead of blindly trusting it. The very last line of installer output is the next step:</div>
 <pre class="cli">Run: <span class="c">sudo sysible_controller start</span></pre>
+
+<div class="note"><b>Updating later</b>The controller runs out of <code>/opt/sysible</code>, which the installer syncs from your source checkout, so a plain <code>git pull</code> in the checkout doesn't change what's running. To pull the latest code and redeploy in one step, run <code>sudo sysible_controller update</code>: it pulls the recorded checkout, re-syncs it into <code>/opt/sysible</code> while preserving your database, admin API key, TLS certificates, host records, SSH keys, and active sessions, refreshes dependencies, and restarts the services. (Re-running <code>sudo ./install_sysible.sh</code> does the same thing.) Managed hosts run their own copy of the agent, so to pick up agent-side changes you redeploy the agent to each host separately.</div>
 </div>
 
 <!-- ===================== 4. FIRST LOGIN ===================== -->

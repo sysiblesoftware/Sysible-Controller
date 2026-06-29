@@ -25,6 +25,21 @@ def _validate_path(path: str, label: str = "Path") -> str:
     return path
 
 
+def _reject_critical_mount(path: str, allow_critical: bool, label: str = "Mount") -> None:
+    """Refuses unmounting / fstab-removing a system-critical mount (see
+    client/system_paths) unless `allow_critical` is set - which the front ends
+    only pass after a superuser confirms the warning. A hard block for
+    sysadmins (they can never set the flag)."""
+    if allow_critical:
+        return
+    from client import system_paths
+    reason = system_paths.system_critical_reason(path)
+    if reason:
+        raise ValueError(
+            f"{label}: {reason} Only a superuser can do this, after confirming the warning."
+        )
+
+
 def _validate_int_range(value, lo: int, hi: int, label: str) -> int:
     try:
         n = int(str(value).strip())
@@ -69,10 +84,14 @@ def cmd_mount_filesystem(device: str, mount_point: str, fstype: str = "", option
     return " ".join(parts) + " 2>&1"
 
 
-def cmd_unmount_filesystem(target: str, force: bool = False) -> str:
+def cmd_unmount_filesystem(target: str, force: bool = False,
+                           allow_critical: bool = False) -> str:
     """`target` can be either the mount point or the underlying
-    device."""
+    device. Refuses to unmount a system-critical mount (see
+    client/system_paths) unless `allow_critical` is set - which the UIs only
+    pass after a superuser confirms the warning."""
     target = _validate_path(target, "Mount point or device")
+    _reject_critical_mount(target, allow_critical, "Unmount target")
     flag = "-f " if force else ""
     return f"umount {flag}{shlex.quote(target)} 2>&1"
 
@@ -247,11 +266,14 @@ def cmd_add_fstab_entry(
     )
 
 
-def cmd_remove_fstab_entry(mount_point: str) -> str:
+def cmd_remove_fstab_entry(mount_point: str, allow_critical: bool = False) -> str:
     """Removes the line whose mount-point field (2nd column) exactly
     matches `mount_point` - by field, not substring, so removing
-    "/data" won't also match "/data2". Backs up /etc/fstab first."""
+    "/data" won't also match "/data2". Backs up /etc/fstab first. Refuses a
+    system-critical mount (see client/system_paths) unless `allow_critical` is
+    set - which the UIs only pass after a superuser confirms the warning."""
     mount_point = _validate_path(mount_point, "Mount point")
+    _reject_critical_mount(mount_point, allow_critical, "fstab mount point")
     q_mnt = shlex.quote(mount_point)
     return (
         f"cp /etc/fstab /etc/fstab.bak.$(date +%s) && "

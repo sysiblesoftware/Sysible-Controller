@@ -373,6 +373,24 @@ def me(request: Request):
     }
 
 
+class PathCriticalRequest(BaseModel):
+    paths: list[str] = []
+
+
+@app.post("/api/path-critical")
+def path_critical(body: PathCriticalRequest, user: str = Depends(require_login)):
+    """Classify whether any of `paths` is a system-critical file/mount, so the
+    UI can warn (superuser) or block (sysadmin) before a delete/unmount/fstab
+    removal. Single source of truth = client/system_paths (shared with the
+    desktop GUI and the cmd_* builder backstop)."""
+    from client import system_paths
+    for p in body.paths:
+        reason = system_paths.system_critical_reason(p)
+        if reason:
+            return {"critical": True, "path": system_paths.normalize(p), "reason": reason}
+    return {"critical": False, "path": "", "reason": ""}
+
+
 # ----------------------------------------------------------------------
 # Read-only data the dashboard + host picker need
 # ----------------------------------------------------------------------
@@ -1190,6 +1208,13 @@ def run_tool(action_name: str, body: RunRequest, request: Request, user: str = D
     spec = actions.get(action_name)
     if spec is None:
         raise HTTPException(status_code=404, detail=f"Unknown action: {action_name}")
+
+    # The system-critical override (allow_critical) may only ever be honoured for
+    # a superuser. Strip it for anyone else so a sysadmin can't bypass the
+    # builder's critical-path block by crafting the request; the builder then
+    # refuses a critical path with a clear error.
+    if body.params.get("allow_critical") and request.session.get("role") != "superuser":
+        body.params = {**body.params, "allow_critical": False}
 
     try:
         command = spec.build(body.params)

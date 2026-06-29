@@ -37,6 +37,7 @@ export const api = {
   hosts: () => req("/api/hosts"),
   environments: () => req("/api/environments"),
   tools: () => req("/api/tools"),
+  pathCritical: (paths) => req("/api/path-critical", { method: "POST", body: { paths } }),
   runTool: (action, targets, params) =>
     req(`/api/tool/${encodeURIComponent(action)}`, {
       method: "POST",

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
 import TerminalDock from "../components/TerminalDock.jsx";
+import HostResults from "../components/HostResults.jsx";
 
 // Sysible Connect — mirrors the desktop window: managed-hosts tree on the
 // left; selected-host panel, terminals, fleet actions, file transfer, and
@@ -225,18 +226,8 @@ function FleetActions({ hosts, checked, onErr }) {
                 onClick={() => act("poweroff", "POWER OFF all hosts?")}>Power Off All</button>
       </div>
       {results && (
-        <div style={{ marginTop: 10 }}>
-          {results.results.map((r, i) => (
-            <div className="result" key={i}>
-              <div className="rh">
-                <span className={"dot " + (r.ok ? "ok" : "bad")} />
-                <strong>{r.host}</strong>
-                {r.code !== null && r.code !== undefined && <span className="faint">exit {r.code}</span>}
-                {r.error && <span className="badge amber">{r.error}</span>}
-              </div>
-              {(r.stdout || r.stderr) && <pre>{r.stdout}{r.stderr}</pre>}
-            </div>
-          ))}
+        <div className="result" style={{ marginTop: 10 }}>
+          <HostResults rows={results.results} />
         </div>
       )}
     </Collapsible>

@@ -448,6 +448,84 @@ def hosts(user: str = Depends(require_login)):
     return {"hosts": out}
 
 
+def _parse_sysmetrics(text):
+    """Parse the one-line `SYSMETRICS|k=v|...` snapshot (client._api_dispatch
+    .cmd_metrics_snapshot) into a dict, or None if not present."""
+    for line in (text or "").splitlines():
+        if line.startswith("SYSMETRICS|"):
+            d = {}
+            for kv in line.split("|")[1:]:
+                if "=" in kv:
+                    k, v = kv.split("=", 1)
+                    d[k] = v
+
+            def num(k, cast):
+                try:
+                    return cast(d[k])
+                except (KeyError, TypeError, ValueError):
+                    return None
+            return {
+                "verdict": d.get("verdict", "OK"),
+                "disk": num("disk", int), "mount": d.get("mount", "/"),
+                "mem": num("mem", int), "load1": num("load1", float),
+                "cores": num("cores", int) or 1, "failed": num("failed", int) or 0,
+                "uptime": num("uptime", int) or 0,
+            }
+    return None
+
+
+@app.get("/api/fleet-health")
+def fleet_health(user: str = Depends(require_login)):
+    """Snapshot health for the dashboard fleet overview: run the compact
+    metrics command on every reachable host (in parallel) and return parsed
+    per-host disk/mem/load/failed + a verdict. Offline agent hosts are reported
+    without probing (so the sweep can't hang on them); read-only, dispatched
+    without an admin token so it isn't attributed/logged as an operator action."""
+    import concurrent.futures
+    import time as _t
+    try:
+        entries = dispatch.list_merged_hosts(agent_only=False)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+
+    try:
+        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+    except Exception:
+        last_seen = {}
+    now = _t.time()
+    cmd = api.cmd_metrics_snapshot()
+
+    def agent_id_of(e):
+        if e["kind"] == "agent":
+            return e["id"]
+        if e["kind"] == "merged":
+            return (e.get("agent_entry") or {}).get("id") or e["id"]
+        return None
+
+    def probe(e):
+        base = {"host": e.get("label"), "environment": e.get("environment") or "Unassigned"}
+        aid = agent_id_of(e)
+        ls = last_seen.get(aid) if aid else None
+        online = (bool(ls and (now - ls) <= 20)) if aid else None
+        # Don't probe an agent host we already know is offline — avoids waiting
+        # out the task timeout on a host that won't answer.
+        if aid is not None and not online:
+            return {**base, "online": False, "ok": False, "verdict": "OFFLINE", "error": "offline"}
+        r = _dispatch_one(e, cmd, "command", None, None, None)  # no token: read-only, unlogged
+        m = _parse_sysmetrics((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
+        return {
+            **base,
+            "online": True if m else online,
+            "ok": bool(r.get("ok")) and m is not None,
+            "error": None if m else (r.get("error") or "no metrics returned"),
+            **(m or {}),
+        }
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
+        hosts = list(ex.map(probe, entries)) if entries else []
+    return {"hosts": hosts}
+
+
 @app.get("/api/environments")
 def environments(user: str = Depends(require_login)):
     try:

@@ -4,21 +4,45 @@ disk/mem, problem signals) plus compliance ("N need attention" from the posture
 sweep), expandable to per-host rows that drill into a full posture breakdown.
 Plus the OK/Warning/Critical donut and the high-ticket compliance signal strip.
 
-Data comes from client/_fleet_status.py (the same read-only, root-dispatched
-gather the browser console uses); the sweeps run on background QThreads so the
-UI never blocks.
+Theme-aware (light/dark via client.theme): all chrome colors come from a palette
+that flips on theme change, so light mode is legible. Data comes from
+client/_fleet_status.py (the same read-only, root-dispatched gather the browser
+console uses); sweeps run on background QThreads so the UI never blocks.
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QScrollArea, QFrame, QProgressBar, QDialog, QSizePolicy,
+    QScrollArea, QFrame, QProgressBar, QDialog,
 )
 from PySide6.QtGui import QPainter, QPen, QColor
 from PySide6.QtCore import Qt, QThread, Signal, QRectF
 
 from client import _fleet_status as fs
+from client import theme
 
+# Verdict colors read the same in both themes (they're status signals).
 VERDICT = {"OK": "#4ec07a", "WARNING": "#e0a83a", "CRITICAL": "#e06c6c", "OFFLINE": "#7a7a7a"}
 _ORDER = {"CRITICAL": 0, "WARNING": 1, "OFFLINE": 2, "OK": 3}
+
+# Theme palette — repopulated from the current mode by _refresh_pal(). Chrome
+# (card/row backgrounds, borders, text) flips with light/dark; widgets read PAL
+# at build time, and the page rebuilds on theme change.
+PAL = {}
+
+
+def _refresh_pal():
+    light = theme.get_theme_mode() == "light"
+    PAL.update(
+        bg="#FFFFFF" if light else "#232a36",
+        border="#D5DAE2" if light else "#3a4250",
+        text="#1F2430" if light else "#EAEAEA",
+        faint="#6B7280" if light else "#9aa5b1",
+        track="#E3E8F0" if light else "#2a2f3a",
+        row="#F5F7FA" if light else "#2a313d",
+        row_hover="#E9EDF2" if light else "#313947",
+    )
+
+
+_refresh_pal()
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +84,7 @@ class Donut(QWidget):
         stroke = max(12, self._size // 7)
         m = stroke / 2 + 2
         rect = QRectF(m, m, self._size - 2 * m, self._size - 2 * m)
-        pen = QPen(QColor("#3a4250"))
+        pen = QPen(QColor(PAL["track"]))
         pen.setWidth(stroke)
         pen.setCapStyle(Qt.FlatCap)
         p.setPen(pen)
@@ -77,7 +101,7 @@ class Donut(QWidget):
                 p.setPen(pen)
                 p.drawArc(rect, start, span)
                 start += span
-        p.setPen(QColor("#9aa5b1"))
+        p.setPen(QColor(PAL["text"]))
         f = p.font()
         f.setPointSize(max(12, int(self._size * 0.16)))
         f.setBold(True)
@@ -93,7 +117,7 @@ def _meter(label, pct):
     row.setContentsMargins(0, 1, 0, 1)
     row.setSpacing(8)
     lab = QLabel(label)
-    lab.setStyleSheet("color:#9aa5b1; font-size:11px;")
+    lab.setStyleSheet(f"border:none; color:{PAL['faint']}; font-size:11px;")
     lab.setFixedWidth(34)
     row.addWidget(lab)
     bar = QProgressBar()
@@ -104,11 +128,11 @@ def _meter(label, pct):
     bar.setValue(v)
     color = "#7a7a7a" if pct is None else ("#e06c6c" if v >= 90 else "#e0a83a" if v >= 75 else "#4ec07a")
     bar.setStyleSheet(
-        "QProgressBar{background:#2a2f3a;border:none;border-radius:4px;}"
+        f"QProgressBar{{background:{PAL['track']};border:none;border-radius:4px;}}"
         f"QProgressBar::chunk{{background:{color};border-radius:4px;}}")
     row.addWidget(bar, 1)
     val = QLabel("—" if pct is None else f"{v}%")
-    val.setStyleSheet("color:#9aa5b1; font-size:11px;")
+    val.setStyleSheet(f"border:none; color:{PAL['faint']}; font-size:11px;")
     val.setFixedWidth(36)
     val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
     row.addWidget(val)
@@ -118,13 +142,13 @@ def _meter(label, pct):
 def _dot(color, size=9):
     d = QLabel()
     d.setFixedSize(size, size)
-    d.setStyleSheet(f"background:{color}; border-radius:{size // 2}px;")
+    d.setStyleSheet(f"border:none; background:{color}; border-radius:{size // 2}px;")
     return d
 
 
 def _card_frame():
     f = QFrame()
-    f.setStyleSheet("QFrame{border:1px solid #3a4250; border-radius:8px;}")
+    f.setStyleSheet(f"QFrame{{border:1px solid {PAL['border']}; border-radius:8px; background:{PAL['bg']};}}")
     return f
 
 
@@ -138,7 +162,7 @@ def _signal_chip(label, count):
     color = "#e0a83a" if count > 0 else "#4ec07a"
     lay.addWidget(_dot(color))
     name = QLabel(label)
-    name.setStyleSheet("border:none; font-size:12px;")
+    name.setStyleSheet(f"border:none; color:{PAL['text']}; font-size:12px;")
     lay.addWidget(name, 1)
     cnt = QLabel(str(count))
     cnt.setStyleSheet(f"border:none; font-weight:bold; color:{color};")
@@ -152,29 +176,32 @@ def _signal_chip(label, count):
 class EnvCard(QFrame):
     def __init__(self, group, posture_loaded, on_open_host):
         super().__init__()
-        self.setStyleSheet("QFrame{border:1px solid #3a4250; border-radius:8px;}")
+        self.setStyleSheet(f"QFrame{{border:1px solid {PAL['border']}; border-radius:8px; background:{PAL['bg']};}}")
         self._on_open_host = on_open_host
         v = group["verdict"]
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # header (clickable to expand)
+        # Header — clickable to expand. Transparent background (so it never
+        # bleeds past the card's rounded corners) with explicit text color.
         head = QPushButton()
         head.setCursor(Qt.PointingHandCursor)
-        head.setStyleSheet("QPushButton{border:none; text-align:left; padding:8px 10px;}")
+        head.setStyleSheet(
+            f"QPushButton{{border:none; background:transparent; text-align:left;"
+            f" padding:8px 10px; color:{PAL['text']};}}")
         hl = QHBoxLayout(head)
         hl.setContentsMargins(0, 0, 0, 0)
         hl.setSpacing(8)
         self._chev = QLabel("▶")
-        self._chev.setStyleSheet("border:none; color:#9aa5b1; font-size:10px;")
+        self._chev.setStyleSheet(f"border:none; background:transparent; color:{PAL['faint']}; font-size:10px;")
         hl.addWidget(self._chev)
         hl.addWidget(_dot(VERDICT.get(v, "#7a7a7a")))
         name = QLabel(f"<b>{group['env']}</b>")
-        name.setStyleSheet("border:none;")
+        name.setStyleSheet(f"border:none; background:transparent; color:{PAL['text']};")
         hl.addWidget(name)
         cnt = QLabel(f"{len(group['hosts'])} host{'' if len(group['hosts']) == 1 else 's'}")
-        cnt.setStyleSheet("border:none; color:#9aa5b1; font-size:11px;")
+        cnt.setStyleSheet(f"border:none; background:transparent; color:{PAL['faint']}; font-size:11px;")
         hl.addWidget(cnt)
         hl.addStretch()
         if posture_loaded:
@@ -182,9 +209,11 @@ class EnvCard(QFrame):
             lim = group.get("limited", 0)
             txt = f"{prob} need attention" if prob else "all clear"
             if lim:
-                txt += f"  ·  {lim} limited"
+                txt += f"   ·   {lim} limited"
             att = QLabel(txt)
-            att.setStyleSheet(f"border:none; font-size:11px; color:{'#e0a83a' if prob else '#4ec07a'};")
+            att.setStyleSheet(
+                f"border:none; background:transparent; font-size:11px;"
+                f" color:{'#e0a83a' if prob else '#4ec07a'};")
             hl.addWidget(att)
         head.clicked.connect(self._toggle)
         outer.addWidget(head)
@@ -205,7 +234,7 @@ class EnvCard(QFrame):
             sig.append(f"{group['degraded']} degraded systemd")
         if sig:
             s = QLabel(" · ".join(sig))
-            s.setStyleSheet("border:none; color:#e0a83a; font-size:12px;")
+            s.setStyleSheet("border:none; background:transparent; color:#e0a83a; font-size:12px;")
             bl.addWidget(s)
         outer.addWidget(body)
 
@@ -218,7 +247,6 @@ class EnvCard(QFrame):
             hb.addWidget(self._host_row(h))
         self._hosts_box.setVisible(False)
         outer.addWidget(self._hosts_box)
-        # default open when there's trouble
         if v != "OK" or group.get("problematic", 0) > 0:
             self._toggle()
 
@@ -230,29 +258,32 @@ class EnvCard(QFrame):
     def _host_row(self, h):
         btn = QPushButton()
         btn.setCursor(Qt.PointingHandCursor)
-        btn.setStyleSheet("QPushButton{border:1px solid #3a4250; border-radius:8px; text-align:left; padding:8px 10px;} QPushButton:hover{background:#262c38;}")
+        btn.setStyleSheet(
+            f"QPushButton{{border:1px solid {PAL['border']}; border-radius:8px; text-align:left;"
+            f" padding:8px 10px; background:{PAL['row']}; color:{PAL['text']};}}"
+            f"QPushButton:hover{{background:{PAL['row_hover']};}}")
         rl = QHBoxLayout(btn)
         rl.setContentsMargins(0, 0, 0, 0)
         rl.setSpacing(8)
         verdict = (h.get("verdict") or "OK").upper()
         rl.addWidget(_dot(VERDICT.get(verdict, "#7a7a7a")))
         nm = QLabel(f"<b>{h.get('host')}</b>")
-        nm.setStyleSheet("border:none;")
+        nm.setStyleSheet(f"border:none; background:transparent; color:{PAL['text']};")
         rl.addWidget(nm)
         rl.addStretch()
         issues = h.get("issues")
         if issues:
             iss = QLabel(f"⚠ {issues}")
-            iss.setStyleSheet("border:none; color:#e0a83a; font-weight:bold; font-size:11px;")
+            iss.setStyleSheet("border:none; background:transparent; color:#e0a83a; font-weight:bold; font-size:11px;")
             rl.addWidget(iss)
         if h.get("limited"):
             lm = QLabel("limited")
-            lm.setStyleSheet("border:none; color:#7a7a7a; font-size:11px;")
+            lm.setStyleSheet(f"border:none; background:transparent; color:{PAL['faint']}; font-size:11px;")
             rl.addWidget(lm)
         disk = h.get("disk")
         meta = QLabel(("offline" if verdict == "OFFLINE" else
                        (f"disk {disk}% · mem {h.get('mem')}%" if disk is not None else (h.get("error") or "no data"))))
-        meta.setStyleSheet("border:none; color:#9aa5b1; font-size:11px;")
+        meta.setStyleSheet(f"border:none; background:transparent; color:{PAL['faint']}; font-size:11px;")
         rl.addWidget(meta)
         hid = h.get("id")
         if hid:
@@ -284,6 +315,7 @@ _SECTIONS = [
 class PostureDialog(QDialog):
     def __init__(self, host_id, label, parent=None):
         super().__init__(parent)
+        _refresh_pal()
         self._host_id = host_id
         self.setWindowTitle(f"Posture — {label}")
         self.resize(900, 720)
@@ -297,7 +329,7 @@ class PostureDialog(QDialog):
         topr.addWidget(self._refresh)
         v.addLayout(topr)
         self._status = QLabel("Gathering posture…")
-        self._status.setStyleSheet("color:#9aa5b1;")
+        self._status.setStyleSheet(f"color:{PAL['faint']};")
         v.addWidget(self._status)
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -311,6 +343,7 @@ class PostureDialog(QDialog):
 
     def _load(self):
         self._status.setText("Gathering posture…")
+        self._status.setStyleSheet(f"color:{PAL['faint']};")
         self._status.setVisible(True)
         self._refresh.setEnabled(False)
         self._worker = _Worker(lambda: fs.gather_host_posture(self._host_id))
@@ -320,7 +353,6 @@ class PostureDialog(QDialog):
 
     def _render(self, data):
         self._refresh.setEnabled(True)
-        # clear grid
         while self._grid.count():
             it = self._grid.takeAt(0)
             w = it.widget()
@@ -329,10 +361,12 @@ class PostureDialog(QDialog):
         posture = (data or {}).get("posture")
         if not posture:
             self._status.setText((data or {}).get("error") or "No posture data.")
+            self._status.setVisible(True)
             return
         if (posture.get("meta") or {}).get("privileged") == "0":
             self._status.setText("⚠ Gathered without root — root-only checks may be blank; absence of findings is not a clean bill.")
             self._status.setStyleSheet("color:#e0a83a;")
+            self._status.setVisible(True)
         else:
             self._status.setVisible(False)
         col_count = 2
@@ -341,7 +375,7 @@ class PostureDialog(QDialog):
             rows = []
             for cat in cats:
                 for k, val in (posture.get(cat) or {}).items():
-                    rows.append((f"{cat}.{k}", k.replace("_", " ").title(), val))
+                    rows.append((name_for(k), val))
             if not rows:
                 continue
             self._grid.addWidget(self._section(title, rows), i // col_count, i % col_count)
@@ -353,22 +387,26 @@ class PostureDialog(QDialog):
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(2)
         t = QLabel(title.upper())
-        t.setStyleSheet("border:none; color:#9aa5b1; font-size:11px; font-weight:bold;")
+        t.setStyleSheet(f"border:none; background:transparent; color:{PAL['faint']}; font-size:11px; font-weight:bold;")
         lay.addWidget(t)
-        for _fk, name, val in rows:
+        for name, val in rows:
             row = QHBoxLayout()
             row.setContentsMargins(0, 0, 0, 0)
             ln = QLabel(name)
-            ln.setStyleSheet("border:none; color:#9aa5b1; font-size:12px;")
+            ln.setStyleSheet(f"border:none; background:transparent; color:{PAL['faint']}; font-size:12px;")
             row.addWidget(ln)
             row.addStretch()
             lv = QLabel("—" if val in ("", None) else str(val))
-            lv.setStyleSheet("border:none; font-size:12px;")
+            lv.setStyleSheet(f"border:none; background:transparent; color:{PAL['text']}; font-size:12px;")
             lv.setWordWrap(True)
             lv.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             row.addWidget(lv)
             lay.addLayout(row)
         return f
+
+
+def name_for(key):
+    return key.replace("_", " ").title()
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +415,7 @@ class PostureDialog(QDialog):
 class FleetDashboardPage(QWidget):
     def __init__(self):
         super().__init__()
+        _refresh_pal()
         self.setWindowTitle("Fleet Health & Compliance")
         self.resize(1100, 860)
         self._health = []
@@ -390,8 +429,8 @@ class FleetDashboardPage(QWidget):
         outer.setSpacing(12)
 
         head = QHBoxLayout()
-        title = QLabel("<b style='font-size:20px;'>Fleet Health &amp; Compliance</b>")
-        head.addWidget(title)
+        self._title = QLabel("Fleet Health &amp; Compliance")
+        head.addWidget(self._title)
         head.addStretch()
         self._scan_btn = QPushButton("Run posture scan")
         self._scan_btn.clicked.connect(self._load_posture)
@@ -402,10 +441,8 @@ class FleetDashboardPage(QWidget):
         outer.addLayout(head)
 
         self._status = QLabel("Gathering fleet health…")
-        self._status.setStyleSheet("color:#9aa5b1;")
         outer.addWidget(self._status)
 
-        # summary row: donut + counts + signal strip
         summary = QHBoxLayout()
         self._donut = Donut(120)
         summary.addWidget(self._donut)
@@ -418,9 +455,9 @@ class FleetDashboardPage(QWidget):
         summary.addWidget(self._signals_box, 1)
         outer.addLayout(summary)
 
-        # environment cards (scroll)
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
+        self._scroll.setStyleSheet("QScrollArea{border:none;}")
         self._envs_host = QWidget()
         self._envs_lay = QVBoxLayout(self._envs_host)
         self._envs_lay.setSpacing(10)
@@ -428,7 +465,19 @@ class FleetDashboardPage(QWidget):
         self._scroll.setWidget(self._envs_host)
         outer.addWidget(self._scroll, 1)
 
+        self._apply_chrome()
+        theme.add_theme_listener(self._on_theme)
         self.refresh()
+
+    # ---- theme ----
+    def _apply_chrome(self):
+        self._title.setStyleSheet(f"font-size:20px; font-weight:bold; color:{PAL['text']};")
+        self._status.setStyleSheet(f"color:{PAL['faint']};")
+
+    def _on_theme(self):
+        _refresh_pal()
+        self._apply_chrome()
+        self._rebuild()
 
     # ---- data loading ----
     def refresh(self):
@@ -441,7 +490,7 @@ class FleetDashboardPage(QWidget):
         self._refresh_btn.setEnabled(False)
         self._h_worker = _Worker(fs.gather_fleet_health)
         self._h_worker.done.connect(self._on_health)
-        self._h_worker.fail.connect(lambda m: self._fail(m))
+        self._h_worker.fail.connect(self._fail)
         self._h_worker.start()
 
     def _load_posture(self):
@@ -449,7 +498,7 @@ class FleetDashboardPage(QWidget):
         self._scan_btn.setText("Scanning…")
         self._p_worker = _Worker(fs.gather_fleet_posture)
         self._p_worker.done.connect(self._on_posture)
-        self._p_worker.fail.connect(lambda m: self._fail(m))
+        self._p_worker.fail.connect(self._fail)
         self._p_worker.start()
 
     def _fail(self, msg):
@@ -473,29 +522,27 @@ class FleetDashboardPage(QWidget):
 
     # ---- rendering ----
     def _rebuild(self):
-        # donut + counts
         counts = {"OK": 0, "WARNING": 0, "CRITICAL": 0, "OFFLINE": 0}
         for h in self._health:
-            counts[(h.get("verdict") or "OK").upper()] = counts.get((h.get("verdict") or "OK").upper(), 0) + 1
+            k = (h.get("verdict") or "OK").upper()
+            counts[k] = counts.get(k, 0) + 1
         self._donut.set_segments([(counts["OK"], VERDICT["OK"]), (counts["WARNING"], VERDICT["WARNING"]),
                                   (counts["CRITICAL"], VERDICT["CRITICAL"]), (counts["OFFLINE"], VERDICT["OFFLINE"])])
-        _clear(self._counts)
+        _clear_layout(self._counts)
         for key, lbl in (("OK", "OK"), ("WARNING", "warning"), ("CRITICAL", "critical"), ("OFFLINE", "offline")):
             r = QHBoxLayout()
             r.addWidget(_dot(VERDICT[key]))
             t = QLabel(f"{counts[key]} {lbl}")
-            t.setStyleSheet("font-size:13px;")
+            t.setStyleSheet(f"color:{PAL['text']}; font-size:13px;")
             r.addWidget(t)
             r.addStretch()
             self._counts.addLayout(r)
 
-        # posture by id -> issue count / limited
         post_by_id = {}
         for p in self._posture:
             issues = sum(1 for v in (p.get("flags") or {}).values() if v is True)
             post_by_id[p.get("id")] = {"issues": issues, "limited": bool(p.get("limited"))}
 
-        # compliance signal strip
         _clear_grid(self._signals_grid)
         if self._posture:
             sigs = []
@@ -508,7 +555,6 @@ class FleetDashboardPage(QWidget):
             for idx, (label, n) in enumerate(sigs):
                 self._signals_grid.addWidget(_signal_chip(label, n), idx // 2, idx % 2)
 
-        # environment rollup (join health + posture by id)
         groups = {}
         for h in self._health:
             env = h.get("environment") or "Unassigned"
@@ -536,7 +582,8 @@ class FleetDashboardPage(QWidget):
         for g in groups.values():
             c = g["counts"]
             g["verdict"] = "CRITICAL" if c["CRITICAL"] else "WARNING" if c["WARNING"] else "OK" if c["OK"] else "OFFLINE"
-            g["hosts"].sort(key=lambda x: (_ORDER.get((x.get("verdict") or "OK").upper(), 9), -(x.get("issues") or 0), -(x.get("disk") or 0)))
+            g["hosts"].sort(key=lambda x: (_ORDER.get((x.get("verdict") or "OK").upper(), 9),
+                                           -(x.get("issues") or 0), -(x.get("disk") or 0)))
             env_list.append(g)
         env_list.sort(key=lambda g: (_ORDER.get(g["verdict"], 9), -g["problematic"], g["env"]))
 
@@ -544,7 +591,7 @@ class FleetDashboardPage(QWidget):
         posture_loaded = bool(self._posture)
         if not env_list:
             empty = QLabel("No host data yet — click Refresh.")
-            empty.setStyleSheet("color:#9aa5b1; padding:16px;")
+            empty.setStyleSheet(f"color:{PAL['faint']}; padding:16px;")
             self._envs_lay.addWidget(empty)
         for g in env_list:
             self._envs_lay.addWidget(EnvCard(g, posture_loaded, self._open_host))
@@ -554,10 +601,6 @@ class FleetDashboardPage(QWidget):
         dlg = PostureDialog(host_id, label, self)
         self._dialogs.append(dlg)
         dlg.show()
-
-
-def _clear(layout):
-    _clear_layout(layout)
 
 
 def _clear_layout(layout):

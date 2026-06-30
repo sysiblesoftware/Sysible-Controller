@@ -543,7 +543,7 @@ def fleet_health(user: str = Depends(require_login)):
         return None
 
     def probe(e):
-        base = {"host": e.get("label"), "environment": e.get("environment") or "Unassigned"}
+        base = {"id": e.get("id"), "host": e.get("label"), "environment": e.get("environment") or "Unassigned"}
         aid = agent_id_of(e)
         ls = last_seen.get(aid) if aid else None
         online = (bool(ls and (now - ls) <= 20)) if aid else None
@@ -583,6 +583,202 @@ def fleet_metrics(window: int = 3600, user: str = Depends(require_login)):
         return api.get_metrics_timeseries(window)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+
+
+# ----------------------------------------------------------------------
+# Host posture / compliance (Phase 1 — read-only, on-demand sweep)
+# ----------------------------------------------------------------------
+#
+# Mirrors the fleet-health sweep: run the read-only posture command on hosts
+# (tokenless, as root), parse the POSTURE|cat.key=value stream, and surface a
+# per-host posture object plus a curated set of high-ticket flags the dashboard
+# aggregates into a Compliance strip. Read-only throughout (require_login), so
+# the auditor role can view it; nothing here dispatches a mutating command.
+
+# Best-effort end-of-life table for the dashboard's "EOL / unsupported OS"
+# signal. Keyed by os-release ID then VERSION_ID; value is the end-of-support
+# date (ISO). A host past this date (or a version not in a known-supported set)
+# flags as EOL. Intentionally small and conservative — unknowns never flag.
+_EOL_TABLE = {
+    "ubuntu": {"16.04": "2021-04-30", "18.04": "2023-05-31", "20.04": "2025-05-31",
+               "22.04": "2027-04-30", "24.04": "2029-05-31"},
+    "debian": {"9": "2022-06-30", "10": "2024-06-30", "11": "2026-08-31", "12": "2028-06-30"},
+    "centos": {"7": "2024-06-30", "8": "2021-12-31"},
+    "rhel": {"7": "2024-06-30", "8": "2029-05-31", "9": "2032-05-31"},
+    "rocky": {"8": "2029-05-31", "9": "2032-05-31"},
+    "almalinux": {"8": "2029-05-31", "9": "2032-05-31"},
+    "fedora": {"38": "2024-05-21", "39": "2024-11-12", "40": "2025-05-13", "41": "2025-11-19"},
+    "opensuse-leap": {"15.4": "2023-12-31", "15.5": "2024-12-31", "15.6": "2025-12-31"},
+    "sles": {"12": "2024-10-31", "15": "2031-07-31"},
+}
+
+
+def _parse_posture(text):
+    """Parse the `POSTURE|<cat>.<key>=<value>` stream from cmd_posture_snapshot
+    into a nested {category: {key: value}} dict, or None if no lines present.
+    Values are kept as strings (the gather command already single-lines them)."""
+    flat = {}
+    for line in (text or "").splitlines():
+        if line.startswith("POSTURE|"):
+            body = line[len("POSTURE|"):]
+            if "=" in body:
+                k, v = body.split("=", 1)
+                flat[k.strip()] = v
+    if not flat:
+        return None
+    nested = {}
+    for k, v in flat.items():
+        cat, _, sub = k.partition(".")
+        nested.setdefault(cat, {})[sub or cat] = v
+    return nested
+
+
+def _eol_status(distro, version):
+    """Return True (EOL), False (supported), or None (unknown) for a distro."""
+    if not distro or not version:
+        return None
+    table = _EOL_TABLE.get((distro or "").lower())
+    if not table:
+        return None
+    eol = table.get(version) or table.get(version.split(".")[0])
+    if not eol:
+        return None  # unknown point release -> don't flag
+    import datetime
+    try:
+        return datetime.date.today().isoformat() > eol
+    except Exception:
+        return None
+
+
+def _posture_flags(p):
+    """Compute the curated high-ticket compliance signals from a parsed posture
+    dict. Each value is True (a problem), False (clean), or None (couldn't
+    determine). The dashboard counts the True ones per signal across the fleet."""
+    if not p:
+        return {}
+    g = lambda c, k, d=None: (p.get(c) or {}).get(k, d)
+
+    def as_int(v):
+        try:
+            return int(str(v).strip())
+        except (TypeError, ValueError):
+            return None
+
+    # SSH root login: "yes" is the risk; key-only forms are acceptable.
+    rl = (g("ssh", "permit_root_login") or "").strip().lower()
+    ssh_root = (rl == "yes") if rl else None
+
+    # MAC: flag only when NEITHER SELinux nor AppArmor is actively enforcing.
+    se = (g("mac", "selinux") or "").strip().lower()
+    aa = (g("mac", "apparmor") or "").strip().lower()
+    se_enf = se == "enforcing"
+    aa_enf = aa == "enabled"
+    mac_off = (not se_enf and not aa_enf) if (se or aa) else None
+
+    fw = g("fw", "active")
+    sync = (g("time", "synced") or "").strip().lower()
+    uid0 = as_int(g("users", "uid0_count"))
+    emptypw = as_int(g("users", "empty_pw_count"))
+    cert30 = as_int(g("cert", "expiring_30d"))
+    eol = _eol_status(g("os", "distro"), g("os", "version"))
+
+    return {
+        "reboot_required": (g("reboot", "required") == "1") if g("reboot", "required") is not None else None,
+        "ssh_root_login": ssh_root,
+        "firewall_disabled": (fw == "0") if fw is not None else None,
+        "mac_not_enforcing": mac_off,
+        "eol_os": eol,
+        "risky_accounts": ((uid0 or 0) > 1 or (emptypw or 0) > 0)
+        if (uid0 is not None or emptypw is not None) else None,
+        "cert_expiring": (cert30 > 0) if cert30 is not None else None,
+        "time_unsynced": (sync in ("no", "false", "0")) if sync else None,
+    }
+
+
+def _posture_command():
+    return api.cmd_posture_snapshot()
+
+
+def _probe_posture(e, cmd, last_seen, now):
+    """Run the read-only posture command on one host entry and return its parsed
+    posture + flags. Mirrors fleet_health.probe: offline agents are reported
+    without probing; dispatch is tokenless (read-only, root, unattributed)."""
+    base = {"id": e.get("id"), "host": e.get("label"),
+            "environment": e.get("environment") or "Unassigned"}
+    aid = None
+    if e["kind"] == "agent":
+        aid = e["id"]
+    elif e["kind"] == "merged":
+        aid = (e.get("agent_entry") or {}).get("id") or e["id"]
+    ls = last_seen.get(aid) if aid else None
+    online = (bool(ls and (now - ls) <= 20)) if aid else None
+    if aid is not None and not online:
+        return {**base, "online": False, "ok": False, "error": "offline", "posture": None, "flags": {}}
+    pe = {**e, "requires_sudo_password": False}
+    if e.get("agent_entry"):
+        pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+    r = _dispatch_one(pe, cmd, "command", None, None, None)  # no token: read-only, unlogged
+    p = _parse_posture((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
+    return {
+        **base,
+        "online": True if p else online,
+        "ok": bool(r.get("ok")) and p is not None,
+        "error": None if p else (r.get("error") or "no posture returned"),
+        "posture": p,
+        "flags": _posture_flags(p),
+    }
+
+
+# Small in-process cache so the dashboard doesn't force a full re-sweep on every
+# load. {ts, hosts}. A sweep is on-demand: the cache is served unless a caller
+# passes ?refresh=1 or it is older than _POSTURE_TTL.
+_POSTURE_CACHE = {"ts": 0.0, "hosts": None}
+_POSTURE_TTL = 300.0
+
+
+@app.get("/api/fleet-posture")
+def fleet_posture(refresh: int = 0, user: str = Depends(require_login)):
+    """On-demand posture sweep across the fleet for the dashboard Compliance
+    strip. Cached for a few minutes unless ?refresh=1. Read-only; tokenless
+    dispatch, so visible to the auditor role and never attributed as an action."""
+    import concurrent.futures
+    import time as _t
+    if not refresh and _POSTURE_CACHE["hosts"] is not None and (_t.time() - _POSTURE_CACHE["ts"]) < _POSTURE_TTL:
+        return {"hosts": _POSTURE_CACHE["hosts"], "cached": True, "ts": _POSTURE_CACHE["ts"]}
+    try:
+        entries = dispatch.list_merged_hosts(agent_only=False)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+    try:
+        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+    except Exception:
+        last_seen = {}
+    now = _t.time()
+    cmd = _posture_command()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
+        hosts = list(ex.map(lambda e: _probe_posture(e, cmd, last_seen, now), entries)) if entries else []
+    _POSTURE_CACHE["hosts"] = hosts
+    _POSTURE_CACHE["ts"] = now
+    return {"hosts": hosts, "cached": False, "ts": now}
+
+
+@app.get("/api/host-posture/{host_id}")
+def host_posture(host_id: str, user: str = Depends(require_login)):
+    """Full read-only posture for a single host (the drill-down's Refresh).
+    Always re-gathers (no cache) so the operator sees current state."""
+    import time as _t
+    try:
+        entries = dispatch.list_merged_hosts(agent_only=False)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+    entry = next((e for e in entries if str(e.get("id")) == str(host_id)), None)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Host not found")
+    try:
+        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+    except Exception:
+        last_seen = {}
+    return _probe_posture(entry, _posture_command(), last_seen, _t.time())
 
 
 @app.get("/api/environments")

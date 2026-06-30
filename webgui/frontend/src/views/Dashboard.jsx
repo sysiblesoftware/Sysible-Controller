@@ -41,11 +41,15 @@ function Meter({ label, pct }) {
   );
 }
 
-function FleetHostCard({ h }) {
+function FleetHostCard({ h, onOpenHost }) {
   const v = (h.verdict || "OK").toUpperCase();
   const noData = v === "OFFLINE" || h.disk == null;
+  const clickable = !!(onOpenHost && h.id);
   return (
-    <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px" }}>
+    <div onClick={clickable ? () => onOpenHost(h) : undefined}
+         title={clickable ? "View posture / compliance detail" : undefined}
+         style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px",
+                  cursor: clickable ? "pointer" : "default" }}>
       <div className="spread" style={{ marginBottom: noData ? 0 : 6 }}>
         <span><span className="dot" style={{ background: VERDICT_COLOR[v] || VERDICT_COLOR.OFFLINE }} />{" "}
           <strong>{h.host}</strong>
@@ -82,7 +86,7 @@ function FleetHostCard({ h }) {
 // to the individual host cards. Environment-first, mirroring the Performance
 // view, so the dashboard reads as "how is each environment doing" rather than a
 // flat wall of hosts.
-function EnvHealthCard({ group }) {
+function EnvHealthCard({ group, onOpenHost }) {
   const [open, setOpen] = useState(false);
   const v = group.verdict;
   const Count = ({ k, color }) => group.counts[k] > 0 ? (
@@ -128,7 +132,54 @@ function EnvHealthCard({ group }) {
       {open && (
         <div style={{ padding: "0 10px 10px", display: "grid", gap: 8,
                       borderTop: "1px solid var(--border)", paddingTop: 8 }}>
-          {group.hosts.map((h) => <FleetHostCard key={h.host} h={h} />)}
+          {group.hosts.map((h) => <FleetHostCard key={h.host} h={h} onOpenHost={onOpenHost} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Curated high-ticket compliance signals for the dashboard strip. The first
+// group is derived from the read-only posture sweep (/api/fleet-posture); the
+// disk/service ones reuse the fleet-health snapshot already on the dashboard.
+// Each counts the hosts where the signal is a problem; green at zero.
+const POSTURE_SIGNALS = [
+  { key: "reboot_required", label: "Reboot required" },
+  { key: "ssh_root_login", label: "SSH root login enabled" },
+  { key: "firewall_disabled", label: "Firewall disabled" },
+  { key: "mac_not_enforcing", label: "SELinux/AppArmor not enforcing" },
+  { key: "eol_os", label: "EOL / unsupported OS" },
+  { key: "risky_accounts", label: "UID-0 / empty-password accounts" },
+  { key: "cert_expiring", label: "TLS cert expiring < 30 days" },
+  { key: "time_unsynced", label: "Time not synchronized" },
+];
+
+// One compliance signal: label + affected-host count, expands to the hosts
+// (each clickable into the drill-down). Green when zero, amber when >0.
+function SignalChip({ label, hosts, onOpenHost }) {
+  const [open, setOpen] = useState(false);
+  const n = hosts.length;
+  const color = n > 0 ? VERDICT_COLOR.WARNING : VERDICT_COLOR.OK;
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+      <button onClick={() => n > 0 && setOpen((o) => !o)}
+        style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                 gap: 8, padding: "8px 10px", background: "none", border: "none",
+                 cursor: n > 0 ? "pointer" : "default", color: "var(--text)", textAlign: "left", font: "inherit" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span className="dot" style={{ background: color }} />
+          <span style={{ fontSize: 13 }}>{label}</span>
+        </span>
+        <span style={{ fontWeight: 700, color }}>{n}</span>
+      </button>
+      {open && n > 0 && (
+        <div style={{ padding: "0 10px 8px", display: "flex", flexWrap: "wrap", gap: 6,
+                      borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+          {hosts.map((h) => (
+            <button key={h.id ?? h.host} className="btn ghost sm"
+                    onClick={() => h.id && onOpenHost && onOpenHost(h)}
+                    title={h.id ? "View posture detail" : ""}>{h.host}</button>
+          ))}
         </div>
       )}
     </div>
@@ -202,7 +253,47 @@ export default function Dashboard({ role, edition, onOpen }) {
     return () => clearInterval(t);
   }, [fleetAuto, loadFleet]);
 
+  const openHost = useCallback((h) => onOpen("host", { id: h.id, label: h.host }), [onOpen]);
+
+  // Compliance / posture sweep (read-only, on-demand; cached by the BFF).
+  const [posture, setPosture] = useState([]);
+  const [postureAt, setPostureAt] = useState(0);
+  const [postureLoading, setPostureLoading] = useState(false);
+  const [postureErr, setPostureErr] = useState("");
+
+  const loadPosture = useCallback((refresh = false) => {
+    setPostureLoading(true); setPostureErr("");
+    api.fleetPosture(refresh)
+      .then((d) => { setPosture(d.hosts || []); setPostureAt((d.ts ? d.ts * 1000 : Date.now())); })
+      .catch((e) => setPostureErr(e.message))
+      .finally(() => setPostureLoading(false));
+  }, []);
+  useEffect(() => { loadPosture(false); }, [loadPosture]);
+
   const order = { CRITICAL: 0, WARNING: 1, OFFLINE: 2, OK: 3 };
+
+  // Build the dashboard compliance strip: posture-derived signals (hosts whose
+  // flag is true) plus two reused from fleet-health (disk-critical, failed
+  // services). Each carries the affected hosts so the chip can expand to them.
+  const complianceSignals = useMemo(() => {
+    const sig = POSTURE_SIGNALS.map((s) => ({
+      label: s.label,
+      hosts: posture.filter((h) => h.flags && h.flags[s.key] === true)
+        .map((h) => ({ id: h.id, host: h.host })),
+    }));
+    sig.push({
+      label: "Disk usage critical (≥ 90%)",
+      hosts: fleet.filter((h) => (h.disk ?? 0) >= 90).map((h) => ({ id: h.id, host: h.host })),
+    });
+    sig.push({
+      label: "Failed systemd units",
+      hosts: fleet.filter((h) => (h.failed ?? 0) > 0).map((h) => ({ id: h.id, host: h.host })),
+    });
+    // Surface the signals with findings first.
+    return sig.sort((a, b) => b.hosts.length - a.hosts.length);
+  }, [posture, fleet]);
+
+  const issuesTotal = complianceSignals.reduce((n, s) => n + (s.hosts.length > 0 ? 1 : 0), 0);
 
   const fleetSummary = useMemo(() => {
     const counts = { OK: 0, WARNING: 0, CRITICAL: 0, OFFLINE: 0 };
@@ -335,9 +426,44 @@ export default function Dashboard({ role, edition, onOpen }) {
               </div>
             </div>
             <div style={{ flex: 1, minWidth: 300, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
-              {fleetByEnv.map((e) => <EnvHealthCard key={e.env} group={e} />)}
+              {fleetByEnv.map((e) => <EnvHealthCard key={e.env} group={e} onOpenHost={openHost} />)}
             </div>
           </div>
+        )}
+      </div>
+
+      <div className="card" style={{ marginTop: 14 }}>
+        <div className="spread" style={{ marginBottom: 10 }}>
+          <strong>Compliance &amp; posture
+            {posture.length > 0 && (
+              <span className="faint" style={{ fontSize: 12, marginLeft: 8 }}>
+                {issuesTotal === 0 ? "all clear" : `${issuesTotal} signal${issuesTotal === 1 ? "" : "s"} with findings`}
+              </span>
+            )}
+          </strong>
+          <div className="row" style={{ gap: 12, alignItems: "center" }}>
+            {postureAt > 0 && <span className="faint" style={{ fontSize: 12 }}>scanned {new Date(postureAt).toLocaleTimeString()}</span>}
+            <button className="btn ghost sm" onClick={() => loadPosture(true)} disabled={postureLoading}>
+              {postureLoading ? <span className="spin" /> : "Run posture scan"}
+            </button>
+          </div>
+        </div>
+        {postureErr && <div className="error-box">{postureErr}</div>}
+        {posture.length === 0 ? (
+          <div className="empty" style={{ padding: 16 }}>
+            {postureLoading ? "Scanning fleet posture…" : "No posture data yet — click Run posture scan."}
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
+              {complianceSignals.map((s) => (
+                <SignalChip key={s.label} label={s.label} hosts={s.hosts} onOpenHost={openHost} />
+              ))}
+            </div>
+            <div className="faint" style={{ fontSize: 11, marginTop: 10 }}>
+              Read-only checks across {posture.length} host{posture.length === 1 ? "" : "s"}. Click a host for the full per-category drill-down.
+            </div>
+          </>
         )}
       </div>
 

@@ -8,6 +8,7 @@ import Connect from "./views/Connect.jsx";
 import LiveActivity from "./views/LiveActivity.jsx";
 import Settings from "./views/Settings.jsx";
 import HostEnrollment from "./views/HostEnrollment.jsx";
+import HostDetail from "./views/HostDetail.jsx";
 import SudoModal from "./components/SudoModal.jsx";
 import StandaloneTerminal from "./components/StandaloneTerminal.jsx";
 
@@ -150,13 +151,15 @@ export default function App() {
 
       <main className="main">
         <div className="main-top">
-          <h2>{view ? SECTIONS[view] : "Dashboard"}</h2>
+          <h2>{view === "host" ? (target?.label || "Host Posture") : (view ? SECTIONS[view] : "Dashboard")}</h2>
           <div className="main-top-sub">{view ? "" : `Signed in as ${user}${role ? ` · ${role}` : ""}`}</div>
         </div>
         <div className="main-scroll">
           {view === null && <Dashboard role={role} edition={edition}
             onOpen={(section, opts) => { setView(section); setTarget(opts || null); }} />}
           {view === "perf" && <Performance />}
+          {view === "host" && <HostDetail hostId={target?.id} label={target?.label}
+            onBack={() => { setView(null); setTarget(null); }} />}
           {!isAuditor && view === "hosts" && <HostEnrollment />}
           {!isAuditor && view === "settings" && <Settings />}
           {!isAuditor && view === "sysadmin" && <ToolRunner openTool={target?.tool} openTab={target?.tab}

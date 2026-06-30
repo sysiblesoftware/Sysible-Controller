@@ -31,7 +31,7 @@ class WebGuiPage(QWidget):
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(10)
 
-        layout.addLayout(make_page_header("Browser Access (Web GUI)"))
+        layout.addWidget(make_page_header("Browser Access (Web GUI)"))
 
         intro = QLabel(
             "Runs a browser-based version of this controller so Windows and other "

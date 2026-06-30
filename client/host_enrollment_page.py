@@ -75,7 +75,7 @@ class HostEnrollmentPage(QWidget):
         # =====================================================
         # TITLE
         # =====================================================
-        layout.addLayout(make_page_header("Sysible Controller Host Enrollment", font_size=22, logo_height=32))
+        layout.addWidget(make_page_header("Sysible Controller Host Enrollment", font_size=22, logo_height=32))
 
         # Community-edition host cap, shown so the limit is visible up front
         # rather than only surfacing as an error when the (N+1)th host enrolls.

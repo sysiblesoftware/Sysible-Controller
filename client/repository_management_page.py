@@ -62,7 +62,7 @@ class RepositoryManagementPage(QWidget):
         main = QVBoxLayout()
         self.setLayout(main)
 
-        main.addLayout(make_page_header("Repository Management"))
+        main.addWidget(make_page_header("Repository Management"))
 
         # =========================================================
         # BODY: Target Hosts as a full-height left column (#352),

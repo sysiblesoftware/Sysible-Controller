@@ -193,7 +193,7 @@ class UserGroupAdministrationPage(QWidget):
         main = QVBoxLayout()
         self.setLayout(main)
 
-        main.addLayout(make_page_header("User & Group Administration"))
+        main.addWidget(make_page_header("User & Group Administration"))
 
         body = QHBoxLayout()
 

@@ -1550,7 +1550,7 @@ class RemoteAdministrationPage(QWidget):
         main = QVBoxLayout()
         self.setLayout(main)
 
-        main.addLayout(make_page_header("Sysible Connect"))
+        main.addWidget(make_page_header("Sysible Connect"))
 
         body = QHBoxLayout()
 

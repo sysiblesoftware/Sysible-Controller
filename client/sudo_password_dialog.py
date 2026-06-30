@@ -38,7 +38,7 @@ class SudoPasswordDialog(QDialog):
         layout.setContentsMargins(24, 18, 24, 18)
         layout.setSpacing(10)
 
-        layout.addLayout(make_page_header("My Sudo Password", font_size=16, logo_height=24))
+        layout.addWidget(make_page_header("My Sudo Password", font_size=16, logo_height=24))
 
         who = session.get_current_admin() or "this admin"
         intro = QLabel(

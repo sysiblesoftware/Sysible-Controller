@@ -56,7 +56,7 @@ class EnvironmentalPoliciesPage(QWidget):
         outer = QVBoxLayout()
         self.setLayout(outer)
 
-        outer.addLayout(make_page_header("Environmental Policies", font_size=22, logo_height=32))
+        outer.addWidget(make_page_header("Environmental Policies", font_size=22, logo_height=32))
 
         body = QHBoxLayout()
 

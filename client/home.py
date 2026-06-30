@@ -10,6 +10,7 @@ from client.host_enrollment_page import HostEnrollmentPage
 from client.admin_configuration_page import AdminConfigurationPage
 from client.remote_administration_page import RemoteAdministrationPage
 from client.system_administration_page import SystemAdministrationPage
+from client.fleet_dashboard_page import FleetDashboardPage
 from client.live_log_page import LiveLogPage
 from client.branding import LOGO_PATH
 from client.theme_toggle import ThemeToggle
@@ -161,6 +162,10 @@ class HomeWindow(QWidget):
         # these regardless (require_superuser); this just keeps a sysadmin's
         # dashboard from showing tiles whose pages would only 403.
         cards = [
+            ("Fleet Health & Compliance",
+             "Live fleet-health rollup per environment plus a read-only "
+             "posture/compliance scan — drill into any host's full posture.",
+             self.open_fleet_dashboard, "fa5s.heartbeat", "green", False),
             ("Sysible Controller Host Enrollment",
              "Download the agent bundle and manage the enrolled host fleet.",
              self.open_hosts, "fa5s.server", "teal", True),
@@ -198,6 +203,7 @@ class HomeWindow(QWidget):
         outer.addStretch()
 
         # popouts
+        self.fleet_dashboard_window = None
         self.host_window = None
         self.admin_config_window = None
         self.remote_window = None
@@ -284,6 +290,13 @@ class HomeWindow(QWidget):
             "edition to manage more hosts."
         )
         self.edition_badge.setVisible(True)
+
+    def open_fleet_dashboard(self):
+        if self.fleet_dashboard_window is None:
+            self.fleet_dashboard_window = FleetDashboardPage()
+        self.fleet_dashboard_window.show()
+        self.fleet_dashboard_window.raise_()
+        return self.fleet_dashboard_window
 
     def open_hosts(self):
         if self.host_window is None:

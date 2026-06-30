@@ -64,7 +64,7 @@ class HostSoftwareManagementPage(QWidget):
         main = QVBoxLayout()
         self.setLayout(main)
 
-        main.addLayout(make_page_header("Host Software Management"))
+        main.addWidget(make_page_header("Host Software Management"))
 
         # =========================================================
         # BODY: Target Hosts as a full-height left column (#352),

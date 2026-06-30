@@ -73,7 +73,7 @@ class WebserverPortalPage(QWidget):
             outer = QVBoxLayout()
             self.setLayout(outer)
 
-            outer.addLayout(make_page_header("Webserver Portal Configuration", font_size=22, logo_height=32))
+            outer.addWidget(make_page_header("Webserver Portal Configuration", font_size=22, logo_height=32))
 
             # Everything below the title lives inside a scroll area instead
             # of directly in the page's layout. With 8 stacked sections (two

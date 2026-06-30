@@ -56,7 +56,7 @@ class CronSystemdTimersPage(QWidget):
         main = QVBoxLayout()
         self.setLayout(main)
 
-        main.addLayout(make_page_header("Cron & Systemd Timers"))
+        main.addWidget(make_page_header("Cron & Systemd Timers"))
 
         # =========================================================
         # BODY: Target Hosts as a full-height left column (#352),

@@ -430,6 +430,15 @@ cmd_update() {
   echo "Restarting services ..."
   cmd_restart
 
+  # Self-heal: if the web console is enabled but not running (e.g. a prior
+  # botched update left it down, so cmd_restart's "was it running" check skipped
+  # it), bring it back. The front end is already built above, so this is fast.
+  if systemctl is-enabled --quiet "${WEBGUI_SERVICE}.service" 2>/dev/null \
+     && ! systemctl is-active --quiet "${WEBGUI_SERVICE}.service" 2>/dev/null; then
+    echo "Ensuring the web console is up ..."
+    _start_webgui
+  fi
+
   echo ""
   echo "Update complete."
   echo "Then hard-refresh your browser (Ctrl/Cmd+Shift+R) to drop the old bundle."

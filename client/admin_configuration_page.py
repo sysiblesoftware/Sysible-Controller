@@ -1,10 +1,11 @@
 import datetime
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QMessageBox, QFrame, QComboBox, QTableWidget, QTableWidgetItem,
     QAbstractItemView, QScrollArea, QCheckBox, QDialog, QFileDialog, QApplication,
+    QProgressBar,
 )
 
 from client import api, session
@@ -504,9 +505,27 @@ class AdminConfigurationPage(QWidget):
         row.addStretch()
         layout.addLayout(row)
 
+        # Controller reconnect bar (indeterminate while the backend restarts).
+        self.controller_progress = QProgressBar()
+        self.controller_progress.setRange(0, 0)
+        self.controller_progress.setTextVisible(False)
+        self.controller_progress.setFixedHeight(8)
+        self.controller_progress.setVisible(False)
+        layout.addWidget(self.controller_progress)
+
+        # Agent rollout bar ("N of M updated", driven by reported agent_version).
+        self.agents_progress = QProgressBar()
+        self.agents_progress.setTextVisible(False)
+        self.agents_progress.setFixedHeight(8)
+        self.agents_progress.setVisible(False)
+        layout.addWidget(self.agents_progress)
+
         self.software_update_status = QLabel("")
         self.software_update_status.setWordWrap(True)
         layout.addWidget(self.software_update_status)
+
+        self._ctrl_timer = None
+        self._agents_timer = None
 
     def _update_controller(self):
         if QMessageBox.question(
@@ -516,20 +535,44 @@ class AdminConfigurationPage(QWidget):
             "may need a Refresh afterwards.",
         ) != QMessageBox.Yes:
             return
+        self.update_controller_btn.setEnabled(False)
         self.software_update_status.setStyleSheet(f"color:{STATUS_NEUTRAL_COLOR};")
         self.software_update_status.setText("Starting controller update…")
-        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             r = api.controller_update()
         except Exception as e:
-            QApplication.restoreOverrideCursor()
+            self.update_controller_btn.setEnabled(True)
             self.software_update_status.setStyleSheet(f"color:{STATUS_ERROR_COLOR};")
             self.software_update_status.setText(f"Update failed: {e}")
             return
-        QApplication.restoreOverrideCursor()
-        self.software_update_status.setStyleSheet(f"color:{STATUS_SUCCESS_COLOR};")
         self.software_update_status.setText(
-            (r or {}).get("message") or "Controller update started; it will restart shortly.")
+            (r or {}).get("message") or "Controller update started.")
+        # Watch for the backend going down then coming back up.
+        self.controller_progress.setVisible(True)
+        self._ctrl_saw_down = False
+        self._ctrl_start = datetime.datetime.now()
+        if self._ctrl_timer:
+            self._ctrl_timer.stop()
+        self._ctrl_timer = QTimer(self)
+        self._ctrl_timer.setInterval(2500)
+        self._ctrl_timer.timeout.connect(self._poll_controller)
+        self._ctrl_timer.start()
+
+    def _poll_controller(self):
+        try:
+            api.get_controller_config()   # succeeds once the backend is back
+            up = True
+        except Exception:
+            up = False
+        if not up:
+            self._ctrl_saw_down = True
+        elapsed = (datetime.datetime.now() - self._ctrl_start).total_seconds()
+        if (up and self._ctrl_saw_down) or elapsed > 150:
+            self._ctrl_timer.stop()
+            self.controller_progress.setVisible(False)
+            self.update_controller_btn.setEnabled(True)
+            self.software_update_status.setStyleSheet(f"color:{STATUS_SUCCESS_COLOR};")
+            self.software_update_status.setText("Controller is back up. Use Refresh to reload this page.")
 
     def _update_agents(self):
         if QMessageBox.question(
@@ -541,18 +584,53 @@ class AdminConfigurationPage(QWidget):
             return
         self.software_update_status.setStyleSheet(f"color:{STATUS_NEUTRAL_COLOR};")
         self.software_update_status.setText("Queuing agent update…")
-        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             r = api.update_agents()
         except Exception as e:
-            QApplication.restoreOverrideCursor()
             self.software_update_status.setStyleSheet(f"color:{STATUS_ERROR_COLOR};")
             self.software_update_status.setText(f"Agent update failed: {e}")
             return
-        QApplication.restoreOverrideCursor()
         self.software_update_status.setStyleSheet(f"color:{STATUS_SUCCESS_COLOR};")
         self.software_update_status.setText(
-            (r or {}).get("message") or "Agent update queued; hosts apply it on next check-in.")
+            (r or {}).get("message") or "Agent update queued.")
+        ver = (r or {}).get("version")
+        total = (r or {}).get("queued") or 0
+        if not ver or not total:
+            return
+        # Poll which hosts now report the new agent version → N-of-M bar.
+        self._agent_ver = ver
+        self._agent_total = total
+        self._agents_start = datetime.datetime.now()
+        self.agents_progress.setRange(0, total)
+        self.agents_progress.setValue(0)
+        self.agents_progress.setVisible(True)
+        if self._agents_timer:
+            self._agents_timer.stop()
+        self._agents_timer = QTimer(self)
+        self._agents_timer.setInterval(4000)
+        self._agents_timer.timeout.connect(self._poll_agents)
+        self._agents_timer.start()
+        self._poll_agents()
+
+    def _poll_agents(self):
+        try:
+            agents = api.get_agents()
+        except Exception:
+            return
+        updated = sum(1 for a in agents if a.get("agent_version") == self._agent_ver)
+        self.agents_progress.setValue(min(updated, self._agent_total))
+        elapsed = (datetime.datetime.now() - self._agents_start).total_seconds()
+        done = updated >= self._agent_total
+        self.software_update_status.setStyleSheet(f"color:{STATUS_SUCCESS_COLOR};")
+        if done:
+            self.software_update_status.setText(f"✓ All {self._agent_total} agents updated.")
+            self._agents_timer.stop()
+        elif elapsed > 240:
+            self.software_update_status.setText(
+                f"{updated}/{self._agent_total} agents updated — offline hosts apply on reconnect.")
+            self._agents_timer.stop()
+        else:
+            self.software_update_status.setText(f"Updating agents… {updated}/{self._agent_total}")
 
     # =========================================================
     # SECTION 2: TLS CERTIFICATE

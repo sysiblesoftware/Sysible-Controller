@@ -429,3 +429,7 @@ tr:hover td { background: var(--row-hover); }
 @keyframes sp { to { transform: rotate(360deg); } }
 .empty { color: var(--text-faint); padding: 40px; text-align: center; }
 .ok-text { color: var(--green-bright); }
+
+/* Indeterminate progress sweep (Settings → Software updates: controller restart). */
+@keyframes progIndef { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
+.prog-indef { animation: progIndef 1.1s ease-in-out infinite; }

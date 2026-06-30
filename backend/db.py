@@ -108,6 +108,15 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
+    # agent_version: a short hash of the agent's own agent.py, reported on every
+    # heartbeat (newer agents). Lets the web console show which hosts are running
+    # the current agent and drive the "Update agents" progress bar. Nullable;
+    # older agents simply don't report it.
+    try:
+        cur.execute("ALTER TABLE agents ADD COLUMN agent_version TEXT")
+    except sqlite3.OperationalError:
+        pass
+
     # -----------------------------------------------------
     # Environments (dev/stage/prod, etc.)
     # An editable, admin-managed list rather than a fixed enum - used
@@ -621,7 +630,7 @@ def create_or_update_agent(
     conn.close()
 
 
-def update_agent_heartbeat(host_id, ip=None, hostname=None):
+def update_agent_heartbeat(host_id, ip=None, hostname=None, agent_version=None):
     conn = _connect()
     cur = conn.cursor()
 
@@ -647,7 +656,8 @@ def update_agent_heartbeat(host_id, ip=None, hostname=None):
         status=?,
         last_seen=?,
         ip=COALESCE(?, ip),
-        hostname=COALESCE(?, hostname)
+        hostname=COALESCE(?, hostname),
+        agent_version=COALESCE(?, agent_version)
     WHERE host_id=?
     """,
     (
@@ -655,6 +665,7 @@ def update_agent_heartbeat(host_id, ip=None, hostname=None):
         time.time(),
         ip,
         hostname,
+        agent_version,
         host_id
     ))
 
@@ -669,7 +680,7 @@ def list_agents():
 
     cur.execute("""
     SELECT host_id, hostname, platform, kernel, status, last_seen, environment, ip,
-           requires_sudo_password
+           requires_sudo_password, agent_version
     FROM agents
     ORDER BY hostname
     """)

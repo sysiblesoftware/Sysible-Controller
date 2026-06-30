@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 
 // Sysible Controller Settings: administrators, password policy, controller
@@ -287,28 +287,86 @@ function ControllerCfg() {
   );
 }
 
+// A thin progress bar. `value`/`max` give a determinate fill; `indeterminate`
+// shows a moving sweep when there's no measurable percentage.
+function ProgressBar({ value = 0, max = 1, indeterminate = false, color }) {
+  const pct = Math.max(0, Math.min(100, max ? (value / max) * 100 : 0));
+  return (
+    <div style={{ height: 8, borderRadius: 4, background: "var(--border)", overflow: "hidden", marginTop: 8 }}>
+      <div className={indeterminate ? "prog-indef" : ""}
+           style={{ width: indeterminate ? "40%" : pct + "%", height: "100%",
+                    background: color || "var(--accent)",
+                    transition: indeterminate ? "none" : "width .4s ease" }} />
+    </div>
+  );
+}
+
 // Software updates (Settings → Controller): update the controller in place, then
 // push the agent to every managed host over its existing check-in. Superuser-only
-// (the whole Settings page is). Each button has a confirm step.
+// (the whole Settings page is). Each button confirms, then shows live progress:
+// the controller as a reconnect indicator (it restarts the console mid-update),
+// the agents as an "N of M on the new version" bar fed by agent_version reports.
 function SoftwareUpdate() {
   const [confirm, setConfirm] = useState(null); // null | "controller" | "agents"
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useErr(); const [msg, setMsg] = useState("");
+  const [ctrl, setCtrl] = useState(null);       // null | "restarting" | "back"
+  const [agents, setAgents] = useState(null);   // null | {total, updated, ver, done, timedOut}
+  const pollRef = useRef(null);
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
-  async function run(which) {
-    setBusy(true); setErr(""); setMsg("");
+  async function startController() {
+    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setAgents(null);
     try {
-      const r = which === "controller" ? await api.controllerUpdate() : await api.updateAgents();
-      setConfirm(null);
-      setMsg(r?.message || (which === "controller" ? "Controller update started." : "Agent update queued."));
+      const r = await api.controllerUpdate();
+      setMsg(r?.message || "Controller update started.");
+      setCtrl("restarting");
+      let sawDown = false;
+      const t0 = Date.now();
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(async () => {
+        let up;
+        try { await api.me(); up = true; }                 // resolved → console is up
+        catch (e) { up = !!(e && e.status); }              // HTTP status (401) = up; network error = down
+        if (!up) sawDown = true;
+        // Done once the console has gone down (restart) and come back, or as a
+        // time fallback in case the restart was too quick to observe.
+        if ((up && sawDown) || Date.now() - t0 > 150000) {
+          clearInterval(pollRef.current); setCtrl("back");
+        }
+      }, 2500);
+    } catch (e) { setErr(e.message); setCtrl(null); }
+    finally { setBusy(false); }
+  }
+
+  async function startAgents() {
+    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setCtrl(null);
+    try {
+      const r = await api.updateAgents();
+      const ver = r?.version, total = r?.queued || 0;
+      setMsg(r?.message || `Agent update queued for ${total} host(s).`);
+      if (!ver || !total) return;
+      setAgents({ total, updated: 0, ver, done: false, timedOut: false });
+      const t0 = Date.now();
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(async () => {
+        try {
+          const d = await api.agents();
+          const updated = (d.agents || []).filter((a) => a.agent_version === ver).length;
+          const done = updated >= total;
+          const timedOut = !done && Date.now() - t0 > 240000;
+          setAgents({ total, updated, ver, done, timedOut });
+          if (done || timedOut) clearInterval(pollRef.current);
+        } catch { /* transient — keep polling */ }
+      }, 4000);
     } catch (e) { setErr(e.message); }
     finally { setBusy(false); }
   }
 
-  const Button = ({ which, label }) => (
+  const Button = ({ which, label, start }) => (
     confirm === which ? (
       <>
-        <button className="btn" onClick={() => run(which)} disabled={busy}>
+        <button className="btn" onClick={start} disabled={busy}>
           {busy ? <span className="spin" /> : `Yes, ${label.toLowerCase()}`}
         </button>
         <button className="btn ghost" onClick={() => setConfirm(null)} disabled={busy}>Cancel</button>
@@ -326,13 +384,42 @@ function SoftwareUpdate() {
         current agent to every managed host over its existing check-in — no SSH or
         re-enrollment. Each restarts itself; a controller update signs you out briefly.
       </p>
+
       <div className="row" style={{ gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-        <Button which="controller" label="Update controller" />
+        <Button which="controller" label="Update controller" start={startController} />
       </div>
-      <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-        <Button which="agents" label="Update agents" />
+      {ctrl === "restarting" && (
+        <div style={{ marginTop: 8 }}>
+          <div className="faint" style={{ fontSize: 12 }}>Rebuilding and restarting the controller… reconnecting (this can take 30–90 s).</div>
+          <ProgressBar indeterminate />
+        </div>
+      )}
+      {ctrl === "back" && (
+        <div style={{ marginTop: 8 }}>
+          <div className="ok-text" style={{ fontSize: 13 }}>✓ Controller is back up.</div>
+          <button className="btn sm" style={{ marginTop: 6 }} onClick={() => window.location.reload()}>Reload &amp; sign in</button>
+        </div>
+      )}
+
+      <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+        <Button which="agents" label="Update agents" start={startAgents} />
       </div>
-      <p className="faint" style={{ marginTop: 10, marginBottom: 0 }}>
+      {agents && (
+        <div style={{ marginTop: 8 }}>
+          <div className="spread" style={{ fontSize: 12 }}>
+            <span className="faint">
+              {agents.done ? "✓ all agents updated"
+                : agents.timedOut ? "still updating — offline hosts apply on reconnect"
+                : "Updating agents…"}
+            </span>
+            <span className="faint">{agents.updated} / {agents.total}</span>
+          </div>
+          <ProgressBar value={agents.updated} max={agents.total}
+                       color={agents.done ? "#4ec07a" : undefined} />
+        </div>
+      )}
+
+      <p className="faint" style={{ marginTop: 12, marginBottom: 0 }}>
         Tip: update the controller first, then update agents so hosts report the latest metrics.
       </p>
       {msg && <div className="ok-text" style={{ marginTop: 10 }}>{msg}</div>}

@@ -17,6 +17,10 @@ class HeartbeatRequest(BaseModel):
     agent_secret: str
     ip: Optional[str] = None
     hostname: Optional[str] = None
+    # Short hash of the agent's own agent.py, so the controller knows which hosts
+    # run the current agent (drives the web console's Update-agents progress).
+    # Older agents omit it.
+    agent_version: Optional[str] = None
     # Optional performance sample (load/cpu/mem/swap/disk/net/io/procs). Sent by
     # newer agents at most once per SYSIBLE_METRICS_INTERVAL, not on every
     # heartbeat; older agents omit it (or send only load1/cores/mem/disk). See

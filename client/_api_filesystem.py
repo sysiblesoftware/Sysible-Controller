@@ -126,6 +126,26 @@ def cmd_view_file(path: str) -> str:
     )
 
 
+def cmd_file_fingerprint(path: str) -> str:
+    """Read-only fingerprint of a file for cross-host comparison: a single
+    machine-parseable `SYSFILEHASH|...` line carrying the sha256, byte size, and
+    mtime (or status=missing / status=dir). Cross-distro (sha256sum with a
+    shasum fallback, GNU `stat -c` with a BSD `stat -f` fallback). Never
+    modifies anything; reads as the dispatching operator, so a file the operator
+    can't read reports an empty sha (shown as 'unreadable' by the comparison)."""
+    path = _validate_path(path, "File path")
+    q = shlex.quote(path)
+    return (
+        f"if [ ! -e {q} ]; then printf 'SYSFILEHASH|status=missing\\n'; exit 0; fi; "
+        f"if [ -d {q} ]; then printf 'SYSFILEHASH|status=dir\\n'; exit 0; fi; "
+        f"h=$(sha256sum {q} 2>/dev/null | awk '{{print $1}}'); "
+        f"[ -z \"$h\" ] && h=$(shasum -a 256 {q} 2>/dev/null | awk '{{print $1}}'); "
+        f"sz=$(wc -c < {q} 2>/dev/null | tr -d ' '); "
+        f"mt=$(stat -c %Y {q} 2>/dev/null || stat -f %m {q} 2>/dev/null); "
+        f"printf 'SYSFILEHASH|status=ok|sha=%s|size=%s|mtime=%s\\n' \"$h\" \"$sz\" \"$mt\""
+    )
+
+
 def cmd_create_directory(path: str, mode: str = "") -> str:
     """mkdir -p - safe to call on a path that already exists, and
     creates any missing parent directories along the way."""

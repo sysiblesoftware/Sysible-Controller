@@ -424,6 +424,14 @@ _register(Action(name="fs_list_dir", tool="File System Management", label="List 
     build=lambda p: api.cmd_list_directory(_s(p, "path", "/") or "/")))
 _register(Action(name="fs_view", tool="File System Management", label="View file",
     params=[Param("path", "Path")], build=lambda p: api.cmd_view_file(_s(p, "path"))))
+# Cross-host file comparison: check several hosts, enter a path, and see which
+# hosts have a different version (grouped by content hash). The web console
+# handles this specially (POST /api/files/compare aggregates the per-host
+# fingerprints); the build below is the per-host read-only fingerprint command.
+_register(Action(name="fs_compare", tool="File System Management",
+    group="Compare a file across hosts", label="Compare across selected hosts",
+    params=[Param("path", "Path", help="e.g. /etc/ssh/sshd_config")],
+    build=lambda p: api.cmd_file_fingerprint(_s(p, "path"))))
 _register(Action(name="fs_mkdir", tool="File System Management", label="Create directory",
     params=[Param("path", "Path")], build=lambda p: api.cmd_create_directory(_s(p, "path"))))
 _register(Action(name="fs_rmdir", tool="File System Management", label="Remove directory",

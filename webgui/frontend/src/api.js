@@ -149,6 +149,8 @@ export const api = {
   },
   downloadUrl: (host, path) =>
     `/api/files/download?host=${encodeURIComponent(host)}&path=${encodeURIComponent(path)}`,
+  compareFile: (path, targets) =>
+    req("/api/files/compare", { method: "POST", body: { path, targets } }),
 };
 
 // Websocket URL for the browser terminal (same origin, ws/wss to match page).

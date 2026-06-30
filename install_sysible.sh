@@ -162,6 +162,24 @@ source "$VENV/bin/activate"
 pip install --upgrade pip
 pip install -r "$BASE/requirements.txt"
 
+# Desktop GUI client deps (PySide6, ...) are OPTIONAL — the controller (backend +
+# web console) doesn't need them. Install best-effort and NEVER fail the install:
+# PySide6 has no wheels on some platforms (ARM / Raspberry Pi, very new Python),
+# where the GUI uses the distro's PySide6 package instead. A headless controller
+# doesn't run the desktop GUI at all.
+if [[ -f "$BASE/requirements-gui.txt" ]]; then
+  echo "Installing desktop GUI dependencies (optional)..."
+  if pip install -r "$BASE/requirements-gui.txt"; then
+    echo "Desktop GUI dependencies installed."
+  else
+    echo "NOTE: desktop GUI dependencies (e.g. PySide6) were not installed on this"
+    echo "      platform. This is expected on headless servers and ARM/Raspberry Pi,"
+    echo "      and does NOT affect the controller or the web console."
+    echo "      To use the desktop GUI here, install them from your distro, e.g.:"
+    echo "        sudo apt install python3-pyside6 python3-qtawesome python3-pyte"
+  fi
+fi
+
 # =========================================================
 # WEB CONSOLE (browser-based, headless-friendly GUI)
 # Extra Python deps the BFF needs, plus a production build of the React

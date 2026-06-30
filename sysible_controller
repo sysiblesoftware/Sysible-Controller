@@ -379,6 +379,7 @@ cmd_update() {
       --exclude '__pycache__' \
       --exclude '*.pyc' \
       --exclude '.git' \
+      --exclude node_modules \
       "$SRC"/ "$BASE"/
     # rsync --delete removes BASE-only files not present in the checkout,
     # including .install_src itself - rewrite it so the NEXT update still works

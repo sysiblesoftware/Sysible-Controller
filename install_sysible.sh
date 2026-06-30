@@ -146,6 +146,7 @@ if [[ "$SRC_DIR" != "$BASE" ]]; then
     --exclude '__pycache__' \
     --exclude '*.pyc' \
     --exclude '.git' \
+    --exclude node_modules \
     "$SRC_DIR"/ "$BASE"/
 fi
 

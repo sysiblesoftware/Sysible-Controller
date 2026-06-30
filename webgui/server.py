@@ -576,11 +576,23 @@ def fleet_health(user: str = Depends(require_login)):
 
 @app.get("/api/fleet-metrics")
 def fleet_metrics(window: int = 3600, user: str = Depends(require_login)):
-    """Per-host performance time-series for the Performance view: load/mem/disk
-    history reported by the agents on heartbeat, grouped by host with the
-    environment label attached. Read-only; just proxies the controller."""
+    """Per-host performance time-series for the Performance view: load/cpu/mem/
+    swap/disk/network/io history reported by the agents on heartbeat, grouped by
+    host with the environment label attached. Read-only; just proxies the
+    controller."""
     try:
         return api.get_metrics_timeseries(window)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+
+
+@app.get("/api/host-snapshot/{host_id}")
+def host_snapshot(host_id: str, user: str = Depends(require_login)):
+    """Latest rich detail metrics snapshot for one host (per-core CPU, memory
+    breakdown, per-interface network, per-mount disk, top processes) for the
+    per-host metrics drill-down. Read-only; auditor-visible."""
+    try:
+        return api.get_host_snapshot(host_id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
 

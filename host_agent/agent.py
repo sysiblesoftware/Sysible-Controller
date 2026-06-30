@@ -504,39 +504,340 @@ def _worst_disk_pct():
     return worst
 
 
-def _sample_metrics():
-    """A cheap pure-Python performance snapshot: 1-min load, core count,
-    memory used%, and worst-disk%. Best-effort - any failure yields None so
-    a metrics hiccup never disturbs the heartbeat itself."""
+def _disk_detail():
+    """(worst_used_pct, [{mount, pct, used_gb, total_gb}, ...]) across real,
+    writable local filesystems. Mirrors _worst_disk_pct's filtering but also
+    returns the per-mount breakdown for the snapshot."""
+    worst = None
+    mounts = []
     try:
-        with open("/proc/loadavg") as f:
-            load1 = float(f.read().split()[0])
+        with open("/proc/mounts") as f:
+            lines = f.readlines()
+    except OSError:
+        return None, mounts
+    seen = set()
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        mnt, fstype = parts[1], parts[2]
+        if fstype in _DISK_SKIP_FSTYPES:
+            continue
+        if any(mnt == p or mnt.startswith(p + "/") for p in _DISK_SKIP_PREFIXES):
+            continue
+        if mnt in seen:
+            continue
+        seen.add(mnt)
+        try:
+            st = os.statvfs(mnt)
+        except OSError:
+            continue
+        used = st.f_blocks - st.f_bfree
+        avail = st.f_bavail
+        denom = used + avail
+        if denom <= 0:
+            continue
+        pct = int(round(used * 100.0 / denom))
+        total_b = st.f_blocks * st.f_frsize
+        used_b = used * st.f_frsize
+        mounts.append({
+            "mount": mnt, "pct": pct,
+            "used_gb": round(used_b / 1073741824.0, 1),
+            "total_gb": round(total_b / 1073741824.0, 1),
+        })
+        if worst is None or pct > worst:
+            worst = pct
+    mounts.sort(key=lambda m: m["pct"], reverse=True)
+    return worst, mounts
+
+
+def _read_cpu_times():
+    """/proc/stat -> (total, busy, {core_index: (total, busy)}). Busy excludes
+    idle+iowait. Returns (None, None, {}) on failure."""
+    try:
+        agg = (None, None)
+        per = {}
+        with open("/proc/stat") as f:
+            for line in f:
+                if not line.startswith("cpu"):
+                    break
+                parts = line.split()
+                name = parts[0]
+                vals = [int(x) for x in parts[1:]]
+                if len(vals) < 4:
+                    continue
+                idle = vals[3] + (vals[4] if len(vals) > 4 else 0)  # idle + iowait
+                total = sum(vals)
+                busy = total - idle
+                if name == "cpu":
+                    agg = (total, busy)
+                else:
+                    try:
+                        per[int(name[3:])] = (total, busy)
+                    except ValueError:
+                        pass
+        return agg[0], agg[1], per
     except (OSError, ValueError, IndexError):
-        load1 = None
+        return None, None, {}
 
-    cores = os.cpu_count() or 1
 
-    mem = None
+def _read_meminfo():
+    info = {}
     try:
-        total = avail = None
         with open("/proc/meminfo") as f:
             for line in f:
-                if line.startswith("MemTotal:"):
-                    total = float(line.split()[1])
-                elif line.startswith("MemAvailable:"):
-                    avail = float(line.split()[1])
-                if total is not None and avail is not None:
-                    break
-        if total and total > 0 and avail is not None:
-            mem = int(round((total - avail) * 100.0 / total))
+                k, _, rest = line.partition(":")
+                try:
+                    info[k.strip()] = int(rest.split()[0])  # kB
+                except (IndexError, ValueError):
+                    pass
+    except OSError:
+        pass
+    return info
+
+
+_NET_SKIP_PREFIXES = (
+    "lo", "veth", "docker", "br-", "virbr", "tap", "tun", "cni", "flannel",
+    # Kernel tunnel / virtual pseudo-interfaces that are usually present but idle.
+    "gre", "gretap", "erspan", "sit", "ip6tnl", "ip_vti", "ip6_vti", "ip6gre",
+    "bond", "dummy", "ifb", "teql",
+)
+
+
+def _read_net_dev():
+    """{iface: {rx, tx, rx_err, tx_err, rx_drop, tx_drop}} in bytes/packets,
+    skipping loopback and virtual/container interfaces."""
+    out = {}
+    try:
+        with open("/proc/net/dev") as f:
+            for line in f.readlines()[2:]:
+                name, _, data = line.partition(":")
+                name = name.strip()
+                if not name or name.startswith(_NET_SKIP_PREFIXES):
+                    continue
+                v = data.split()
+                if len(v) < 16:
+                    continue
+                out[name] = {
+                    "rx": int(v[0]), "rx_err": int(v[2]), "rx_drop": int(v[3]),
+                    "tx": int(v[8]), "tx_err": int(v[10]), "tx_drop": int(v[11]),
+                }
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def _read_diskio():
+    """Aggregate (read_bytes, write_bytes) across physical disks from
+    /proc/diskstats (sectors * 512). Skips partitions, loop, ram, dm/md."""
+    rb = wb = 0
+    found = False
+    try:
+        with open("/proc/diskstats") as f:
+            for line in f:
+                p = line.split()
+                if len(p) < 14:
+                    continue
+                name = p[2]
+                if name.startswith(("loop", "ram", "dm-", "md", "sr", "fd")):
+                    continue
+                # Skip partitions: a trailing digit on sd*/vd*/hd* names, or pN on nvme.
+                if name[:2] in ("sd", "vd", "hd", "xv") and name[-1].isdigit():
+                    continue
+                if name.startswith("nvme") and "p" in name:
+                    continue
+                rb += int(p[5]) * 512   # sectors read
+                wb += int(p[9]) * 512   # sectors written
+                found = True
     except (OSError, ValueError, IndexError):
-        mem = None
+        return None, None
+    return (rb, wb) if found else (None, None)
 
-    disk = _worst_disk_pct()
 
-    if load1 is None and mem is None and disk is None:
+def _read_top_procs(prev_pids, total_delta, ncores):
+    """Scan /proc once: return (top_cpu, top_mem, proc_count, threads_total,
+    new_pids). top_* are lists of {pid, name, cpu, mem_mb, mem_pct}. CPU% is the
+    process's jiffies delta over the aggregate CPU jiffies delta (0-100 of the
+    whole machine); needs prev_pids from the last sample (empty -> cpu 0)."""
+    try:
+        page = os.sysconf("SC_PAGE_SIZE")
+    except (ValueError, OSError):
+        page = 4096
+    memtotal_kb = _read_meminfo().get("MemTotal", 0) or 0
+    procs = []
+    new_pids = {}
+    count = 0
+    threads = 0
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        count += 1
+        try:
+            with open(f"/proc/{pid}/stat") as f:
+                raw = f.read()
+            rp = raw.rfind(")")
+            rest = raw[rp + 2:].split()
+            utime, stime = int(rest[11]), int(rest[12])
+            nthreads = int(rest[17])
+            jiff = utime + stime
+            new_pids[pid] = jiff
+            threads += nthreads
+            with open(f"/proc/{pid}/statm") as f:
+                rss_pages = int(f.read().split()[1])
+            rss_mb = rss_pages * page / 1048576.0
+            try:
+                with open(f"/proc/{pid}/comm") as f:
+                    name = f.read().strip()
+            except OSError:
+                name = raw[raw.find("(") + 1:rp]
+            prev = prev_pids.get(pid)
+            cpu = 0.0
+            if prev is not None and total_delta and total_delta > 0:
+                cpu = max(0.0, (jiff - prev) / float(total_delta) * 100.0)
+            procs.append({
+                "pid": int(pid), "name": name[:32],
+                "cpu": round(cpu, 1), "mem_mb": round(rss_mb, 1),
+                "mem_pct": round(rss_mb * 1024 / memtotal_kb * 100, 1) if memtotal_kb else None,
+            })
+        except (OSError, ValueError, IndexError):
+            continue
+    top_cpu = sorted(procs, key=lambda p: p["cpu"], reverse=True)[:5]
+    top_mem = sorted(procs, key=lambda p: p["mem_mb"], reverse=True)[:5]
+    return top_cpu, top_mem, count, threads, new_pids
+
+
+# Previous reading, so CPU%, network throughput and disk I/O can be computed as
+# deltas between successive samples (the agent samples once per METRICS_INTERVAL).
+_prev_sample = {}
+
+
+def _collect_metrics():
+    """Build the heartbeat's performance payload: scalar time-series metrics
+    plus a rich detail snapshot. Best-effort throughout - any single failure is
+    swallowed so a metrics hiccup never disturbs the heartbeat. Returns
+    {"metrics": {...}, "snapshot": {...}} or None if nothing scoreable."""
+    global _prev_sample
+    now = time.time()
+    prev = _prev_sample
+    dt = (now - prev["t"]) if prev.get("t") else None
+    cores = os.cpu_count() or 1
+
+    # Load averages.
+    load1 = load5 = load15 = None
+    try:
+        with open("/proc/loadavg") as f:
+            la = f.read().split()
+        load1, load5, load15 = float(la[0]), float(la[1]), float(la[2])
+    except (OSError, ValueError, IndexError):
+        pass
+
+    # CPU (overall + per-core %), needs a delta against the previous reading.
+    cpu_total, cpu_busy, percpu = _read_cpu_times()
+    cpu_pct = None
+    percpu_pct = []
+    total_delta = None
+    if cpu_total is not None and prev.get("cpu_total") is not None:
+        total_delta = cpu_total - prev["cpu_total"]
+        busy_delta = cpu_busy - prev["cpu_busy"]
+        if total_delta > 0:
+            cpu_pct = round(max(0.0, min(100.0, busy_delta / total_delta * 100.0)), 1)
+        pp = prev.get("percpu") or {}
+        for idx in sorted(percpu):
+            t, b = percpu[idx]
+            if idx in pp:
+                td = t - pp[idx][0]
+                bd = b - pp[idx][1]
+                if td > 0:
+                    percpu_pct.append(round(max(0.0, min(100.0, bd / td * 100.0)), 1))
+
+    # Memory + swap.
+    mi = _read_meminfo()
+    mem = swap = None
+    memtotal = mi.get("MemTotal")
+    memavail = mi.get("MemAvailable")
+    if memtotal and memavail is not None and memtotal > 0:
+        mem = int(round((memtotal - memavail) * 100.0 / memtotal))
+    swaptotal = mi.get("SwapTotal")
+    swapfree = mi.get("SwapFree")
+    if swaptotal and swapfree is not None and swaptotal > 0:
+        swap = int(round((swaptotal - swapfree) * 100.0 / swaptotal))
+
+    # Disk usage (worst + per-mount) and disk I/O throughput (delta).
+    disk, mounts = _disk_detail()
+    io_r = io_w = None
+    cur_io = _read_diskio()
+    if cur_io[0] is not None and prev.get("io") and dt and dt > 0:
+        io_r = max(0.0, (cur_io[0] - prev["io"][0]) / dt)
+        io_w = max(0.0, (cur_io[1] - prev["io"][1]) / dt)
+
+    # Network throughput (aggregate + per-interface), delta over dt.
+    cur_net = _read_net_dev()
+    net_rx = net_tx = None
+    net_ifaces = []
+    if prev.get("net") and dt and dt > 0:
+        agg_rx = agg_tx = 0.0
+        for name, c in cur_net.items():
+            p = prev["net"].get(name)
+            if not p:
+                continue
+            rxs = max(0.0, (c["rx"] - p["rx"]) / dt)
+            txs = max(0.0, (c["tx"] - p["tx"]) / dt)
+            agg_rx += rxs
+            agg_tx += txs
+            net_ifaces.append({
+                "name": name, "rx_bps": round(rxs), "tx_bps": round(txs),
+                "rx_err": c["rx_err"], "tx_err": c["tx_err"],
+                "rx_drop": c["rx_drop"], "tx_drop": c["tx_drop"],
+            })
+        net_rx, net_tx = round(agg_rx), round(agg_tx)
+    net_ifaces.sort(key=lambda i: i["rx_bps"] + i["tx_bps"], reverse=True)
+
+    # Top processes + counts (single /proc scan; CPU% needs prev per-pid jiffies).
+    top_cpu, top_mem, proc_count, threads, new_pids = _read_top_procs(
+        prev.get("pids") or {}, total_delta, cores)
+
+    # Stash this reading for next time's deltas.
+    _prev_sample = {
+        "t": now, "cpu_total": cpu_total, "cpu_busy": cpu_busy, "percpu": percpu,
+        "net": cur_net, "io": cur_io if cur_io[0] is not None else prev.get("io"),
+        "pids": new_pids,
+    }
+
+    if load1 is None and mem is None and disk is None and cpu_pct is None:
         return None
-    return {"load1": load1, "cores": cores, "mem": mem, "disk": disk}
+
+    metrics = {
+        "load1": load1, "load5": load5, "load15": load15, "cores": cores,
+        "cpu": cpu_pct, "mem": mem, "swap": swap, "disk": disk,
+        "net_rx": net_rx, "net_tx": net_tx, "io_r": io_r, "io_w": io_w,
+        "procs": proc_count,
+    }
+    snapshot = {
+        "percpu": percpu_pct,
+        "mem": {
+            "total_mb": round(memtotal / 1024) if memtotal else None,
+            "available_mb": round(memavail / 1024) if memavail is not None else None,
+            "free_mb": round(mi["MemFree"] / 1024) if "MemFree" in mi else None,
+            "buffers_mb": round(mi["Buffers"] / 1024) if "Buffers" in mi else None,
+            "cached_mb": round(mi["Cached"] / 1024) if "Cached" in mi else None,
+            "swap_total_mb": round(swaptotal / 1024) if swaptotal else None,
+            "swap_used_mb": round((swaptotal - swapfree) / 1024)
+            if (swaptotal and swapfree is not None) else None,
+        },
+        "net": net_ifaces[:8],
+        "mounts": mounts[:12],
+        "top_cpu": top_cpu,
+        "top_mem": top_mem,
+        "procs": proc_count,
+        "threads": threads,
+    }
+    return {"metrics": metrics, "snapshot": snapshot}
+
+
+def _sample_metrics():
+    """Back-compat shim: the scalar metrics dict only (older call sites)."""
+    c = _collect_metrics()
+    return c["metrics"] if c else None
 
 
 # Timestamp of the last metrics report, so heartbeat() can rate-limit to
@@ -565,9 +866,10 @@ def heartbeat(state):
     # roughly one row per host per interval rather than per heartbeat.
     now = time.time()
     if METRICS_INTERVAL > 0 and (now - _last_metrics_at) >= METRICS_INTERVAL:
-        metrics = _sample_metrics()
-        if metrics is not None:
-            body["metrics"] = metrics
+        collected = _collect_metrics()
+        if collected is not None:
+            body["metrics"] = collected["metrics"]
+            body["snapshot"] = collected["snapshot"]
             _last_metrics_at = now
 
     try:

@@ -295,6 +295,16 @@ export default function Dashboard({ role, edition, onOpen }) {
 
   const issuesTotal = complianceSignals.reduce((n, s) => n + (s.hosts.length > 0 ? 1 : 0), 0);
 
+  // Per-host posture rollup: how many high-ticket signals each scanned host
+  // trips, worst-first, so the strip also reads "which hosts need attention".
+  const postureHosts = useMemo(() => {
+    return posture.map((h) => ({
+      id: h.id, host: h.host, online: h.online, error: h.error,
+      issues: h.flags ? Object.values(h.flags).filter((v) => v === true).length : 0,
+    })).sort((a, b) => b.issues - a.issues || (a.host || "").localeCompare(b.host || ""));
+  }, [posture]);
+  const cleanHosts = postureHosts.filter((h) => h.issues === 0 && !h.error).length;
+
   const fleetSummary = useMemo(() => {
     const counts = { OK: 0, WARNING: 0, CRITICAL: 0, OFFLINE: 0 };
     for (const h of fleet) {
@@ -460,6 +470,30 @@ export default function Dashboard({ role, edition, onOpen }) {
                 <SignalChip key={s.label} label={s.label} hosts={s.hosts} onOpenHost={openHost} />
               ))}
             </div>
+            <div className="section-title" style={{ margin: "14px 0 6px" }}>
+              Hosts <span className="faint" style={{ fontWeight: 400, fontSize: 12 }}>
+                — {cleanHosts}/{postureHosts.length} clear
+              </span>
+            </div>
+            <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+              {postureHosts.map((h) => {
+                const color = h.error ? VERDICT_COLOR.OFFLINE
+                  : h.issues === 0 ? VERDICT_COLOR.OK : VERDICT_COLOR.WARNING;
+                return (
+                  <button key={h.id ?? h.host} className="btn ghost sm"
+                          onClick={() => h.id && openHost(h)}
+                          title={h.error ? h.error : `${h.issues} issue${h.issues === 1 ? "" : "s"} — click for detail`}
+                          style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span className="dot" style={{ background: color }} />
+                    <span>{h.host}</span>
+                    {!h.error && h.issues > 0 && (
+                      <span style={{ fontWeight: 700, color: VERDICT_COLOR.WARNING }}>{h.issues}</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
             <div className="faint" style={{ fontSize: 11, marginTop: 10 }}>
               Read-only checks across {posture.length} host{posture.length === 1 ? "" : "s"}. Click a host for the full per-category drill-down.
             </div>

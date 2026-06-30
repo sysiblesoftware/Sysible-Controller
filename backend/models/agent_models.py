@@ -17,10 +17,15 @@ class HeartbeatRequest(BaseModel):
     agent_secret: str
     ip: Optional[str] = None
     hostname: Optional[str] = None
-    # Optional performance sample (load1/cores/mem/disk). Sent by newer agents
-    # at most once per SYSIBLE_METRICS_INTERVAL, not on every heartbeat; older
-    # agents omit it entirely. See host_agent/agent.py's _sample_metrics().
+    # Optional performance sample (load/cpu/mem/swap/disk/net/io/procs). Sent by
+    # newer agents at most once per SYSIBLE_METRICS_INTERVAL, not on every
+    # heartbeat; older agents omit it (or send only load1/cores/mem/disk). See
+    # host_agent/agent.py's _sample_metrics().
     metrics: Optional[Dict[str, Any]] = None
+    # Optional rich detail snapshot (per-core CPU, memory breakdown, per-interface
+    # network, per-mount disk, top processes) for the per-host drill-down. Latest
+    # only - overwritten each interval. See host_agent/agent.py's _sample_snapshot().
+    snapshot: Optional[Dict[str, Any]] = None
 
 
 class SelfDisenrollRequest(BaseModel):

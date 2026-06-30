@@ -149,6 +149,14 @@ def get_metrics_timeseries(window=3600):
     return _request("GET", f"/metrics/timeseries?window={int(window)}")
 
 
+def get_host_snapshot(host_id):
+    """Latest rich detail snapshot (per-core CPU, memory breakdown, per-interface
+    network, per-mount disk, top processes) for one host's metrics drill-down.
+    Returns {"host_id", "ts", "snapshot": {...}|None}."""
+    from urllib.parse import quote
+    return _request("GET", f"/metrics/snapshot/{quote(str(host_id), safe='')}")
+
+
 def get_edition():
     """Edition + host-cap info, e.g. {"edition": "community", "host_limit": 10,
     "host_count": 3}. host_limit is None on an unlimited (Enterprise) build.

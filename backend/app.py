@@ -18,6 +18,8 @@ from backend.db import (
     update_agent_heartbeat,
     insert_metric_sample,
     get_metric_samples,
+    upsert_host_snapshot,
+    get_host_snapshot,
     list_agents,
     delete_agent,
     get_agent_secret,
@@ -369,7 +371,24 @@ def heartbeat(req: HeartbeatRequest):
                 _num("cores", int),
                 _num("mem", int),
                 _num("disk", int),
+                load5=_num("load5", float),
+                load15=_num("load15", float),
+                cpu=_num("cpu", float),
+                swap=_num("swap", int),
+                net_rx=_num("net_rx", float),
+                net_tx=_num("net_tx", float),
+                io_r=_num("io_r", float),
+                io_w=_num("io_w", float),
+                procs=_num("procs", int),
             )
+        except Exception:
+            pass
+
+    # Persist the latest rich detail snapshot if attached (newer agents only).
+    # Stored as one row per host (overwritten), feeding the per-host drill-down.
+    if req.snapshot:
+        try:
+            upsert_host_snapshot(req.host_id, time.time(), json.dumps(req.snapshot))
         except Exception:
             pass
 
@@ -622,6 +641,21 @@ def get_metrics_timeseries(window: int = 3600):
     samples are reported by the agents themselves on heartbeat."""
     hosts = get_metric_samples(window)
     return {"hosts": hosts, "window": window, "now": time.time()}
+
+
+@app.get("/metrics/snapshot/{host_id}", dependencies=[Depends(require_api_key)])
+def get_metrics_snapshot_route(host_id: str):
+    """Latest rich detail snapshot for one host (per-core CPU, memory breakdown,
+    per-interface network, per-mount disk, top processes) for the per-host
+    metrics drill-down. Reported by the agent on heartbeat; read-only."""
+    snap = get_host_snapshot(host_id)
+    if not snap:
+        return {"host_id": host_id, "ts": None, "snapshot": None}
+    try:
+        data = json.loads(snap["data"]) if snap.get("data") else None
+    except (ValueError, TypeError):
+        data = None
+    return {"host_id": host_id, "ts": snap.get("ts"), "snapshot": data}
 
 
 @app.get("/agents", dependencies=[Depends(require_api_key)])

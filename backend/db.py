@@ -172,6 +172,36 @@ def init_db():
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_metric_samples_ts ON metric_samples(ts)"
     )
+    # Richer scalar time-series (added later): CPU%, load 5/15m, swap%, network
+    # throughput (bytes/s), disk I/O (bytes/s), and process count. All nullable
+    # so older agents (which omit them) and existing rows keep working.
+    for _col, _type in (
+        ("load5", "REAL"), ("load15", "REAL"), ("cpu", "REAL"), ("swap", "INTEGER"),
+        ("net_rx", "REAL"), ("net_tx", "REAL"), ("io_r", "REAL"), ("io_w", "REAL"),
+        ("procs", "INTEGER"),
+    ):
+        try:
+            cur.execute(f"ALTER TABLE metric_samples ADD COLUMN {_col} {_type}")
+        except sqlite3.OperationalError:
+            pass
+
+    # -----------------------------------------------------
+    # Host snapshot (latest rich detail for the per-host drill-down)
+    #
+    # Unlike metric_samples (a rolling scalar time-series), this holds just the
+    # LATEST detailed snapshot per host - per-core CPU, memory breakdown,
+    # per-interface network, per-mount disk, and top processes - as a JSON blob
+    # the agent attaches alongside its metrics. One row per host, overwritten
+    # each interval, so it never grows with time. Powers the per-host metrics
+    # drill-down without a separate on-demand probe.
+    # -----------------------------------------------------
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS host_snapshot (
+        host_id TEXT PRIMARY KEY,
+        ts REAL NOT NULL,
+        data TEXT
+    )
+    """)
 
     # -----------------------------------------------------
     # Enrollment Tokens
@@ -695,20 +725,26 @@ def delete_agent(host_id):
 METRIC_RETENTION_S = 26 * 3600
 
 
-def insert_metric_sample(host_id, ts, load1, cores, mem, disk):
+def insert_metric_sample(host_id, ts, load1, cores, mem, disk,
+                         load5=None, load15=None, cpu=None, swap=None,
+                         net_rx=None, net_tx=None, io_r=None, io_w=None, procs=None):
     """Append one performance sample for a host and prune anything past the
     retention window. Called from the heartbeat path (only when the agent
     actually attached metrics, i.e. at most once per SYSIBLE_METRICS_INTERVAL),
     so the write rate is low enough not to add meaningful heartbeat contention.
-    """
+    The trailing args are the richer scalars added later (CPU%, load 5/15m,
+    swap%, network/disk throughput, process count); older agents omit them."""
     conn = _connect()
     cur = conn.cursor()
     # INSERT OR REPLACE: the (host_id, ts) PK makes a duplicate timestamp
     # (e.g. a retried heartbeat) idempotent rather than an error.
     cur.execute(
-        "INSERT OR REPLACE INTO metric_samples (host_id, ts, load1, cores, mem, disk) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (host_id, float(ts), load1, cores, mem, disk),
+        "INSERT OR REPLACE INTO metric_samples "
+        "(host_id, ts, load1, cores, mem, disk, load5, load15, cpu, swap, "
+        " net_rx, net_tx, io_r, io_w, procs) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (host_id, float(ts), load1, cores, mem, disk, load5, load15, cpu, swap,
+         net_rx, net_tx, io_r, io_w, procs),
     )
     cur.execute(
         "DELETE FROM metric_samples WHERE ts < ?",
@@ -716,6 +752,33 @@ def insert_metric_sample(host_id, ts, load1, cores, mem, disk):
     )
     conn.commit()
     conn.close()
+
+
+def upsert_host_snapshot(host_id, ts, data_json):
+    """Store the latest rich detail snapshot (JSON string) for a host,
+    overwriting any previous one. One row per host - never grows with time."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO host_snapshot (host_id, ts, data) VALUES (?, ?, ?)",
+        (host_id, float(ts), data_json),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_host_snapshot(host_id):
+    """Return {ts, data} for a host's latest snapshot (data is the raw JSON
+    string the agent sent), or None if there isn't one."""
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT ts, data FROM host_snapshot WHERE host_id = ?", (host_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"ts": row["ts"], "data": row["data"]}
 
 
 def get_metric_samples(window_s=3600):
@@ -732,6 +795,8 @@ def get_metric_samples(window_s=3600):
     cur.execute(
         """
         SELECT s.host_id, s.ts, s.load1, s.cores, s.mem, s.disk,
+               s.load5, s.load15, s.cpu, s.swap, s.net_rx, s.net_tx,
+               s.io_r, s.io_w, s.procs,
                a.hostname, a.environment
         FROM metric_samples s
         LEFT JOIN agents a ON a.host_id = s.host_id
@@ -757,6 +822,9 @@ def get_metric_samples(window_s=3600):
         h["samples"].append({
             "t": r["ts"], "load1": r["load1"], "cores": r["cores"],
             "mem": r["mem"], "disk": r["disk"],
+            "load5": r["load5"], "load15": r["load15"], "cpu": r["cpu"],
+            "swap": r["swap"], "net_rx": r["net_rx"], "net_tx": r["net_tx"],
+            "io_r": r["io_r"], "io_w": r["io_w"], "procs": r["procs"],
         })
     return list(by_host.values())
 

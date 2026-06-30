@@ -55,6 +55,8 @@ from backend.db import (
     add_administrator,
     remove_administrator,
     set_administrator_sudo_connect,
+    set_administrator_role,
+    count_administrators_by_role,
     update_administrator_password,
     update_administrator_username,
     record_administrator_login,
@@ -98,6 +100,7 @@ from backend.models.portal_models import (
     ForcePasswordChangeRequest,
     ResetAdministratorPasswordRequest,
     SetSudoConnectRequest,
+    SetRoleRequest,
 )
 from backend.models.policy_models import (
     SetEnvironmentalPolicyRequest,
@@ -1350,6 +1353,42 @@ def set_administrator_sudo_connect_route(username: str, body: SetSudoConnectRequ
         + (f" by {body.actor}" if body.actor else ""))
 
     return {"username": username, "sudo_connect": bool(body.allowed)}
+
+
+@app.post("/admin/administrators/{username}/role",
+          dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def set_administrator_role_route(username: str, body: SetRoleRequest):
+    """Superuser-gated promote/demote of an administrator's role
+    ('superuser' | 'sysadmin' | 'auditor'). Guards:
+      - refuse to demote the LAST superuser (would lock everyone out of admin
+        management, controller config, the portal, ...);
+      - honour the edition seat caps when promoting into a capped role.
+    The role takes full effect at the target admin's next login (their current
+    token keeps its old role until it expires / they re-log in)."""
+    from backend.edition import enforce_role_limit
+
+    admin = get_administrator(username)
+    if admin is None:
+        raise HTTPException(status_code=404, detail="No such administrator")
+
+    new_role = (body.role or "").strip().lower()
+    if new_role not in ("superuser", "sysadmin", "auditor"):
+        raise HTTPException(status_code=400, detail="Role must be 'superuser', 'sysadmin', or 'auditor'")
+
+    current = (admin.get("role") or "superuser")
+    if new_role == current:
+        return {"username": username, "role": new_role, "status": "unchanged"}
+
+    if current == "superuser" and count_administrators_by_role("superuser") <= 1:
+        raise HTTPException(status_code=400, detail="Cannot change the role of the last remaining superuser.")
+
+    # Edition seat cap on the destination role (auditor is uncapped -> no-op).
+    enforce_role_limit(new_role, count_administrators_by_role(new_role))
+
+    set_administrator_role(username, new_role)
+    log_admin_audit("administrator_role_changed", username,
+                    f"{current} -> {new_role}" + (f" by {body.actor}" if body.actor else ""))
+    return {"username": username, "role": new_role, "status": "updated"}
 
 
 @app.post("/admin/credentials", dependencies=[Depends(require_api_key)])

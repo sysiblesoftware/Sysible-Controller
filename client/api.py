@@ -405,6 +405,15 @@ def set_administrator_sudo_connect(username: str, allowed: bool, actor: str = ""
     )
 
 
+def set_administrator_role(username: str, role: str, actor: str = ""):
+    """Superuser-only: promote/demote an administrator's role
+    ('superuser' | 'sysadmin' | 'auditor')."""
+    return _request(
+        "POST", f"/admin/administrators/{quote(username)}/role",
+        json={"role": role, "actor": actor},
+    )
+
+
 def get_admin_audit_log(limit: int = 200):
     return _request("GET", "/admin/audit-log", params={"limit": limit}).get("entries", [])
 

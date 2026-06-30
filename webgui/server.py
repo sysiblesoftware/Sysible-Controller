@@ -914,6 +914,20 @@ def set_admin_sudo_connect(username: str, body: AdminSudoConnect, request: Reque
         username, body.allowed, actor=user)))
 
 
+class AdminRole(BaseModel):
+    role: str
+
+
+@app.post("/api/admins/{username}/role")
+def set_admin_role(username: str, body: AdminRole, request: Request,
+                   user: str = Depends(require_login)):
+    # Superuser-gated on the controller (via the admin token in _as_admin):
+    # promote/demote the account's role. The controller refuses to demote the
+    # last superuser and enforces seat caps.
+    return _wrap(lambda: _as_admin(request, lambda: api.set_administrator_role(
+        username, body.role, actor=user)))
+
+
 @app.get("/api/password-policy")
 def get_policy(user: str = Depends(require_login)):
     return _wrap(lambda: api.get_admin_password_policy())

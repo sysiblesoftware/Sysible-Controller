@@ -83,6 +83,16 @@ function Admins() {
     } catch (e) { setErr(e.message); }
   }
 
+  async function setRole(a, role) {
+    if (role === a.role) return;
+    setErr(""); setMsg("");
+    try {
+      await api.setAdminRole(a.username, role);
+      setMsg(`${a.username} is now ${role}. They must re-log in for the new role to fully apply.`);
+      load();
+    } catch (e) { setErr(e.message); load(); }
+  }
+
   function onDone(text) { setModal(null); setMsg(text); setErr(""); load(); }
 
   return (
@@ -100,7 +110,14 @@ function Admins() {
             {list.map((a) => (
               <tr key={a.username}>
                 <td style={{ fontWeight: 600 }}>{a.username}</td>
-                <td><span className={"badge" + (a.role === "superuser" ? " amber" : "")}>{a.role}</span></td>
+                <td>
+                  <select value={a.role} onChange={(e) => setRole(a, e.target.value)}
+                          title="Promote or demote this administrator (they re-log in for it to fully apply)">
+                    <option value="superuser">superuser</option>
+                    <option value="sysadmin">sysadmin</option>
+                    <option value="auditor">auditor</option>
+                  </select>
+                </td>
                 <td>{a.sudo_connect
                   ? <span className="ok-text">Yes</span>
                   : <span className="faint">No</span>}</td>

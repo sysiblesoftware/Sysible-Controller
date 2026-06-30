@@ -9,6 +9,7 @@ configured in one spot.
 import contextlib
 import os
 import shlex
+import threading
 from pathlib import Path
 from urllib.parse import quote
 
@@ -51,16 +52,46 @@ _API_KEY = _load_api_key()
 # the matching local user). Process-local; cleared on logout.
 _ADMIN_TOKEN = None
 
+# Per-thread override of the admin token. The web BFF is a single shared process
+# serving every administrator concurrently, so a process-global token is unsafe:
+# one request (or fleet-health's parallel probe threads) can read another's
+# token. The BFF therefore sets a THREAD-scoped token per request/worker; the
+# desktop GUI never sets this and keeps using the process-global it sets once at
+# login (which its own worker threads inherit). A thread-local value of None
+# means "explicitly no token for this thread" (e.g. the read-only fleet-health
+# metrics probe, which must run as root regardless of who is viewing) — distinct
+# from "no override set", hence the sentinel.
+_NO_OVERRIDE = object()
+_token_override = threading.local()
+
 
 def set_admin_token(token):
     global _ADMIN_TOKEN
     _ADMIN_TOKEN = token
 
 
+def set_admin_token_override(token):
+    """Set the admin token for THIS thread only (used by the multi-threaded BFF).
+    Pass None to force no token for this thread. Always pair with
+    clear_admin_token_override() in a finally."""
+    _token_override.value = token
+
+
+def clear_admin_token_override():
+    if hasattr(_token_override, "value"):
+        del _token_override.value
+
+
+def _effective_admin_token():
+    v = getattr(_token_override, "value", _NO_OVERRIDE)
+    return _ADMIN_TOKEN if v is _NO_OVERRIDE else v
+
+
 def _headers():
     h = {"X-API-Key": _API_KEY} if _API_KEY else {}
-    if _ADMIN_TOKEN:
-        h["X-Sysible-Admin-Token"] = _ADMIN_TOKEN
+    tok = _effective_admin_token()
+    if tok:
+        h["X-Sysible-Admin-Token"] = tok
     return h
 
 

@@ -238,14 +238,17 @@ def _session_token(request: "Request"):
 # superuser-gated routes AND for dispatch/terminal calls, so the controller can
 # derive the run-as user (runuser -u <admin>) and attribute the activity feed.
 def _with_token(token, fn):
-    if not token:
+    # Thread-scoped: the BFF serves many admins concurrently, and fleet-health
+    # runs its probes in parallel threads. Setting the token per-thread (rather
+    # than on the process-global) means a concurrent request can't leak its
+    # token into another thread's call. token=None explicitly forces NO token
+    # for this thread, so the read-only metrics probe truly runs as root and
+    # never depends on the viewer having a host account (e.g. an auditor).
+    api.set_admin_token_override(token)
+    try:
         return fn()
-    with _ADMIN_TOKEN_LOCK:
-        api.set_admin_token(token)
-        try:
-            return fn()
-        finally:
-            api.set_admin_token(None)
+    finally:
+        api.clear_admin_token_override()
 
 
 def _client_ip(request: Request) -> str:

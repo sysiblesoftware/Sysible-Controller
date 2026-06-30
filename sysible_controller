@@ -411,15 +411,26 @@ cmd_update() {
     fi
   fi
 
+  # 3b) Rebuild the web console front end DIRECTLY (outside systemd) before the
+  #     restart. The rsync --delete above cleared the old dist/ (and the
+  #     untracked node_modules), so leaving the rebuild to start_webgui.sh inside
+  #     the service's ExecStart can be slow enough to trip the unit's start
+  #     timeout and leave the web console down - which is why a plain `update`
+  #     sometimes needed a follow-up install. install_sysible.sh builds it
+  #     directly for exactly this reason; mirror that here. Best-effort.
+  if [[ -d "$BASE/webgui/frontend" ]] && command -v npm >/dev/null 2>&1; then
+    echo "Rebuilding the web console front end ..."
+    ( cd "$BASE/webgui/frontend" && npm install --no-audit --no-fund && npm run build ) \
+      || echo "NOTE: web console front-end rebuild hit an issue; it will retry on web start."
+  fi
+
   # 4) Restart. cmd_restart brings the backend back and, if the web console was
-  #    running, restarts it too - which rebuilds the front end that step 2 cleared.
+  #    running, restarts it too (front end already rebuilt above, so it's fast).
   echo "Restarting services ..."
   cmd_restart
 
   echo ""
   echo "Update complete."
-  echo "If the web console was running, it is rebuilding its front end now"
-  echo "(the first load after an update can take a few extra seconds)."
   echo "Then hard-refresh your browser (Ctrl/Cmd+Shift+R) to drop the old bundle."
   echo ""
   echo "NOTE: managed hosts run their own copy of the agent - to pick up agent"

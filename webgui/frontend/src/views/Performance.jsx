@@ -98,6 +98,7 @@ function LineChart({ series, t0, t1, kind }) {
     let mx = 0;
     for (const s of series) for (const p of s.points) if (p.v > mx) mx = p.v;
     if (kind === "pct") return Math.max(100, Math.ceil(mx / 25) * 25);
+    if (kind === "bytes") return Math.max(1024, niceCeil(mx || 1)); // floor so empty charts read 0–1 KB, not "1 B 1 B"
     return niceCeil(mx || 1);
   }, [series, kind]);
 
@@ -128,7 +129,7 @@ function LineChart({ series, t0, t1, kind }) {
       ))}
       {series.map((s) => (
         s.points.length === 0 ? null : (
-          <polyline key={s.key} fill="none" stroke={s.color} strokeWidth="1.8"
+          <polyline key={s.key} fill="none" stroke={s.color} strokeWidth="2.2"
                     strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"
                     points={s.points.map((p) => `${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ")} />
         )
@@ -158,6 +159,22 @@ function Legend({ items, onClick, selectedKey }) {
           {it.sub != null && <span className="faint" style={{ fontSize: 11 }}>{it.sub}</span>}
         </button>
       ))}
+    </div>
+  );
+}
+
+// Boxed chart: a bordered, padded card with a title (and optional latest-value
+// badge), so the stack of graphs reads as distinct panels instead of running
+// together. The box is what gives the page visual separation.
+function ChartCard({ label, value, children }) {
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "10px 14px 6px",
+                  background: "var(--panel)" }}>
+      <div className="spread" style={{ marginBottom: 6 }}>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>{label}</span>
+        {value != null && <span className="faint" style={{ fontSize: 12 }}>now {value}</span>}
+      </div>
+      {children}
     </div>
   );
 }
@@ -411,6 +428,20 @@ export default function Performance() {
 
   const empty = data.hosts.length === 0;
 
+  // The richer metrics (cpu%, swap, network, disk I/O, processes) only arrive
+  // from the updated agent. `procs` is the tell: it's always reported by a new
+  // agent and never by an old one. If nothing reports it, the agents predate the
+  // enriched sampling — surface a hint pointing at the Update agents button
+  // instead of leaving half the charts mysteriously empty.
+  const richMissing = data.hosts.length > 0 && !data.hosts.some((h) => h.samples.some((s) => s.procs != null));
+  const richHint = richMissing ? (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "9px 12px",
+                  margin: "8px 0", fontSize: 12.5, color: "var(--text-dim)" }}>
+      Swap, network, disk I/O and process graphs need the updated agent. Push it from
+      <strong> Settings → Controller → Update agents</strong>, then give hosts a minute to report.
+    </div>
+  ) : null;
+
   return (
     <div>
       <div className="card">
@@ -477,13 +508,15 @@ export default function Performance() {
               </div>
             )}
 
+            {richHint}
+
             <div className="section-title" style={{ marginBottom: 6 }}>History</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(540px, 1fr))", gap: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(540px, 1fr))", gap: 18 }}>
               {METRICS.map((metric) => (
-                <div key={metric.key}>
-                  <div className="faint" style={{ fontSize: 12, marginBottom: 2 }}>{metric.label}</div>
+                <ChartCard key={metric.key} label={metric.label}
+                  value={latest ? fmtMetric(metric.kind, metric.valueOf(latest), metric.kind === "bytes") : null}>
                   <LineChart series={hostSeriesFor(metric)} t0={t0} t1={t1} kind={metric.kind} />
-                </div>
+                </ChartCard>
               ))}
             </div>
 
@@ -501,12 +534,13 @@ export default function Performance() {
                     onClick={selectedEnv ? (id) => setSelectedHostId(id) : (env) => setSelectedEnv(env)}
                     selectedKey={null} />
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(540px, 1fr))", gap: 16, marginTop: 8 }}>
+            {richHint}
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(540px, 1fr))", gap: 18, marginTop: 8 }}>
               {METRICS.map((metric) => (
-                <div key={metric.key}>
-                  <div className="faint" style={{ fontSize: 12, marginBottom: 2 }}>{metric.label}</div>
+                <ChartCard key={metric.key} label={metric.label}>
                   <LineChart series={seriesFor(metric)} t0={t0} t1={t1} kind={metric.kind} />
-                </div>
+                </ChartCard>
               ))}
             </div>
           </>

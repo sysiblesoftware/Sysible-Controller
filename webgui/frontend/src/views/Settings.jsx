@@ -16,7 +16,7 @@ export default function Settings() {
       {tab === "admins" && <Admins />}
       {tab === "me" && <MyAccount />}
       {tab === "policy" && <PasswordPolicy />}
-      {tab === "controller" && <ControllerCfg />}
+      {tab === "controller" && <><ControllerCfg /><SoftwareUpdate /></>}
       {tab === "tls" && <Tls />}
       {tab === "license" && <License />}
       {tab === "audit" && <Audit />}
@@ -283,6 +283,60 @@ function ControllerCfg() {
       <button className="btn" style={{ marginTop: 14 }} onClick={save}>Save</button>
       {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
       {err && <div className="error-box">{err}</div>}
+    </div>
+  );
+}
+
+// One-click controller self-update: same work as `sysible_controller update`
+// on the host. The controller launches it detached (its own systemd cgroup) and
+// restarts the backend + this web console, so the page will drop momentarily.
+function SoftwareUpdate() {
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useErr();
+
+  async function run() {
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      const r = await api.controllerUpdate();
+      setConfirm(false);
+      setMsg(r?.message || "Update started.");
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card" style={{ maxWidth: 460, marginTop: 16 }}>
+      <strong>Software update</strong>
+      <p className="faint" style={{ marginTop: 8 }}>
+        Pull the latest controller code, redeploy, and restart. This is the same
+        as running <code>sysible_controller update</code> on the host.
+      </p>
+      <p className="faint" style={{ marginTop: 0 }}>
+        The backend and this web console will restart, so you'll be signed out
+        briefly. Wait ~30–60&nbsp;seconds, then hard-refresh and sign back in.
+        Managed hosts keep running and update their agents separately.
+      </p>
+
+      {!confirm ? (
+        <button className="btn" style={{ marginTop: 6 }} onClick={() => { setMsg(""); setErr(""); setConfirm(true); }}>
+          Check &amp; install update
+        </button>
+      ) : (
+        <div className="row" style={{ gap: 8, marginTop: 6 }}>
+          <button className="btn" onClick={run} disabled={busy}>
+            {busy ? <span className="spin" /> : "Yes, update now"}
+          </button>
+          <button className="btn ghost" onClick={() => setConfirm(false)} disabled={busy}>Cancel</button>
+        </div>
+      )}
+
+      {msg && <div className="ok-text" style={{ marginTop: 10 }}>{msg}</div>}
+      {err && <div className="error-box" style={{ marginTop: 10 }}>{err}</div>}
     </div>
   );
 }

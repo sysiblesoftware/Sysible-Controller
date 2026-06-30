@@ -233,6 +233,13 @@ def set_controller_config(hostname: str, ip: str, address_mode: str, port: int):
     )
 
 
+def controller_update():
+    """Trigger an in-place controller self-update (git pull + redeploy + restart)
+    on the controller host. The controller launches it as a detached transient
+    unit and returns immediately; the backend and web console then restart."""
+    return _request("POST", "/controller/update", timeout=30)
+
+
 def get_license_config():
     return _request("GET", "/license-config")
 

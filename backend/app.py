@@ -938,6 +938,60 @@ async def install_tls_certificate_route(
     }
 
 
+@app.post("/controller/update", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def controller_update_route():
+    """Trigger an in-place controller self-update: the same work as the CLI
+    `sysible_controller update` (git pull -> rsync into /opt/sysible -> rebuild
+    the web console -> restart services). Superuser-only.
+
+    The update restarts BOTH the backend and the web console, so it must NOT run
+    as a child of either service: a `systemctl restart` kills the whole service
+    cgroup and would abort the update mid-flight. We launch it as a *transient*
+    systemd unit (systemd-run --collect), which gets its own cgroup and survives
+    the restarts, and we return immediately so this response reaches the caller
+    before anything bounces. Progress is in `journalctl -u sysible-self-update`."""
+    import os
+    import shutil
+    import subprocess
+
+    cli = shutil.which("sysible_controller") or "/usr/local/bin/sysible_controller"
+    if not os.path.exists(cli):
+        raise HTTPException(status_code=500, detail="Controller CLI not found on this host.")
+
+    unit = "sysible-self-update"
+    # Don't stack updates - if one is already in flight, say so.
+    try:
+        active = subprocess.run(
+            ["systemctl", "is-active", f"{unit}.service"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        if active == "active":
+            return {"status": "already-running", "message": "An update is already in progress."}
+    except Exception:
+        pass
+
+    if not shutil.which("systemd-run"):
+        raise HTTPException(
+            status_code=500,
+            detail="systemd-run is unavailable; run 'sudo sysible_controller update' on the host instead.",
+        )
+
+    # --collect reaps the transient unit after it exits so the next update can
+    # reuse the name. The update itself re-execs the services from a clean cgroup.
+    cmd = ["systemd-run", "--collect", f"--unit={unit}",
+           "--description=Sysible Controller self-update", cli, "update"]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        detail = (r.stderr or r.stdout or "").strip() or "failed to launch updater"
+        raise HTTPException(status_code=500, detail=f"Could not start update: {detail}")
+
+    return {
+        "status": "started",
+        "message": "Update started. The controller and web console will restart shortly — "
+                   "you'll be logged out. Wait ~30–60s, then hard-refresh and sign back in.",
+    }
+
+
 @app.get("/controller-config/tls/trust-bundle", dependencies=[Depends(require_api_key)])
 def download_trust_bundle_route():
     """Current trust.crt content - what an admin hands to GUI

@@ -1155,6 +1155,14 @@ def set_cfg(body: ControllerCfg, request: Request, user: str = Depends(require_l
         body.hostname, body.ip, body.address_mode, body.port)))
 
 
+@app.post("/api/controller-update")
+def controller_update(request: Request, user: str = Depends(require_superuser_session)):
+    """Trigger an in-place controller self-update (git pull + redeploy + restart).
+    Superuser-only — the controller launches it as a detached transient unit and
+    returns immediately, then the backend and this web console both restart."""
+    return _wrap(lambda: _as_admin(request, lambda: api.controller_update()))
+
+
 @app.get("/api/audit-log")
 def audit_log(limit: int = 200, request: Request = None, user: str = Depends(require_login)):
     # Superuser-gated on the controller — login attempts + admin changes.

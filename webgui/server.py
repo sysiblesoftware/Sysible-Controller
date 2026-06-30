@@ -1175,6 +1175,14 @@ def controller_update(request: Request, user: str = Depends(require_superuser_se
     return _wrap(lambda: _as_admin(request, lambda: api.controller_update()))
 
 
+@app.post("/api/update-agents")
+def update_agents(request: Request, user: str = Depends(require_superuser_session)):
+    """Push the controller's current agent to every managed host over the
+    existing task channel. Superuser-only. Agents apply it on their next
+    check-in and restart with the new code."""
+    return _wrap(lambda: _as_admin(request, lambda: api.update_agents()))
+
+
 @app.get("/api/audit-log")
 def audit_log(limit: int = 200, request: Request = None, user: str = Depends(require_login)):
     # Superuser-gated on the controller — login attempts + admin changes.

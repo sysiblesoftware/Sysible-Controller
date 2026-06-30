@@ -72,6 +72,7 @@ export const api = {
   setControllerConfig: (cfg) =>
     req("/api/controller-config", { method: "POST", body: cfg }),
   controllerUpdate: () => req("/api/controller-update", { method: "POST" }),
+  updateAgents: () => req("/api/update-agents", { method: "POST" }),
   auditLog: (limit = 200) => req(`/api/audit-log?limit=${limit}`),
   license: () => req("/api/license"),
   changeMyCredentials: (current_password, new_username, new_password) =>

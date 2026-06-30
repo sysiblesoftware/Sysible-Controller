@@ -16,7 +16,7 @@ export default function Settings() {
       {tab === "admins" && <Admins />}
       {tab === "me" && <MyAccount />}
       {tab === "policy" && <PasswordPolicy />}
-      {tab === "controller" && <><ControllerCfg /><SoftwareUpdate /></>}
+      {tab === "controller" && <><ControllerCfg /><SoftwareUpdate /><UpdateAgents /></>}
       {tab === "tls" && <Tls />}
       {tab === "license" && <License />}
       {tab === "audit" && <Audit />}
@@ -330,6 +330,61 @@ function SoftwareUpdate() {
         <div className="row" style={{ gap: 8, marginTop: 6 }}>
           <button className="btn" onClick={run} disabled={busy}>
             {busy ? <span className="spin" /> : "Yes, update now"}
+          </button>
+          <button className="btn ghost" onClick={() => setConfirm(false)} disabled={busy}>Cancel</button>
+        </div>
+      )}
+
+      {msg && <div className="ok-text" style={{ marginTop: 10 }}>{msg}</div>}
+      {err && <div className="error-box" style={{ marginTop: 10 }}>{err}</div>}
+    </div>
+  );
+}
+
+// Push the controller's current agent to every managed host over the existing
+// heartbeat/task channel — no SSH or manual redeploy. Each agent applies it on
+// its next check-in and restarts itself. Pairs with Software update above:
+// update the controller, then roll the agents.
+function UpdateAgents() {
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useErr();
+
+  async function run() {
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      const r = await api.updateAgents();
+      setConfirm(false);
+      setMsg(r?.message || `Agent update queued for ${r?.queued ?? 0} host(s).`);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card" style={{ maxWidth: 460, marginTop: 16 }}>
+      <strong>Update agents</strong>
+      <p className="faint" style={{ marginTop: 8 }}>
+        Push the controller's current agent to every managed host over the
+        existing check-in channel — no SSH or re-enrollment needed.
+      </p>
+      <p className="faint" style={{ marginTop: 0 }}>
+        Each agent applies the update on its next check-in (usually within a
+        minute) and restarts itself. Offline hosts update when they reconnect.
+        Run this after a controller update so hosts report the latest metrics.
+      </p>
+
+      {!confirm ? (
+        <button className="btn" style={{ marginTop: 6 }} onClick={() => { setMsg(""); setErr(""); setConfirm(true); }}>
+          Update all agents
+        </button>
+      ) : (
+        <div className="row" style={{ gap: 8, marginTop: 6 }}>
+          <button className="btn" onClick={run} disabled={busy}>
+            {busy ? <span className="spin" /> : "Yes, push to all hosts"}
           </button>
           <button className="btn ghost" onClick={() => setConfirm(false)} disabled={busy}>Cancel</button>
         </div>

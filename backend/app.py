@@ -505,6 +505,82 @@ def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
     }
 
 
+def _build_agent_update_command():
+    """(version, command) that updates a managed host's agent in place. The
+    controller's current host_agent/agent.py is shipped inline (base64) so the
+    task needs no extra fetch/credentials, decoded over the installed agent.py,
+    py_compiled as a guard (a corrupt transfer leaves the old agent untouched),
+    then the agent service is restarted OUT OF BAND (a scheduled transient unit
+    / detached shell) so the task can report success before the agent bounces -
+    a plain `systemctl restart` would kill the agent process running this task."""
+    import base64
+    import hashlib
+    from backend.agent_bundle import AGENT_SOURCE_FILE, _AGENT_INSTALL_DIR, _SERVICE_NAME
+
+    src = AGENT_SOURCE_FILE.read_text(encoding="utf-8")
+    b64 = base64.b64encode(src.encode("utf-8")).decode("ascii")
+    ver = hashlib.sha256(src.encode("utf-8")).hexdigest()[:12]
+    install = f"{_AGENT_INSTALL_DIR}/agent.py"
+    svc = _SERVICE_NAME
+    cmd = (
+        "set -e\n"
+        f"nf={install}.new\n"
+        f"printf '%s' '{b64}' | base64 -d > \"$nf\"\n"
+        "python3 -m py_compile \"$nf\"\n"
+        f"mv -f \"$nf\" {install}\n"
+        # Restart after this task returns: a 3s-delayed transient unit (own
+        # cgroup) if systemd-run exists, else a detached shell. Either way the
+        # restart can't kill the agent before it reports this task's result.
+        "if command -v systemd-run >/dev/null 2>&1; then\n"
+        f"  systemd-run --collect --on-active=3 --unit=sysible-agent-selfupdate "
+        f"systemctl restart {svc} >/dev/null 2>&1 "
+        f"|| setsid sh -c 'sleep 3; systemctl restart {svc}' >/dev/null 2>&1 &\n"
+        "else\n"
+        f"  setsid sh -c 'sleep 3; systemctl restart {svc}' >/dev/null 2>&1 &\n"
+        "fi\n"
+        f"echo \"sysible-agent updated to {ver}; restarting\"\n"
+    )
+    return ver, cmd
+
+
+@app.post("/agents/update", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def update_agents_route(request: Request):
+    """Push the controller's current agent to every managed host over the
+    existing task channel: queue a self-update command (runs as root on the
+    host - no run_as, so it isn't gated on an operator's local account) on each
+    agent. Agents apply it on their next poll and restart with the new code.
+    Superuser-only. Offline agents pick it up whenever they next check in."""
+    ver, cmd = _build_agent_update_command()
+    queued = 0
+    for a in list_agents():
+        hid = a.get("host_id")
+        if not hid:
+            continue
+        try:
+            queue_task(hid, cmd, kind="agent-update", run_as=None)
+            queued += 1
+        except Exception:
+            pass
+
+    # Attribute the bulk action in the activity feed (single entry, no command
+    # text - it's a 50KB base64 blob, and the agent log deliberately omits it).
+    token = request.headers.get("X-Sysible-Admin-Token")
+    actor = "controller"
+    if token:
+        admin = resolve_admin_token(token)
+        if admin:
+            actor = admin.get("username", "controller")
+    try:
+        log_activity(actor, f"{queued} host(s)",
+                     f"Pushed agent update ({ver}) to all managed hosts", "")
+    except Exception:
+        pass
+
+    return {"queued": queued, "version": ver,
+            "message": f"Agent update queued for {queued} host(s). "
+                       "Each applies it on its next check-in and restarts."}
+
+
 def _describe_command(command: str) -> str:
     """Fallback human description when a tool didn't supply one. Deliberately
     NEVER echoes raw code into the feed: multi-line / script / python

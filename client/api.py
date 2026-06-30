@@ -248,6 +248,13 @@ def controller_update():
     return _request("POST", "/controller/update", timeout=30)
 
 
+def update_agents():
+    """Push the controller's current agent to every managed host over the
+    existing task channel. Returns {"queued", "version", "message"}. Agents
+    apply it on their next check-in and restart with the new code."""
+    return _request("POST", "/agents/update", timeout=30)
+
+
 def get_license_config():
     return _request("GET", "/license-config")
 

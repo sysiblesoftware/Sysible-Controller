@@ -70,7 +70,10 @@ function summarizeHosts(hostnames, inv) {
   return parts.join(", ");
 }
 
-export default function LiveActivity() {
+export default function LiveActivity({ role }) {
+  // The read-only 'auditor' role may read the activity feed but NOT the
+  // controller service log (which stays superuser-only and 403s for them).
+  const isAuditor = role === "auditor";
   const [tab, setTab] = useState("activity");
   const [activity, setActivity] = useState([]);
   const [log, setLog] = useState("");
@@ -106,7 +109,7 @@ export default function LiveActivity() {
     <div>
       <div className="tabs" style={{ marginBottom: 14 }}>
         <button className={tab === "activity" ? "active" : ""} onClick={() => setTab("activity")}>Activity Feed</button>
-        <button className={tab === "log" ? "active" : ""} onClick={() => setTab("log")}>Controller Log</button>
+        {!isAuditor && <button className={tab === "log" ? "active" : ""} onClick={() => setTab("log")}>Controller Log</button>}
         <div style={{ flex: 1 }} />
         <label className="checkrow" style={{ margin: 0 }}>
           <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />

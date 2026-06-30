@@ -174,6 +174,7 @@ function AdminModal({ mode, username: fixedUser, onClose, onDone }) {
               <select value={role} onChange={(e) => setRole(e.target.value)}>
                 <option value="sysadmin">Sysadmin — manages the fleet</option>
                 <option value="superuser">Superuser — also manages administrators</option>
+                <option value="auditor">Auditor — read-only (dashboard, performance, activity)</option>
               </select></label>
           </>
         )}

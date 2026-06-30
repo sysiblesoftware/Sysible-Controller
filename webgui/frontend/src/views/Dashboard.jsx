@@ -160,6 +160,7 @@ export default function Dashboard({ role, edition, onOpen }) {
   const [agents, setAgents] = useState([]);
   const [activity, setActivity] = useState([]);
   const isSuper = role === "superuser";
+  const isAuditor = role === "auditor";
 
   useEffect(() => {
     api.agents().then((d) => setAgents(d.agents || [])).catch(() => {});
@@ -271,9 +272,13 @@ export default function Dashboard({ role, edition, onOpen }) {
 
   return (
     <div>
-      <input className="search-bar"
-             placeholder='Search for a task, e.g. "create a user" or "add a repository"…'
-             value={q} onChange={(e) => setQ(e.target.value)} />
+      {/* The task search routes into the tool pages, which auditors can't use,
+          so it's hidden for the read-only role. */}
+      {!isAuditor && (
+        <input className="search-bar"
+               placeholder='Search for a task, e.g. "create a user" or "add a repository"…'
+               value={q} onChange={(e) => setQ(e.target.value)} />
+      )}
 
       <div className="metric-row">
         <div className="metric">

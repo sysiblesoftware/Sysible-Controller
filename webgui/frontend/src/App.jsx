@@ -20,14 +20,16 @@ const SECTIONS = {
   settings: "Settings",
 };
 
-// Left-rail navigation. `su` = superuser-only (matches the desktop role gating).
+// Left-rail navigation. `su` = superuser-only. `aud` = visible to the read-only
+// 'auditor' role (which sees ONLY these). Auditors get a strict allow-list:
+// Dashboard, Performance, and the Activity feed — nothing that can act.
 const NAV = [
-  { key: null, label: "Dashboard", icon: "grid", su: false },
-  { key: "perf", label: "Performance", icon: "chart", su: false },
+  { key: null, label: "Dashboard", icon: "grid", su: false, aud: true },
+  { key: "perf", label: "Performance", icon: "chart", su: false, aud: true },
   { key: "hosts", label: "Host Enrollment", icon: "server", su: true },
   { key: "sysadmin", label: "System Administration Tools", icon: "tools", su: false },
   { key: "connect", label: "Connect", icon: "terminal", su: false },
-  { key: "live", label: "Activity & Logs", icon: "activity", su: true },
+  { key: "live", label: "Activity & Logs", icon: "activity", su: true, aud: true },
   { key: "settings", label: "Settings", icon: "cog", su: true },
 ];
 
@@ -94,7 +96,10 @@ export default function App() {
   }
 
   const isSuper = role === "superuser";
-  const nav = NAV.filter((n) => !n.su || isSuper);
+  const isAuditor = role === "auditor";
+  // Auditors get a strict allow-list (read-only surfaces only); everyone else
+  // sees everything except superuser-gated items.
+  const nav = NAV.filter((n) => (isAuditor ? n.aud : (!n.su || isSuper)));
 
   const editionLabel = (() => {
     if (!edition) return "";
@@ -152,12 +157,12 @@ export default function App() {
           {view === null && <Dashboard role={role} edition={edition}
             onOpen={(section, opts) => { setView(section); setTarget(opts || null); }} />}
           {view === "perf" && <Performance />}
-          {view === "hosts" && <HostEnrollment />}
-          {view === "settings" && <Settings />}
-          {view === "sysadmin" && <ToolRunner openTool={target?.tool} openTab={target?.tab}
+          {!isAuditor && view === "hosts" && <HostEnrollment />}
+          {!isAuditor && view === "settings" && <Settings />}
+          {!isAuditor && view === "sysadmin" && <ToolRunner openTool={target?.tool} openTab={target?.tab}
             onConsumed={() => setTarget(null)} />}
-          {view === "connect" && <Connect />}
-          {view === "live" && <LiveActivity />}
+          {!isAuditor && view === "connect" && <Connect />}
+          {view === "live" && <LiveActivity role={role} />}
         </div>
       </main>
 

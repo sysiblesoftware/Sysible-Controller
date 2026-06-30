@@ -39,6 +39,11 @@ def _refresh_pal():
         track="#E3E8F0" if light else "#2a2f3a",
         row="#F5F7FA" if light else "#2a313d",
         row_hover="#E9EDF2" if light else "#313947",
+        # Blue env-card header band — breaks the gray/white card list into
+        # clearly delimited environments.
+        header="#3F5C8C" if light else "#2C3E5F",
+        header_text="#FFFFFF",
+        header_faint="#C9D4E8" if light else "#9fb0cc",
     )
 
 
@@ -183,25 +188,26 @@ class EnvCard(QFrame):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # Header — clickable to expand. Transparent background (so it never
-        # bleeds past the card's rounded corners) with explicit text color.
+        # Header — a blue band (clickable to expand). Its top corners are rounded
+        # to match the card so the blue never bleeds past the card's edge.
         head = QPushButton()
         head.setCursor(Qt.PointingHandCursor)
         head.setStyleSheet(
-            f"QPushButton{{border:none; background:transparent; text-align:left;"
-            f" padding:8px 10px; color:{PAL['text']};}}")
+            f"QPushButton{{border:none; background:{PAL['header']}; text-align:left;"
+            f" padding:8px 10px; color:{PAL['header_text']};"
+            f" border-top-left-radius:8px; border-top-right-radius:8px;}}")
         hl = QHBoxLayout(head)
         hl.setContentsMargins(0, 0, 0, 0)
         hl.setSpacing(8)
         self._chev = QLabel("▶")
-        self._chev.setStyleSheet(f"border:none; background:transparent; color:{PAL['faint']}; font-size:10px;")
+        self._chev.setStyleSheet(f"border:none; background:transparent; color:{PAL['header_faint']}; font-size:10px;")
         hl.addWidget(self._chev)
         hl.addWidget(_dot(VERDICT.get(v, "#7a7a7a")))
         name = QLabel(f"<b>{group['env']}</b>")
-        name.setStyleSheet(f"border:none; background:transparent; color:{PAL['text']};")
+        name.setStyleSheet(f"border:none; background:transparent; color:{PAL['header_text']};")
         hl.addWidget(name)
         cnt = QLabel(f"{len(group['hosts'])} host{'' if len(group['hosts']) == 1 else 's'}")
-        cnt.setStyleSheet(f"border:none; background:transparent; color:{PAL['faint']}; font-size:11px;")
+        cnt.setStyleSheet(f"border:none; background:transparent; color:{PAL['header_faint']}; font-size:11px;")
         hl.addWidget(cnt)
         hl.addStretch()
         if posture_loaded:
@@ -212,8 +218,8 @@ class EnvCard(QFrame):
                 txt += f"   ·   {lim} limited"
             att = QLabel(txt)
             att.setStyleSheet(
-                f"border:none; background:transparent; font-size:11px;"
-                f" color:{'#e0a83a' if prob else '#4ec07a'};")
+                f"border:none; background:transparent; font-size:11px; font-weight:bold;"
+                f" color:{'#FFD27D' if prob else '#9BE8B8'};")
             hl.addWidget(att)
         head.clicked.connect(self._toggle)
         outer.addWidget(head)
@@ -429,7 +435,7 @@ class FleetDashboardPage(QWidget):
         outer.setSpacing(12)
 
         head = QHBoxLayout()
-        self._title = QLabel("Fleet Health &amp; Compliance")
+        self._title = QLabel("Fleet Health & Compliance")
         head.addWidget(self._title)
         head.addStretch()
         self._scan_btn = QPushButton("Run posture scan")

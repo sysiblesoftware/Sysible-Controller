@@ -11,6 +11,7 @@ from client.admin_configuration_page import AdminConfigurationPage
 from client.remote_administration_page import RemoteAdministrationPage
 from client.system_administration_page import SystemAdministrationPage
 from client.fleet_dashboard_page import FleetDashboardPage
+from client.fleet_performance_page import FleetPerformancePage
 from client.live_log_page import LiveLogPage
 from client.branding import LOGO_PATH
 from client.theme_toggle import ThemeToggle
@@ -166,6 +167,10 @@ class HomeWindow(QWidget):
              "Live fleet-health rollup per environment plus a read-only "
              "posture/compliance scan — drill into any host's full posture.",
              self.open_fleet_dashboard, "fa5s.heartbeat", "green", False),
+            ("Fleet Performance",
+             "CPU, memory, swap, disk, network and I/O time-series per "
+             "environment — drill into a host for all its metrics and live detail.",
+             self.open_fleet_performance, "fa5s.chart-line", "sky", False),
             ("Sysible Controller Host Enrollment",
              "Download the agent bundle and manage the enrolled host fleet.",
              self.open_hosts, "fa5s.server", "teal", True),
@@ -204,6 +209,7 @@ class HomeWindow(QWidget):
 
         # popouts
         self.fleet_dashboard_window = None
+        self.fleet_performance_window = None
         self.host_window = None
         self.admin_config_window = None
         self.remote_window = None
@@ -297,6 +303,13 @@ class HomeWindow(QWidget):
         self.fleet_dashboard_window.show()
         self.fleet_dashboard_window.raise_()
         return self.fleet_dashboard_window
+
+    def open_fleet_performance(self):
+        if self.fleet_performance_window is None:
+            self.fleet_performance_window = FleetPerformancePage()
+        self.fleet_performance_window.show()
+        self.fleet_performance_window.raise_()
+        return self.fleet_performance_window
 
     def open_hosts(self):
         if self.host_window is None:

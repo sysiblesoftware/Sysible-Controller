@@ -570,9 +570,11 @@ class AdminConfigurationPage(QWidget):
         if (up and self._ctrl_saw_down) or elapsed > 150:
             self._ctrl_timer.stop()
             self.controller_progress.setVisible(False)
-            self.update_controller_btn.setEnabled(True)
             self.software_update_status.setStyleSheet(f"color:{STATUS_SUCCESS_COLOR};")
-            self.software_update_status.setText("Controller is back up. Use Refresh to reload this page.")
+            self.software_update_status.setText("Controller is back up — signing you out…")
+            # A controller update should end the session; return to the login
+            # screen (a brief delay so the message is visible first).
+            QTimer.singleShot(900, bus.logout_requested.emit)
 
     def _update_agents(self):
         if QMessageBox.question(

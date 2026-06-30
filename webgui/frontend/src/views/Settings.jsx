@@ -332,7 +332,13 @@ function SoftwareUpdate() {
         // Done once the console has gone down (restart) and come back, or as a
         // time fallback in case the restart was too quick to observe.
         if ((up && sawDown) || Date.now() - t0 > 150000) {
-          clearInterval(pollRef.current); setCtrl("back");
+          clearInterval(pollRef.current);
+          setCtrl("back");
+          // A controller update should end your session — but the session cookie
+          // survives the restart, so reloading alone would keep you logged in.
+          // Log out explicitly, then reload to the sign-in screen.
+          try { await api.logout(); } catch { /* ignore */ }
+          setTimeout(() => window.location.reload(), 700);
         }
       }, 2500);
     } catch (e) { setErr(e.message); setCtrl(null); }
@@ -396,8 +402,11 @@ function SoftwareUpdate() {
       )}
       {ctrl === "back" && (
         <div style={{ marginTop: 8 }}>
-          <div className="ok-text" style={{ fontSize: 13 }}>✓ Controller is back up.</div>
-          <button className="btn sm" style={{ marginTop: 6 }} onClick={() => window.location.reload()}>Reload &amp; sign in</button>
+          <div className="ok-text" style={{ fontSize: 13 }}>✓ Controller is back up — signing you out…</div>
+          <button className="btn sm" style={{ marginTop: 6 }}
+                  onClick={async () => { try { await api.logout(); } catch { /* ignore */ } window.location.reload(); }}>
+            Sign in
+          </button>
         </div>
       )}
 

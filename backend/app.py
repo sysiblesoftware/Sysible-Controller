@@ -900,7 +900,7 @@ def get_tls_info_route():
     return tls_manager.get_tls_info()
 
 
-@app.post("/controller-config/tls/install", dependencies=[Depends(require_api_key)])
+@app.post("/controller-config/tls/install", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 async def install_tls_certificate_route(
     cert_file: UploadFile = File(...),
     key_file: UploadFile = File(...),
@@ -1000,19 +1000,19 @@ def get_portal_status_route():
     return status
 
 
-@app.post("/portal/start", dependencies=[Depends(require_api_key)])
+@app.post("/portal/start", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def start_portal_route():
 
     return portal_manager.start()
 
 
-@app.post("/portal/stop", dependencies=[Depends(require_api_key)])
+@app.post("/portal/stop", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def stop_portal_route():
 
     return portal_manager.stop()
 
 
-@app.post("/portal/credentials", dependencies=[Depends(require_api_key)])
+@app.post("/portal/credentials", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def set_portal_credentials_route(body: SetPortalCredentialsRequest):
 
     username = body.username.strip()
@@ -1051,7 +1051,7 @@ def set_portal_credentials_route(body: SetPortalCredentialsRequest):
     return {"username": username, "status": "updated"}
 
 
-@app.delete("/portal/credentials", dependencies=[Depends(require_api_key)])
+@app.delete("/portal/credentials", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def remove_portal_credentials_route(body: RemovePortalCredentialsRequest):
 
     existing = get_portal_credentials()
@@ -1087,7 +1087,7 @@ def list_portal_sessions_route():
     return {"sessions": list_portal_sessions()}
 
 
-@app.post("/portal/sessions/{session_id}/revoke", dependencies=[Depends(require_api_key)])
+@app.post("/portal/sessions/{session_id}/revoke", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def revoke_portal_session_route(session_id: int):
     delete_portal_session(session_id)
     return {"status": "revoked"}
@@ -1486,7 +1486,7 @@ def get_portal_config_route():
     return get_portal_config()
 
 
-@app.post("/portal/config", dependencies=[Depends(require_api_key)])
+@app.post("/portal/config", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def set_portal_config_route(body: SetPortalPortRequest):
 
     if not (1 <= body.port <= 65535):

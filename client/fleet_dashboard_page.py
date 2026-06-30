@@ -33,12 +33,12 @@ def _refresh_pal():
     light = theme.get_theme_mode() == "light"
     PAL.update(
         bg="#FFFFFF" if light else "#232a36",
-        border="#D5DAE2" if light else "#3a4250",
-        text="#1F2430" if light else "#EAEAEA",
-        faint="#6B7280" if light else "#9aa5b1",
-        track="#E3E8F0" if light else "#2a2f3a",
-        row="#F5F7FA" if light else "#2a313d",
-        row_hover="#E9EDF2" if light else "#313947",
+        border="#D0D7DE" if light else "#3a4250",
+        text="#1F2328" if light else "#EAEAEA",
+        faint="#656D76" if light else "#9aa5b1",
+        track="#EAEEF2" if light else "#2a2f3a",
+        row="#F6F8FA" if light else "#2a313d",
+        row_hover="#EFF2F5" if light else "#313947",
         # Blue env-card header band — breaks the gray/white card list into
         # clearly delimited environments.
         header="#3F5C8C" if light else "#2C3E5F",

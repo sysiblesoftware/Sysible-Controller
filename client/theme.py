@@ -225,8 +225,8 @@ QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
 # every rule above has a match below.
 DAYLIGHT_THEME = """
 QWidget {
-    background-color: #E0E4EA;
-    color: #1F2430;
+    background-color: #F3F5F8;
+    color: #1F2328;
     font-size: 10pt;
 }
 
@@ -236,7 +236,7 @@ QLabel {
 
 QLineEdit {
     background-color: #FFFFFF;
-    border: 1px solid #C2C8D2;
+    border: 1px solid #D0D7DE;
     padding: 5px;
     border-radius: 4px;
     color: #1F2430;
@@ -244,13 +244,13 @@ QLineEdit {
 
 QListWidget {
     background-color: #FFFFFF;
-    border: 1px solid #C2C8D2;
+    border: 1px solid #D0D7DE;
     color: #1F2430;
 }
 
 QTableWidget {
     background-color: #FFFFFF;
-    border: 1px solid #C2C8D2;
+    border: 1px solid #D0D7DE;
     color: #1F2430;
     gridline-color: #E6E8EB;
 }
@@ -279,7 +279,7 @@ QPushButton:pressed {
 }
 
 QGroupBox {
-    border: 1px solid #C2C8D2;
+    border: 1px solid #D0D7DE;
     margin-top: 10px;
     padding-top: 10px;
 }
@@ -491,7 +491,7 @@ def build_palette(mode):
     palette = QPalette()
 
     if mode == "light":
-        palette.setColor(QPalette.Window, QColor(224, 228, 234))
+        palette.setColor(QPalette.Window, QColor(243, 245, 248))
         palette.setColor(QPalette.Base, QColor(255, 255, 255))
         palette.setColor(QPalette.Text, QColor(31, 36, 48))
         palette.setColor(QPalette.WindowText, QColor(31, 36, 48))

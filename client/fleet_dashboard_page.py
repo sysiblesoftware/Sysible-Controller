@@ -32,6 +32,7 @@ PAL = {}
 def _refresh_pal():
     light = theme.get_theme_mode() == "light"
     PAL.update(
+        page="#F3F5F8" if light else "#1E1E1E",
         bg="#FFFFFF" if light else "#232a36",
         border="#D0D7DE" if light else "#3a4250",
         text="#1F2328" if light else "#EAEAEA",
@@ -322,6 +323,87 @@ _SECTIONS = [
 ]
 
 
+def name_for(key):
+    return key.replace("_", " ").title()
+
+
+def _to_int(v):
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _pct_status(v):
+    n = _to_int(v)
+    if n is None:
+        return None
+    return "bad" if n >= 90 else "warn" if n >= 75 else "good"
+
+
+# Pass/warn/fail per posture key — ported from the web console's HostDetail
+# evalStatus so the desktop colors the same signals. "good"/"warn"/"bad"/None.
+def _metric_status(full_key, value):
+    s = ("" if value is None else str(value)).strip().lower()
+    if full_key == "reboot.required":
+        return "bad" if s == "1" else "good"
+    if full_key == "fw.active":
+        return "good" if s == "1" else "bad"
+    if full_key == "mac.selinux":
+        return "good" if s == "enforcing" else "warn" if s in ("permissive", "disabled") else None
+    if full_key == "mac.apparmor":
+        return "good" if s == "enabled" else "warn" if s == "disabled" else None
+    if full_key == "sec.auditd":
+        return "good" if s == "active" else None
+    if full_key == "sec.fail2ban":
+        return "good" if s == "active" else None if s == "absent" else "warn"
+    if full_key == "sec.fips":
+        return "good" if s == "1" else None
+    if full_key == "sec.usb_storage":
+        return "good" if s == "blocked" else None
+    if full_key == "ssh.permit_root_login":
+        return "bad" if s == "yes" else "good" if s == "no" else ("warn" if s else None)
+    if full_key == "ssh.password_auth":
+        return "warn" if s == "yes" else "good" if s == "no" else None
+    if full_key in ("ssh.weak_ciphers", "ssh.weak_macs", "ssh.weak_kex"):
+        return "bad" if s else "good"
+    if full_key == "users.uid0_count":
+        n = _to_int(s); return "bad" if (n or 0) > 1 else "good"
+    if full_key == "users.empty_pw_count":
+        n = _to_int(s); return "bad" if (n or 0) > 0 else "good"
+    if full_key in ("users.dup_uid", "users.dup_gid"):
+        return "bad" if s else "good"
+    if full_key == "users.pw_complexity":
+        return "good" if s == "configured" else "warn"
+    if full_key in ("fs.disk_pct", "fs.inode_pct", "hw.mem_pct", "hw.swap_pct"):
+        return _pct_status(s)
+    if full_key == "time.synced":
+        return "good" if s in ("yes", "true", "1") else "bad" if s in ("no", "false", "0") else None
+    if full_key == "cert.expiring_30d":
+        n = _to_int(s); return "warn" if (n or 0) > 0 else "good"
+    if full_key == "cert.nearest_days":
+        n = _to_int(s); return ("warn" if n < 30 else "good") if n is not None else None
+    if full_key in ("svc.failed_count", "svc.zombies", "perf.oom", "cont.docker_privileged"):
+        n = _to_int(s); return "warn" if (n or 0) > 0 else "good"
+    if full_key == "hw.smart":
+        return "good" if s == "ok" else "bad" if s == "failing" else None
+    return None
+
+
+def _fmt_value(full_key, value):
+    if value in ("", None):
+        return "—"
+    if full_key in ("fw.active", "reboot.required", "net.ip_forward",
+                    "log.remote_forward", "net.ipv6_disabled"):
+        return "yes" if str(value) == "1" else "no" if str(value) == "0" else str(value)
+    if full_key in ("fs.disk_pct", "fs.inode_pct", "hw.mem_pct", "hw.swap_pct"):
+        return f"{value}%"
+    return str(value)
+
+
+_STATUS_COLOR = {"bad": "#e06c6c", "warn": "#e0a83a", "good": "#4ec07a"}
+
+
 class PostureDialog(QDialog):
     def __init__(self, host_id, label, parent=None):
         super().__init__(parent)
@@ -329,9 +411,13 @@ class PostureDialog(QDialog):
         self._host_id = host_id
         self.setWindowTitle(f"Posture — {label}")
         self.resize(900, 720)
+        # Force the dialog + scroll backgrounds to the theme page color so dark
+        # mode doesn't fall back to a white viewport.
+        self.setStyleSheet(f"QDialog{{background:{PAL['page']};}}")
         v = QVBoxLayout(self)
         topr = QHBoxLayout()
         self._title = QLabel(f"<b>{label}</b>")
+        self._title.setStyleSheet(f"color:{PAL['text']};")
         topr.addWidget(self._title)
         topr.addStretch()
         self._refresh = QPushButton("Refresh posture")
@@ -343,7 +429,9 @@ class PostureDialog(QDialog):
         v.addWidget(self._status)
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
+        self._scroll.setStyleSheet(f"QScrollArea{{background:{PAL['page']}; border:none;}}")
         self._body = QWidget()
+        self._body.setStyleSheet(f"background:{PAL['page']};")
         self._grid = QGridLayout(self._body)
         self._grid.setSpacing(10)
         self._scroll.setWidget(self._body)
@@ -385,7 +473,7 @@ class PostureDialog(QDialog):
             rows = []
             for cat in cats:
                 for k, val in (posture.get(cat) or {}).items():
-                    rows.append((name_for(k), val))
+                    rows.append((f"{cat}.{k}", name_for(k), val))
             if not rows:
                 continue
             self._grid.addWidget(self._section(title, rows), i // col_count, i % col_count)
@@ -395,28 +483,31 @@ class PostureDialog(QDialog):
         f = _card_frame()
         lay = QVBoxLayout(f)
         lay.setContentsMargins(12, 10, 12, 10)
-        lay.setSpacing(2)
+        lay.setSpacing(3)
         t = QLabel(title.upper())
         t.setStyleSheet(f"border:none; background:transparent; color:{PAL['faint']}; font-size:11px; font-weight:bold;")
         lay.addWidget(t)
-        for name, val in rows:
+        for full_key, name, val in rows:
+            status = _metric_status(full_key, val)
             row = QHBoxLayout()
             row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(8)
             ln = QLabel(name)
             ln.setStyleSheet(f"border:none; background:transparent; color:{PAL['faint']}; font-size:12px;")
             row.addWidget(ln)
             row.addStretch()
-            lv = QLabel("—" if val in ("", None) else str(val))
-            lv.setStyleSheet(f"border:none; background:transparent; color:{PAL['text']}; font-size:12px;")
+            # A colored status dot for any evaluated metric (green/amber/red).
+            if status in _STATUS_COLOR:
+                row.addWidget(_dot(_STATUS_COLOR[status], 8))
+            lv = QLabel(_fmt_value(full_key, val))
+            color = _STATUS_COLOR.get(status, PAL["text"])
+            bold = "font-weight:bold;" if status in ("bad", "warn") else ""
+            lv.setStyleSheet(f"border:none; background:transparent; color:{color}; font-size:12px; {bold}")
             lv.setWordWrap(True)
             lv.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             row.addWidget(lv)
             lay.addLayout(row)
         return f
-
-
-def name_for(key):
-    return key.replace("_", " ").title()
 
 
 # ---------------------------------------------------------------------------

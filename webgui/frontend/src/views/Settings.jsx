@@ -16,7 +16,7 @@ export default function Settings() {
       {tab === "admins" && <Admins />}
       {tab === "me" && <MyAccount />}
       {tab === "policy" && <PasswordPolicy />}
-      {tab === "controller" && <ControllerCfg />}
+      {tab === "controller" && <><ControllerCfg /><SoftwareUpdate /></>}
       {tab === "tls" && <Tls />}
       {tab === "license" && <License />}
       {tab === "audit" && <Audit />}
@@ -283,6 +283,60 @@ function ControllerCfg() {
       <button className="btn" style={{ marginTop: 14 }} onClick={save}>Save</button>
       {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
       {err && <div className="error-box">{err}</div>}
+    </div>
+  );
+}
+
+// Software updates (Settings → Controller): update the controller in place, then
+// push the agent to every managed host over its existing check-in. Superuser-only
+// (the whole Settings page is). Each button has a confirm step.
+function SoftwareUpdate() {
+  const [confirm, setConfirm] = useState(null); // null | "controller" | "agents"
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useErr(); const [msg, setMsg] = useState("");
+
+  async function run(which) {
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      const r = which === "controller" ? await api.controllerUpdate() : await api.updateAgents();
+      setConfirm(null);
+      setMsg(r?.message || (which === "controller" ? "Controller update started." : "Agent update queued."));
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+
+  const Button = ({ which, label }) => (
+    confirm === which ? (
+      <>
+        <button className="btn" onClick={() => run(which)} disabled={busy}>
+          {busy ? <span className="spin" /> : `Yes, ${label.toLowerCase()}`}
+        </button>
+        <button className="btn ghost" onClick={() => setConfirm(null)} disabled={busy}>Cancel</button>
+      </>
+    ) : (
+      <button className="btn" onClick={() => { setErr(""); setMsg(""); setConfirm(which); }}>{label}</button>
+    )
+  );
+
+  return (
+    <div className="card" style={{ maxWidth: 460, marginTop: 16 }}>
+      <strong>Software updates</strong>
+      <p className="faint" style={{ marginTop: 8 }}>
+        Update the controller in place (git pull → redeploy → restart), then push the
+        current agent to every managed host over its existing check-in — no SSH or
+        re-enrollment. Each restarts itself; a controller update signs you out briefly.
+      </p>
+      <div className="row" style={{ gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+        <Button which="controller" label="Update controller" />
+      </div>
+      <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+        <Button which="agents" label="Update agents" />
+      </div>
+      <p className="faint" style={{ marginTop: 10, marginBottom: 0 }}>
+        Tip: update the controller first, then update agents so hosts report the latest metrics.
+      </p>
+      {msg && <div className="ok-text" style={{ marginTop: 10 }}>{msg}</div>}
+      {err && <div className="error-box" style={{ marginTop: 10 }}>{err}</div>}
     </div>
   );
 }

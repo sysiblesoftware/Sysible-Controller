@@ -980,7 +980,7 @@ def trust_certificate(user: str = Depends(require_login)):
 @app.post("/api/tls-certificate")
 async def install_certificate(request: Request, cert: UploadFile = File(...),
                               key: UploadFile = File(...), chain: UploadFile = File(None),
-                              user: str = Depends(require_login)):
+                              user: str = Depends(require_operator)):
     tmp = Path(tempfile.mkdtemp(prefix="sysible-cert-"))
     paths = {}
     try:
@@ -1157,17 +1157,17 @@ async def packages_install_local(request: Request, file: UploadFile = File(...),
 # Webserver Portal
 # ----------------------------------------------------------------------
 @app.get("/api/portal/status")
-def portal_status(user: str = Depends(require_login)):
+def portal_status(user: str = Depends(require_operator)):
     return _wrap(lambda: api.get_portal_status())
 
 
 @app.post("/api/portal/start")
-def portal_start(request: Request, user: str = Depends(require_login)):
+def portal_start(request: Request, user: str = Depends(require_operator)):
     return _wrap(lambda: _as_admin(request, lambda: api.start_portal()))
 
 
 @app.post("/api/portal/stop")
-def portal_stop(request: Request, user: str = Depends(require_login)):
+def portal_stop(request: Request, user: str = Depends(require_operator)):
     return _wrap(lambda: _as_admin(request, lambda: api.stop_portal()))
 
 
@@ -1176,7 +1176,7 @@ class PortalPort(BaseModel):
 
 
 @app.post("/api/portal/config")
-def portal_cfg(body: PortalPort, request: Request, user: str = Depends(require_login)):
+def portal_cfg(body: PortalPort, request: Request, user: str = Depends(require_operator)):
     return _wrap(lambda: _as_admin(request, lambda: api.set_portal_port(body.port)))
 
 
@@ -1187,7 +1187,7 @@ class PortalCreds(BaseModel):
 
 
 @app.post("/api/portal/credentials")
-def portal_creds(body: PortalCreds, request: Request, user: str = Depends(require_login)):
+def portal_creds(body: PortalCreds, request: Request, user: str = Depends(require_operator)):
     return _wrap(lambda: _as_admin(request, lambda: api.set_portal_credentials(
         body.username, body.password, body.current_password)))
 
@@ -1197,34 +1197,34 @@ class PortalRemoveCreds(BaseModel):
 
 
 @app.delete("/api/portal/credentials")
-def portal_remove_creds(body: PortalRemoveCreds, request: Request, user: str = Depends(require_login)):
+def portal_remove_creds(body: PortalRemoveCreds, request: Request, user: str = Depends(require_operator)):
     return _wrap(lambda: _as_admin(request, lambda: api.remove_portal_credentials(body.current_password)))
 
 
 @app.get("/api/portal/login-history")
-def portal_login_history(limit: int = 200, user: str = Depends(require_login)):
+def portal_login_history(limit: int = 200, user: str = Depends(require_operator)):
     return _wrap(lambda: {"history": api.get_portal_login_history(limit)})
 
 
 @app.get("/api/portal/sessions")
-def portal_sessions(user: str = Depends(require_login)):
+def portal_sessions(user: str = Depends(require_operator)):
     return _wrap(lambda: {"sessions": api.get_portal_sessions()})
 
 
 @app.post("/api/portal/sessions/{session_id}/revoke")
-def portal_revoke_session(session_id: int, request: Request, user: str = Depends(require_login)):
+def portal_revoke_session(session_id: int, request: Request, user: str = Depends(require_operator)):
     return _wrap(lambda: _as_admin(request, lambda: api.revoke_portal_session(session_id)))
 
 
 # Portal file management: files host operators uploaded, and files staged for
 # them to download.
 @app.get("/api/portal/uploads")
-def portal_uploads(user: str = Depends(require_login)):
+def portal_uploads(user: str = Depends(require_operator)):
     return _wrap(lambda: {"files": api.list_portal_uploads()})
 
 
 @app.get("/api/portal/uploads/{filename}")
-def portal_upload_download(filename: str, user: str = Depends(require_login)):
+def portal_upload_download(filename: str, user: str = Depends(require_operator)):
     tmp = Path(tempfile.mkdtemp(prefix="sysible-pu-"))
     # Never trust the routed value for a filesystem write — strip any path
     # components so a crafted name can't escape the temp dir.
@@ -1244,17 +1244,17 @@ def portal_upload_download(filename: str, user: str = Depends(require_login)):
 
 
 @app.delete("/api/portal/uploads/{filename}")
-def portal_upload_delete(filename: str, user: str = Depends(require_login)):
+def portal_upload_delete(filename: str, user: str = Depends(require_operator)):
     return _wrap(lambda: api.delete_portal_upload(filename) or {"deleted": True})
 
 
 @app.get("/api/portal/downloads")
-def portal_downloads(user: str = Depends(require_login)):
+def portal_downloads(user: str = Depends(require_operator)):
     return _wrap(lambda: {"files": api.list_portal_downloads()})
 
 
 @app.post("/api/portal/downloads")
-async def portal_download_stage(file: UploadFile = File(...), user: str = Depends(require_login)):
+async def portal_download_stage(file: UploadFile = File(...), user: str = Depends(require_operator)):
     tmp = Path(tempfile.mkdtemp(prefix="sysible-pd-"))
     p = tmp / (file.filename or "file.bin")
     try:
@@ -1268,7 +1268,7 @@ async def portal_download_stage(file: UploadFile = File(...), user: str = Depend
 
 
 @app.delete("/api/portal/downloads/{filename}")
-def portal_download_delete(filename: str, user: str = Depends(require_login)):
+def portal_download_delete(filename: str, user: str = Depends(require_operator)):
     return _wrap(lambda: api.delete_portal_download(filename) or {"deleted": True})
 
 
@@ -1440,7 +1440,7 @@ async def files_upload(
     host: str = Form(...),
     remote_path: str = Form(...),
     file: UploadFile = File(...),
-    user: str = Depends(require_login),
+    user: str = Depends(require_operator),
 ):
     tmp = Path(tempfile.mkdtemp(prefix="sysible-up-")) / (file.filename or "upload.bin")
     try:
@@ -1461,7 +1461,7 @@ async def files_upload(
 
 
 @app.get("/api/files/download")
-async def files_download(host: str, path: str, user: str = Depends(require_login)):
+async def files_download(host: str, path: str, user: str = Depends(require_operator)):
     tmpdir = Path(tempfile.mkdtemp(prefix="sysible-dn-"))
     filename = os.path.basename(path.rstrip("/")) or "download.bin"
     dest = tmpdir / filename

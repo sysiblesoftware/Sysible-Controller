@@ -35,7 +35,6 @@ export default function HostEnrollment() {
   const [portalBusy, setPortalBusy] = useState("");
   const [tab, setTab] = useState("hosts");
   const [sudoEnv, setSudoEnv] = useState("");
-  const [confirmUpd, setConfirmUpd] = useState(null); // null | "controller" | "agents"
   // Portal administration
   const [history, setHistory] = useState([]);
   const [sessions, setSessions] = useState([]);
@@ -115,19 +114,6 @@ export default function HostEnrollment() {
     catch (e) { setErr(e.message); }
   }
 
-  // Software updates: update the controller in place, then push the agent to all
-  // managed hosts over their existing check-in channel. Both surface the
-  // controller's own status message (they don't reload host inventory).
-  async function updateController() {
-    setErr(""); setMsg(""); setConfirmUpd(null);
-    try { const r = await api.controllerUpdate(); setMsg(r?.message || "Controller update started."); }
-    catch (e) { setErr(e.message); }
-  }
-  async function updateAgents() {
-    setErr(""); setMsg(""); setConfirmUpd(null);
-    try { const r = await api.updateAgents(); setMsg(r?.message || "Agent update queued."); }
-    catch (e) { setErr(e.message); }
-  }
 
   async function assignEnvironment() {
     if (checked.length === 0) { setErr("Check one or more hosts first."); return; }
@@ -302,39 +288,6 @@ export default function HostEnrollment() {
 
             <p className="faint" style={{ marginTop: 10 }}>
               For password-sudo hosts, store your own sudo password from the “Sudo Password” button in the header.
-            </p>
-          </fieldset>
-
-          <fieldset className="tool-group-box"><legend>Software updates</legend>
-            <p className="faint" style={{ marginTop: 0 }}>
-              Update the controller in place (git pull → redeploy → restart), then push the
-              current agent to every managed host over its existing check-in — no SSH or
-              re-enrollment. Each restarts itself; a controller update signs you out briefly.
-            </p>
-            <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
-              {confirmUpd === "controller" ? (
-                <>
-                  <button className="btn sm" onClick={updateController}>Confirm — update controller</button>
-                  <button className="btn ghost sm" onClick={() => setConfirmUpd(null)}>Cancel</button>
-                </>
-              ) : (
-                <button className="btn sm" onClick={() => { setErr(""); setMsg(""); setConfirmUpd("controller"); }}>
-                  Update controller
-                </button>
-              )}
-              {confirmUpd === "agents" ? (
-                <>
-                  <button className="btn sm" onClick={updateAgents}>Confirm — update all agents</button>
-                  <button className="btn ghost sm" onClick={() => setConfirmUpd(null)}>Cancel</button>
-                </>
-              ) : (
-                <button className="btn sm" onClick={() => { setErr(""); setMsg(""); setConfirmUpd("agents"); }}>
-                  Update agents
-                </button>
-              )}
-            </div>
-            <p className="faint" style={{ marginTop: 10, marginBottom: 0 }}>
-              Tip: update the controller first, then update agents so hosts report the latest metrics.
             </p>
           </fieldset>
 

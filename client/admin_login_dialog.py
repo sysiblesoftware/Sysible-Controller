@@ -149,6 +149,18 @@ class AdminLoginDialog(QDialog):
         finally:
             self.login_btn.setEnabled(True)
 
+        # The read-only 'auditor' role is a web-console role only: the desktop
+        # GUI is a full operator client (and can run commands over SSH directly,
+        # outside the controller's per-request role checks), so we refuse the
+        # desktop login outright rather than ship a half-gated desktop UI.
+        if (result.get("role") or "").lower() == "auditor":
+            self.error_label.setText(
+                "Auditor accounts are read-only and use the web console only.\n"
+                "Sign in at  https://<controller>:8800/"
+            )
+            self.password_input.clear()
+            return
+
         self.username = result.get("username", username)
         self.password = password
         self.role = result.get("role")

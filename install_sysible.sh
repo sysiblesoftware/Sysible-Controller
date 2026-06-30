@@ -120,6 +120,35 @@ else
 fi
 
 # =========================================================
+# NODE.JS / npm for building the web console front end.
+# The React console ships as source and is compiled to webgui/frontend/dist at
+# install time (and rebuilt on update). Without npm the build step below is
+# skipped and the web console only serves a "frontend not built" placeholder -
+# which is exactly what bit headless boxes like a Raspberry Pi. Install it here.
+# Best-effort (package names vary; under `set -e` a missing package must not
+# abort the install) - the controller backend works regardless, and Node 18+
+# is needed for the Vite build.
+# =========================================================
+echo "Installing Node.js/npm for the web console front end..."
+if ! command -v npm >/dev/null 2>&1; then
+  case "$PKGMGR" in
+    dnf|yum)  "$PKGMGR" install -y nodejs npm || true ;;
+    zypper)   zypper --non-interactive install -y nodejs npm \
+                || zypper --non-interactive install -y nodejs20 npm20 \
+                || zypper --non-interactive install -y nodejs18 npm18 || true ;;
+    apt-get)  apt install -y nodejs npm || true ;;
+  esac
+fi
+if command -v npm >/dev/null 2>&1; then
+  echo "Node.js $(node --version 2>/dev/null) / npm $(npm --version 2>/dev/null) available - the web console will be built."
+else
+  echo "NOTE: Node.js/npm not installed (no distro package found) - the web console"
+  echo "      front end can't be built here. Install Node 18+ (e.g. via NodeSource:"
+  echo "      https://github.com/nodesource/distributions), then run"
+  echo "      'sudo sysible_controller webgui restart' to build and start it."
+fi
+
+# =========================================================
 # DEPLOY PROJECT FILES TO BASE
 # Sysible Controller always runs out of $BASE - the sysible CLI
 # hardcodes it. This installer can be run
@@ -146,6 +175,7 @@ if [[ "$SRC_DIR" != "$BASE" ]]; then
     --exclude '__pycache__' \
     --exclude '*.pyc' \
     --exclude '.git' \
+    --exclude node_modules \
     "$SRC_DIR"/ "$BASE"/
 fi
 
@@ -161,6 +191,24 @@ source "$VENV/bin/activate"
 
 pip install --upgrade pip
 pip install -r "$BASE/requirements.txt"
+
+# Desktop GUI client deps (PySide6, ...) are OPTIONAL — the controller (backend +
+# web console) doesn't need them. Install best-effort and NEVER fail the install:
+# PySide6 has no wheels on some platforms (ARM / Raspberry Pi, very new Python),
+# where the GUI uses the distro's PySide6 package instead. A headless controller
+# doesn't run the desktop GUI at all.
+if [[ -f "$BASE/requirements-gui.txt" ]]; then
+  echo "Installing desktop GUI dependencies (optional)..."
+  if pip install -r "$BASE/requirements-gui.txt"; then
+    echo "Desktop GUI dependencies installed."
+  else
+    echo "NOTE: desktop GUI dependencies (e.g. PySide6) were not installed on this"
+    echo "      platform. This is expected on headless servers and ARM/Raspberry Pi,"
+    echo "      and does NOT affect the controller or the web console."
+    echo "      To use the desktop GUI here, install them from your distro, e.g.:"
+    echo "        sudo apt install python3-pyside6 python3-qtawesome python3-pyte"
+  fi
+fi
 
 # =========================================================
 # WEB CONSOLE (browser-based, headless-friendly GUI)

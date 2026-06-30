@@ -144,6 +144,39 @@ def require_login(request: Request):
     return user
 
 
+def require_operator(request: Request):
+    """Dependency for any write/dispatch route: 401 if not logged in, 403 for
+    the read-only 'auditor' role. Superuser-only routes don't need this (they
+    proxy through the controller's require_superuser, which already rejects an
+    auditor); this guards the routes that superusers AND sysadmins may use but
+    auditors may not (running tools, fleet actions, terminals, etc.). The
+    controller also blocks command dispatch for auditors server-side, so this
+    is the front-of-house half of a defence-in-depth pair."""
+    user = request.session.get("user")
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if request.session.get("role") == "auditor":
+        raise HTTPException(status_code=403, detail="Auditor accounts are read-only.")
+    return user
+
+
+def require_superuser_session(request: Request):
+    """Dependency for superuser-only surfaces whose controller routes are NOT
+    themselves require_superuser (the webserver portal and TLS-cert install are
+    api-key-only on the controller). Those screens are superuser-only in the UI,
+    but without this a sysadmin could still drive them via the API. A sysadmin
+    reaches the controller ONLY through this BFF (the admin API key is root-only
+    on the controller host), so enforcing the superuser/sysadmin split here is
+    the effective control; the high-value writes also get controller-side
+    require_superuser as defence-in-depth."""
+    user = request.session.get("user")
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if request.session.get("role") != "superuser":
+        raise HTTPException(status_code=403, detail="This action requires a superuser account.")
+    return user
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -205,14 +238,17 @@ def _session_token(request: "Request"):
 # superuser-gated routes AND for dispatch/terminal calls, so the controller can
 # derive the run-as user (runuser -u <admin>) and attribute the activity feed.
 def _with_token(token, fn):
-    if not token:
+    # Thread-scoped: the BFF serves many admins concurrently, and fleet-health
+    # runs its probes in parallel threads. Setting the token per-thread (rather
+    # than on the process-global) means a concurrent request can't leak its
+    # token into another thread's call. token=None explicitly forces NO token
+    # for this thread, so the read-only metrics probe truly runs as root and
+    # never depends on the viewer having a host account (e.g. an auditor).
+    api.set_admin_token_override(token)
+    try:
         return fn()
-    with _ADMIN_TOKEN_LOCK:
-        api.set_admin_token(token)
-        try:
-            return fn()
-        finally:
-            api.set_admin_token(None)
+    finally:
+        api.clear_admin_token_override()
 
 
 def _client_ip(request: Request) -> str:
@@ -336,7 +372,7 @@ def sudo_status(user: str = Depends(require_login)):
 
 
 @app.post("/api/sudo")
-def sudo_set(body: SudoRequest, user: str = Depends(require_login)):
+def sudo_set(body: SudoRequest, user: str = Depends(require_operator)):
     if not body.password:
         raise HTTPException(status_code=400, detail="Password is required.")
     ok = sudo_store.set_password(user, body.scope or sudo_store.ALL, body.password)
@@ -350,7 +386,7 @@ def sudo_set(body: SudoRequest, user: str = Depends(require_login)):
 
 
 @app.delete("/api/sudo")
-def sudo_clear(body: SudoRequest, user: str = Depends(require_login)):
+def sudo_clear(body: SudoRequest, user: str = Depends(require_operator)):
     sudo_store.clear(user, body.scope or sudo_store.ALL)
     return {"cleared": True, "scope": body.scope or sudo_store.ALL}
 
@@ -507,7 +543,7 @@ def fleet_health(user: str = Depends(require_login)):
         return None
 
     def probe(e):
-        base = {"host": e.get("label"), "environment": e.get("environment") or "Unassigned"}
+        base = {"id": e.get("id"), "host": e.get("label"), "environment": e.get("environment") or "Unassigned"}
         aid = agent_id_of(e)
         ls = last_seen.get(aid) if aid else None
         online = (bool(ls and (now - ls) <= 20)) if aid else None
@@ -540,13 +576,244 @@ def fleet_health(user: str = Depends(require_login)):
 
 @app.get("/api/fleet-metrics")
 def fleet_metrics(window: int = 3600, user: str = Depends(require_login)):
-    """Per-host performance time-series for the Performance view: load/mem/disk
-    history reported by the agents on heartbeat, grouped by host with the
-    environment label attached. Read-only; just proxies the controller."""
+    """Per-host performance time-series for the Performance view: load/cpu/mem/
+    swap/disk/network/io history reported by the agents on heartbeat, grouped by
+    host with the environment label attached. Read-only; just proxies the
+    controller."""
     try:
         return api.get_metrics_timeseries(window)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+
+
+@app.get("/api/host-snapshot/{host_id}")
+def host_snapshot(host_id: str, user: str = Depends(require_login)):
+    """Latest rich detail metrics snapshot for one host (per-core CPU, memory
+    breakdown, per-interface network, per-mount disk, top processes) for the
+    per-host metrics drill-down. Read-only; auditor-visible."""
+    try:
+        return api.get_host_snapshot(host_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+
+
+# ----------------------------------------------------------------------
+# Host posture / compliance (Phase 1 — read-only, on-demand sweep)
+# ----------------------------------------------------------------------
+#
+# Mirrors the fleet-health sweep: run the read-only posture command on hosts
+# (tokenless, as root), parse the POSTURE|cat.key=value stream, and surface a
+# per-host posture object plus a curated set of high-ticket flags the dashboard
+# aggregates into a Compliance strip. Read-only throughout (require_login), so
+# the auditor role can view it; nothing here dispatches a mutating command.
+
+# Best-effort end-of-life table for the dashboard's "EOL / unsupported OS"
+# signal. Keyed by os-release ID then VERSION_ID; value is the end-of-support
+# date (ISO). A host past this date (or a version not in a known-supported set)
+# flags as EOL. Intentionally small and conservative — unknowns never flag.
+_EOL_TABLE = {
+    "ubuntu": {"16.04": "2021-04-30", "18.04": "2023-05-31", "20.04": "2025-05-31",
+               "22.04": "2027-04-30", "24.04": "2029-05-31"},
+    "debian": {"9": "2022-06-30", "10": "2024-06-30", "11": "2026-08-31", "12": "2028-06-30"},
+    "centos": {"7": "2024-06-30", "8": "2021-12-31"},
+    "rhel": {"7": "2024-06-30", "8": "2029-05-31", "9": "2032-05-31"},
+    "rocky": {"8": "2029-05-31", "9": "2032-05-31"},
+    "almalinux": {"8": "2029-05-31", "9": "2032-05-31"},
+    "fedora": {"38": "2024-05-21", "39": "2024-11-12", "40": "2025-05-13", "41": "2025-11-19"},
+    "opensuse-leap": {"15.4": "2023-12-31", "15.5": "2024-12-31", "15.6": "2025-12-31"},
+    "sles": {"12": "2024-10-31", "15": "2031-07-31"},
+}
+
+
+def _parse_posture(text):
+    """Parse the `POSTURE|<cat>.<key>=<value>` stream from cmd_posture_snapshot
+    into a nested {category: {key: value}} dict, or None if no lines present.
+    Values are kept as strings (the gather command already single-lines them)."""
+    flat = {}
+    for line in (text or "").splitlines():
+        if line.startswith("POSTURE|"):
+            body = line[len("POSTURE|"):]
+            if "=" in body:
+                k, v = body.split("=", 1)
+                flat[k.strip()] = v
+    if not flat:
+        return None
+    nested = {}
+    for k, v in flat.items():
+        cat, _, sub = k.partition(".")
+        nested.setdefault(cat, {})[sub or cat] = v
+    return nested
+
+
+def _eol_status(distro, version):
+    """Return True (EOL), False (supported), or None (unknown) for a distro."""
+    if not distro or not version:
+        return None
+    table = _EOL_TABLE.get((distro or "").lower())
+    if not table:
+        return None
+    eol = table.get(version) or table.get(version.split(".")[0])
+    if not eol:
+        return None  # unknown point release -> don't flag
+    import datetime
+    try:
+        return datetime.date.today().isoformat() > eol
+    except Exception:
+        return None
+
+
+def _posture_flags(p):
+    """Compute the curated high-ticket compliance signals from a parsed posture
+    dict. Each value is True (a problem), False (clean), or None (couldn't
+    determine). The dashboard counts the True ones per signal across the fleet."""
+    if not p:
+        return {}
+    g = lambda c, k, d=None: (p.get(c) or {}).get(k, d)
+
+    def as_int(v):
+        try:
+            return int(str(v).strip())
+        except (TypeError, ValueError):
+            return None
+
+    # SSH root login: "yes" is the risk; key-only forms are acceptable.
+    rl = (g("ssh", "permit_root_login") or "").strip().lower()
+    ssh_root = (rl == "yes") if rl else None
+
+    # MAC: flag only when NEITHER SELinux nor AppArmor is actively enforcing.
+    se = (g("mac", "selinux") or "").strip().lower()
+    aa = (g("mac", "apparmor") or "").strip().lower()
+    se_enf = se == "enforcing"
+    aa_enf = aa == "enabled"
+    mac_off = (not se_enf and not aa_enf) if (se or aa) else None
+
+    fw = g("fw", "active")
+    sync = (g("time", "synced") or "").strip().lower()
+    uid0 = as_int(g("users", "uid0_count"))
+    emptypw = as_int(g("users", "empty_pw_count"))
+    cert30 = as_int(g("cert", "expiring_30d"))
+    eol = _eol_status(g("os", "distro"), g("os", "version"))
+
+    return {
+        "reboot_required": (g("reboot", "required") == "1") if g("reboot", "required") is not None else None,
+        "ssh_root_login": ssh_root,
+        "firewall_disabled": (fw == "0") if fw is not None else None,
+        "mac_not_enforcing": mac_off,
+        "eol_os": eol,
+        "risky_accounts": ((uid0 or 0) > 1 or (emptypw or 0) > 0)
+        if (uid0 is not None or emptypw is not None) else None,
+        "cert_expiring": (cert30 > 0) if cert30 is not None else None,
+        "time_unsynced": (sync in ("no", "false", "0")) if sync else None,
+    }
+
+
+def _posture_command():
+    return api.cmd_posture_snapshot()
+
+
+def _probe_posture(e, cmd, last_seen, now):
+    """Run the read-only posture command on one host entry and return its parsed
+    posture + flags. Mirrors fleet_health.probe: offline agents are reported
+    without probing; dispatch is tokenless (read-only, root, unattributed)."""
+    base = {"id": e.get("id"), "host": e.get("label"),
+            "environment": e.get("environment") or "Unassigned"}
+    aid = None
+    if e["kind"] == "agent":
+        aid = e["id"]
+    elif e["kind"] == "merged":
+        aid = (e.get("agent_entry") or {}).get("id") or e["id"]
+    ls = last_seen.get(aid) if aid else None
+    online = (bool(ls and (now - ls) <= 20)) if aid else None
+    if aid is not None and not online:
+        return {**base, "online": False, "ok": False, "error": "offline",
+                "posture": None, "flags": {}, "limited": False}
+    pe = {**e, "requires_sudo_password": False}
+    if e.get("agent_entry"):
+        pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+    r = _dispatch_one(pe, cmd, "command", None, None, None)  # no token: read-only, unlogged
+    p = _parse_posture((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
+    # "limited": the probe ran but NOT as root (e.g. an SSH host whose login user
+    # isn't root) - root-only checks (shadow, sshd -T, SUID scans) read blank, so
+    # the result can't be trusted as "clean". Agent hosts run as root (privileged).
+    limited = bool(p) and (p.get("meta") or {}).get("privileged") == "0"
+    return {
+        **base,
+        "online": True if p else online,
+        "ok": bool(r.get("ok")) and p is not None,
+        "error": None if p else (r.get("error") or "no posture returned"),
+        "posture": p,
+        "flags": _posture_flags(p),
+        "limited": limited,
+    }
+
+
+# Small in-process cache so the dashboard doesn't force a full re-sweep on every
+# load. {ts, hosts}. A sweep is on-demand: the cache is served unless a caller
+# passes ?refresh=1 or it is older than _POSTURE_TTL.
+import threading as _posture_threading
+_POSTURE_CACHE = {"ts": 0.0, "hosts": None}
+_POSTURE_TTL = 300.0
+# Serialize sweeps so concurrent cold dashboard loads share ONE fleet-wide sweep
+# instead of each launching its own (the posture command does bounded `find /`
+# scans per host - several at once is needless host-side load). Threads that
+# arrive while a sweep is running block here, then return the just-filled cache.
+_POSTURE_LOCK = _posture_threading.Lock()
+
+
+@app.get("/api/fleet-posture")
+def fleet_posture(refresh: int = 0, user: str = Depends(require_login)):
+    """On-demand posture sweep across the fleet for the dashboard Compliance
+    strip. Cached for a few minutes unless ?refresh=1. Read-only; tokenless
+    dispatch, so visible to the auditor role and never attributed as an action."""
+    import concurrent.futures
+    import time as _t
+
+    def _fresh():
+        return (not refresh) and _POSTURE_CACHE["hosts"] is not None \
+            and (_t.time() - _POSTURE_CACHE["ts"]) < _POSTURE_TTL
+
+    if _fresh():
+        return {"hosts": _POSTURE_CACHE["hosts"], "cached": True, "ts": _POSTURE_CACHE["ts"]}
+
+    with _POSTURE_LOCK:
+        # Re-check: another request may have just completed the sweep while we
+        # waited for the lock, in which case serve its result instead of re-sweeping.
+        if _fresh():
+            return {"hosts": _POSTURE_CACHE["hosts"], "cached": True, "ts": _POSTURE_CACHE["ts"]}
+        try:
+            entries = dispatch.list_merged_hosts(agent_only=False)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        try:
+            last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+        except Exception:
+            last_seen = {}
+        now = _t.time()
+        cmd = _posture_command()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
+            hosts = list(ex.map(lambda e: _probe_posture(e, cmd, last_seen, now), entries)) if entries else []
+        _POSTURE_CACHE["hosts"] = hosts
+        _POSTURE_CACHE["ts"] = now
+        return {"hosts": hosts, "cached": False, "ts": now}
+
+
+@app.get("/api/host-posture/{host_id}")
+def host_posture(host_id: str, user: str = Depends(require_login)):
+    """Full read-only posture for a single host (the drill-down's Refresh).
+    Always re-gathers (no cache) so the operator sees current state."""
+    import time as _t
+    try:
+        entries = dispatch.list_merged_hosts(agent_only=False)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+    entry = next((e for e in entries if str(e.get("id")) == str(host_id)), None)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Host not found")
+    try:
+        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+    except Exception:
+        last_seen = {}
+    return _probe_posture(entry, _posture_command(), last_seen, _t.time())
 
 
 @app.get("/api/environments")
@@ -620,7 +887,7 @@ class FleetRequest(BaseModel):
 
 
 @app.post("/api/fleet")
-def fleet(body: FleetRequest, request: Request, user: str = Depends(require_login)):
+def fleet(body: FleetRequest, request: Request, user: str = Depends(require_operator)):
     """Run a fleet action across the selected hosts (or all hosts)."""
     if body.action == "script":
         command = body.command.strip()
@@ -656,7 +923,7 @@ def fleet(body: FleetRequest, request: Request, user: str = Depends(require_logi
 
 
 @app.post("/api/checkin")
-def checkin(user: str = Depends(require_login)):
+def checkin(user: str = Depends(require_operator)):
     """Lightweight reachability probe: run `true` on every host and report
     which answered (mirrors the desktop 'Check In / Ping')."""
     try:
@@ -689,7 +956,7 @@ class EnrollRequest(BaseModel):
 
 
 @app.post("/api/enroll-ssh")
-def enroll_ssh(body: EnrollRequest, request: Request, user: str = Depends(require_login)):
+def enroll_ssh(body: EnrollRequest, request: Request, user: str = Depends(require_operator)):
     payload = {"name": body.name, "ip": body.ip, "username": body.username,
                "password": body.password}
     if body.environment:
@@ -881,6 +1148,20 @@ def set_admin_sudo_connect(username: str, body: AdminSudoConnect, request: Reque
         username, body.allowed, actor=user)))
 
 
+class AdminRole(BaseModel):
+    role: str
+
+
+@app.post("/api/admins/{username}/role")
+def set_admin_role(username: str, body: AdminRole, request: Request,
+                   user: str = Depends(require_login)):
+    # Superuser-gated on the controller (via the admin token in _as_admin):
+    # promote/demote the account's role. The controller refuses to demote the
+    # last superuser and enforces seat caps.
+    return _wrap(lambda: _as_admin(request, lambda: api.set_administrator_role(
+        username, body.role, actor=user)))
+
+
 @app.get("/api/password-policy")
 def get_policy(user: str = Depends(require_login)):
     return _wrap(lambda: api.get_admin_password_policy())
@@ -907,6 +1188,22 @@ class ControllerCfg(BaseModel):
 def set_cfg(body: ControllerCfg, request: Request, user: str = Depends(require_login)):
     return _wrap(lambda: _as_admin(request, lambda: api.set_controller_config(
         body.hostname, body.ip, body.address_mode, body.port)))
+
+
+@app.post("/api/controller-update")
+def controller_update(request: Request, user: str = Depends(require_superuser_session)):
+    """Trigger an in-place controller self-update (git pull + redeploy + restart).
+    Superuser-only — the controller launches it as a detached transient unit and
+    returns immediately, then the backend and this web console both restart."""
+    return _wrap(lambda: _as_admin(request, lambda: api.controller_update()))
+
+
+@app.post("/api/update-agents")
+def update_agents(request: Request, user: str = Depends(require_superuser_session)):
+    """Push the controller's current agent to every managed host over the
+    existing task channel. Superuser-only. Agents apply it on their next
+    check-in and restart with the new code."""
+    return _wrap(lambda: _as_admin(request, lambda: api.update_agents()))
 
 
 @app.get("/api/audit-log")
@@ -964,7 +1261,7 @@ def trust_certificate(user: str = Depends(require_login)):
 @app.post("/api/tls-certificate")
 async def install_certificate(request: Request, cert: UploadFile = File(...),
                               key: UploadFile = File(...), chain: UploadFile = File(None),
-                              user: str = Depends(require_login)):
+                              user: str = Depends(require_superuser_session)):
     tmp = Path(tempfile.mkdtemp(prefix="sysible-cert-"))
     paths = {}
     try:
@@ -1001,7 +1298,7 @@ class UserSyncRequest(BaseModel):
 
 
 @app.post("/api/users/sync")
-def users_sync(body: UserSyncRequest, user: str = Depends(require_login)):
+def users_sync(body: UserSyncRequest, user: str = Depends(require_operator)):
     """Pull the live user/group/session inventory from one host (mirrors the
     desktop 'Sync Checked Hosts'). SSH hosts answer synchronously; agent hosts
     are polled here to a timeout so the browser gets one response."""
@@ -1041,7 +1338,7 @@ class ServicesListRequest(BaseModel):
 
 
 @app.post("/api/services/list")
-def services_list(body: ServicesListRequest, request: Request, user: str = Depends(require_login)):
+def services_list(body: ServicesListRequest, request: Request, user: str = Depends(require_operator)):
     try:
         entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
     except Exception as e:
@@ -1073,7 +1370,7 @@ class PkgListRequest(BaseModel):
 
 
 @app.post("/api/packages/list")
-def packages_list(body: PkgListRequest, request: Request, user: str = Depends(require_login)):
+def packages_list(body: PkgListRequest, request: Request, user: str = Depends(require_operator)):
     try:
         entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
     except Exception as e:
@@ -1098,7 +1395,7 @@ def packages_list(body: PkgListRequest, request: Request, user: str = Depends(re
 
 @app.post("/api/packages/install-local")
 async def packages_install_local(request: Request, file: UploadFile = File(...),
-                                 targets: str = Form(""), user: str = Depends(require_login)):
+                                 targets: str = Form(""), user: str = Depends(require_operator)):
     import json as _json
     tids = _json.loads(targets) if targets else []
     if not tids:
@@ -1141,17 +1438,17 @@ async def packages_install_local(request: Request, file: UploadFile = File(...),
 # Webserver Portal
 # ----------------------------------------------------------------------
 @app.get("/api/portal/status")
-def portal_status(user: str = Depends(require_login)):
+def portal_status(user: str = Depends(require_superuser_session)):
     return _wrap(lambda: api.get_portal_status())
 
 
 @app.post("/api/portal/start")
-def portal_start(request: Request, user: str = Depends(require_login)):
+def portal_start(request: Request, user: str = Depends(require_superuser_session)):
     return _wrap(lambda: _as_admin(request, lambda: api.start_portal()))
 
 
 @app.post("/api/portal/stop")
-def portal_stop(request: Request, user: str = Depends(require_login)):
+def portal_stop(request: Request, user: str = Depends(require_superuser_session)):
     return _wrap(lambda: _as_admin(request, lambda: api.stop_portal()))
 
 
@@ -1160,7 +1457,7 @@ class PortalPort(BaseModel):
 
 
 @app.post("/api/portal/config")
-def portal_cfg(body: PortalPort, request: Request, user: str = Depends(require_login)):
+def portal_cfg(body: PortalPort, request: Request, user: str = Depends(require_superuser_session)):
     return _wrap(lambda: _as_admin(request, lambda: api.set_portal_port(body.port)))
 
 
@@ -1171,7 +1468,7 @@ class PortalCreds(BaseModel):
 
 
 @app.post("/api/portal/credentials")
-def portal_creds(body: PortalCreds, request: Request, user: str = Depends(require_login)):
+def portal_creds(body: PortalCreds, request: Request, user: str = Depends(require_superuser_session)):
     return _wrap(lambda: _as_admin(request, lambda: api.set_portal_credentials(
         body.username, body.password, body.current_password)))
 
@@ -1181,34 +1478,34 @@ class PortalRemoveCreds(BaseModel):
 
 
 @app.delete("/api/portal/credentials")
-def portal_remove_creds(body: PortalRemoveCreds, request: Request, user: str = Depends(require_login)):
+def portal_remove_creds(body: PortalRemoveCreds, request: Request, user: str = Depends(require_superuser_session)):
     return _wrap(lambda: _as_admin(request, lambda: api.remove_portal_credentials(body.current_password)))
 
 
 @app.get("/api/portal/login-history")
-def portal_login_history(limit: int = 200, user: str = Depends(require_login)):
+def portal_login_history(limit: int = 200, user: str = Depends(require_superuser_session)):
     return _wrap(lambda: {"history": api.get_portal_login_history(limit)})
 
 
 @app.get("/api/portal/sessions")
-def portal_sessions(user: str = Depends(require_login)):
+def portal_sessions(user: str = Depends(require_superuser_session)):
     return _wrap(lambda: {"sessions": api.get_portal_sessions()})
 
 
 @app.post("/api/portal/sessions/{session_id}/revoke")
-def portal_revoke_session(session_id: int, request: Request, user: str = Depends(require_login)):
+def portal_revoke_session(session_id: int, request: Request, user: str = Depends(require_superuser_session)):
     return _wrap(lambda: _as_admin(request, lambda: api.revoke_portal_session(session_id)))
 
 
 # Portal file management: files host operators uploaded, and files staged for
 # them to download.
 @app.get("/api/portal/uploads")
-def portal_uploads(user: str = Depends(require_login)):
+def portal_uploads(user: str = Depends(require_superuser_session)):
     return _wrap(lambda: {"files": api.list_portal_uploads()})
 
 
 @app.get("/api/portal/uploads/{filename}")
-def portal_upload_download(filename: str, user: str = Depends(require_login)):
+def portal_upload_download(filename: str, user: str = Depends(require_superuser_session)):
     tmp = Path(tempfile.mkdtemp(prefix="sysible-pu-"))
     # Never trust the routed value for a filesystem write — strip any path
     # components so a crafted name can't escape the temp dir.
@@ -1228,17 +1525,17 @@ def portal_upload_download(filename: str, user: str = Depends(require_login)):
 
 
 @app.delete("/api/portal/uploads/{filename}")
-def portal_upload_delete(filename: str, user: str = Depends(require_login)):
+def portal_upload_delete(filename: str, user: str = Depends(require_superuser_session)):
     return _wrap(lambda: api.delete_portal_upload(filename) or {"deleted": True})
 
 
 @app.get("/api/portal/downloads")
-def portal_downloads(user: str = Depends(require_login)):
+def portal_downloads(user: str = Depends(require_superuser_session)):
     return _wrap(lambda: {"files": api.list_portal_downloads()})
 
 
 @app.post("/api/portal/downloads")
-async def portal_download_stage(file: UploadFile = File(...), user: str = Depends(require_login)):
+async def portal_download_stage(file: UploadFile = File(...), user: str = Depends(require_superuser_session)):
     tmp = Path(tempfile.mkdtemp(prefix="sysible-pd-"))
     p = tmp / (file.filename or "file.bin")
     try:
@@ -1252,7 +1549,7 @@ async def portal_download_stage(file: UploadFile = File(...), user: str = Depend
 
 
 @app.delete("/api/portal/downloads/{filename}")
-def portal_download_delete(filename: str, user: str = Depends(require_login)):
+def portal_download_delete(filename: str, user: str = Depends(require_superuser_session)):
     return _wrap(lambda: api.delete_portal_download(filename) or {"deleted": True})
 
 
@@ -1307,7 +1604,7 @@ class RunRequest(BaseModel):
 
 
 @app.post("/api/tool/{action_name}")
-def run_tool(action_name: str, body: RunRequest, request: Request, user: str = Depends(require_login)):
+def run_tool(action_name: str, body: RunRequest, request: Request, user: str = Depends(require_operator)):
     """Build the shell command for `action_name` via the desktop client's
     cmd_* builder, then dispatch it across every selected target and
     return per-host results. Synchronous: agent tasks are polled here up
@@ -1424,7 +1721,7 @@ async def files_upload(
     host: str = Form(...),
     remote_path: str = Form(...),
     file: UploadFile = File(...),
-    user: str = Depends(require_login),
+    user: str = Depends(require_operator),
 ):
     tmp = Path(tempfile.mkdtemp(prefix="sysible-up-")) / (file.filename or "upload.bin")
     try:
@@ -1445,7 +1742,7 @@ async def files_upload(
 
 
 @app.get("/api/files/download")
-async def files_download(host: str, path: str, user: str = Depends(require_login)):
+async def files_download(host: str, path: str, user: str = Depends(require_operator)):
     tmpdir = Path(tempfile.mkdtemp(prefix="sysible-dn-"))
     filename = os.path.basename(path.rstrip("/")) or "download.bin"
     dest = tmpdir / filename
@@ -1505,7 +1802,12 @@ async def terminal_ws(ws: WebSocket):
             return
     # Auth: SessionMiddleware populates the websocket scope's session the
     # same way it does for HTTP, so the login cookie gates this too.
-    if not ws.scope.get("session", {}).get("user"):
+    _sess = ws.scope.get("session", {}) or {}
+    if not _sess.get("user"):
+        await ws.close(code=1008)
+        return
+    # Read-only 'auditor' accounts cannot open an interactive terminal.
+    if _sess.get("role") == "auditor":
         await ws.close(code=1008)
         return
     await ws.accept()

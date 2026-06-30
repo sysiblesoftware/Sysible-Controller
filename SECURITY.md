@@ -86,10 +86,40 @@ the controller safely.
   controller derives the run-as user from the token, not from anything the
   browser sends), so the host's sudo policy and audit trail stay
   authoritative.
-- A superuser can reset another administrator's password; the target is
-  required to change it at next login. Role-gated surfaces (administrator
-  management, the Live Activity & Controller Log views) require a
-  superuser token, enforced server-side.
+- A superuser can reset another administrator's password (and promote or
+  demote an existing account's role); the target is required to change it at
+  next login. Role-gated surfaces — administrator management, the Live
+  Activity & Controller Log views, the Webserver Portal controls, the
+  controller TLS-certificate install, and the controller/agent **software
+  updates** — require a superuser token, enforced server-side at both the web
+  BFF and the controller (the portal/TLS/update controller routes are
+  `require_superuser`, not just API-key, so a sysadmin can't drive them by
+  hand).
+- **Read-only Auditor role.** An `auditor` account has oversight without any
+  ability to act. Enforced server-side, independent of the UI: the controller
+  refuses to queue any host task for an auditor token (`queue_agent_task`
+  → 403), the web BFF rejects every write/dispatch route (tool runs, fleet
+  actions, check-in, SSH enroll, user/service/package ops, file transfer, the
+  terminal websocket) via a `require_operator` gate, and the desktop GUI —
+  which is a full operator client that can exec over SSH outside the
+  controller's per-request checks — refuses auditor login outright. Auditors
+  may read the activity log, fleet health, posture/compliance, and metrics.
+- **Read-only health/posture/metrics dispatch.** The fleet-health, posture,
+  and on-demand metric probes are dispatched **without an operator identity**
+  (no run-as token) and run as the agent itself — they are non-mutating,
+  unattributed, and need no local account, which is what lets the read-only
+  auditor view them. They reuse the same `cmd_*` builders and are read-only by
+  construction.
+- **Controller & agent self-update.** *Update controller* (superuser-only)
+  launches the in-place redeploy as a **transient systemd unit** (its own
+  cgroup) so restarting the backend/web-console can't kill the updater
+  mid-flight. *Update agents* (superuser-only) ships the controller's current
+  `agent.py` to managed hosts over the **existing authenticated task channel**
+  (no new inbound path, no SSH): the host verifies the file compiles
+  (`py_compile`) before swapping it in, and restarts its own agent out-of-band
+  so the task reports success before the bounce. The agent source carries no
+  secrets; host secrets live in the host's own state file, never in the pushed
+  code.
 - "Become" (password) sudo passwords are kept encrypted at rest on the
   controller (Fernet, `0600` key), namespaced per administrator, and fed
   to `sudo -S` over stdin only — never on the command line, in the

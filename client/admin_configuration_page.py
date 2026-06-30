@@ -624,9 +624,24 @@ class AdminConfigurationPage(QWidget):
             "terminal's 'Send sudo password' button. Off by default; superuser only.")
         self.toggle_sudo_connect_btn.clicked.connect(self.toggle_sudo_connect_selected)
 
+        # Promote/demote the selected administrator. The backend refuses to
+        # demote the last superuser and enforces the edition seat caps.
+        self.change_role_combo = QComboBox()
+        self.change_role_combo.addItem("→ Superuser", "superuser")
+        self.change_role_combo.addItem("→ Sysadmin", "sysadmin")
+        self.change_role_combo.addItem("→ Auditor", "auditor")
+        self.change_role_combo.setMaximumWidth(150)
+        self.set_role_btn = QPushButton("Set Role (Selected)")
+        self.set_role_btn.setToolTip(
+            "Promote or demote the selected administrator. They log out and back "
+            "in for the new role to fully apply. Superuser only.")
+        self.set_role_btn.clicked.connect(self.set_role_selected)
+
         admin_buttons.addWidget(admin_refresh_btn)
         admin_buttons.addWidget(self.remove_admin_btn)
         admin_buttons.addWidget(self.toggle_sudo_connect_btn)
+        admin_buttons.addWidget(self.change_role_combo)
+        admin_buttons.addWidget(self.set_role_btn)
         layout.addLayout(admin_buttons)
 
         # -- Add Administrator --
@@ -656,6 +671,7 @@ class AdminConfigurationPage(QWidget):
         self.add_role_combo = QComboBox()
         self.add_role_combo.addItem("Sysadmin (run tools on hosts)", "sysadmin")
         self.add_role_combo.addItem("Superuser (full controller management)", "superuser")
+        self.add_role_combo.addItem("Auditor (read-only — web console only)", "auditor")
         self.add_role_combo.setMaximumWidth(320)
         add_role_row.addWidget(self.add_role_combo)
         add_role_row.addStretch()
@@ -813,6 +829,30 @@ class AdminConfigurationPage(QWidget):
             f"Sudo on Connect {'enabled' if not currently else 'disabled'} for '{username}'."
             + ("\n\nThey'll need to log out and back in for it to take effect in their session."
                if not currently else ""))
+
+    def set_role_selected(self):
+        selected = self.admin_table.selectedItems()
+        if not selected:
+            QMessageBox.warning(self, "No selection",
+                                "Select an administrator to promote or demote.")
+            return
+
+        row = selected[0].row()
+        username = self.admin_table.item(row, 0).text()
+        new_role = self.change_role_combo.currentData()
+
+        try:
+            api.set_administrator_role(
+                username, new_role, actor=session.get_current_admin() or "")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+            return
+
+        self.refresh_administrators()
+        QMessageBox.information(
+            self, "Updated",
+            f"'{username}' is now {new_role}.\n\nThey'll need to log out and back in "
+            "for the new role to fully apply in their session.")
 
     def save_credentials(self):
         acting_username = session.get_current_admin()

@@ -474,6 +474,238 @@ def cmd_metrics_snapshot() -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# Host posture / compliance snapshot (Phase 1 — read-only, on-demand)
+# ---------------------------------------------------------------------------
+#
+# One read-only command, run on the host *as root* (tokenless, like
+# cmd_metrics_snapshot / fleet-health), that gathers a broad set of security &
+# compliance posture signals and prints them as a stream of
+#
+#     POSTURE|<category>.<key>=<value>
+#
+# lines (key=value rather than JSON — far more robust to build in portable
+# shell; the controller's _parse_posture groups them by the dotted prefix).
+# Every probe is best-effort and `command -v`-guarded: a missing tool yields
+# "n/a" (or the field is simply omitted), never an error. Nothing here writes,
+# changes state, or needs a host account, so the read-only auditor can run it.
+#
+# Phase 1 is Tier-A only: read-only system checks. NOT patch/CVE scoring, NOT
+# external scanners (CIS/STIG/OpenSCAP/Lynis), NOT vendor/cloud/EDR/backup.
+_POSTURE_SH = r"""
+p(){ printf 'POSTURE|%s=%s\n' "$1" "$(printf '%s' "$2" | tr '\r\n\t' '   ' | cut -c1-400)"; }
+TMO=""; command -v timeout >/dev/null 2>&1 && TMO="timeout 20"
+
+# --- Operating system -------------------------------------------------------
+. /etc/os-release 2>/dev/null
+p os.distro "${ID:-unknown}"
+p os.name "${PRETTY_NAME:-$(uname -s) $(uname -r)}"
+p os.version "${VERSION_ID:-}"
+p os.kernel "$(uname -r)"
+p os.arch "$(uname -m)"
+up=$(awk '{print int($1)}' /proc/uptime 2>/dev/null); p os.uptime_s "${up:-0}"
+bt=$(awk '/^btime/{print $2}' /proc/stat 2>/dev/null); [ -n "$bt" ] && p os.boot_epoch "$bt"
+if command -v subscription-manager >/dev/null 2>&1; then
+  p sub.rhsm "$(subscription-manager status 2>/dev/null | awk -F': ' '/Overall Status/{print $2; exit}')"
+fi
+if command -v pro >/dev/null 2>&1; then
+  p sub.ubuntu_pro "$(pro status 2>/dev/null | awk -F': ' '/account/{print $2; exit}')"
+fi
+
+# --- Reboot required --------------------------------------------------------
+rr=0
+[ -f /var/run/reboot-required ] && rr=1
+if command -v needs-restarting >/dev/null 2>&1; then needs-restarting -r >/dev/null 2>&1 || rr=1; fi
+if command -v zypper >/dev/null 2>&1; then zypper ps 2>/dev/null | grep -qi 'reboot' && rr=1; fi
+p reboot.required "$rr"
+
+# --- Mandatory access control / kernel hardening ----------------------------
+if command -v getenforce >/dev/null 2>&1; then p mac.selinux "$(getenforce 2>/dev/null)"; else p mac.selinux "n/a"; fi
+if command -v aa-status >/dev/null 2>&1; then
+  if aa-status --enabled 2>/dev/null; then p mac.apparmor "enabled"; else p mac.apparmor "disabled"; fi
+else p mac.apparmor "n/a"; fi
+p sec.fips "$(cat /proc/sys/crypto/fips_enabled 2>/dev/null || echo n/a)"
+p sec.aslr "$(cat /proc/sys/kernel/randomize_va_space 2>/dev/null || echo n/a)"
+if command -v mokutil >/dev/null 2>&1; then p sec.secureboot "$(mokutil --sb-state 2>/dev/null | head -1)"; else p sec.secureboot "n/a"; fi
+if systemctl is-active auditd >/dev/null 2>&1; then p sec.auditd active; else p sec.auditd inactive; fi
+if systemctl is-active fail2ban >/dev/null 2>&1; then p sec.fail2ban active
+elif command -v fail2ban-client >/dev/null 2>&1; then p sec.fail2ban installed
+else p sec.fail2ban absent; fi
+if [ -d /etc/modprobe.d ] && grep -rqsiE 'install[[:space:]]+usb-storage[[:space:]]+/bin/(true|false)|blacklist[[:space:]]+usb-storage' /etc/modprobe.d 2>/dev/null; then
+  p sec.usb_storage blocked; else p sec.usb_storage allowed; fi
+
+# --- Firewall ---------------------------------------------------------------
+fw=none; fwa=0
+if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then fw=firewalld; fwa=1
+elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; then fw=ufw; fwa=1
+elif command -v nft >/dev/null 2>&1 && [ -n "$(nft list ruleset 2>/dev/null)" ]; then fw=nftables; fwa=1
+elif command -v iptables >/dev/null 2>&1 && iptables -S 2>/dev/null | grep -qE '^-A'; then fw=iptables; fwa=1
+fi
+p fw.backend "$fw"; p fw.active "$fwa"
+
+# --- Users / accounts -------------------------------------------------------
+p users.uid0 "$(awk -F: '$3==0{print $1}' /etc/passwd 2>/dev/null | paste -sd, -)"
+p users.uid0_count "$(awk -F: '$3==0' /etc/passwd 2>/dev/null | wc -l | tr -d ' ')"
+p users.empty_pw "$(awk -F: '($2==""){print $1}' /etc/shadow 2>/dev/null | paste -sd, -)"
+p users.empty_pw_count "$(awk -F: '($2==""){c++} END{print c+0}' /etc/shadow 2>/dev/null)"
+p users.dup_uid "$(awk -F: '{print $3}' /etc/passwd 2>/dev/null | sort | uniq -d | paste -sd, -)"
+p users.dup_gid "$(awk -F: '{print $3}' /etc/group 2>/dev/null | sort | uniq -d | paste -sd, -)"
+p users.admins "$(getent group sudo wheel 2>/dev/null | awk -F: '{print $4}' | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -)"
+p users.pw_max_days "$(awk '/^PASS_MAX_DAYS/{print $2}' /etc/login.defs 2>/dev/null | head -1)"
+p users.pw_min_len "$(awk '/^PASS_MIN_LEN/{print $2}' /etc/login.defs 2>/dev/null | head -1)"
+p users.locked_count "$(awk -F: '($2 ~ /^[!*]/){c++} END{print c+0}' /etc/shadow 2>/dev/null)"
+p users.svc_login_shells "$(awk -F: '($3>0 && $3<1000 && $7 !~ /(nologin|false|sync|halt|shutdown)$/){print $1}' /etc/passwd 2>/dev/null | paste -sd, -)"
+if grep -rqsE 'pam_pwquality|pam_cracklib' /etc/pam.d 2>/dev/null; then p users.pw_complexity configured; else p users.pw_complexity none; fi
+
+# --- SSH (effective config via sshd -T, falls back to file) -----------------
+ST=$(sshd -T 2>/dev/null); [ -z "$ST" ] && ST=$(grep -vE '^\s*#|^\s*$' /etc/ssh/sshd_config 2>/dev/null)
+sg(){ printf '%s\n' "$ST" | awk -v k="$1" 'BEGIN{IGNORECASE=1} tolower($1)==k{$1="";sub(/^[ \t]+/,"");print;exit}'; }
+if [ -n "$ST" ]; then
+  p ssh.permit_root_login "$(sg permitrootlogin)"
+  p ssh.password_auth "$(sg passwordauthentication)"
+  p ssh.pubkey_auth "$(sg pubkeyauthentication)"
+  p ssh.max_auth_tries "$(sg maxauthtries)"
+  p ssh.idle_timeout "$(sg clientaliveinterval)"
+  p ssh.banner "$(sg banner)"
+  p ssh.allow_users "$(sg allowusers)"
+  p ssh.allow_groups "$(sg allowgroups)"
+  p ssh.x11_forwarding "$(sg x11forwarding)"
+  p ssh.weak_ciphers "$(sg ciphers | tr ', ' '\n\n' | grep -iE 'cbc|arcfour|3des' | sort -u | paste -sd, -)"
+  p ssh.weak_macs "$(sg macs | tr ', ' '\n\n' | grep -iE 'md5|sha1|-96' | sort -u | paste -sd, -)"
+  p ssh.weak_kex "$(sg kexalgorithms | tr ', ' '\n\n' | grep -iE 'sha1$|group1-|group-exchange-sha1' | sort -u | paste -sd, -)"
+fi
+command -v ssh >/dev/null 2>&1 && p ssh.version "$(ssh -V 2>&1 | head -1)"
+
+# --- Filesystem -------------------------------------------------------------
+p fs.disk_pct "$(df -P 2>/dev/null | awk 'NR>1 && $1 !~ /^(tmpfs|devtmpfs|overlay|squashfs|udev)$/ && $6 !~ /^(\/dev|\/proc|\/sys|\/run|\/snap|\/var\/lib\/docker)/ {gsub(/%/,"",$5); if($5+0>m)m=$5+0} END{print m+0}')"
+p fs.inode_pct "$(df -Pi 2>/dev/null | awk 'NR>1 && $1 !~ /^(tmpfs|devtmpfs|overlay|squashfs|udev)$/ {gsub(/%/,"",$5); if($5+0>m)m=$5+0} END{print m+0}')"
+for mp in / /tmp /var /home /dev/shm /boot; do
+  opts=$(awk -v m="$mp" '$2==m{print $4; exit}' /proc/mounts 2>/dev/null)
+  key=$(printf '%s' "$mp" | sed 's#^/$#root#; s#^/##; s#/#_#g')
+  [ -n "$opts" ] && p "mount.$key" "$opts"
+done
+sg2=$($TMO find / -xdev -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | wc -l 2>/dev/null | tr -d ' '); p fs.suid_sgid_count "${sg2:-na}"
+ww=$($TMO find / -xdev -type f -perm -0002 2>/dev/null | wc -l 2>/dev/null | tr -d ' '); p fs.world_writable_count "${ww:-na}"
+no=$($TMO find / -xdev \( -nouser -o -nogroup \) 2>/dev/null | wc -l 2>/dev/null | tr -d ' '); p fs.unowned_count "${no:-na}"
+
+# --- Time synchronization ---------------------------------------------------
+if command -v timedatectl >/dev/null 2>&1; then
+  p time.synced "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)"
+  p time.ntp_service "$(timedatectl show -p NTP --value 2>/dev/null)"
+  p time.timezone "$(timedatectl show -p Timezone --value 2>/dev/null)"
+fi
+if command -v chronyc >/dev/null 2>&1; then
+  p time.source chrony
+  p time.offset "$(chronyc tracking 2>/dev/null | awk -F': ' '/Last offset/{print $2; exit}')"
+elif systemctl is-active systemd-timesyncd >/dev/null 2>&1; then p time.source systemd-timesyncd
+elif command -v ntpq >/dev/null 2>&1; then p time.source ntpd; fi
+
+# --- Logging ----------------------------------------------------------------
+if systemctl is-active rsyslog >/dev/null 2>&1; then p log.rsyslog active; else p log.rsyslog inactive; fi
+if systemctl is-active systemd-journald >/dev/null 2>&1; then p log.journald active; else p log.journald inactive; fi
+if grep -rqsE '^[^#]*@@?[A-Za-z0-9.]' /etc/rsyslog.conf /etc/rsyslog.d 2>/dev/null; then p log.remote_forward 1; else p log.remote_forward 0; fi
+if command -v logrotate >/dev/null 2>&1; then p log.logrotate present; else p log.logrotate absent; fi
+p log.var_log_mb "$(du -sm /var/log 2>/dev/null | awk '{print $1}')"
+
+# --- Networking -------------------------------------------------------------
+if command -v ss >/dev/null 2>&1; then
+  p net.listen_count "$(ss -tulnH 2>/dev/null | wc -l | tr -d ' ')"
+  p net.listen_ports "$(ss -tulnH 2>/dev/null | awk '{print $5}' | sed 's/.*://' | grep -E '^[0-9]+$' | sort -un | paste -sd, - | cut -c1-300)"
+fi
+p net.dns "$(awk '/^nameserver/{print $2}' /etc/resolv.conf 2>/dev/null | paste -sd, -)"
+p net.gateway "$(ip route 2>/dev/null | awk '/^default/{print $3; exit}')"
+p net.ip_forward "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)"
+p net.ipv6_disabled "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null)"
+p net.hostname "$(hostname 2>/dev/null)"
+
+# --- TLS certificates (bounded scan of common dirs) -------------------------
+if command -v openssl >/dev/null 2>&1; then
+  cn=0; c30=0; cself=0; near=
+  for f in $($TMO find /etc/ssl /etc/pki /etc/letsencrypt /etc/nginx /etc/apache2 /etc/httpd -type f \( -name '*.crt' -o -name '*.pem' -o -name '*.cer' \) 2>/dev/null | head -60); do
+    end=$(openssl x509 -enddate -noout -in "$f" 2>/dev/null | cut -d= -f2)
+    [ -z "$end" ] && continue
+    es=$(date -d "$end" +%s 2>/dev/null) || continue
+    [ -z "$es" ] && continue
+    days=$(( (es - $(date +%s)) / 86400 ))
+    cn=$((cn+1))
+    [ "$days" -lt 30 ] 2>/dev/null && c30=$((c30+1))
+    { [ -z "$near" ] || [ "$days" -lt "$near" ] 2>/dev/null; } && near=$days
+    sub=$(openssl x509 -noout -subject -in "$f" 2>/dev/null); iss=$(openssl x509 -noout -issuer -in "$f" 2>/dev/null)
+    [ "${sub#subject}" = "${iss#issuer}" ] && cself=$((cself+1))
+  done
+  p cert.count "$cn"; p cert.expiring_30d "$c30"; p cert.self_signed "$cself"
+  [ -n "$near" ] && p cert.nearest_days "$near"
+fi
+
+# --- Services ---------------------------------------------------------------
+if command -v systemctl >/dev/null 2>&1; then
+  p svc.failed_count "$(systemctl --failed --no-legend 2>/dev/null | wc -l | tr -d ' ')"
+  p svc.failed "$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | head -10 | paste -sd, -)"
+fi
+p svc.zombies "$(ps -eo stat 2>/dev/null | grep -c '^Z')"
+
+# --- Hardware ---------------------------------------------------------------
+p hw.mem_pct "$(awk '/^MemTotal:/{t=$2}/^MemAvailable:/{a=$2}END{if(t>0)printf "%d",(t-a)*100/t}' /proc/meminfo 2>/dev/null)"
+p hw.swap_pct "$(awk '/^SwapTotal:/{t=$2}/^SwapFree:/{f=$2}END{if(t>0)printf "%d",(t-f)*100/t; else print 0}' /proc/meminfo 2>/dev/null)"
+p hw.cores "$(nproc 2>/dev/null || echo 1)"
+[ -r /proc/mdstat ] && p hw.raid "$(awk '/^md[0-9]/{print $1}' /proc/mdstat 2>/dev/null | paste -sd, -)"
+if command -v smartctl >/dev/null 2>&1 && command -v lsblk >/dev/null 2>&1; then
+  shl=ok
+  for d in $(lsblk -dno NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}'); do
+    if $TMO smartctl -H "/dev/$d" 2>/dev/null | grep -iE 'overall-health|SMART Health' | grep -iqv 'PASSED'; then shl=failing; fi
+  done
+  p hw.smart "$shl"
+fi
+
+# --- Virtualization ---------------------------------------------------------
+if command -v systemd-detect-virt >/dev/null 2>&1; then p virt.type "$(systemd-detect-virt 2>/dev/null)"; else p virt.type "n/a"; fi
+if systemctl is-active qemu-guest-agent >/dev/null 2>&1; then p virt.guest_agent qemu-guest-agent
+elif systemctl is-active vmtoolsd >/dev/null 2>&1; then p virt.guest_agent open-vm-tools; fi
+
+# --- Containers -------------------------------------------------------------
+if command -v docker >/dev/null 2>&1; then
+  p cont.docker "$(docker --version 2>/dev/null | awk '{print $3}' | tr -d ,)"
+  p cont.docker_running "$(docker ps -q 2>/dev/null | wc -l | tr -d ' ')"
+  p cont.docker_privileged "$(docker ps -q 2>/dev/null | xargs -r docker inspect -f '{{.HostConfig.Privileged}}' 2>/dev/null | grep -c true)"
+fi
+if command -v podman >/dev/null 2>&1; then
+  p cont.podman "$(podman --version 2>/dev/null | awk '{print $3}')"
+  p cont.podman_running "$(podman ps -q 2>/dev/null | wc -l | tr -d ' ')"
+fi
+
+# --- AD / Identity ----------------------------------------------------------
+if command -v realm >/dev/null 2>&1; then p ad.domain "$(realm list --name-only 2>/dev/null | head -1)"; fi
+if systemctl is-active sssd >/dev/null 2>&1; then p ad.sssd active; else p ad.sssd inactive; fi
+command -v klist >/dev/null 2>&1 && p ad.kerberos present
+
+# --- Performance ------------------------------------------------------------
+p perf.load1 "$(awk '{print $1}' /proc/loadavg 2>/dev/null)"
+p perf.oom "$(dmesg -t 2>/dev/null | grep -ciE 'out of memory|killed process|oom-killer')"
+
+# --- Miscellaneous ----------------------------------------------------------
+p misc.last_login "$(last -1 -w 2>/dev/null | head -1 | cut -c1-120)"
+p misc.cron_jobs "$(ls /etc/cron.d 2>/dev/null | wc -l | tr -d ' ')"
+command -v systemctl >/dev/null 2>&1 && p misc.timers "$(systemctl list-timers --no-legend 2>/dev/null | wc -l | tr -d ' ')"
+
+# Whether this ran as root. Many checks above (shadow, sshd -T, SUID scans)
+# only see the truth as root; on an unprivileged SSH host they read blank and
+# would otherwise look falsely "clean", so the controller marks such a host's
+# posture as limited rather than trusting it.
+p meta.privileged "$([ "$(id -u 2>/dev/null)" = 0 ] && echo 1 || echo 0)"
+printf 'POSTURE|meta.done=1\n'
+"""
+
+
+def cmd_posture_snapshot() -> str:
+    """Read-only host posture/compliance snapshot. Run as root (tokenless),
+    like cmd_metrics_snapshot/fleet-health. Emits a stream of
+    `POSTURE|<category>.<key>=<value>` lines covering OS, security/MAC,
+    firewall, users, SSH, filesystem, time sync, logging, networking, TLS
+    certs, services, hardware, virtualization, containers, and AD/identity.
+    Best-effort and non-mutating throughout — see _POSTURE_SH."""
+    return _POSTURE_SH
+
+
 def cmd_health_check() -> str:
     """A single combined command that has the *host itself* score a few
     signals (disk usage, failed systemd units, load average relative to

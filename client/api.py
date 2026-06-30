@@ -9,6 +9,7 @@ configured in one spot.
 import contextlib
 import os
 import shlex
+import threading
 from pathlib import Path
 from urllib.parse import quote
 
@@ -51,16 +52,46 @@ _API_KEY = _load_api_key()
 # the matching local user). Process-local; cleared on logout.
 _ADMIN_TOKEN = None
 
+# Per-thread override of the admin token. The web BFF is a single shared process
+# serving every administrator concurrently, so a process-global token is unsafe:
+# one request (or fleet-health's parallel probe threads) can read another's
+# token. The BFF therefore sets a THREAD-scoped token per request/worker; the
+# desktop GUI never sets this and keeps using the process-global it sets once at
+# login (which its own worker threads inherit). A thread-local value of None
+# means "explicitly no token for this thread" (e.g. the read-only fleet-health
+# metrics probe, which must run as root regardless of who is viewing) — distinct
+# from "no override set", hence the sentinel.
+_NO_OVERRIDE = object()
+_token_override = threading.local()
+
 
 def set_admin_token(token):
     global _ADMIN_TOKEN
     _ADMIN_TOKEN = token
 
 
+def set_admin_token_override(token):
+    """Set the admin token for THIS thread only (used by the multi-threaded BFF).
+    Pass None to force no token for this thread. Always pair with
+    clear_admin_token_override() in a finally."""
+    _token_override.value = token
+
+
+def clear_admin_token_override():
+    if hasattr(_token_override, "value"):
+        del _token_override.value
+
+
+def _effective_admin_token():
+    v = getattr(_token_override, "value", _NO_OVERRIDE)
+    return _ADMIN_TOKEN if v is _NO_OVERRIDE else v
+
+
 def _headers():
     h = {"X-API-Key": _API_KEY} if _API_KEY else {}
-    if _ADMIN_TOKEN:
-        h["X-Sysible-Admin-Token"] = _ADMIN_TOKEN
+    tok = _effective_admin_token()
+    if tok:
+        h["X-Sysible-Admin-Token"] = tok
     return h
 
 
@@ -116,6 +147,14 @@ def get_metrics_timeseries(window=3600):
     """Per-host performance time-series (load/mem/disk) for the last `window`
     seconds. Returns {"hosts": [...], "window": int, "now": float}."""
     return _request("GET", f"/metrics/timeseries?window={int(window)}")
+
+
+def get_host_snapshot(host_id):
+    """Latest rich detail snapshot (per-core CPU, memory breakdown, per-interface
+    network, per-mount disk, top processes) for one host's metrics drill-down.
+    Returns {"host_id", "ts", "snapshot": {...}|None}."""
+    from urllib.parse import quote
+    return _request("GET", f"/metrics/snapshot/{quote(str(host_id), safe='')}")
 
 
 def get_edition():
@@ -200,6 +239,20 @@ def set_controller_config(hostname: str, ip: str, address_mode: str, port: int):
         "POST", "/controller-config",
         json={"hostname": hostname, "ip": ip, "address_mode": address_mode, "port": port},
     )
+
+
+def controller_update():
+    """Trigger an in-place controller self-update (git pull + redeploy + restart)
+    on the controller host. The controller launches it as a detached transient
+    unit and returns immediately; the backend and web console then restart."""
+    return _request("POST", "/controller/update", timeout=30)
+
+
+def update_agents():
+    """Push the controller's current agent to every managed host over the
+    existing task channel. Returns {"queued", "version", "message"}. Agents
+    apply it on their next check-in and restart with the new code."""
+    return _request("POST", "/agents/update", timeout=30)
 
 
 def get_license_config():
@@ -402,6 +455,15 @@ def set_administrator_sudo_connect(username: str, allowed: bool, actor: str = ""
     return _request(
         "POST", f"/admin/administrators/{quote(username)}/sudo-connect",
         json={"allowed": bool(allowed), "actor": actor},
+    )
+
+
+def set_administrator_role(username: str, role: str, actor: str = ""):
+    """Superuser-only: promote/demote an administrator's role
+    ('superuser' | 'sysadmin' | 'auditor')."""
+    return _request(
+        "POST", f"/admin/administrators/{quote(username)}/role",
+        json={"role": role, "actor": actor},
     )
 
 

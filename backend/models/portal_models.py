@@ -78,3 +78,9 @@ class SetSudoConnectRequest(BaseModel):
     # Sysible Connect terminal's "Send sudo password" button.
     allowed: bool
     actor: str = ""  # username of the superuser making the change, for the audit log
+
+
+class SetRoleRequest(BaseModel):
+    # Superuser-initiated promote/demote of an administrator's role.
+    role: str        # 'superuser' | 'sysadmin' | 'auditor'
+    actor: str = ""  # username of the superuser making the change, for the audit log

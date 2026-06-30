@@ -8,7 +8,7 @@ import threading
 import time
 
 from backend.agent_bundle import build_agent_bundle, detect_local_ips, resolve_controller_addresses
-from backend.auth import require_api_key, require_superuser
+from backend.auth import require_api_key, require_superuser, require_activity_viewer
 from backend.db import (
     create_enroll_token,
     validate_enroll_token,
@@ -18,6 +18,8 @@ from backend.db import (
     update_agent_heartbeat,
     insert_metric_sample,
     get_metric_samples,
+    upsert_host_snapshot,
+    get_host_snapshot,
     list_agents,
     delete_agent,
     get_agent_secret,
@@ -55,6 +57,8 @@ from backend.db import (
     add_administrator,
     remove_administrator,
     set_administrator_sudo_connect,
+    set_administrator_role,
+    count_administrators_by_role,
     update_administrator_password,
     update_administrator_username,
     record_administrator_login,
@@ -98,6 +102,7 @@ from backend.models.portal_models import (
     ForcePasswordChangeRequest,
     ResetAdministratorPasswordRequest,
     SetSudoConnectRequest,
+    SetRoleRequest,
 )
 from backend.models.policy_models import (
     SetEnvironmentalPolicyRequest,
@@ -366,7 +371,24 @@ def heartbeat(req: HeartbeatRequest):
                 _num("cores", int),
                 _num("mem", int),
                 _num("disk", int),
+                load5=_num("load5", float),
+                load15=_num("load15", float),
+                cpu=_num("cpu", float),
+                swap=_num("swap", int),
+                net_rx=_num("net_rx", float),
+                net_tx=_num("net_tx", float),
+                io_r=_num("io_r", float),
+                io_w=_num("io_w", float),
+                procs=_num("procs", int),
             )
+        except Exception:
+            pass
+
+    # Persist the latest rich detail snapshot if attached (newer agents only).
+    # Stored as one row per host (overwritten), feeding the per-host drill-down.
+    if req.snapshot:
+        try:
+            upsert_host_snapshot(req.host_id, time.time(), json.dumps(req.snapshot))
         except Exception:
             pass
 
@@ -455,6 +477,11 @@ def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
         admin = resolve_admin_token(token)
         if not admin:
             raise HTTPException(status_code=401, detail="Invalid or expired admin token")
+        # Read-only 'auditor' accounts can never dispatch a command to a host.
+        # Enforced here (front-end independent) so it holds for the web console,
+        # the desktop GUI, or a hand-crafted API call alike.
+        if admin.get("role") == "auditor":
+            raise HTTPException(status_code=403, detail="Auditor accounts are read-only.")
         run_as = admin["username"]
 
     task_id = queue_task(host_id, body.command, body.kind, run_as=run_as)
@@ -476,6 +503,82 @@ def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
         "task_id": task_id,
         "status": "queued"
     }
+
+
+def _build_agent_update_command():
+    """(version, command) that updates a managed host's agent in place. The
+    controller's current host_agent/agent.py is shipped inline (base64) so the
+    task needs no extra fetch/credentials, decoded over the installed agent.py,
+    py_compiled as a guard (a corrupt transfer leaves the old agent untouched),
+    then the agent service is restarted OUT OF BAND (a scheduled transient unit
+    / detached shell) so the task can report success before the agent bounces -
+    a plain `systemctl restart` would kill the agent process running this task."""
+    import base64
+    import hashlib
+    from backend.agent_bundle import AGENT_SOURCE_FILE, _AGENT_INSTALL_DIR, _SERVICE_NAME
+
+    src = AGENT_SOURCE_FILE.read_text(encoding="utf-8")
+    b64 = base64.b64encode(src.encode("utf-8")).decode("ascii")
+    ver = hashlib.sha256(src.encode("utf-8")).hexdigest()[:12]
+    install = f"{_AGENT_INSTALL_DIR}/agent.py"
+    svc = _SERVICE_NAME
+    cmd = (
+        "set -e\n"
+        f"nf={install}.new\n"
+        f"printf '%s' '{b64}' | base64 -d > \"$nf\"\n"
+        "python3 -m py_compile \"$nf\"\n"
+        f"mv -f \"$nf\" {install}\n"
+        # Restart after this task returns: a 3s-delayed transient unit (own
+        # cgroup) if systemd-run exists, else a detached shell. Either way the
+        # restart can't kill the agent before it reports this task's result.
+        "if command -v systemd-run >/dev/null 2>&1; then\n"
+        f"  systemd-run --collect --on-active=3 --unit=sysible-agent-selfupdate "
+        f"systemctl restart {svc} >/dev/null 2>&1 "
+        f"|| setsid sh -c 'sleep 3; systemctl restart {svc}' >/dev/null 2>&1 &\n"
+        "else\n"
+        f"  setsid sh -c 'sleep 3; systemctl restart {svc}' >/dev/null 2>&1 &\n"
+        "fi\n"
+        f"echo \"sysible-agent updated to {ver}; restarting\"\n"
+    )
+    return ver, cmd
+
+
+@app.post("/agents/update", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def update_agents_route(request: Request):
+    """Push the controller's current agent to every managed host over the
+    existing task channel: queue a self-update command (runs as root on the
+    host - no run_as, so it isn't gated on an operator's local account) on each
+    agent. Agents apply it on their next poll and restart with the new code.
+    Superuser-only. Offline agents pick it up whenever they next check in."""
+    ver, cmd = _build_agent_update_command()
+    queued = 0
+    for a in list_agents():
+        hid = a.get("host_id")
+        if not hid:
+            continue
+        try:
+            queue_task(hid, cmd, kind="agent-update", run_as=None)
+            queued += 1
+        except Exception:
+            pass
+
+    # Attribute the bulk action in the activity feed (single entry, no command
+    # text - it's a 50KB base64 blob, and the agent log deliberately omits it).
+    token = request.headers.get("X-Sysible-Admin-Token")
+    actor = "controller"
+    if token:
+        admin = resolve_admin_token(token)
+        if admin:
+            actor = admin.get("username", "controller")
+    try:
+        log_activity(actor, f"{queued} host(s)",
+                     f"Pushed agent update ({ver}) to all managed hosts", "")
+    except Exception:
+        pass
+
+    return {"queued": queued, "version": ver,
+            "message": f"Agent update queued for {queued} host(s). "
+                       "Each applies it on its next check-in and restarts."}
 
 
 def _describe_command(command: str) -> str:
@@ -570,11 +673,13 @@ def get_edition():
     return edition_info()
 
 
-@app.get("/activity-log", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+@app.get("/activity-log", dependencies=[Depends(require_api_key), Depends(require_activity_viewer)])
 def get_activity_log_route(limit: int = 200, since_id: int = 0):
     """Human-readable, attributed feed of actions the controller carried out
-    (who did what, where). Superuser-only - it's a fleet-wide audit view.
-    `since_id` lets the GUI poll for only new rows."""
+    (who did what, where) - a fleet-wide audit view. Visible to superusers and
+    the read-only 'auditor' role (see require_activity_viewer). The controller
+    service log below stays superuser-only. `since_id` lets the GUI poll for
+    only new rows."""
     return {"entries": get_activity_log(limit=limit, since_id=since_id)}
 
 
@@ -612,6 +717,21 @@ def get_metrics_timeseries(window: int = 3600):
     samples are reported by the agents themselves on heartbeat."""
     hosts = get_metric_samples(window)
     return {"hosts": hosts, "window": window, "now": time.time()}
+
+
+@app.get("/metrics/snapshot/{host_id}", dependencies=[Depends(require_api_key)])
+def get_metrics_snapshot_route(host_id: str):
+    """Latest rich detail snapshot for one host (per-core CPU, memory breakdown,
+    per-interface network, per-mount disk, top processes) for the per-host
+    metrics drill-down. Reported by the agent on heartbeat; read-only."""
+    snap = get_host_snapshot(host_id)
+    if not snap:
+        return {"host_id": host_id, "ts": None, "snapshot": None}
+    try:
+        data = json.loads(snap["data"]) if snap.get("data") else None
+    except (ValueError, TypeError):
+        data = None
+    return {"host_id": host_id, "ts": snap.get("ts"), "snapshot": data}
 
 
 @app.get("/agents", dependencies=[Depends(require_api_key)])
@@ -893,7 +1013,7 @@ def get_tls_info_route():
     return tls_manager.get_tls_info()
 
 
-@app.post("/controller-config/tls/install", dependencies=[Depends(require_api_key)])
+@app.post("/controller-config/tls/install", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 async def install_tls_certificate_route(
     cert_file: UploadFile = File(...),
     key_file: UploadFile = File(...),
@@ -925,6 +1045,60 @@ async def install_tls_certificate_route(
         **info,
         "restarting": True,
         "message": "Certificate installed. The backend is restarting now to apply it.",
+    }
+
+
+@app.post("/controller/update", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def controller_update_route():
+    """Trigger an in-place controller self-update: the same work as the CLI
+    `sysible_controller update` (git pull -> rsync into /opt/sysible -> rebuild
+    the web console -> restart services). Superuser-only.
+
+    The update restarts BOTH the backend and the web console, so it must NOT run
+    as a child of either service: a `systemctl restart` kills the whole service
+    cgroup and would abort the update mid-flight. We launch it as a *transient*
+    systemd unit (systemd-run --collect), which gets its own cgroup and survives
+    the restarts, and we return immediately so this response reaches the caller
+    before anything bounces. Progress is in `journalctl -u sysible-self-update`."""
+    import os
+    import shutil
+    import subprocess
+
+    cli = shutil.which("sysible_controller") or "/usr/local/bin/sysible_controller"
+    if not os.path.exists(cli):
+        raise HTTPException(status_code=500, detail="Controller CLI not found on this host.")
+
+    unit = "sysible-self-update"
+    # Don't stack updates - if one is already in flight, say so.
+    try:
+        active = subprocess.run(
+            ["systemctl", "is-active", f"{unit}.service"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        if active == "active":
+            return {"status": "already-running", "message": "An update is already in progress."}
+    except Exception:
+        pass
+
+    if not shutil.which("systemd-run"):
+        raise HTTPException(
+            status_code=500,
+            detail="systemd-run is unavailable; run 'sudo sysible_controller update' on the host instead.",
+        )
+
+    # --collect reaps the transient unit after it exits so the next update can
+    # reuse the name. The update itself re-execs the services from a clean cgroup.
+    cmd = ["systemd-run", "--collect", f"--unit={unit}",
+           "--description=Sysible Controller self-update", cli, "update"]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        detail = (r.stderr or r.stdout or "").strip() or "failed to launch updater"
+        raise HTTPException(status_code=500, detail=f"Could not start update: {detail}")
+
+    return {
+        "status": "started",
+        "message": "Update started. The controller and web console will restart shortly — "
+                   "you'll be logged out. Wait ~30–60s, then hard-refresh and sign back in.",
     }
 
 
@@ -993,19 +1167,19 @@ def get_portal_status_route():
     return status
 
 
-@app.post("/portal/start", dependencies=[Depends(require_api_key)])
+@app.post("/portal/start", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def start_portal_route():
 
     return portal_manager.start()
 
 
-@app.post("/portal/stop", dependencies=[Depends(require_api_key)])
+@app.post("/portal/stop", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def stop_portal_route():
 
     return portal_manager.stop()
 
 
-@app.post("/portal/credentials", dependencies=[Depends(require_api_key)])
+@app.post("/portal/credentials", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def set_portal_credentials_route(body: SetPortalCredentialsRequest):
 
     username = body.username.strip()
@@ -1044,7 +1218,7 @@ def set_portal_credentials_route(body: SetPortalCredentialsRequest):
     return {"username": username, "status": "updated"}
 
 
-@app.delete("/portal/credentials", dependencies=[Depends(require_api_key)])
+@app.delete("/portal/credentials", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def remove_portal_credentials_route(body: RemovePortalCredentialsRequest):
 
     existing = get_portal_credentials()
@@ -1080,7 +1254,7 @@ def list_portal_sessions_route():
     return {"sessions": list_portal_sessions()}
 
 
-@app.post("/portal/sessions/{session_id}/revoke", dependencies=[Depends(require_api_key)])
+@app.post("/portal/sessions/{session_id}/revoke", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def revoke_portal_session_route(session_id: int):
     delete_portal_session(session_id)
     return {"status": "revoked"}
@@ -1286,10 +1460,11 @@ def add_administrator_route(body: AddAdministratorRequest):
         raise HTTPException(status_code=400, detail="Password cannot be empty")
 
     role = (body.role or "sysadmin").strip().lower()
-    if role not in ("superuser", "sysadmin"):
-        raise HTTPException(status_code=400, detail="Role must be 'superuser' or 'sysadmin'")
+    if role not in ("superuser", "sysadmin", "auditor"):
+        raise HTTPException(status_code=400, detail="Role must be 'superuser', 'sysadmin', or 'auditor'")
 
-    # Edition seat cap (Community: 2 superusers, 5 sysadmins).
+    # Edition seat cap (Community: 2 superusers, 5 sysadmins; 'auditor' is
+    # read-only and uncapped — enforce_role_limit no-ops for unknown roles).
     enforce_role_limit(role, count_administrators_by_role(role))
 
     ok, message = validate_password_against_policy(body.password, get_admin_password_policy())
@@ -1342,6 +1517,42 @@ def set_administrator_sudo_connect_route(username: str, body: SetSudoConnectRequ
         + (f" by {body.actor}" if body.actor else ""))
 
     return {"username": username, "sudo_connect": bool(body.allowed)}
+
+
+@app.post("/admin/administrators/{username}/role",
+          dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def set_administrator_role_route(username: str, body: SetRoleRequest):
+    """Superuser-gated promote/demote of an administrator's role
+    ('superuser' | 'sysadmin' | 'auditor'). Guards:
+      - refuse to demote the LAST superuser (would lock everyone out of admin
+        management, controller config, the portal, ...);
+      - honour the edition seat caps when promoting into a capped role.
+    The role takes full effect at the target admin's next login (their current
+    token keeps its old role until it expires / they re-log in)."""
+    from backend.edition import enforce_role_limit
+
+    admin = get_administrator(username)
+    if admin is None:
+        raise HTTPException(status_code=404, detail="No such administrator")
+
+    new_role = (body.role or "").strip().lower()
+    if new_role not in ("superuser", "sysadmin", "auditor"):
+        raise HTTPException(status_code=400, detail="Role must be 'superuser', 'sysadmin', or 'auditor'")
+
+    current = (admin.get("role") or "superuser")
+    if new_role == current:
+        return {"username": username, "role": new_role, "status": "unchanged"}
+
+    if current == "superuser" and count_administrators_by_role("superuser") <= 1:
+        raise HTTPException(status_code=400, detail="Cannot change the role of the last remaining superuser.")
+
+    # Edition seat cap on the destination role (auditor is uncapped -> no-op).
+    enforce_role_limit(new_role, count_administrators_by_role(new_role))
+
+    set_administrator_role(username, new_role)
+    log_admin_audit("administrator_role_changed", username,
+                    f"{current} -> {new_role}" + (f" by {body.actor}" if body.actor else ""))
+    return {"username": username, "role": new_role, "status": "updated"}
 
 
 @app.post("/admin/credentials", dependencies=[Depends(require_api_key)])
@@ -1478,7 +1689,7 @@ def get_portal_config_route():
     return get_portal_config()
 
 
-@app.post("/portal/config", dependencies=[Depends(require_api_key)])
+@app.post("/portal/config", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def set_portal_config_route(body: SetPortalPortRequest):
 
     if not (1 <= body.port <= 65535):

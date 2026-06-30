@@ -39,6 +39,10 @@ export const api = {
   tools: () => req("/api/tools"),
   fleetHealth: () => req("/api/fleet-health"),
   fleetMetrics: (window = 3600) => req(`/api/fleet-metrics?window=${window}`),
+  hostSnapshot: (hostId) => req(`/api/host-snapshot/${encodeURIComponent(hostId)}`),
+  // Posture / compliance (read-only sweep + per-host drill-down)
+  fleetPosture: (refresh = false) => req(`/api/fleet-posture${refresh ? "?refresh=1" : ""}`),
+  hostPosture: (hostId) => req(`/api/host-posture/${encodeURIComponent(hostId)}`),
   pathCritical: (paths) => req("/api/path-critical", { method: "POST", body: { paths } }),
   runTool: (action, targets, params) =>
     req(`/api/tool/${encodeURIComponent(action)}`, {
@@ -59,12 +63,16 @@ export const api = {
     req(`/api/admins/${encodeURIComponent(username)}/password`, { method: "POST", body: { new_password } }),
   setAdminSudoConnect: (username, allowed) =>
     req(`/api/admins/${encodeURIComponent(username)}/sudo-connect`, { method: "POST", body: { allowed } }),
+  setAdminRole: (username, role) =>
+    req(`/api/admins/${encodeURIComponent(username)}/role`, { method: "POST", body: { role } }),
   passwordPolicy: () => req("/api/password-policy"),
   setPasswordPolicy: (policy) =>
     req("/api/password-policy", { method: "POST", body: policy }),
   controllerConfig: () => req("/api/controller-config"),
   setControllerConfig: (cfg) =>
     req("/api/controller-config", { method: "POST", body: cfg }),
+  controllerUpdate: () => req("/api/controller-update", { method: "POST" }),
+  updateAgents: () => req("/api/update-agents", { method: "POST" }),
   auditLog: (limit = 200) => req(`/api/audit-log?limit=${limit}`),
   license: () => req("/api/license"),
   changeMyCredentials: (current_password, new_username, new_password) =>

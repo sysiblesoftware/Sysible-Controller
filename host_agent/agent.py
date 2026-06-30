@@ -37,6 +37,17 @@ import uuid
 
 import requests
 
+# Short identity of THIS agent build: a hash of our own source. Reported on
+# every heartbeat so the controller (and the web console's Update-agents
+# progress bar) can tell which hosts are already running the current agent.
+# Matches the controller's hash of host_agent/agent.py (sha256 of the same
+# bytes). Best-effort - never let it break startup.
+try:
+    import hashlib as _hashlib
+    AGENT_VERSION = _hashlib.sha256(open(__file__, "rb").read()).hexdigest()[:12]
+except Exception:
+    AGENT_VERSION = ""
+
 # Cap on stdout/stderr bytes kept from a single command - a runaway
 # command (e.g. `cat` on a huge file, a noisy build log) shouldn't be
 # able to balloon this process's memory or the JSON payload sent back
@@ -859,6 +870,8 @@ def heartbeat(state):
         # without re-enrolling. gethostname() reflects the new
         # name immediately after hostnamectl set-hostname.
         "hostname": socket.gethostname(),
+        # Lets the controller track which hosts run the current agent build.
+        "agent_version": AGENT_VERSION,
     }
 
     # Attach a performance sample at most once per METRICS_INTERVAL. Most

@@ -353,7 +353,7 @@ def heartbeat(req: HeartbeatRequest):
 
     verify_agent(req.host_id, req.agent_secret)
 
-    update_agent_heartbeat(req.host_id, req.ip, req.hostname)
+    update_agent_heartbeat(req.host_id, req.ip, req.hostname, agent_version=req.agent_version)
 
     # Persist a performance sample if this heartbeat carried one (newer agents
     # attach one ~once per SYSIBLE_METRICS_INTERVAL). Wrapped so a malformed

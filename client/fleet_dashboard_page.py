@@ -116,29 +116,33 @@ class Donut(QWidget):
 
 
 def _meter(label, pct):
-    """A label + colored bar + percentage row (disk/mem)."""
+    """A label + colored bar + percentage row (disk/mem). The label sits in a
+    fixed gutter; the percentage is bold and takes the bar's threshold color
+    (green/amber/red) so it reads as a status at a glance, not muddy gray."""
     w = QWidget()
     row = QHBoxLayout(w)
-    row.setContentsMargins(0, 1, 0, 1)
-    row.setSpacing(8)
-    lab = QLabel(label)
-    lab.setStyleSheet(f"border:none; color:{PAL['faint']}; font-size:11px;")
-    lab.setFixedWidth(34)
+    row.setContentsMargins(0, 3, 0, 3)
+    row.setSpacing(10)
+    lab = QLabel(label.upper())
+    lab.setStyleSheet(f"border:none; background:transparent; color:{PAL['faint']};"
+                      f" font-size:12px; font-weight:bold; letter-spacing:0.5px;")
+    lab.setFixedWidth(40)
     row.addWidget(lab)
     bar = QProgressBar()
     bar.setRange(0, 100)
     bar.setTextVisible(False)
-    bar.setFixedHeight(8)
+    bar.setFixedHeight(10)
     v = 0 if pct is None else max(0, min(100, int(pct)))
     bar.setValue(v)
     color = "#7a7a7a" if pct is None else ("#e06c6c" if v >= 90 else "#e0a83a" if v >= 75 else "#4ec07a")
     bar.setStyleSheet(
-        f"QProgressBar{{background:{PAL['track']};border:none;border-radius:4px;}}"
-        f"QProgressBar::chunk{{background:{color};border-radius:4px;}}")
+        f"QProgressBar{{background:{PAL['track']};border:none;border-radius:5px;}}"
+        f"QProgressBar::chunk{{background:{color};border-radius:5px;}}")
     row.addWidget(bar, 1)
     val = QLabel("—" if pct is None else f"{v}%")
-    val.setStyleSheet(f"border:none; color:{PAL['faint']}; font-size:11px;")
-    val.setFixedWidth(36)
+    val.setStyleSheet(f"border:none; background:transparent; color:{color};"
+                      f" font-size:14px; font-weight:bold;")
+    val.setFixedWidth(46)
     val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
     row.addWidget(val)
     return w

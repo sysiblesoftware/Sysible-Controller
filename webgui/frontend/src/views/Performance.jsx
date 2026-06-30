@@ -87,9 +87,11 @@ function bucketAverage(samples, valueOf, t0, t1, buckets = 80) {
   return pts;
 }
 
-// A single inline-SVG multi-line chart (no chart-library dependency).
+// A single inline-SVG multi-line chart (no chart-library dependency). The
+// viewBox is scaled to width:100% of its grid cell, so a taller viewBox + wider
+// columns make the charts fill the window instead of sitting as thin slivers.
 function LineChart({ series, t0, t1, kind }) {
-  const W = 1000, H = 190, padL = 52, padR = 14, padT = 10, padB = 22;
+  const W = 1000, H = 300, padL = 54, padR = 16, padT = 12, padB = 26;
   const plotW = W - padL - padR, plotH = H - padT - padB;
 
   const yMax = useMemo(() => {
@@ -476,7 +478,7 @@ export default function Performance() {
             )}
 
             <div className="section-title" style={{ marginBottom: 6 }}>History</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(440px, 1fr))", gap: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(540px, 1fr))", gap: 16 }}>
               {METRICS.map((metric) => (
                 <div key={metric.key}>
                   <div className="faint" style={{ fontSize: 12, marginBottom: 2 }}>{metric.label}</div>
@@ -499,7 +501,7 @@ export default function Performance() {
                     onClick={selectedEnv ? (id) => setSelectedHostId(id) : (env) => setSelectedEnv(env)}
                     selectedKey={null} />
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(440px, 1fr))", gap: 16, marginTop: 8 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(540px, 1fr))", gap: 16, marginTop: 8 }}>
               {METRICS.map((metric) => (
                 <div key={metric.key}>
                   <div className="faint" style={{ fontSize: 12, marginBottom: 2 }}>{metric.label}</div>

@@ -1659,6 +1659,81 @@ def run_tool(action_name: str, body: RunRequest, request: Request, user: str = D
     return {"action": action_name, "command": command, "results": results}
 
 
+def _parse_filehash(text):
+    """Parse the `SYSFILEHASH|k=v|...` line from cmd_file_fingerprint, or None."""
+    for line in (text or "").splitlines():
+        if line.startswith("SYSFILEHASH|"):
+            d = {}
+            for kv in line.split("|")[1:]:
+                if "=" in kv:
+                    k, v = kv.split("=", 1)
+                    d[k] = v
+            return d
+    return None
+
+
+class CompareRequest(BaseModel):
+    path: str
+    targets: list[str] = []
+
+
+@app.post("/api/files/compare")
+def files_compare(body: CompareRequest, request: Request, user: str = Depends(require_operator)):
+    """Fingerprint one file across the selected hosts (read-only) and group the
+    hosts by content hash, so the operator can see at a glance which hosts have a
+    different version. Reads as the dispatching operator (sudo password supplied
+    if a host requires it); a file the operator can't read is reported separately
+    as 'unreadable'. Auditor-blocked (require_operator) since it dispatches."""
+    path = (body.path or "").strip()
+    if not path:
+        raise HTTPException(status_code=400, detail="A file path is required.")
+    if not body.targets:
+        raise HTTPException(status_code=400, detail="Select one or more hosts to compare.")
+
+    try:
+        cmd = api.cmd_file_fingerprint(path)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Bad path: {e}")
+    try:
+        all_entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+
+    token = _session_token(request)
+    versions = {}      # sha -> {sha, size, mtime, hosts:[...]}
+    missing, unreadable, errors = [], [], []
+    for target in body.targets:
+        entry = all_entries.get(target)
+        if entry is None:
+            errors.append({"host": target, "error": "host not found"})
+            continue
+        host = entry.get("label", target)
+        become = sudo_store.resolve(user, entry.get("label", ""))
+        r = _dispatch_one(entry, cmd, "command", become, token, f"Compare file {path}")
+        if not r.get("ok"):
+            errors.append({"host": host, "error": r.get("error") or "command failed"})
+            continue
+        fp = _parse_filehash((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
+        if not fp:
+            errors.append({"host": host, "error": "no fingerprint returned"})
+            continue
+        status = fp.get("status")
+        if status == "missing":
+            missing.append(host); continue
+        if status == "dir":
+            errors.append({"host": host, "error": "path is a directory"}); continue
+        sha = fp.get("sha") or ""
+        if not sha:
+            unreadable.append(host); continue
+        v = versions.setdefault(sha, {"sha": sha, "size": fp.get("size"), "mtime": fp.get("mtime"), "hosts": []})
+        v["hosts"].append(host)
+
+    vlist = sorted(versions.values(), key=lambda v: len(v["hosts"]), reverse=True)
+    identical = len(vlist) <= 1 and not missing and not unreadable and not errors
+    return {"path": path, "versions": vlist, "missing": missing,
+            "unreadable": unreadable, "errors": errors, "identical": identical}
+
+
 def _dispatch_one(entry, command, kind, become_password=None, token=None, description=None):
     """Run one command on one host and return a normalized result,
     polling agent tasks to completion (bounded) so the response is

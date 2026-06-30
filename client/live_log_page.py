@@ -91,7 +91,7 @@ class LiveLogPage(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
-        layout.addLayout(make_page_header("Live Activity & Logs"))
+        layout.addWidget(make_page_header("Live Activity & Logs"))
 
         controls = QHBoxLayout()
         self.auto = QCheckBox("Auto-refresh")

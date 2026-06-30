@@ -378,7 +378,7 @@ class SystemHealthLogsPage(QWidget):
         main = QVBoxLayout()
         self.setLayout(main)
 
-        main.addLayout(make_page_header("System Health & Logs"))
+        main.addWidget(make_page_header("System Health & Logs"))
 
         body = QHBoxLayout()
 

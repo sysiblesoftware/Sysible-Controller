@@ -54,7 +54,7 @@ class StorageAdministrationPage(QWidget):
         main = QVBoxLayout()
         self.setLayout(main)
 
-        main.addLayout(make_page_header("Storage Administration"))
+        main.addWidget(make_page_header("Storage Administration"))
 
         body = QHBoxLayout()
 

@@ -1,5 +1,6 @@
 import datetime
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QMessageBox, QFrame, QComboBox, QTableWidget, QTableWidgetItem,
@@ -187,7 +188,7 @@ class AdminConfigurationPage(QWidget):
         outer = QVBoxLayout()
         self.setLayout(outer)
 
-        outer.addLayout(make_page_header("Sysible Controller Settings", font_size=22, logo_height=32))
+        outer.addWidget(make_page_header("Sysible Controller Settings", font_size=22, logo_height=32))
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -202,6 +203,13 @@ class AdminConfigurationPage(QWidget):
         # SECTION 1: CONTROLLER CONFIGURATION
         # =====================================================
         self._build_controller_section(layout)
+
+        layout.addWidget(self._divider())
+
+        # =====================================================
+        # SECTION: SOFTWARE UPDATES (update controller + push agents)
+        # =====================================================
+        self._build_software_updates_section(layout)
 
         layout.addWidget(self._divider())
 
@@ -468,6 +476,83 @@ class AdminConfigurationPage(QWidget):
         else:
             used = config.get("address") or "(not set)"
             self.controller_status_label.setText(f"Saved - bundles will use: {used}:{config.get('port')}")
+
+    # =========================================================
+    # SECTION: SOFTWARE UPDATES
+    # =========================================================
+    def _build_software_updates_section(self, layout):
+        layout.addWidget(self._section_label("Software Updates"))
+
+        hint = QLabel(
+            "Update the controller in place (git pull → redeploy → restart), then "
+            "push the current agent to every managed host over its existing check-in "
+            "— no SSH or re-enrollment. Each restarts itself; a controller update "
+            "briefly drops the backend, then it comes back. Update the controller "
+            "first, then the agents."
+        )
+        hint.setWordWrap(True)
+        theme.style_hint_label(hint)
+        layout.addWidget(hint)
+
+        row = QHBoxLayout()
+        self.update_controller_btn = QPushButton("Update Controller")
+        self.update_controller_btn.clicked.connect(self._update_controller)
+        row.addWidget(self.update_controller_btn)
+        self.update_agents_btn = QPushButton("Update Agents")
+        self.update_agents_btn.clicked.connect(self._update_agents)
+        row.addWidget(self.update_agents_btn)
+        row.addStretch()
+        layout.addLayout(row)
+
+        self.software_update_status = QLabel("")
+        self.software_update_status.setWordWrap(True)
+        layout.addWidget(self.software_update_status)
+
+    def _update_controller(self):
+        if QMessageBox.question(
+            self, "Update controller",
+            "Pull the latest controller code, redeploy, and restart?\n\n"
+            "The backend and web console will restart briefly. This window's data "
+            "may need a Refresh afterwards.",
+        ) != QMessageBox.Yes:
+            return
+        self.software_update_status.setStyleSheet(f"color:{STATUS_NEUTRAL_COLOR};")
+        self.software_update_status.setText("Starting controller update…")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            r = api.controller_update()
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            self.software_update_status.setStyleSheet(f"color:{STATUS_ERROR_COLOR};")
+            self.software_update_status.setText(f"Update failed: {e}")
+            return
+        QApplication.restoreOverrideCursor()
+        self.software_update_status.setStyleSheet(f"color:{STATUS_SUCCESS_COLOR};")
+        self.software_update_status.setText(
+            (r or {}).get("message") or "Controller update started; it will restart shortly.")
+
+    def _update_agents(self):
+        if QMessageBox.question(
+            self, "Update agents",
+            "Push the controller's current agent to every managed host?\n\n"
+            "Each agent applies it on its next check-in and restarts itself; "
+            "offline hosts update when they reconnect.",
+        ) != QMessageBox.Yes:
+            return
+        self.software_update_status.setStyleSheet(f"color:{STATUS_NEUTRAL_COLOR};")
+        self.software_update_status.setText("Queuing agent update…")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            r = api.update_agents()
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            self.software_update_status.setStyleSheet(f"color:{STATUS_ERROR_COLOR};")
+            self.software_update_status.setText(f"Agent update failed: {e}")
+            return
+        QApplication.restoreOverrideCursor()
+        self.software_update_status.setStyleSheet(f"color:{STATUS_SUCCESS_COLOR};")
+        self.software_update_status.setText(
+            (r or {}).get("message") or "Agent update queued; hosts apply it on next check-in.")
 
     # =========================================================
     # SECTION 2: TLS CERTIFICATE

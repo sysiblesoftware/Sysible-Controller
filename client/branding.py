@@ -14,28 +14,39 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QHBoxLayout, QLabel
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QFrame
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 LOGO_PATH = PROJECT_ROOT / "sysible_logo.png"
 
 
+HEADER_BAR_COLOR = "#3C4B64"  # same navy as the primary buttons
+
+
 def make_page_header(title_text, font_size=18, logo_height=28):
-    """Small-logo + title row for the top of a popout page, mirroring
-    the dashboard (home.py) and login screen (admin_login_dialog.py)
-    branding treatments so every window in the app - not just those
-    two - carries the logo.
+    """A navy banner (logo + centered white title) for the top of a popout
+    page — a single in-app "title bar" that breaks the page up from the gray
+    content below and stays consistent across every window. (The OS window
+    title bar above it is drawn by the window manager and can't be recolored
+    from the app.) Matches the navy of the primary buttons in both themes.
 
-    Returns a QHBoxLayout ready to hand straight to the page's outer
-    layout (e.g. `main.addLayout(make_page_header("Service Management"))`)
-    in place of the old bare title QLabel.
+    Returns a QWidget — hand it to the page's outer layout with `addWidget`
+    (e.g. `main.addWidget(make_page_header("Service Management"))`).
 
-    Same isNull() guard as home.py/admin_login_dialog.py: if LOGO_PATH
-    is ever missing or unreadable, the row silently falls back to a
-    title-only look instead of showing a broken-image icon.
+    Same isNull() guard as before: if LOGO_PATH is missing/unreadable, the
+    banner silently falls back to a title-only look.
     """
-    row = QHBoxLayout()
+    bar = QFrame()
+    bar.setObjectName("pageHeaderBar")
+    # Scope the navy + white-text to this banner only (object-name selector) so
+    # it overrides the theme's default QLabel color and isn't affected by it.
+    bar.setStyleSheet(
+        f"QFrame#pageHeaderBar{{background:{HEADER_BAR_COLOR}; border:none; border-radius:8px;}}"
+        f"QFrame#pageHeaderBar QLabel{{background:transparent; color:#FFFFFF;}}")
+    row = QHBoxLayout(bar)
+    row.setContentsMargins(16, 11, 16, 11)
+    row.setSpacing(12)
 
     logo_pixmap = QPixmap(str(LOGO_PATH))
     if not logo_pixmap.isNull():
@@ -47,10 +58,10 @@ def make_page_header(title_text, font_size=18, logo_height=28):
 
     title = QLabel(title_text)
     title.setAlignment(Qt.AlignCenter)
-    title.setStyleSheet(f"font-size:{font_size}px; font-weight:bold;")
+    title.setStyleSheet(f"background:transparent; color:#FFFFFF; font-size:{font_size}px; font-weight:bold;")
     row.addWidget(title, 1)
 
-    return row
+    return bar
 
 
 def center_on_screen(widget):

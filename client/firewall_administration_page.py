@@ -54,7 +54,7 @@ class FirewallAdministrationPage(QWidget):
         main = QVBoxLayout()
         self.setLayout(main)
 
-        main.addLayout(make_page_header("Firewall Administration"))
+        main.addWidget(make_page_header("Firewall Administration"))
 
         body = QHBoxLayout()
 

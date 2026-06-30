@@ -67,7 +67,7 @@ class SystemAdministrationPage(QWidget):
         main = QVBoxLayout()
         self.setLayout(main)
 
-        main.addLayout(make_page_header("System Administration"))
+        main.addWidget(make_page_header("System Administration"))
 
         self.subtitle_label = QLabel("Select a tool below.")
         self.subtitle_label.setAlignment(Qt.AlignCenter)

@@ -65,7 +65,7 @@ class NetworkManagementPage(QWidget):
         main = QVBoxLayout()
         self.setLayout(main)
 
-        main.addLayout(make_page_header("Network Management"))
+        main.addWidget(make_page_header("Network Management"))
 
         # =========================================================
         # BODY: Target Hosts as a full-height left column (#352),

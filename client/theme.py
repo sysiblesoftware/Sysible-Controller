@@ -225,7 +225,7 @@ QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
 # every rule above has a match below.
 DAYLIGHT_THEME = """
 QWidget {
-    background-color: #D7DCE4;
+    background-color: #E0E4EA;
     color: #1F2430;
     font-size: 10pt;
 }
@@ -491,7 +491,7 @@ def build_palette(mode):
     palette = QPalette()
 
     if mode == "light":
-        palette.setColor(QPalette.Window, QColor(215, 220, 228))
+        palette.setColor(QPalette.Window, QColor(224, 228, 234))
         palette.setColor(QPalette.Base, QColor(255, 255, 255))
         palette.setColor(QPalette.Text, QColor(31, 36, 48))
         palette.setColor(QPalette.WindowText, QColor(31, 36, 48))

@@ -61,7 +61,7 @@ class SecurityAdministrationPage(QWidget):
         main = QVBoxLayout()
         self.setLayout(main)
 
-        main.addLayout(make_page_header("Security Administration"))
+        main.addWidget(make_page_header("Security Administration"))
 
         body = QHBoxLayout()
 

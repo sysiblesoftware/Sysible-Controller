@@ -97,7 +97,7 @@ class FleetToolPage(QWidget):
         self._collapsed_envs = set()
 
         main = QVBoxLayout(self)
-        main.addLayout(make_page_header(title))
+        main.addWidget(make_page_header(title))
 
         body = QHBoxLayout()
 

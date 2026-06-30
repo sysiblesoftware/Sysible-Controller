@@ -1602,7 +1602,7 @@ def get_administrator(username):
 def add_administrator(username, password_hash, password_salt, must_change_password=1,
                       created_by=None, role="superuser"):
     """Returns True on success, False if the username is already
-    taken. role is 'superuser' or 'sysadmin'."""
+    taken. role is 'superuser', 'sysadmin', or 'auditor' (read-only)."""
     conn = _connect()
     cur = conn.cursor()
 

@@ -8,7 +8,7 @@ import threading
 import time
 
 from backend.agent_bundle import build_agent_bundle, detect_local_ips, resolve_controller_addresses
-from backend.auth import require_api_key, require_superuser
+from backend.auth import require_api_key, require_superuser, require_activity_viewer
 from backend.db import (
     create_enroll_token,
     validate_enroll_token,
@@ -455,6 +455,11 @@ def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
         admin = resolve_admin_token(token)
         if not admin:
             raise HTTPException(status_code=401, detail="Invalid or expired admin token")
+        # Read-only 'auditor' accounts can never dispatch a command to a host.
+        # Enforced here (front-end independent) so it holds for the web console,
+        # the desktop GUI, or a hand-crafted API call alike.
+        if admin.get("role") == "auditor":
+            raise HTTPException(status_code=403, detail="Auditor accounts are read-only.")
         run_as = admin["username"]
 
     task_id = queue_task(host_id, body.command, body.kind, run_as=run_as)
@@ -570,11 +575,13 @@ def get_edition():
     return edition_info()
 
 
-@app.get("/activity-log", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+@app.get("/activity-log", dependencies=[Depends(require_api_key), Depends(require_activity_viewer)])
 def get_activity_log_route(limit: int = 200, since_id: int = 0):
     """Human-readable, attributed feed of actions the controller carried out
-    (who did what, where). Superuser-only - it's a fleet-wide audit view.
-    `since_id` lets the GUI poll for only new rows."""
+    (who did what, where) - a fleet-wide audit view. Visible to superusers and
+    the read-only 'auditor' role (see require_activity_viewer). The controller
+    service log below stays superuser-only. `since_id` lets the GUI poll for
+    only new rows."""
     return {"entries": get_activity_log(limit=limit, since_id=since_id)}
 
 
@@ -1286,10 +1293,11 @@ def add_administrator_route(body: AddAdministratorRequest):
         raise HTTPException(status_code=400, detail="Password cannot be empty")
 
     role = (body.role or "sysadmin").strip().lower()
-    if role not in ("superuser", "sysadmin"):
-        raise HTTPException(status_code=400, detail="Role must be 'superuser' or 'sysadmin'")
+    if role not in ("superuser", "sysadmin", "auditor"):
+        raise HTTPException(status_code=400, detail="Role must be 'superuser', 'sysadmin', or 'auditor'")
 
-    # Edition seat cap (Community: 2 superusers, 5 sysadmins).
+    # Edition seat cap (Community: 2 superusers, 5 sysadmins; 'auditor' is
+    # read-only and uncapped — enforce_role_limit no-ops for unknown roles).
     enforce_role_limit(role, count_administrators_by_role(role))
 
     ok, message = validate_password_against_policy(body.password, get_admin_password_policy())

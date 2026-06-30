@@ -103,3 +103,25 @@ def require_superuser(x_admin_token: str = Header(default=None, alias="X-Sysible
         raise HTTPException(status_code=401, detail="Invalid or expired admin token")
     if admin.get("role") != "superuser":
         raise HTTPException(status_code=403, detail="This action requires a superuser account.")
+
+
+def require_activity_viewer(x_admin_token: str = Header(default=None, alias="X-Sysible-Admin-Token")):
+    """RBAC gate for the activity feed: allowed for a superuser OR the read-only
+    'auditor' role (oversight without any ability to act). Same token-resolution
+    and first-run bootstrap rules as require_superuser; only the allowed-role set
+    differs. The controller service log stays superuser-only (require_superuser)."""
+    from backend.db import resolve_admin_token, count_administrators
+
+    if not x_admin_token:
+        if count_administrators() == 0:
+            return
+        raise HTTPException(
+            status_code=401,
+            detail="A login token is required for this action.",
+        )
+
+    admin = resolve_admin_token(x_admin_token)
+    if not admin:
+        raise HTTPException(status_code=401, detail="Invalid or expired admin token")
+    if admin.get("role") not in ("superuser", "auditor"):
+        raise HTTPException(status_code=403, detail="This action requires a superuser or auditor account.")

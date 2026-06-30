@@ -144,6 +144,22 @@ def require_login(request: Request):
     return user
 
 
+def require_operator(request: Request):
+    """Dependency for any write/dispatch route: 401 if not logged in, 403 for
+    the read-only 'auditor' role. Superuser-only routes don't need this (they
+    proxy through the controller's require_superuser, which already rejects an
+    auditor); this guards the routes that superusers AND sysadmins may use but
+    auditors may not (running tools, fleet actions, terminals, etc.). The
+    controller also blocks command dispatch for auditors server-side, so this
+    is the front-of-house half of a defence-in-depth pair."""
+    user = request.session.get("user")
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if request.session.get("role") == "auditor":
+        raise HTTPException(status_code=403, detail="Auditor accounts are read-only.")
+    return user
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -336,7 +352,7 @@ def sudo_status(user: str = Depends(require_login)):
 
 
 @app.post("/api/sudo")
-def sudo_set(body: SudoRequest, user: str = Depends(require_login)):
+def sudo_set(body: SudoRequest, user: str = Depends(require_operator)):
     if not body.password:
         raise HTTPException(status_code=400, detail="Password is required.")
     ok = sudo_store.set_password(user, body.scope or sudo_store.ALL, body.password)
@@ -350,7 +366,7 @@ def sudo_set(body: SudoRequest, user: str = Depends(require_login)):
 
 
 @app.delete("/api/sudo")
-def sudo_clear(body: SudoRequest, user: str = Depends(require_login)):
+def sudo_clear(body: SudoRequest, user: str = Depends(require_operator)):
     sudo_store.clear(user, body.scope or sudo_store.ALL)
     return {"cleared": True, "scope": body.scope or sudo_store.ALL}
 
@@ -620,7 +636,7 @@ class FleetRequest(BaseModel):
 
 
 @app.post("/api/fleet")
-def fleet(body: FleetRequest, request: Request, user: str = Depends(require_login)):
+def fleet(body: FleetRequest, request: Request, user: str = Depends(require_operator)):
     """Run a fleet action across the selected hosts (or all hosts)."""
     if body.action == "script":
         command = body.command.strip()
@@ -656,7 +672,7 @@ def fleet(body: FleetRequest, request: Request, user: str = Depends(require_logi
 
 
 @app.post("/api/checkin")
-def checkin(user: str = Depends(require_login)):
+def checkin(user: str = Depends(require_operator)):
     """Lightweight reachability probe: run `true` on every host and report
     which answered (mirrors the desktop 'Check In / Ping')."""
     try:
@@ -689,7 +705,7 @@ class EnrollRequest(BaseModel):
 
 
 @app.post("/api/enroll-ssh")
-def enroll_ssh(body: EnrollRequest, request: Request, user: str = Depends(require_login)):
+def enroll_ssh(body: EnrollRequest, request: Request, user: str = Depends(require_operator)):
     payload = {"name": body.name, "ip": body.ip, "username": body.username,
                "password": body.password}
     if body.environment:
@@ -1001,7 +1017,7 @@ class UserSyncRequest(BaseModel):
 
 
 @app.post("/api/users/sync")
-def users_sync(body: UserSyncRequest, user: str = Depends(require_login)):
+def users_sync(body: UserSyncRequest, user: str = Depends(require_operator)):
     """Pull the live user/group/session inventory from one host (mirrors the
     desktop 'Sync Checked Hosts'). SSH hosts answer synchronously; agent hosts
     are polled here to a timeout so the browser gets one response."""
@@ -1041,7 +1057,7 @@ class ServicesListRequest(BaseModel):
 
 
 @app.post("/api/services/list")
-def services_list(body: ServicesListRequest, request: Request, user: str = Depends(require_login)):
+def services_list(body: ServicesListRequest, request: Request, user: str = Depends(require_operator)):
     try:
         entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
     except Exception as e:
@@ -1073,7 +1089,7 @@ class PkgListRequest(BaseModel):
 
 
 @app.post("/api/packages/list")
-def packages_list(body: PkgListRequest, request: Request, user: str = Depends(require_login)):
+def packages_list(body: PkgListRequest, request: Request, user: str = Depends(require_operator)):
     try:
         entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
     except Exception as e:
@@ -1098,7 +1114,7 @@ def packages_list(body: PkgListRequest, request: Request, user: str = Depends(re
 
 @app.post("/api/packages/install-local")
 async def packages_install_local(request: Request, file: UploadFile = File(...),
-                                 targets: str = Form(""), user: str = Depends(require_login)):
+                                 targets: str = Form(""), user: str = Depends(require_operator)):
     import json as _json
     tids = _json.loads(targets) if targets else []
     if not tids:
@@ -1307,7 +1323,7 @@ class RunRequest(BaseModel):
 
 
 @app.post("/api/tool/{action_name}")
-def run_tool(action_name: str, body: RunRequest, request: Request, user: str = Depends(require_login)):
+def run_tool(action_name: str, body: RunRequest, request: Request, user: str = Depends(require_operator)):
     """Build the shell command for `action_name` via the desktop client's
     cmd_* builder, then dispatch it across every selected target and
     return per-host results. Synchronous: agent tasks are polled here up
@@ -1505,7 +1521,12 @@ async def terminal_ws(ws: WebSocket):
             return
     # Auth: SessionMiddleware populates the websocket scope's session the
     # same way it does for HTTP, so the login cookie gates this too.
-    if not ws.scope.get("session", {}).get("user"):
+    _sess = ws.scope.get("session", {}) or {}
+    if not _sess.get("user"):
+        await ws.close(code=1008)
+        return
+    # Read-only 'auditor' accounts cannot open an interactive terminal.
+    if _sess.get("role") == "auditor":
         await ws.close(code=1008)
         return
     await ws.accept()

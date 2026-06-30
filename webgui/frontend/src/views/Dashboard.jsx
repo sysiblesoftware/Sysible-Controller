@@ -54,7 +54,11 @@ function FleetHostCard({ h, onOpenHost }) {
         <span><span className="dot" style={{ background: VERDICT_COLOR[v] || VERDICT_COLOR.OFFLINE }} />{" "}
           <strong>{h.host}</strong>
           <span className="faint" style={{ marginLeft: 6, fontSize: 11 }}>{h.environment}</span></span>
-        <span className="faint" style={{ fontSize: 11 }}>{v}</span>
+        <span className="faint" style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
+          {h.issues > 0 && <span style={{ color: VERDICT_COLOR.WARNING, fontWeight: 700 }}>⚠ {h.issues}</span>}
+          {h.postureError && <span style={{ color: VERDICT_COLOR.OFFLINE }}>posture n/a</span>}
+          {v}
+        </span>
       </div>
       {noData ? (
         <div className="faint" style={{ fontSize: 12 }}>{h.error || "no data"}</div>
@@ -81,19 +85,14 @@ function FleetHostCard({ h, onOpenHost }) {
   );
 }
 
-// One card per environment: a rolled-up health summary (worst verdict, per-
-// verdict host counts, peak disk/mem, aggregated problem signals) that expands
-// to the individual host cards. Environment-first, mirroring the Performance
-// view, so the dashboard reads as "how is each environment doing" rather than a
-// flat wall of hosts.
-function EnvHealthCard({ group, onOpenHost }) {
-  const [open, setOpen] = useState(false);
+// One card per environment, combining BOTH lenses: health (worst verdict, peak
+// disk/mem, aggregated problem signals) and compliance ("N need attention" from
+// the posture sweep). Expands to the per-host cards, which show health meters
+// plus a posture issue badge and drill into the full per-host page. Defaults
+// open when the environment has any health trouble or posture findings.
+function EnvFleetCard({ group, postureLoaded, onOpenHost }) {
   const v = group.verdict;
-  const Count = ({ k, color }) => group.counts[k] > 0 ? (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
-      <span className="dot" style={{ background: color }} />{group.counts[k]}
-    </span>
-  ) : null;
+  const [open, setOpen] = useState(v !== "OK" || group.problematic > 0);
   return (
     <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
       <button onClick={() => setOpen((o) => !o)}
@@ -109,12 +108,11 @@ function EnvHealthCard({ group, onOpenHost }) {
             {group.hosts.length} host{group.hosts.length === 1 ? "" : "s"}
           </span>
         </span>
-        <span className="faint row" style={{ fontSize: 11, gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <Count k="OK" color={VERDICT_COLOR.OK} />
-          <Count k="WARNING" color={VERDICT_COLOR.WARNING} />
-          <Count k="CRITICAL" color={VERDICT_COLOR.CRITICAL} />
-          <Count k="OFFLINE" color={VERDICT_COLOR.OFFLINE} />
-        </span>
+        {postureLoaded && (
+          <span style={{ fontSize: 11, color: group.problematic > 0 ? VERDICT_COLOR.WARNING : VERDICT_COLOR.OK }}>
+            {group.problematic > 0 ? `${group.problematic} need attention` : "all clear"}
+          </span>
+        )}
       </button>
       <div style={{ padding: "0 10px 8px" }}>
         <Meter label="disk" pct={group.disk} />
@@ -180,61 +178,6 @@ function SignalChip({ label, hosts, onOpenHost }) {
                     onClick={() => h.id && onOpenHost && onOpenHost(h)}
                     title={h.id ? "View posture detail" : ""}>{h.host}</button>
           ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// One environment in the compliance strip: collapses to a header (env name +
-// "N need attention" / "all clear"), expands to ONLY its problematic hosts
-// (each a chip that drills into the full per-host posture page). Defaults open
-// when the environment has something to look at.
-function EnvPostureCard({ group, onOpenHost }) {
-  const problematic = group.hosts.filter((h) => h.issues > 0 || h.error);
-  const clear = group.hosts.length - problematic.length;
-  const [open, setOpen] = useState(problematic.length > 0);
-  const color = problematic.length > 0 ? VERDICT_COLOR.WARNING : VERDICT_COLOR.OK;
-  return (
-    <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-      <button onClick={() => setOpen((o) => !o)}
-        style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
-                 gap: 8, padding: "8px 10px", background: "none", border: "none",
-                 cursor: "pointer", color: "var(--text)", textAlign: "left", font: "inherit" }}>
-        <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-          <span style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .15s",
-                         fontSize: 10, opacity: 0.6 }}>▶</span>
-          <span className="dot" style={{ background: color }} />
-          <strong style={{ whiteSpace: "nowrap" }}>{group.env}</strong>
-          <span className="faint" style={{ fontSize: 11 }}>
-            {group.hosts.length} host{group.hosts.length === 1 ? "" : "s"}
-          </span>
-        </span>
-        <span className="faint" style={{ fontSize: 11, color }}>
-          {problematic.length > 0 ? `${problematic.length} need attention` : "all clear"}
-        </span>
-      </button>
-      {open && (
-        <div style={{ padding: "8px 10px", borderTop: "1px solid var(--border)" }}>
-          {problematic.length === 0 ? (
-            <div className="faint" style={{ fontSize: 12 }}>All {group.hosts.length} host(s) clear.</div>
-          ) : (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-              {problematic.map((h) => (
-                <button key={h.id ?? h.host} className="btn ghost sm"
-                        onClick={() => h.id && onOpenHost && onOpenHost(h)}
-                        title={h.error ? h.error : `${h.issues} issue${h.issues === 1 ? "" : "s"} — click for detail`}
-                        style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span className="dot" style={{ background: h.error ? VERDICT_COLOR.OFFLINE : VERDICT_COLOR.WARNING }} />
-                  <span>{h.host}</span>
-                  {!h.error && h.issues > 0 && (
-                    <span style={{ fontWeight: 700, color: VERDICT_COLOR.WARNING }}>{h.issues}</span>
-                  )}
-                </button>
-              ))}
-              {clear > 0 && <span className="faint" style={{ fontSize: 11 }}>+{clear} clear</span>}
-            </div>
-          )}
         </div>
       )}
     </div>
@@ -350,30 +293,6 @@ export default function Dashboard({ role, edition, onOpen }) {
 
   const issuesTotal = complianceSignals.reduce((n, s) => n + (s.hosts.length > 0 ? 1 : 0), 0);
 
-  // Per-host posture rollup, grouped by environment. Each host carries its
-  // count of high-ticket signals; the dashboard lists environments first, and
-  // an environment expands to just its problematic hosts (worst-first), each of
-  // which drills into the full per-host posture page.
-  const postureByEnv = useMemo(() => {
-    const g = {};
-    let total = 0, clear = 0;
-    for (const h of posture) {
-      const env = h.environment || "Unassigned";
-      const issues = h.flags ? Object.values(h.flags).filter((v) => v === true).length : 0;
-      const host = { id: h.id, host: h.host, online: h.online, error: h.error, issues };
-      (g[env] = g[env] || { env, hosts: [] }).hosts.push(host);
-      total += 1;
-      if (issues === 0 && !h.error) clear += 1;
-    }
-    const envs = Object.values(g).map((e) => {
-      e.hosts.sort((a, b) => b.issues - a.issues || (a.host || "").localeCompare(b.host || ""));
-      e.problematic = e.hosts.filter((h) => h.issues > 0 || h.error).length;
-      return e;
-    });
-    envs.sort((a, b) => b.problematic - a.problematic || a.env.localeCompare(b.env));
-    return { envs, total, clear };
-  }, [posture]);
-
   const fleetSummary = useMemo(() => {
     const counts = { OK: 0, WARNING: 0, CRITICAL: 0, OFFLINE: 0 };
     for (const h of fleet) {
@@ -383,19 +302,30 @@ export default function Dashboard({ role, edition, onOpen }) {
     return { counts };
   }, [fleet]);
 
-  // Roll the per-host snapshot up to one entry per environment: verdict counts,
-  // worst verdict, peak disk/mem, and summed problem signals; hosts kept (sorted
-  // worst-first) so an env card can expand to them. Envs themselves sorted
-  // worst-first so trouble surfaces at the top.
-  const fleetByEnv = useMemo(() => {
+  // Single environment-grouped rollup joining the two lenses by host id: each
+  // host carries its live health (verdict, disk/mem, problem signals) AND its
+  // posture issue count; each environment carries worst verdict, peak disk/mem,
+  // summed health signals, and how many hosts need attention. Health is the
+  // base set (always present); posture issues are attached when scanned.
+  const fleetEnvs = useMemo(() => {
+    const postById = {};
+    for (const p of posture) {
+      postById[p.id] = {
+        issues: p.flags ? Object.values(p.flags).filter((v) => v === true).length : 0,
+        postureError: p.error || null,
+      };
+    }
     const g = {};
+    let total = 0, clear = 0;
     for (const h of fleet) {
       const env = h.environment || "Unassigned";
+      const pe = postById[h.id] || {};
+      const host = { ...h, issues: pe.issues ?? null, postureError: pe.postureError || null };
       const e = g[env] || (g[env] = {
         env, hosts: [], counts: { OK: 0, WARNING: 0, CRITICAL: 0, OFFLINE: 0 },
-        disk: null, mem: null, failed: 0, oom: 0, degraded: 0,
+        disk: null, mem: null, failed: 0, oom: 0, degraded: 0, problematic: 0,
       });
-      e.hosts.push(h);
+      e.hosts.push(host);
       const v = (h.verdict || "OK").toUpperCase();
       e.counts[v] = (e.counts[v] || 0) + 1;
       if (h.disk != null) e.disk = Math.max(e.disk ?? 0, h.disk);
@@ -403,6 +333,10 @@ export default function Dashboard({ role, edition, onOpen }) {
       e.failed += h.failed || 0;
       e.oom += h.oom || 0;
       if (h.sysd && h.sysd !== "running" && h.sysd !== "unknown") e.degraded += 1;
+      const trouble = (host.issues || 0) > 0 || host.postureError;
+      if (trouble) e.problematic += 1;
+      total += 1;
+      if (v === "OK" && !trouble) clear += 1;
     }
     const envs = Object.values(g).map((e) => {
       e.verdict = e.counts.CRITICAL > 0 ? "CRITICAL"
@@ -410,12 +344,13 @@ export default function Dashboard({ role, edition, onOpen }) {
         : e.counts.OK > 0 ? "OK" : "OFFLINE";
       e.hosts.sort((a, b) =>
         (order[(a.verdict || "OK").toUpperCase()] ?? 9) - (order[(b.verdict || "OK").toUpperCase()] ?? 9)
-        || (b.disk || 0) - (a.disk || 0));
+        || (b.issues || 0) - (a.issues || 0) || (b.disk || 0) - (a.disk || 0));
       return e;
     });
-    envs.sort((a, b) => (order[a.verdict] ?? 9) - (order[b.verdict] ?? 9) || a.env.localeCompare(b.env));
-    return envs;
-  }, [fleet]);
+    envs.sort((a, b) => (order[a.verdict] ?? 9) - (order[b.verdict] ?? 9)
+      || b.problematic - a.problematic || a.env.localeCompare(b.env));
+    return { envs, total, clear };
+  }, [fleet, posture]);
 
   if (q.trim()) {
     return (
@@ -471,87 +406,79 @@ export default function Dashboard({ role, edition, onOpen }) {
 
       <div className="card" style={{ marginTop: 14 }}>
         <div className="spread" style={{ marginBottom: 10 }}>
-          <strong>Fleet health</strong>
-          <div className="row" style={{ gap: 12, alignItems: "center" }}>
-            {fleetAt > 0 && <span className="faint" style={{ fontSize: 12 }}>updated {new Date(fleetAt).toLocaleTimeString()}</span>}
+          <strong>Fleet
+            {posture.length > 0 && (
+              <span className="faint" style={{ fontSize: 12, marginLeft: 8 }}>
+                {issuesTotal === 0 ? "all clear" : `${issuesTotal} compliance signal${issuesTotal === 1 ? "" : "s"} with findings`}
+              </span>
+            )}
+          </strong>
+          <div className="row" style={{ gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            {fleetAt > 0 && <span className="faint" style={{ fontSize: 12 }}>health {new Date(fleetAt).toLocaleTimeString()}</span>}
+            {postureAt > 0 && <span className="faint" style={{ fontSize: 12 }}>· scan {new Date(postureAt).toLocaleTimeString()}</span>}
             <label className="checkrow" style={{ margin: 0 }}>
               <input type="checkbox" checked={fleetAuto} onChange={(e) => setFleetAuto(e.target.checked)} />
               <span className="faint">Auto (30s)</span>
             </label>
-            <button className="btn ghost sm" onClick={loadFleet} disabled={fleetLoading}>
+            <button className="btn ghost sm" onClick={() => loadPosture(true)} disabled={postureLoading}>
+              {postureLoading ? <span className="spin" /> : "Run posture scan"}
+            </button>
+            <button className="btn ghost sm" onClick={() => { loadFleet(); loadPosture(false); }} disabled={fleetLoading}>
               {fleetLoading ? <span className="spin" /> : "Refresh"}
             </button>
           </div>
         </div>
-        {fleetErr && <div className="error-box">{fleetErr}</div>}
-        {fleet.length === 0 ? (
+        {(fleetErr || postureErr) && <div className="error-box">{fleetErr || postureErr}</div>}
+        {fleetEnvs.total === 0 && posture.length === 0 ? (
           <div className="empty" style={{ padding: 16 }}>
-            {fleetLoading ? "Gathering fleet health…" : "No host metrics yet — click Refresh."}
-          </div>
-        ) : (
-          <div className="row" style={{ gap: 24, alignItems: "flex-start", flexWrap: "wrap" }}>
-            <div className="row" style={{ gap: 14, alignItems: "center" }}>
-              <Donut segments={[
-                { value: fleetSummary.counts.OK, color: VERDICT_COLOR.OK },
-                { value: fleetSummary.counts.WARNING, color: VERDICT_COLOR.WARNING },
-                { value: fleetSummary.counts.CRITICAL, color: VERDICT_COLOR.CRITICAL },
-                { value: fleetSummary.counts.OFFLINE, color: VERDICT_COLOR.OFFLINE },
-              ]} />
-              <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
-                <span><span className="dot" style={{ background: VERDICT_COLOR.OK }} /> {fleetSummary.counts.OK} OK</span>
-                <span><span className="dot" style={{ background: VERDICT_COLOR.WARNING }} /> {fleetSummary.counts.WARNING} warning</span>
-                <span><span className="dot" style={{ background: VERDICT_COLOR.CRITICAL }} /> {fleetSummary.counts.CRITICAL} critical</span>
-                <span><span className="dot" style={{ background: VERDICT_COLOR.OFFLINE }} /> {fleetSummary.counts.OFFLINE} offline</span>
-              </div>
-            </div>
-            <div style={{ flex: 1, minWidth: 300, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
-              {fleetByEnv.map((e) => <EnvHealthCard key={e.env} group={e} onOpenHost={openHost} />)}
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="card" style={{ marginTop: 14 }}>
-        <div className="spread" style={{ marginBottom: 10 }}>
-          <strong>Compliance &amp; posture
-            {posture.length > 0 && (
-              <span className="faint" style={{ fontSize: 12, marginLeft: 8 }}>
-                {issuesTotal === 0 ? "all clear" : `${issuesTotal} signal${issuesTotal === 1 ? "" : "s"} with findings`}
-              </span>
-            )}
-          </strong>
-          <div className="row" style={{ gap: 12, alignItems: "center" }}>
-            {postureAt > 0 && <span className="faint" style={{ fontSize: 12 }}>scanned {new Date(postureAt).toLocaleTimeString()}</span>}
-            <button className="btn ghost sm" onClick={() => loadPosture(true)} disabled={postureLoading}>
-              {postureLoading ? <span className="spin" /> : "Run posture scan"}
-            </button>
-          </div>
-        </div>
-        {postureErr && <div className="error-box">{postureErr}</div>}
-        {posture.length === 0 ? (
-          <div className="empty" style={{ padding: 16 }}>
-            {postureLoading ? "Scanning fleet posture…" : "No posture data yet — click Run posture scan."}
+            {fleetLoading ? "Gathering fleet health…" : "No host data yet — click Refresh."}
           </div>
         ) : (
           <>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
-              {complianceSignals.map((s) => (
-                <SignalChip key={s.label} label={s.label} hosts={s.hosts} onOpenHost={openHost} />
-              ))}
+            {/* Two summaries side by side: fleet-health verdict donut + the
+                high-ticket compliance signal chips. Distinct lenses, not a repeat
+                of the environment list below. */}
+            <div className="row" style={{ gap: 24, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 14 }}>
+              <div className="row" style={{ gap: 14, alignItems: "center" }}>
+                <Donut segments={[
+                  { value: fleetSummary.counts.OK, color: VERDICT_COLOR.OK },
+                  { value: fleetSummary.counts.WARNING, color: VERDICT_COLOR.WARNING },
+                  { value: fleetSummary.counts.CRITICAL, color: VERDICT_COLOR.CRITICAL },
+                  { value: fleetSummary.counts.OFFLINE, color: VERDICT_COLOR.OFFLINE },
+                ]} />
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+                  <span><span className="dot" style={{ background: VERDICT_COLOR.OK }} /> {fleetSummary.counts.OK} OK</span>
+                  <span><span className="dot" style={{ background: VERDICT_COLOR.WARNING }} /> {fleetSummary.counts.WARNING} warning</span>
+                  <span><span className="dot" style={{ background: VERDICT_COLOR.CRITICAL }} /> {fleetSummary.counts.CRITICAL} critical</span>
+                  <span><span className="dot" style={{ background: VERDICT_COLOR.OFFLINE }} /> {fleetSummary.counts.OFFLINE} offline</span>
+                </div>
+              </div>
+              {posture.length > 0 ? (
+                <div style={{ flex: 1, minWidth: 300, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 8 }}>
+                  {complianceSignals.map((s) => (
+                    <SignalChip key={s.label} label={s.label} hosts={s.hosts} onOpenHost={openHost} />
+                  ))}
+                </div>
+              ) : (
+                <div className="faint" style={{ flex: 1, minWidth: 300, fontSize: 12, alignSelf: "center" }}>
+                  {postureLoading ? "Scanning fleet posture…" : "Run a posture scan to add compliance signals."}
+                </div>
+              )}
             </div>
-            <div className="section-title" style={{ margin: "14px 0 6px" }}>
-              Hosts by environment <span className="faint" style={{ fontWeight: 400, fontSize: 12 }}>
-                — {postureByEnv.clear}/{postureByEnv.total} clear
+
+            <div className="section-title" style={{ margin: "4px 0 6px" }}>
+              Environments <span className="faint" style={{ fontWeight: 400, fontSize: 12 }}>
+                — {fleetEnvs.clear}/{fleetEnvs.total} clear
               </span>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
-              {postureByEnv.envs.map((e) => (
-                <EnvPostureCard key={e.env} group={e} onOpenHost={openHost} />
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 10 }}>
+              {fleetEnvs.envs.map((e) => (
+                <EnvFleetCard key={e.env} group={e} postureLoaded={posture.length > 0} onOpenHost={openHost} />
               ))}
             </div>
 
             <div className="faint" style={{ fontSize: 11, marginTop: 10 }}>
-              Read-only checks across {postureByEnv.total} host{postureByEnv.total === 1 ? "" : "s"}. Open an environment to see its problematic hosts, then a host for the full per-category drill-down.
+              Health is live; compliance is the last read-only posture scan. Open an environment for its hosts, then a host for the full per-category drill-down.
             </div>
           </>
         )}

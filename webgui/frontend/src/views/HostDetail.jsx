@@ -201,6 +201,15 @@ export default function HostDetail({ hostId, label, onBack }) {
 
       {err && <div className="error-box">{err}</div>}
 
+      {posture && (posture.meta || {}).privileged === "0" && (
+        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "9px 12px",
+                      marginBottom: 12, fontSize: 12.5, color: "var(--text-dim)" }}>
+          ⚠ Posture for this host was gathered <strong>without root</strong> (e.g. an SSH host whose
+          login user isn't root). Root-only checks — empty passwords, effective SSH config, SUID
+          scans — may read blank, so an absence of findings here is <strong>not</strong> a clean bill.
+        </div>
+      )}
+
       {!posture ? (
         <div className="empty" style={{ padding: 24 }}>
           {loading ? `Gathering posture for ${label || "host"}…`

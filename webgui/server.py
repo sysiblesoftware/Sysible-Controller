@@ -725,12 +725,17 @@ def _probe_posture(e, cmd, last_seen, now):
     ls = last_seen.get(aid) if aid else None
     online = (bool(ls and (now - ls) <= 20)) if aid else None
     if aid is not None and not online:
-        return {**base, "online": False, "ok": False, "error": "offline", "posture": None, "flags": {}}
+        return {**base, "online": False, "ok": False, "error": "offline",
+                "posture": None, "flags": {}, "limited": False}
     pe = {**e, "requires_sudo_password": False}
     if e.get("agent_entry"):
         pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
     r = _dispatch_one(pe, cmd, "command", None, None, None)  # no token: read-only, unlogged
     p = _parse_posture((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
+    # "limited": the probe ran but NOT as root (e.g. an SSH host whose login user
+    # isn't root) - root-only checks (shadow, sshd -T, SUID scans) read blank, so
+    # the result can't be trusted as "clean". Agent hosts run as root (privileged).
+    limited = bool(p) and (p.get("meta") or {}).get("privileged") == "0"
     return {
         **base,
         "online": True if p else online,
@@ -738,14 +743,21 @@ def _probe_posture(e, cmd, last_seen, now):
         "error": None if p else (r.get("error") or "no posture returned"),
         "posture": p,
         "flags": _posture_flags(p),
+        "limited": limited,
     }
 
 
 # Small in-process cache so the dashboard doesn't force a full re-sweep on every
 # load. {ts, hosts}. A sweep is on-demand: the cache is served unless a caller
 # passes ?refresh=1 or it is older than _POSTURE_TTL.
+import threading as _posture_threading
 _POSTURE_CACHE = {"ts": 0.0, "hosts": None}
 _POSTURE_TTL = 300.0
+# Serialize sweeps so concurrent cold dashboard loads share ONE fleet-wide sweep
+# instead of each launching its own (the posture command does bounded `find /`
+# scans per host - several at once is needless host-side load). Threads that
+# arrive while a sweep is running block here, then return the just-filled cache.
+_POSTURE_LOCK = _posture_threading.Lock()
 
 
 @app.get("/api/fleet-posture")
@@ -755,23 +767,34 @@ def fleet_posture(refresh: int = 0, user: str = Depends(require_login)):
     dispatch, so visible to the auditor role and never attributed as an action."""
     import concurrent.futures
     import time as _t
-    if not refresh and _POSTURE_CACHE["hosts"] is not None and (_t.time() - _POSTURE_CACHE["ts"]) < _POSTURE_TTL:
+
+    def _fresh():
+        return (not refresh) and _POSTURE_CACHE["hosts"] is not None \
+            and (_t.time() - _POSTURE_CACHE["ts"]) < _POSTURE_TTL
+
+    if _fresh():
         return {"hosts": _POSTURE_CACHE["hosts"], "cached": True, "ts": _POSTURE_CACHE["ts"]}
-    try:
-        entries = dispatch.list_merged_hosts(agent_only=False)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
-    try:
-        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
-    except Exception:
-        last_seen = {}
-    now = _t.time()
-    cmd = _posture_command()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
-        hosts = list(ex.map(lambda e: _probe_posture(e, cmd, last_seen, now), entries)) if entries else []
-    _POSTURE_CACHE["hosts"] = hosts
-    _POSTURE_CACHE["ts"] = now
-    return {"hosts": hosts, "cached": False, "ts": now}
+
+    with _POSTURE_LOCK:
+        # Re-check: another request may have just completed the sweep while we
+        # waited for the lock, in which case serve its result instead of re-sweeping.
+        if _fresh():
+            return {"hosts": _POSTURE_CACHE["hosts"], "cached": True, "ts": _POSTURE_CACHE["ts"]}
+        try:
+            entries = dispatch.list_merged_hosts(agent_only=False)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        try:
+            last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+        except Exception:
+            last_seen = {}
+        now = _t.time()
+        cmd = _posture_command()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
+            hosts = list(ex.map(lambda e: _probe_posture(e, cmd, last_seen, now), entries)) if entries else []
+        _POSTURE_CACHE["hosts"] = hosts
+        _POSTURE_CACHE["ts"] = now
+        return {"hosts": hosts, "cached": False, "ts": now}
 
 
 @app.get("/api/host-posture/{host_id}")

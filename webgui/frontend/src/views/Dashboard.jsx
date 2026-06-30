@@ -56,6 +56,7 @@ function FleetHostCard({ h, onOpenHost }) {
           <span className="faint" style={{ marginLeft: 6, fontSize: 11 }}>{h.environment}</span></span>
         <span className="faint" style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
           {h.issues > 0 && <span style={{ color: VERDICT_COLOR.WARNING, fontWeight: 700 }}>⚠ {h.issues}</span>}
+          {h.limited && <span style={{ color: VERDICT_COLOR.OFFLINE }} title="Posture gathered without root — some checks incomplete">limited</span>}
           {h.postureError && <span style={{ color: VERDICT_COLOR.OFFLINE }}>posture n/a</span>}
           {v}
         </span>
@@ -111,6 +112,9 @@ function EnvFleetCard({ group, postureLoaded, onOpenHost }) {
         {postureLoaded && (
           <span style={{ fontSize: 11, color: group.problematic > 0 ? VERDICT_COLOR.WARNING : VERDICT_COLOR.OK }}>
             {group.problematic > 0 ? `${group.problematic} need attention` : "all clear"}
+            {group.limited > 0 && (
+              <span className="faint" style={{ marginLeft: 6 }}>· {group.limited} limited</span>
+            )}
           </span>
         )}
       </button>
@@ -313,6 +317,7 @@ export default function Dashboard({ role, edition, onOpen }) {
       postById[p.id] = {
         issues: p.flags ? Object.values(p.flags).filter((v) => v === true).length : 0,
         postureError: p.error || null,
+        limited: !!p.limited,
       };
     }
     const g = {};
@@ -320,10 +325,10 @@ export default function Dashboard({ role, edition, onOpen }) {
     for (const h of fleet) {
       const env = h.environment || "Unassigned";
       const pe = postById[h.id] || {};
-      const host = { ...h, issues: pe.issues ?? null, postureError: pe.postureError || null };
+      const host = { ...h, issues: pe.issues ?? null, postureError: pe.postureError || null, limited: !!pe.limited };
       const e = g[env] || (g[env] = {
         env, hosts: [], counts: { OK: 0, WARNING: 0, CRITICAL: 0, OFFLINE: 0 },
-        disk: null, mem: null, failed: 0, oom: 0, degraded: 0, problematic: 0,
+        disk: null, mem: null, failed: 0, oom: 0, degraded: 0, problematic: 0, limited: 0,
       });
       e.hosts.push(host);
       const v = (h.verdict || "OK").toUpperCase();
@@ -335,8 +340,11 @@ export default function Dashboard({ role, edition, onOpen }) {
       if (h.sysd && h.sysd !== "running" && h.sysd !== "unknown") e.degraded += 1;
       const trouble = (host.issues || 0) > 0 || host.postureError;
       if (trouble) e.problematic += 1;
+      if (host.limited) e.limited += 1;
       total += 1;
-      if (v === "OK" && !trouble) clear += 1;
+      // A "limited" host (posture gathered without root) isn't counted clean -
+      // its root-only checks couldn't be trusted.
+      if (v === "OK" && !trouble && !host.limited) clear += 1;
     }
     const envs = Object.values(g).map((e) => {
       e.verdict = e.counts.CRITICAL > 0 ? "CRITICAL"

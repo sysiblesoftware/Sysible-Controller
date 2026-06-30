@@ -686,6 +686,12 @@ p perf.oom "$(dmesg -t 2>/dev/null | grep -ciE 'out of memory|killed process|oom
 p misc.last_login "$(last -1 -w 2>/dev/null | head -1 | cut -c1-120)"
 p misc.cron_jobs "$(ls /etc/cron.d 2>/dev/null | wc -l | tr -d ' ')"
 command -v systemctl >/dev/null 2>&1 && p misc.timers "$(systemctl list-timers --no-legend 2>/dev/null | wc -l | tr -d ' ')"
+
+# Whether this ran as root. Many checks above (shadow, sshd -T, SUID scans)
+# only see the truth as root; on an unprivileged SSH host they read blank and
+# would otherwise look falsely "clean", so the controller marks such a host's
+# posture as limited rather than trusting it.
+p meta.privileged "$([ "$(id -u 2>/dev/null)" = 0 ] && echo 1 || echo 0)"
 printf 'POSTURE|meta.done=1\n'
 """
 

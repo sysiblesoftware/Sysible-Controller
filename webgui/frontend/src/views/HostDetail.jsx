@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 
 // Per-host posture / compliance drill-down. Read-only: renders the full
@@ -138,7 +138,7 @@ function fmtValue(fullKey, v) {
 // the row is actually in a warn/bad state — no action on a healthy signal.
 const ACTIONS = {
   "reboot.required": { kind: "run", label: "Reboot host", confirm: "Reboot this host now?",
-                       run: (hostId) => api.fleet("reboot", [hostId]) },
+                       refreshAfter: true, run: (hostId) => api.fleet("reboot", [hostId]) },
   "cert.expiring_30d": { kind: "tool", tool: "Certificate Management" },
   "cert.nearest_days": { kind: "tool", tool: "Certificate Management" },
   "fw.active": { kind: "tool", tool: "Firewall Administration" },
@@ -160,12 +160,12 @@ const ACTIONS = {
   "users.pw_complexity": { kind: "tool", tool: "Environmental Policies" },
 };
 
-function RowAction({ action, hostId, onOpen }) {
+function RowAction({ action, hostId, onOpen, onRefreshSoon }) {
   const [state, setState] = useState("idle"); // idle | busy | ok | err
   const [msg, setMsg] = useState("");
   if (action.kind === "tool") {
     return (
-      <button className="btn ghost sm" style={{ marginLeft: 8, whiteSpace: "nowrap" }}
+      <button className="btn ghost sm" style={{ whiteSpace: "nowrap" }}
               onClick={() => onOpen && onOpen("sysadmin", { tool: action.tool })}
               title={`Open ${action.tool}`}>
         Fix in {action.tool} →
@@ -182,37 +182,44 @@ function RowAction({ action, hostId, onOpen }) {
         const ok = res.ok || res.code === 0 || !!(r && r.action);
         setState(ok ? "ok" : "err");
         setMsg(ok ? "" : (res.error || res.stderr || "failed"));
+        if (ok && action.refreshAfter && onRefreshSoon) onRefreshSoon();
       })
       .catch((e) => { setState("err"); setMsg(String(e.message || e)); });
   };
   const color = state === "ok" ? C.good : state === "err" ? C.bad : C.warn;
   return (
-    <button className="btn sm" style={{ marginLeft: 8, whiteSpace: "nowrap", borderColor: color, color }}
+    <button className="btn sm" style={{ whiteSpace: "nowrap", borderColor: color, color }}
             onClick={doRun} disabled={state === "busy" || !hostId} title={msg || action.label}>
       {state === "busy" ? "…" : state === "ok" ? "✓ requested" : state === "err" ? "✕ failed" : action.label}
     </button>
   );
 }
 
-function Row({ fullKey, label, value, hostId, onOpen, canAct }) {
+function Row({ fullKey, label, value, hostId, onOpen, canAct, onRefreshSoon }) {
   const st = evalStatus(fullKey, value);
   const action = (canAct && (st === "bad" || st === "warn")) ? ACTIONS[fullKey] : null;
   return (
-    <div className="spread" style={{ padding: "5px 0", borderBottom: "1px solid var(--border)", gap: 12, alignItems: "center" }}>
-      <span className="faint" style={{ fontSize: 13, whiteSpace: "nowrap" }}>{label}</span>
-      <span style={{ fontSize: 13, textAlign: "right", wordBreak: "break-word",
-                     display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
-        {st !== "none" && <span className="dot" style={{ background: C[st] }} />}
-        <span style={{ color: st === "bad" ? C.bad : st === "warn" ? C.warn : "var(--text)", fontWeight: st === "bad" ? 600 : 400 }}>
-          {fmtValue(fullKey, value)}
+    <div style={{ padding: "5px 0", borderBottom: "1px solid var(--border)" }}>
+      <div className="spread" style={{ gap: 12, alignItems: "baseline" }}>
+        <span className="faint" style={{ fontSize: 13, whiteSpace: "nowrap" }}>{label}</span>
+        <span style={{ fontSize: 13, textAlign: "right", minWidth: 0, overflowWrap: "anywhere",
+                       display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
+          {st !== "none" && <span className="dot" style={{ background: C[st], flex: "0 0 auto" }} />}
+          <span style={{ color: st === "bad" ? C.bad : st === "warn" ? C.warn : "var(--text)", fontWeight: st === "bad" ? 600 : 400 }}>
+            {fmtValue(fullKey, value)}
+          </span>
         </span>
-        {action && <RowAction action={action} hostId={hostId} onOpen={onOpen} />}
-      </span>
+      </div>
+      {action && (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 5 }}>
+          <RowAction action={action} hostId={hostId} onOpen={onOpen} onRefreshSoon={onRefreshSoon} />
+        </div>
+      )}
     </div>
   );
 }
 
-function SectionCard({ section, posture, hostId, onOpen, canAct }) {
+function SectionCard({ section, posture, hostId, onOpen, canAct, onRefreshSoon }) {
   // Collect every present key within this section's categories: known keys keep
   // their friendly label and stated order; unknown ones are appended humanized.
   const rows = [];
@@ -233,7 +240,7 @@ function SectionCard({ section, posture, hostId, onOpen, canAct }) {
     <div className="card" style={{ padding: "12px 14px" }}>
       <div className="section-title" style={{ marginBottom: 6 }}>{section.title}</div>
       {rows.map((r) => <Row key={r.fullKey} fullKey={r.fullKey} label={r.label} value={r.value}
-                            hostId={hostId} onOpen={onOpen} canAct={canAct} />)}
+                            hostId={hostId} onOpen={onOpen} canAct={canAct} onRefreshSoon={onRefreshSoon} />)}
     </div>
   );
 }
@@ -242,6 +249,12 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+
+  const [rebooting, setRebooting] = useState(false);
+  const pollRef = useRef(null);
+  const dataRef = useRef(null);
+  useEffect(() => { dataRef.current = data; }, [data]);
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
   const load = useCallback(() => {
     if (!hostId) { setErr("No host selected."); return; }
@@ -252,6 +265,32 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
       .finally(() => setLoading(false));
   }, [hostId]);
   useEffect(() => { load(); }, [load]);
+
+  // After a reboot the host goes down and comes back; poll posture until it has
+  // clearly rebooted (new boot time / reboot flag cleared / tiny uptime), then
+  // swap in the fresh data so the box updates on its own.
+  const refreshAfterReboot = useCallback(() => {
+    if (!hostId) return;
+    const baseBoot = (((dataRef.current || {}).posture || {}).os || {}).boot_epoch;
+    setRebooting(true);
+    if (pollRef.current) clearInterval(pollRef.current);
+    const t0 = Date.now();
+    pollRef.current = setInterval(async () => {
+      if (Date.now() - t0 > 300000) { clearInterval(pollRef.current); setRebooting(false); return; }
+      try {
+        const d = await api.hostPosture(hostId);
+        const os = (d && d.posture && d.posture.os) || {};
+        const rebootReq = (d && d.posture && d.posture.reboot) ? d.posture.reboot.required : undefined;
+        const up = os.uptime_s != null ? Number(os.uptime_s) : null;
+        const backUp = d && d.posture && (
+          (baseBoot && os.boot_epoch && os.boot_epoch !== baseBoot) ||
+          rebootReq === "0" ||
+          (up != null && isFinite(up) && up < 600)
+        );
+        if (backUp) { setData(d); setRebooting(false); clearInterval(pollRef.current); }
+      } catch { /* host down mid-reboot — keep polling */ }
+    }, 10000);
+  }, [hostId]);
 
   const posture = data && data.posture;
 
@@ -268,6 +307,14 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
       </div>
 
       {err && <div className="error-box">{err}</div>}
+
+      {rebooting && (
+        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "9px 12px",
+                      marginBottom: 12, fontSize: 12.5, display: "flex", alignItems: "center", gap: 8 }}>
+          <span className="spin" /> Reboot requested — waiting for {label || "the host"} to check back in;
+          this will refresh automatically once it's back.
+        </div>
+      )}
 
       {posture && (posture.meta || {}).privileged === "0" && (
         <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "9px 12px",
@@ -288,7 +335,8 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))",
                       gap: 12, alignItems: "start" }}>
           {SECTIONS.map((s) => <SectionCard key={s.title} section={s} posture={posture}
-                                            hostId={hostId} onOpen={onOpen} canAct={canAct} />)}
+                                            hostId={hostId} onOpen={onOpen} canAct={canAct}
+                                            onRefreshSoon={refreshAfterReboot} />)}
         </div>
       )}
     </div>

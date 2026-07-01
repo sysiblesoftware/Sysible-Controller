@@ -347,6 +347,14 @@ _write_update_status() {
 
 cmd_update() {
   _require_root update
+  # Persist the full update output to a file (in addition to the journal) so the
+  # web/desktop consoles can stream it and it stays downloadable afterward.
+  # Truncate for this run, then tee everything below to it. run/ is excluded from
+  # the rsync --delete, so the log survives the redeploy.
+  mkdir -p "$RUN_DIR" 2>/dev/null || true
+  : > "$RUN_DIR/last_update.log" 2>/dev/null || true
+  exec > >(tee -a "$RUN_DIR/last_update.log") 2>&1
+  echo "=== Sysible Controller self-update — $(date -Is 2>/dev/null || date) ==="
   _write_update_status running "Update started" ""
 
   local SRC=""

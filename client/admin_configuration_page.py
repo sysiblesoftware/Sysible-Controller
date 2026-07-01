@@ -502,6 +502,10 @@ class AdminConfigurationPage(QWidget):
         self.update_agents_btn = QPushButton("Update Agents")
         self.update_agents_btn.clicked.connect(self._update_agents)
         row.addWidget(self.update_agents_btn)
+        self.download_log_btn = QPushButton("Download Update Log")
+        self.download_log_btn.setToolTip("Save the most recent controller update's full output to a file.")
+        self.download_log_btn.clicked.connect(self._download_update_log)
+        row.addWidget(self.download_log_btn)
         row.addStretch()
         layout.addLayout(row)
 
@@ -632,6 +636,34 @@ class AdminConfigurationPage(QWidget):
         self.update_console.setPlainText(text)
         sb = self.update_console.verticalScrollBar()
         sb.setValue(sb.maximum())
+
+    def _download_update_log(self):
+        """Save the most recent controller update's full output to a file."""
+        self.download_log_btn.setEnabled(False)
+        try:
+            r = api.controller_update_log(0)   # 0 = full log
+        except Exception as e:
+            self.download_log_btn.setEnabled(True)
+            QMessageBox.warning(self, "Download failed", f"Could not fetch the update log:\n{e}")
+            return
+        self.download_log_btn.setEnabled(True)
+        text = (r or {}).get("log") or ""
+        if not text.strip():
+            QMessageBox.information(self, "No update log",
+                                   "There's no update log yet — run a controller update first.")
+            return
+        default = f"sysible-update-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save update log", default, "Log files (*.log);;All files (*)")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        except Exception as e:
+            QMessageBox.warning(self, "Save failed", f"Could not write the file:\n{e}")
+            return
+        QMessageBox.information(self, "Saved", f"Update log saved to:\n{path}")
 
     def _update_agents(self):
         if QMessageBox.question(

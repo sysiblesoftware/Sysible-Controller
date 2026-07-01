@@ -1126,28 +1126,46 @@ def controller_update_status_route():
     return rec
 
 
-@app.get("/controller/update-log", dependencies=[Depends(require_api_key), Depends(require_superuser)])
-def controller_update_log_route(lines: int = 400):
-    """Recent output of the controller self-update transient unit
-    (sysible-self-update) so the UI can show the update's commands running live —
-    git pull, rsync, dependency + web-console rebuild, restart. Superuser-only.
-    Still readable after the unit is reaped (--collect): journal entries outlive
-    the unit. `-o cat` gives just the messages (the command echoes), no prefix."""
+def _read_update_log(lines=0):
+    """The controller self-update's output. Prefers the persistent file the
+    updater tees to (run/last_update.log, one run's full output); falls back to
+    the systemd journal of the transient unit. `lines` > 0 returns only the tail."""
+    from pathlib import Path
+    logf = Path(__file__).resolve().parent.parent / "run" / "last_update.log"
+    try:
+        if logf.exists():
+            text = logf.read_text(errors="replace")
+            if lines and lines > 0:
+                rows = text.splitlines()
+                if len(rows) > lines:
+                    text = "\n".join(rows[-lines:])
+            return text
+    except Exception:
+        pass
     import subprocess
-    lines = max(1, min(int(lines), 5000))
+    n = str(max(1, min(int(lines or 5000), 20000)))
     try:
         proc = subprocess.run(
-            ["journalctl", "-u", "sysible-self-update", "-n", str(lines), "--no-pager", "-o", "cat"],
+            ["journalctl", "-u", "sysible-self-update", "-n", n, "--no-pager", "-o", "cat"],
             capture_output=True, text=True, timeout=10,
         )
         out = proc.stdout
         if proc.returncode != 0 and not out:
             out = f"(no update output yet: {proc.stderr.strip() or 'journalctl returned nothing'})"
+        return out
     except FileNotFoundError:
-        out = "(journalctl not available on this host)"
+        return "(journalctl not available on this host)"
     except subprocess.TimeoutExpired:
-        out = "(timed out reading the update log)"
-    return {"log": out}
+        return "(timed out reading the update log)"
+
+
+@app.get("/controller/update-log", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def controller_update_log_route(lines: int = 400):
+    """Output of the controller self-update (git pull → rsync → rebuild →
+    restart) so the UI can stream the commands running and offer a download.
+    Superuser-only. `lines` limits to the tail for the live console; pass 0 for
+    the full log (download)."""
+    return {"log": _read_update_log(lines)}
 
 
 @app.get("/controller-config/tls/trust-bundle", dependencies=[Depends(require_api_key)])

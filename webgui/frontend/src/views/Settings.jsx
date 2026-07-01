@@ -412,6 +412,21 @@ function SoftwareUpdate() {
     finally { setBusy(false); }
   }
 
+  async function downloadLog() {
+    try {
+      const d = await api.controllerUpdateLog(0);   // 0 = full log
+      const text = (d && d.log) || "";
+      if (!text.trim()) { setErr("No update log yet — run a controller update first."); return; }
+      const blob = new Blob([text], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `sysible-update-${new Date().toISOString().replace(/[:.]/g, "-")}.log`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) { setErr(e.message); }
+  }
+
   const Button = ({ which, label, start }) => (
     confirm === which ? (
       <>
@@ -468,7 +483,10 @@ function SoftwareUpdate() {
       )}
       {showConsole && (
         <div style={{ marginTop: 8 }}>
-          <div className="faint" style={{ fontSize: 11, marginBottom: 4 }}>Update output (journalctl -u sysible-self-update)</div>
+          <div className="spread" style={{ marginBottom: 4 }}>
+            <span className="faint" style={{ fontSize: 11 }}>Update output (run/last_update.log)</span>
+            <button className="btn ghost sm" onClick={downloadLog}>Download log</button>
+          </div>
           <pre ref={logRef} style={{ margin: 0, maxHeight: 240, overflow: "auto", background: "#0d1117",
                  color: "#c9d1d9", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px",
                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, lineHeight: 1.5,
@@ -510,7 +528,11 @@ function SoftwareUpdate() {
         </div>
       )}
 
-      <p className="faint" style={{ marginTop: 12, marginBottom: 0 }}>
+      <div className="row" style={{ marginTop: 12, gap: 8, alignItems: "center" }}>
+        <button className="btn ghost sm" onClick={downloadLog}>Download last update log</button>
+        <span className="faint" style={{ fontSize: 11 }}>the most recent controller update's full output</span>
+      </div>
+      <p className="faint" style={{ marginTop: 10, marginBottom: 0 }}>
         Tip: update the controller first, then update agents so hosts report the latest metrics.
       </p>
       {msg && <div className="ok-text" style={{ marginTop: 10 }}>{msg}</div>}

@@ -60,27 +60,56 @@ def current_host_names():
 
 
 def host_identities():
-    """Distinct PHYSICAL hosts under management, keyed by IP where known so the
-    same machine reached two ways (agent + SSH) - or accidentally enrolled
-    twice at one IP under different names - counts ONCE. Falls back to the
-    host's name when it has no recorded IP. This is what the host count/limit
-    should use; counting by name alone over-counts a duplicate at one IP."""
-    ids = set()
+    """Distinct PHYSICAL hosts under management. The same machine reached two
+    ways (agent + SSH) - or enrolled twice under different names/IPs - counts
+    ONCE. Two records are the same host if they share a hostname OR an IP; we
+    union over both so a host whose agent record and SSH record differ in either
+    field still collapses (this mirrors how list_merged_hosts collapses the UI
+    host list - by name, then IP). Keying by IP alone over-counted an Agent+SSH
+    host whose two sides reported different IPs."""
+    records = []  # (name, ip) per enrolled record
     try:
         from backend.db import list_agents
         for a in list_agents():
-            ip = (a.get("ip") or "").strip()
-            ids.add(ip or (a.get("hostname") or a.get("host_id")))
+            records.append(((a.get("hostname") or a.get("host_id") or "").strip(),
+                            (a.get("ip") or "").strip()))
     except Exception:
         pass
     try:
         from backend.remote_routes import load_hosts
         for name, h in (load_hosts() or {}).items():
-            ip = (h.get("ip") or "").strip()
-            ids.add(ip or name)
+            records.append(((name or "").strip(), (h.get("ip") or "").strip()))
     except Exception:
         pass
-    return {i for i in ids if i}
+
+    # Union-find: each record joins its (non-empty) name key and ip key, so
+    # records sharing either land in one component; the component count is the
+    # number of distinct hosts.
+    parent = {}
+
+    def find(x):
+        parent.setdefault(x, x)
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:
+            parent[x], x = root, parent[x]
+        return root
+
+    def union(a, b):
+        parent[find(a)] = find(b)
+
+    for i, (name, ip) in enumerate(records):
+        if not name and not ip:
+            continue
+        rid = ("rec", i)
+        find(rid)
+        if name:
+            union(rid, ("name", name.lower()))
+        if ip:
+            union(rid, ("ip", ip))
+
+    return {find(("rec", i)) for i, (name, ip) in enumerate(records) if name or ip}
 
 
 def host_count():

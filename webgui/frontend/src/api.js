@@ -126,6 +126,9 @@ export const api = {
   fleet: (action, targets, command, sudoPassword = "") =>
     req("/api/fleet", { method: "POST", body: { action, targets, command, sudo_password: sudoPassword } }),
   checkin: () => req("/api/checkin", { method: "POST" }),
+  restartUnit: (hostId, unit, sudoPassword = "") =>
+    req(`/api/host/${encodeURIComponent(hostId)}/restart-unit`,
+        { method: "POST", body: { unit, sudo_password: sudoPassword } }),
   controllerKey: () => req("/api/controller-key"),
   enrollSsh: (payload) => req("/api/enroll-ssh", { method: "POST", body: payload }),
   setHostEnvironment: (hostId, environment) =>

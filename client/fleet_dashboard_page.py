@@ -11,12 +11,13 @@ console uses); sweeps run on background QThreads so the UI never blocks.
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QScrollArea, QFrame, QProgressBar, QDialog,
+    QScrollArea, QFrame, QProgressBar, QDialog, QMenu, QMessageBox,
 )
 from PySide6.QtGui import QPainter, QPen, QColor
 from PySide6.QtCore import Qt, QThread, Signal, QRectF
 
 from client import _fleet_status as fs
+from client import api
 from client import theme
 
 # Verdict colors read the same in both themes (they're status signals).
@@ -183,11 +184,45 @@ def _signal_chip(label, count):
 # ---------------------------------------------------------------------------
 # Per-environment card (collapsible)
 # ---------------------------------------------------------------------------
+def _restart_unit_on_host(host_id, unit):
+    """Resolve the host entry and restart one systemd unit on it AS THE OPERATOR
+    (so it's attributed/logged and respects RBAC — unlike the dashboard's
+    tokenless read sweep). Polls an agent task to completion. Returns
+    {'ok': bool, 'detail': str}. Runs off the GUI thread (see _Worker)."""
+    import time
+    entry = None
+    for e in api.list_merged_hosts():
+        if e.get("id") == host_id:
+            entry = e
+            break
+    if entry is None:
+        return {"ok": False, "detail": "host not found"}
+    out = api.run_on_entry(entry, api.cmd_service_restart(unit),
+                           description=f"Restart unit {unit}")
+    if out.get("error"):
+        return {"ok": False, "detail": out["error"]}
+    if out.get("sync"):
+        detail = (out.get("stdout") or "").strip() or (out.get("stderr") or "").strip()
+        return {"ok": out.get("code") == 0, "detail": detail}
+    tid = out.get("task_id")
+    if tid is None:
+        return {"ok": False, "detail": "failed to queue task"}
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        r = api.poll_entry_result(entry, tid)
+        if r is not None:
+            detail = (r.get("stdout") or "").strip() or (r.get("stderr") or "").strip()
+            return {"ok": r.get("code") == 0, "detail": detail}
+        time.sleep(1.0)
+    return {"ok": False, "detail": "timed out waiting for host to report back"}
+
+
 class EnvCard(QFrame):
-    def __init__(self, group, posture_loaded, on_open_host):
+    def __init__(self, group, posture_loaded, on_open_host, on_restart_unit=None):
         super().__init__()
         self.setStyleSheet(f"QFrame{{border:1px solid {PAL['border']}; border-radius:8px; background:{PAL['bg']};}}")
         self._on_open_host = on_open_host
+        self._on_restart_unit = on_restart_unit
         v = group["verdict"]
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -299,7 +334,31 @@ class EnvCard(QFrame):
         hid = h.get("id")
         if hid:
             btn.clicked.connect(lambda _=False, i=hid, lbl=h.get("host"): self._on_open_host(i, lbl))
+        units = h.get("units") or []
+        if hid and units and self._on_restart_unit is not None:
+            btn.setContextMenuPolicy(Qt.CustomContextMenu)
+            btn.customContextMenuRequested.connect(
+                lambda _pos, b=btn, hh=h: self._unit_menu(b, hh))
+            btn.setToolTip("Left-click for posture detail · right-click to restart a failed unit")
         return btn
+
+    def _unit_menu(self, btn, h):
+        """Right-click menu on a host with failed units: one 'Restart <unit>'
+        entry per crashed unit, dispatched as the operator."""
+        units = h.get("units") or []
+        if not units or self._on_restart_unit is None:
+            return
+        menu = QMenu(btn)
+        hdr = menu.addAction("Restart a failed unit:")
+        hdr.setEnabled(False)
+        menu.addSeparator()
+        hid = h.get("id")
+        label = h.get("host") or hid
+        for u in units:
+            act = menu.addAction(f"Restart   {u}")
+            act.triggered.connect(
+                lambda _=False, unit=u: self._on_restart_unit(hid, label, unit))
+        menu.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
 
 
 # ---------------------------------------------------------------------------
@@ -695,8 +754,39 @@ class FleetDashboardPage(QWidget):
             empty.setStyleSheet(f"color:{PAL['faint']}; padding:16px;")
             self._envs_lay.addWidget(empty)
         for g in env_list:
-            self._envs_lay.addWidget(EnvCard(g, posture_loaded, self._open_host))
+            self._envs_lay.addWidget(EnvCard(g, posture_loaded, self._open_host, self._restart_unit))
         self._envs_lay.addStretch()
+
+    def _restart_unit(self, host_id, label, unit):
+        """Restart one failed unit on one host, from the dashboard right-click.
+        Confirms, dispatches off the GUI thread as the operator, then reports.
+        Kept on the (long-lived) page so an auto-refresh rebuilding the cards
+        can't destroy the worker or the dialog parent mid-run."""
+        if QMessageBox.question(
+                self, "Restart unit", f"Restart '{unit}' on {label}?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        if not hasattr(self, "_restart_workers"):
+            self._restart_workers = []
+        w = _Worker(lambda i=host_id, u=unit: _restart_unit_on_host(i, u))
+        self._restart_workers.append(w)
+        w.done.connect(lambda res, u=unit, l=label: self._restart_done(l, u, res))
+        w.fail.connect(lambda err, u=unit, l=label: QMessageBox.warning(
+            self, "Restart failed", f"{u} on {l}:\n\n{err}"))
+        w.finished.connect(lambda w=w: self._restart_workers.remove(w)
+                           if w in self._restart_workers else None)
+        w.start()
+
+    def _restart_done(self, label, unit, res):
+        detail = (res.get("detail") or "").strip()
+        if res.get("ok"):
+            QMessageBox.information(
+                self, "Unit restarted",
+                f"Restarted {unit} on {label}." + (f"\n\n{detail}" if detail else ""))
+        else:
+            QMessageBox.warning(
+                self, "Restart reported a problem",
+                f"{unit} on {label} did not restart cleanly." + (f"\n\n{detail}" if detail else ""))
 
     def _open_host(self, host_id, label):
         dlg = PostureDialog(host_id, label, self)

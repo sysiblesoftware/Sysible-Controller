@@ -1464,11 +1464,23 @@ def _apply_layout():
 # command for the everyday "just reboot it / restart NetworkManager / clear the
 # failed units" tasks. Every build= delegates to an existing cmd_* builder.
 _register(Action(
-    name="qsa_restart_service", tool="Quick System Actions", group="Services",
+    name="qsa_restart_service", tool="Quick System Actions", group="Service (by name)",
     label="Restart a service",
     description="Restart any systemd service by name on the selected hosts.",
     params=[Param("service", "Service name", help="e.g. nginx, docker, postgresql")],
     build=lambda p: api.cmd_service_restart(_s(p, "service")),
+))
+_register(Action(
+    name="qsa_start_service", tool="Quick System Actions", group="Service (by name)",
+    label="Start", params=[],
+    description="Start the service named above on the selected hosts.",
+    build=lambda p: api.cmd_service_start(_s(p, "service")),
+))
+_register(Action(
+    name="qsa_stop_service", tool="Quick System Actions", group="Service (by name)",
+    label="Stop", params=[],
+    description="Stop the service named above on the selected hosts.",
+    build=lambda p: api.cmd_service_stop(_s(p, "service")),
 ))
 _register(Action(
     name="qsa_restart_networkmanager", tool="Quick System Actions", group="Common services",
@@ -1497,6 +1509,57 @@ _register(Action(
     description="Restart the active time-sync daemon (chrony / systemd-timesyncd / ntp).",
     params=[],
     build=lambda p: api.cmd_restart_timesync(),
+))
+_register(Action(
+    name="qsa_sync_time_now", tool="Quick System Actions", group="Common services",
+    label="Sync clock now",
+    description="Force an immediate clock step (chrony makestep / ntpd / timedatectl).",
+    params=[],
+    build=lambda p: api.cmd_sync_time_now(),
+))
+_register(Action(
+    name="qsa_restart_docker", tool="Quick System Actions", group="Common services",
+    label="Restart Docker",
+    description="Restart the Docker daemon on the selected hosts.",
+    params=[],
+    build=lambda p: api.cmd_service_restart("docker"),
+))
+_register(Action(
+    name="qsa_restart_agent", tool="Quick System Actions", group="Common services",
+    label="Restart Sysible agent",
+    description="Restart the Sysible agent service (agent hosts reconnect on the next heartbeat).",
+    params=[],
+    build=lambda p: api.cmd_restart_agent(),
+))
+_register(Action(
+    name="qsa_drop_caches", tool="Quick System Actions", group="Free up resources",
+    label="Free memory (drop caches)",
+    description="sync + drop the page cache / dentries / inodes. Safe — only clean "
+                "caches are released, no data is lost.",
+    params=[],
+    build=lambda p: api.cmd_drop_caches(),
+))
+_register(Action(
+    name="qsa_clean_pkg_cache", tool="Quick System Actions", group="Free up resources",
+    label="Clean package cache",
+    description="Reclaim disk by clearing the package manager's download cache "
+                "(dnf/yum/zypper/apt).",
+    params=[],
+    build=lambda p: api.cmd_clean_package_cache(),
+))
+_register(Action(
+    name="qsa_vacuum_journal", tool="Quick System Actions", group="Free up resources",
+    label="Vacuum journal logs",
+    description="Shrink the systemd journal to the last 7 days to reclaim disk.",
+    params=[],
+    build=lambda p: api.cmd_vacuum_journal(7),
+))
+_register(Action(
+    name="qsa_fstrim", tool="Quick System Actions", group="Free up resources",
+    label="Trim filesystems (fstrim)",
+    description="Discard unused blocks on all mounted filesystems (SSD / thin-LVM).",
+    params=[],
+    build=lambda p: api.cmd_fstrim(),
 ))
 _register(Action(
     name="qsa_reset_failed", tool="Quick System Actions", group="Systemd housekeeping",

@@ -498,6 +498,53 @@ def cmd_flush_dns() -> str:
     )
 
 
+def cmd_drop_caches() -> str:
+    """Free reclaimable memory: sync, then drop the page cache / dentries /
+    inodes. Safe — the kernel only drops CLEAN caches, no data is lost; it just
+    releases 'used' memory that was really cache."""
+    return "sync && echo 3 > /proc/sys/vm/drop_caches && echo 'Dropped page cache, dentries and inodes.'"
+
+
+def cmd_clean_package_cache() -> str:
+    """Clean the package manager's download cache to reclaim disk (dnf/yum clean
+    all, zypper clean, apt-get clean)."""
+    return (
+        "if command -v dnf >/dev/null 2>&1; then dnf clean all; "
+        "elif command -v yum >/dev/null 2>&1; then yum clean all; "
+        "elif command -v zypper >/dev/null 2>&1; then zypper clean; "
+        "elif command -v apt-get >/dev/null 2>&1; then apt-get clean; "
+        "else echo 'No supported package manager found' >&2; exit 1; fi; "
+        "echo 'Package cache cleaned.'"
+    )
+
+
+def cmd_vacuum_journal(keep_days: int = 7) -> str:
+    """Shrink the systemd journal to the last N days to reclaim disk."""
+    d = max(1, int(keep_days))
+    return (
+        "if ! command -v journalctl >/dev/null 2>&1; then echo 'journalctl not available' >&2; exit 1; fi; "
+        f"journalctl --vacuum-time={d}d && echo 'Journal vacuumed to the last {d} day(s).'"
+    )
+
+
+def cmd_fstrim() -> str:
+    """Discard unused blocks on all mounted filesystems (SSD / thin-LVM trim)."""
+    return (
+        "if ! command -v fstrim >/dev/null 2>&1; then echo 'fstrim not available on this host' >&2; exit 1; fi; "
+        "fstrim -av"
+    )
+
+
+def cmd_sync_time_now() -> str:
+    """Force an immediate clock sync (chrony makestep / ntpd step / timedatectl)."""
+    return (
+        "if command -v chronyc >/dev/null 2>&1; then chronyc makestep && echo 'Requested a chrony step.' && exit 0; fi; "
+        "if command -v ntpd >/dev/null 2>&1; then ntpd -gq && echo 'Stepped the clock via ntpd.' && exit 0; fi; "
+        "if command -v timedatectl >/dev/null 2>&1; then timedatectl set-ntp true && echo 'Enabled NTP via timedatectl.' && exit 0; fi; "
+        "echo 'No time-sync tool available (chrony/ntpd/timedatectl).' >&2; exit 1"
+    )
+
+
 def cmd_restart_agent() -> str:
     """Restart the Sysible agent service. Launched detached via systemd-run
     so it survives the agent process (its own parent) being stopped, and

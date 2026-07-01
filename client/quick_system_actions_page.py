@@ -39,41 +39,73 @@ class QuickSystemActionsPage(FleetToolPage):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(5, 5, 5, 5)
 
-        box, g = self.group("Restart a service")
+        box, g = self.group("Service (by name)")
         row = QHBoxLayout()
         row.addWidget(QLabel("Service name:"))
         self.svc_input = QLineEdit()
         self.svc_input.setPlaceholderText("e.g. nginx, docker, postgresql")
         row.addWidget(self.svc_input, 1)
-        b = QPushButton("Restart Service")
+        b = QPushButton("Restart")
         b.clicked.connect(lambda: self.run_with(
             "Restart Service", lambda: api.cmd_service_restart(self.svc_input.text())))
         row.addWidget(b)
+        b_start = QPushButton("Start")
+        b_start.clicked.connect(lambda: self.run_with(
+            "Start Service", lambda: api.cmd_service_start(self.svc_input.text())))
+        row.addWidget(b_start)
+        b_stop = QPushButton("Stop")
+        b_stop.clicked.connect(lambda: self.run_with(
+            "Stop Service", lambda: api.cmd_service_stop(self.svc_input.text())))
+        row.addWidget(b_stop)
         g.addLayout(row)
-        g.addWidget(self._hint("Restarts any systemd service by name on every checked host."))
+        g.addWidget(self._hint("Restart / start / stop any systemd service by name on every checked host."))
         layout.addWidget(box)
 
-        box2, g2 = self.group("Networking")
+        box2, g2 = self.group("Common services")
         row2 = QHBoxLayout()
-        b_nm = QPushButton("Restart NetworkManager")
-        b_nm.clicked.connect(lambda: self.run_command(
-            api.cmd_service_restart("NetworkManager"), "Restart NetworkManager"))
-        row2.addWidget(b_nm)
-        b_dns = QPushButton("Flush DNS Cache")
-        b_dns.clicked.connect(lambda: self.run_command(api.cmd_flush_dns(), "Flush DNS Cache"))
-        row2.addWidget(b_dns)
-        b_ssh = QPushButton("Restart SSH Server")
-        b_ssh.clicked.connect(lambda: self.run_command(api.cmd_restart_ssh(), "Restart SSH Server"))
-        row2.addWidget(b_ssh)
+        for label, fn in [
+            ("Restart NetworkManager", lambda: api.cmd_service_restart("NetworkManager")),
+            ("Flush DNS Cache", api.cmd_flush_dns),
+            ("Restart SSH Server", api.cmd_restart_ssh),
+        ]:
+            btn = QPushButton(label)
+            btn.clicked.connect(lambda _=False, l=label, f=fn: self.run_command(f(), l))
+            row2.addWidget(btn)
         row2.addStretch()
         g2.addLayout(row2)
+        row2b = QHBoxLayout()
+        for label, fn in [
+            ("Restart Time Sync", api.cmd_restart_timesync),
+            ("Sync Clock Now", api.cmd_sync_time_now),
+            ("Restart Docker", lambda: api.cmd_service_restart("docker")),
+            ("Restart Sysible Agent", api.cmd_restart_agent),
+        ]:
+            btn = QPushButton(label)
+            btn.clicked.connect(lambda _=False, l=label, f=fn: self.run_command(f(), l))
+            row2b.addWidget(btn)
+        row2b.addStretch()
+        g2.addLayout(row2b)
         layout.addWidget(box2)
+
+        box4, g4 = self.group("Free up resources")
+        row4 = QHBoxLayout()
+        for label, fn in [
+            ("Free Memory (drop caches)", api.cmd_drop_caches),
+            ("Clean Package Cache", api.cmd_clean_package_cache),
+            ("Vacuum Journal Logs", lambda: api.cmd_vacuum_journal(7)),
+            ("Trim Filesystems", api.cmd_fstrim),
+        ]:
+            btn = QPushButton(label)
+            btn.clicked.connect(lambda _=False, l=label, f=fn: self.run_command(f(), l))
+            row4.addWidget(btn)
+        row4.addStretch()
+        g4.addLayout(row4)
+        g4.addWidget(self._hint("Reclaim memory and disk: drop clean caches (no data lost), clear the "
+                                "package download cache, shrink the journal to 7 days, and trim SSDs."))
+        layout.addWidget(box4)
 
         box3, g3 = self.group("Systemd housekeeping")
         row3 = QHBoxLayout()
-        b_time = QPushButton("Restart Time Sync")
-        b_time.clicked.connect(lambda: self.run_command(api.cmd_restart_timesync(), "Restart Time Sync"))
-        row3.addWidget(b_time)
         b_rf = QPushButton("Clear Failed Units")
         b_rf.clicked.connect(lambda: self.run_command(api.cmd_reset_failed_units(), "Clear Failed Units"))
         row3.addWidget(b_rf)

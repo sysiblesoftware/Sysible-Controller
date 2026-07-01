@@ -90,8 +90,8 @@ function bucketAverage(samples, valueOf, t0, t1, buckets = 80) {
 // A single inline-SVG multi-line chart (no chart-library dependency). The
 // viewBox is scaled to width:100% of its grid cell, so a taller viewBox + wider
 // columns make the charts fill the window instead of sitting as thin slivers.
-function LineChart({ series, t0, t1, kind, onZoom }) {
-  const W = 1000, H = 300, padL = 60, padR = 16, padT = 12, padB = 34;
+function LineChart({ series, t0, t1, kind, onZoom, height = 300 }) {
+  const W = 1000, H = height, padL = 60, padR = 16, padT = 12, padB = 34;
   const plotW = W - padL - padR, plotH = H - padT - padB;
   const svgRef = useRef(null);
   const [hoverX, setHoverX] = useState(null); // cursor x in viewBox coords, or null
@@ -231,12 +231,17 @@ function Legend({ items, onClick, selectedKey }) {
 // Boxed chart: a bordered, padded card with a title (and optional latest-value
 // badge), so the stack of graphs reads as distinct panels instead of running
 // together. The box is what gives the page visual separation.
-function ChartCard({ label, value, children }) {
+function ChartCard({ label, value, children, onExpand }) {
   return (
     <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "10px 14px 6px",
                   background: "var(--panel)" }}>
       <div className="spread" style={{ marginBottom: 6 }}>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>{label}</span>
+        <button onClick={onExpand} disabled={!onExpand} title={onExpand ? "Expand for analysis" : undefined}
+                style={{ background: "none", border: "none", padding: 0, font: "inherit", fontSize: 13,
+                         fontWeight: 600, color: "var(--text)", cursor: onExpand ? "pointer" : "default",
+                         display: "flex", alignItems: "center", gap: 6 }}>
+          {label}{onExpand && <span className="faint" style={{ fontSize: 12 }}>⤢</span>}
+        </button>
         {value != null && <span className="faint" style={{ fontSize: 12 }}>now {value}</span>}
       </div>
       {children}
@@ -433,6 +438,9 @@ export default function Performance() {
   const vt0 = zoom ? zoom[0] : t0;
   const vt1 = zoom ? zoom[1] : t1;
 
+  // Click a chart title to blow it up into a single large window for analysis.
+  const [focus, setFocus] = useState(null); // metric key | null
+
   const envColor = useMemo(() => {
     const names = [...new Set(data.hosts.map((h) => h.environment || "Unassigned"))].sort();
     const m = {};
@@ -595,7 +603,7 @@ export default function Performance() {
             <div className="section-title" style={{ marginBottom: 6 }}>History</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(540px, 1fr))", gap: 18 }}>
               {METRICS.map((metric) => (
-                <ChartCard key={metric.key} label={metric.label}
+                <ChartCard key={metric.key} label={metric.label} onExpand={() => setFocus(metric.key)}
                   value={latest ? fmtMetric(metric.kind, metric.valueOf(latest), metric.kind === "bytes") : null}>
                   <LineChart series={hostSeriesFor(metric)} t0={vt0} t1={vt1} kind={metric.kind}
                              onZoom={(z0, z1) => setZoom([z0, z1])} />
@@ -621,7 +629,7 @@ export default function Performance() {
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(540px, 1fr))", gap: 18, marginTop: 8 }}>
               {METRICS.map((metric) => (
-                <ChartCard key={metric.key} label={metric.label}>
+                <ChartCard key={metric.key} label={metric.label} onExpand={() => setFocus(metric.key)}>
                   <LineChart series={seriesFor(metric)} t0={vt0} t1={vt1} kind={metric.kind}
                              onZoom={(z0, z1) => setZoom([z0, z1])} />
                 </ChartCard>
@@ -630,6 +638,43 @@ export default function Performance() {
           </>
         )}
       </div>
+
+      {focus && (() => {
+        const metric = METRICS.find((mm) => mm.key === focus);
+        if (!metric) return null;
+        const series = selectedHost ? hostSeriesFor(metric) : seriesFor(metric);
+        const scopeLabel = selectedHost ? selectedHost.hostname : selectedEnv ? selectedEnv : "all environments";
+        const legendItems = selectedHost ? null : (selectedEnv ? hostLegend : envLegend);
+        return (
+          <div onClick={() => setFocus(null)}
+               style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 50,
+                        display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+            <div onClick={(e) => e.stopPropagation()} className="card"
+                 style={{ width: "min(1100px, 95vw)", maxHeight: "92vh", overflow: "auto" }}>
+              <div className="spread" style={{ marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
+                <strong style={{ fontSize: 16 }}>{metric.label} <span className="faint" style={{ fontSize: 13, fontWeight: 400 }}>· {scopeLabel}</span></strong>
+                <div className="row" style={{ gap: 10, alignItems: "center" }}>
+                  <div className="row" style={{ gap: 4 }}>
+                    {WINDOWS.map((w) => (
+                      <button key={w.value} className={"btn sm " + (window === w.value ? "" : "ghost")}
+                              onClick={() => setWindow(w.value)}>{w.label}</button>
+                    ))}
+                  </div>
+                  {zoom
+                    ? <button className="btn sm" onClick={() => setZoom(null)}>⤢ reset zoom</button>
+                    : <span className="faint" style={{ fontSize: 11 }}>drag to zoom</span>}
+                  <button className="btn ghost sm" onClick={() => setFocus(null)}>Close ✕</button>
+                </div>
+              </div>
+              <LineChart series={series} t0={vt0} t1={vt1} kind={metric.kind} height={460}
+                         onZoom={(z0, z1) => setZoom([z0, z1])} />
+              {legendItems && legendItems.length > 0 && (
+                <div style={{ marginTop: 10 }}><Legend items={legendItems} /></div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

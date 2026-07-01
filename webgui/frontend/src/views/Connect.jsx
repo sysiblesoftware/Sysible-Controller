@@ -33,15 +33,13 @@ export default function Connect() {
   function openTerm(h) { dock.current && dock.current.open(h.id, h.label); }
 
   const [checkinAt, setCheckinAt] = useState(0);
+  const [showCheckin, setShowCheckin] = useState(false);
   async function runCheckin() {
     setBusy("checkin"); setErr("");
-    try { setCheckin((await api.checkin()).results); setCheckinAt(Date.now()); }
+    try { setCheckin((await api.checkin()).results); setCheckinAt(Date.now()); setShowCheckin(true); }
     catch (e) { setErr(e.message); }
     finally { setBusy(""); }
   }
-  const checkinSummary = checkin
-    ? `${checkin.filter((r) => r.reachable).length} of ${checkin.length} reachable`
-    : "";
 
   return (
     <div className="three-pane">
@@ -54,13 +52,6 @@ export default function Connect() {
             {busy === "checkin" ? <span className="spin" /> : "Check In / Ping"}
           </button>
         </div>
-        {checkin && (
-          <div className="faint" style={{ fontSize: 12, marginTop: 2 }}>
-            Ping: <span style={{ color: checkin.every((r) => r.reachable) ? "var(--ok, #4ec07a)" : "#e0a83a" }}>
-              {checkinSummary}</span>
-            {checkinAt ? ` · ${new Date(checkinAt).toLocaleTimeString()}` : ""}
-          </div>
-        )}
         <div className="ctl-row">
           <button className="btn ghost sm" onClick={() => setChecked(hosts.map((h) => h.id))}>Select All</button>
           <button className="btn ghost sm" onClick={() => setChecked([])}>Deselect All</button>
@@ -96,10 +87,7 @@ export default function Connect() {
                             onClick={() => setSel(h)} onDoubleClick={() => openTerm(h)}
                             title="Click to select · double-click to open a terminal">{h.label}</span>
                       <span className="meta">{h.has_agent ? "Agent+SSH" : "SSH"} {h.address}
-                        {h.online === false ? " · offline" : ""}
-                        {ci && <span style={{ color: ci.reachable ? "var(--ok, #4ec07a)" : "#e06c6c", marginLeft: 4 }}
-                                     title={ci.detail || ""}>· {ci.reachable ? "reachable" : "unreachable"}</span>}
-                      </span>
+                        {h.online === false ? " · offline" : ""}</span>
                     </div>
                   );
                 })}
@@ -134,6 +122,38 @@ export default function Connect() {
           <TerminalDock ref={dock} />
         </Section>
       </div>
+
+      {showCheckin && checkin && (
+        <div onClick={() => setShowCheckin(false)}
+             style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 50,
+                      display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <div onClick={(e) => e.stopPropagation()} className="card"
+               style={{ width: "min(420px, 92vw)", maxHeight: "80vh", overflow: "auto" }}>
+            <div className="spread" style={{ marginBottom: 8, alignItems: "center" }}>
+              <strong>Check-In / Ping</strong>
+              <button className="btn ghost sm" onClick={() => setShowCheckin(false)}>Close ✕</button>
+            </div>
+            <div className="faint" style={{ fontSize: 12, marginBottom: 8 }}>
+              <span style={{ color: checkin.every((r) => r.reachable) ? "var(--ok, #4ec07a)" : "#e0a83a" }}>
+                {checkin.filter((r) => r.reachable).length} of {checkin.length} reachable</span>
+              {checkinAt ? ` · ${new Date(checkinAt).toLocaleTimeString()}` : ""}
+            </div>
+            {[...checkin].sort((a, b) => (a.reachable === b.reachable ? 0 : a.reachable ? 1 : -1)).map((r) => (
+              <div key={r.id || r.host} className="spread"
+                   style={{ padding: "5px 0", borderTop: "1px solid var(--border)", gap: 8, alignItems: "center" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                  <span className={"dot " + (r.reachable ? "ok" : "bad")} />
+                  <span>{r.host}</span>
+                </span>
+                <span className="faint" style={{ fontSize: 12, textAlign: "right",
+                        color: r.reachable ? undefined : "#e06c6c" }}>
+                  {r.reachable ? "reachable" : (r.detail || "unreachable")}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

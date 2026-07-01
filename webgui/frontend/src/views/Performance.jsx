@@ -152,14 +152,14 @@ function LineChart({ series, t0, t1, kind, onZoom }) {
               <line x1={padL} y1={yy} x2={W - padR} y2={yy}
                     stroke="var(--border)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
               <text x={padL - 6} y={yy + 4} textAnchor="end"
-                    style={{ fontSize: 14, fill: "var(--text-faint)" }}>{fmtMetric(kind, yv)}</text>
+                    style={{ fontSize: 14, fill: "var(--text)" }}>{fmtMetric(kind, yv)}</text>
             </g>
           );
         })}
         {xticks.map((t, i) => (
           <text key={i} x={x(t)} y={H - 8}
                 textAnchor={i === 0 ? "start" : i === xticks.length - 1 ? "end" : "middle"}
-                style={{ fontSize: 15, fill: "var(--text-faint)" }}>{fmtClock(t)}</text>
+                style={{ fontSize: 15, fill: "var(--text)" }}>{fmtClock(t)}</text>
         ))}
         {series.map((s) => (
           s.points.length === 0 ? null : (

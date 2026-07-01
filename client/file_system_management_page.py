@@ -1,11 +1,16 @@
+import time
+from concurrent.futures import ThreadPoolExecutor
+
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton,
     QLineEdit, QTextEdit, QMessageBox, QGroupBox, QTabWidget, QComboBox, QCheckBox,
+    QDialog, QScrollArea,
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QThread, Signal
 
 from client import api
+from client.fleet_dashboard_page import PAL, _refresh_pal, _dot, _card_frame
 from client import result_banner
 from client import session
 from client import system_paths
@@ -29,6 +34,188 @@ def _entry_key(entry):
     agent host_ids and SSH host names live in separate namespaces, so the
     kind has to be part of the key."""
     return (entry["kind"], entry["id"])
+
+
+# ---------------------------------------------------------------------------
+# Cross-host file comparison (mass diff) — parity with the web console
+# ---------------------------------------------------------------------------
+def _parse_filehash(text):
+    """Parse the `SYSFILEHASH|k=v|...` line from cmd_file_fingerprint, or None."""
+    for line in (text or "").splitlines():
+        if line.startswith("SYSFILEHASH|"):
+            d = {}
+            for kv in line.split("|")[1:]:
+                if "=" in kv:
+                    k, v = kv.split("=", 1)
+                    d[k] = v
+            return d
+    return None
+
+
+class _CompareWorker(QThread):
+    """Fingerprints one file across the checked hosts off the GUI thread (in
+    parallel), running as the operator. Emits [(label, fingerprint|error), ...]."""
+    done = Signal(object)
+
+    def __init__(self, entries, command):
+        super().__init__()
+        self._entries = entries
+        self._command = command
+
+    def run(self):
+        def work(entry):
+            label = entry["label"]
+            try:
+                out = api.run_on_entry(entry, self._command)
+            except Exception as e:
+                return (label, {"error": str(e)})
+            if out.get("error"):
+                return (label, {"error": out["error"]})
+            if out.get("sync"):
+                fp = _parse_filehash((out.get("stdout") or "") + "\n" + (out.get("stderr") or ""))
+                return (label, fp or {"error": "no fingerprint returned"})
+            tid = out.get("task_id")
+            if tid is None:
+                return (label, {"error": "failed to queue task"})
+            deadline = time.time() + 25
+            while time.time() < deadline:
+                r = api.poll_entry_result(entry, tid)
+                if r is not None:
+                    fp = _parse_filehash((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
+                    return (label, fp or {"error": "no fingerprint returned"})
+                time.sleep(1.0)
+            return (label, {"error": "timed out waiting for host"})
+        workers = min(12, max(1, len(self._entries)))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            res = list(ex.map(work, self._entries))
+        self.done.emit(res)
+
+
+def _fmt_size(s):
+    try:
+        n = int(str(s).strip())
+    except (TypeError, ValueError):
+        return str(s or "—")
+    if n < 1024:
+        return f"{n} B"
+    if n < 1048576:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / 1048576:.1f} MB"
+
+
+def _version_card(i, v):
+    card = _card_frame()
+    lay = QVBoxLayout(card)
+    lay.setContentsMargins(10, 8, 10, 8)
+    hdr = QHBoxLayout()
+    hdr.addWidget(_dot("#4ec07a" if i == 0 else "#e0a83a"))
+    t = QLabel("Version A — most common" if i == 0 else f"Version {chr(65 + i)} — differs")
+    t.setStyleSheet(f"border:none; background:transparent; color:{PAL['text']}; font-weight:bold;")
+    hdr.addWidget(t)
+    cnt = QLabel(f"{len(v['hosts'])} host{'' if len(v['hosts']) == 1 else 's'}")
+    cnt.setStyleSheet(f"border:none; background:transparent; color:{PAL['faint']}; font-size:11px;")
+    hdr.addWidget(cnt)
+    hdr.addStretch()
+    meta = QLabel(f"{(v['sha'] or '')[:12]} · {_fmt_size(v.get('size'))}")
+    meta.setStyleSheet(f"border:none; background:transparent; color:{PAL['faint']}; font-size:11px;")
+    hdr.addWidget(meta)
+    lay.addLayout(hdr)
+    hosts = QLabel(", ".join(v["hosts"]))
+    hosts.setWordWrap(True)
+    hosts.setStyleSheet(f"border:none; background:transparent; color:{PAL['text']}; font-size:12px;")
+    lay.addWidget(hosts)
+    return card
+
+
+def _group_card(title, hosts, color):
+    card = _card_frame()
+    lay = QVBoxLayout(card)
+    lay.setContentsMargins(10, 8, 10, 8)
+    hdr = QHBoxLayout()
+    hdr.addWidget(_dot(color))
+    t = QLabel(title)
+    t.setStyleSheet(f"border:none; background:transparent; color:{PAL['text']}; font-weight:bold;")
+    hdr.addWidget(t)
+    c = QLabel(str(len(hosts)))
+    c.setStyleSheet(f"border:none; background:transparent; color:{PAL['faint']};")
+    hdr.addWidget(c)
+    hdr.addStretch()
+    lay.addLayout(hdr)
+    h = QLabel(", ".join(hosts))
+    h.setWordWrap(True)
+    h.setStyleSheet(f"border:none; background:transparent; color:{PAL['text']}; font-size:12px;")
+    lay.addWidget(h)
+    return card
+
+
+class FileCompareDialog(QDialog):
+    """Grouped cross-host comparison of one file: hosts bucketed by content hash,
+    so it's obvious which hosts have a different version."""
+
+    def __init__(self, path, versions, missing, unreadable, errors, parent=None):
+        super().__init__(parent)
+        _refresh_pal()
+        self.setWindowTitle(f"Compare — {path}")
+        self.resize(700, 560)
+        self.setStyleSheet(f"QDialog{{background:{PAL['page']};}}")
+        outer = QVBoxLayout(self)
+
+        p = QLabel(path)
+        p.setWordWrap(True)
+        p.setStyleSheet(f"color:{PAL['faint']};")
+        outer.addWidget(p)
+
+        all_same = len(versions) <= 1 and not missing and not unreadable and not errors
+        total = sum(len(v["hosts"]) for v in versions) + len(missing) + len(unreadable) + len(errors)
+        summ = QLabel()
+        if all_same:
+            summ.setText(f"✓ Identical across all {total} host{'' if total == 1 else 's'}")
+            summ.setStyleSheet(f"color:{STATUS_SUCCESS_COLOR}; font-weight:bold;")
+        else:
+            parts = [f"{len(versions)} distinct version{'' if len(versions) == 1 else 's'}"]
+            if missing:
+                parts.append(f"{len(missing)} missing")
+            if unreadable:
+                parts.append(f"{len(unreadable)} unreadable")
+            if errors:
+                parts.append(f"{len(errors)} error{'' if len(errors) == 1 else 's'}")
+            summ.setText("⚠ " + ", ".join(parts))
+            summ.setStyleSheet("color:#e0a83a; font-weight:bold;")
+        outer.addWidget(summ)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(f"QScrollArea{{background:{PAL['page']}; border:none;}}")
+        body = QWidget()
+        body.setStyleSheet(f"background:{PAL['page']};")
+        bl = QVBoxLayout(body)
+        bl.setSpacing(8)
+        for i, v in enumerate(versions):
+            bl.addWidget(_version_card(i, v))
+        if missing:
+            bl.addWidget(_group_card("Missing (no such file)", missing, "#7a7a7a"))
+        if unreadable:
+            bl.addWidget(_group_card("Unreadable (permission)", unreadable, "#7a7a7a"))
+        if errors:
+            ec = _card_frame()
+            el = QVBoxLayout(ec)
+            el.setContentsMargins(10, 8, 10, 8)
+            et = QLabel("Errors")
+            et.setStyleSheet(f"border:none; background:transparent; color:{PAL['faint']}; font-weight:bold; font-size:11px;")
+            el.addWidget(et)
+            for label, err in errors:
+                e = QLabel(f"{label}: {err}")
+                e.setWordWrap(True)
+                e.setStyleSheet(f"border:none; background:transparent; color:{PAL['faint']}; font-size:12px;")
+                el.addWidget(e)
+            bl.addWidget(ec)
+        bl.addStretch()
+        scroll.setWidget(body)
+        outer.addWidget(scroll, 1)
+
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        outer.addWidget(close, 0, Qt.AlignRight)
 
 
 class FileSystemManagementPage(QWidget):
@@ -173,6 +360,11 @@ class FileSystemManagementPage(QWidget):
                                  "including system files). Output is capped at ~1 MB.")
         btn_view_file.clicked.connect(self.run_view_file)
         list_row.addWidget(btn_view_file)
+        btn_compare = QPushButton("Compare Across Hosts")
+        btn_compare.setToolTip("Read-only: fingerprint this file on every checked host and show "
+                               "which hosts have a different version (grouped by content hash).")
+        btn_compare.clicked.connect(self.run_compare_file)
+        list_row.addWidget(btn_compare)
         _g1.addLayout(list_row)
 
         create_row = QHBoxLayout()
@@ -922,6 +1114,52 @@ class FileSystemManagementPage(QWidget):
             QMessageBox.warning(self, "Invalid input", str(e))
             return
         self._run_fs_command(cmd, "View File")
+
+    def run_compare_file(self):
+        entries = self.checked_entries()
+        if not entries:
+            QMessageBox.information(self, "No hosts checked",
+                                   "Check two or more target hosts to compare a file across them.")
+            return
+        path = self.list_dir_path_input.text().strip()
+        if not path:
+            QMessageBox.warning(self, "Invalid input", "Enter a file path (in the Path field) to compare.")
+            return
+        try:
+            cmd = api.cmd_file_fingerprint(path)
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid input", str(e))
+            return
+        self.fs_status.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
+        self.fs_status.setText(f"Comparing '{path}' across {len(entries)} host(s)…")
+        self._compare_worker = _CompareWorker(entries, cmd)
+        self._compare_worker.done.connect(lambda res, p=path: self._show_compare(p, res))
+        self._compare_worker.start()
+
+    def _show_compare(self, path, results):
+        versions, missing, unreadable, errors = {}, [], [], []
+        for label, fp in results:
+            if fp.get("error"):
+                errors.append((label, fp["error"]))
+                continue
+            st = fp.get("status")
+            if st == "missing":
+                missing.append(label)
+                continue
+            if st == "dir":
+                errors.append((label, "path is a directory"))
+                continue
+            sha = fp.get("sha") or ""
+            if not sha:
+                unreadable.append(label)
+                continue
+            v = versions.setdefault(sha, {"sha": sha, "size": fp.get("size"),
+                                          "mtime": fp.get("mtime"), "hosts": []})
+            v["hosts"].append(label)
+        vlist = sorted(versions.values(), key=lambda v: len(v["hosts"]), reverse=True)
+        self.fs_status.setStyleSheet(f"color: {STATUS_SUCCESS_COLOR};")
+        self.fs_status.setText(f"Compared '{path}' across {len(results)} host(s).")
+        FileCompareDialog(path, vlist, missing, unreadable, errors, self).exec()
 
     def run_create_directory(self):
         try:

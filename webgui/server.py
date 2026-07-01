@@ -1791,19 +1791,20 @@ def _dispatch_one(entry, command, kind, become_password=None, token=None, descri
     The subsequent agent-result polling does not need the token, so it isn't
     held during the (bounded) poll loop."""
     label = entry["label"]
+    env = entry.get("environment") or "Unassigned"
     try:
         outcome = _with_token(token, lambda: dispatch.run_on_entry(
             entry, command, kind=kind, become_password=become_password, description=description))
     except Exception as e:
-        return {"host": label, "ok": False, "error": str(e),
+        return {"host": label, "environment": env, "ok": False, "error": str(e),
                 "stdout": "", "stderr": "", "code": None}
 
     if outcome.get("error"):
-        return {"host": label, "ok": False, "error": outcome["error"],
+        return {"host": label, "environment": env, "ok": False, "error": outcome["error"],
                 "stdout": "", "stderr": "", "code": None}
 
     if outcome.get("sync"):
-        return _normalize(label, outcome)
+        return _normalize(label, outcome, env)
 
     # Agent task: poll until the agent reports back, or time out.
     import time
@@ -1812,16 +1813,17 @@ def _dispatch_one(entry, command, kind, become_password=None, token=None, descri
     while time.time() < deadline:
         polled = dispatch.poll_entry_result(entry, task_id)
         if polled is not None:
-            return _normalize(label, polled)
+            return _normalize(label, polled, env)
         time.sleep(1.0)
-    return {"host": label, "ok": False, "error": "timed out waiting for agent",
+    return {"host": label, "environment": env, "ok": False, "error": "timed out waiting for agent",
             "stdout": "", "stderr": "", "code": None}
 
 
-def _normalize(label, r):
+def _normalize(label, r, env="Unassigned"):
     code = r.get("code")
     return {
         "host": label,
+        "environment": env,
         "ok": (code == 0) if code is not None else (not r.get("stderr")),
         "error": r.get("error"),
         "stdout": r.get("stdout", ""),

@@ -62,6 +62,7 @@ export default function App() {
   const [checking, setChecking] = useState(true);
   const [view, setView] = useState(null); // null = dashboard
   const [target, setTarget] = useState(null);
+  const [history, setHistory] = useState([]); // breadcrumb stack of {view,target}
   const [edition, setEdition] = useState(null);
   const [sudoOpen, setSudoOpen] = useState(false);
   const [theme, setTheme] = useState(localStorage.getItem("sysible_theme") || "dark");
@@ -82,7 +83,24 @@ export default function App() {
   const onLoggedIn = useCallback((username, r) => { setUser(username); setRole(r || ""); }, []);
   const onLogout = useCallback(async () => {
     try { await api.logout(); } catch { /* ignore */ }
-    setUser(null); setView(null);
+    setUser(null); setView(null); setHistory([]);
+  }, []);
+
+  // Navigate, remembering where we came from so a global Back button can return
+  // there (e.g. Performance → a tool → Back to Performance) without walking the
+  // menus again. Used by both the sidebar and in-app "Fix in…"/drill links.
+  const go = useCallback((v, t = null) => {
+    if (v === view && JSON.stringify(t) === JSON.stringify(target)) return;
+    setHistory((h) => [...h, { view, target }]);
+    setView(v); setTarget(t);
+  }, [view, target]);
+  const goBack = useCallback(() => {
+    setHistory((h) => {
+      if (!h.length) return h;
+      const prev = h[h.length - 1];
+      setView(prev.view); setTarget(prev.target || null);
+      return h.slice(0, -1);
+    });
   }, []);
 
   const toggleTheme = () => {
@@ -116,7 +134,7 @@ export default function App() {
   return (
     <div className="shell">
       <nav className="rail">
-        <div className="rail-brand" onClick={() => setView(null)}>
+        <div className="rail-brand" onClick={() => go(null)}>
           <img className="rail-mark" src="/sysible_logo.png" alt=""
                onError={(e) => { e.target.style.display = "none"; e.target.nextSibling.style.display = "flex"; }} />
           <span className="rail-mark-fallback" style={{ display: "none" }}>S</span>
@@ -127,7 +145,7 @@ export default function App() {
           {nav.map((n) => (
             <button key={n.key ?? "dash"}
                     className={"rail-item" + (view === n.key ? " active" : "")}
-                    onClick={() => { setView(n.key); setTarget(null); }}>
+                    onClick={() => go(n.key, null)}>
               <NavIcon name={n.icon} /><span>{n.label}</span>
             </button>
           ))}
@@ -154,16 +172,21 @@ export default function App() {
 
       <main className="main">
         <div className="main-top">
-          <h2>{view === "host" ? (target?.label || "Host Posture") : (view ? SECTIONS[view] : "Dashboard")}</h2>
+          <div className="row" style={{ alignItems: "center", gap: 10, minWidth: 0 }}>
+            {history.length > 0 && (
+              <button className="btn ghost sm" onClick={goBack} title="Back to the previous screen">← Back</button>
+            )}
+            <h2 style={{ margin: 0 }}>{view === "host" ? (target?.label || "Host Posture") : (view ? SECTIONS[view] : "Dashboard")}</h2>
+          </div>
           <div className="main-top-sub">{view ? "" : `Signed in as ${user}${role ? ` · ${role}` : ""}`}</div>
         </div>
         <div className="main-scroll">
           {view === null && <Dashboard role={role} edition={edition}
-            onOpen={(section, opts) => { setView(section); setTarget(opts || null); }} />}
+            onOpen={(section, opts) => go(section, opts || null)} />}
           {view === "perf" && <Performance />}
           {view === "host" && <HostDetail hostId={target?.id} label={target?.label} canAct={!isAuditor}
-            onBack={() => { setView(null); setTarget(null); }}
-            onOpen={(section, opts) => { setView(section); setTarget(opts || null); }} />}
+            onBack={() => (history.length > 0 ? goBack() : go(null))}
+            onOpen={(section, opts) => go(section, opts || null)} />}
           {!isAuditor && view === "hosts" && <HostEnrollment />}
           {!isAuditor && view === "settings" && <Settings />}
           {!isAuditor && view === "quickactions" && <ToolRunner solo="Quick System Actions" />}

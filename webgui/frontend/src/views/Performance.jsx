@@ -91,7 +91,7 @@ function bucketAverage(samples, valueOf, t0, t1, buckets = 80) {
 // viewBox is scaled to width:100% of its grid cell, so a taller viewBox + wider
 // columns make the charts fill the window instead of sitting as thin slivers.
 function LineChart({ series, t0, t1, kind, onZoom }) {
-  const W = 1000, H = 300, padL = 54, padR = 16, padT = 12, padB = 26;
+  const W = 1000, H = 300, padL = 60, padR = 16, padT = 12, padB = 34;
   const plotW = W - padL - padR, plotH = H - padT - padB;
   const svgRef = useRef(null);
   const [hoverX, setHoverX] = useState(null); // cursor x in viewBox coords, or null
@@ -151,15 +151,15 @@ function LineChart({ series, t0, t1, kind, onZoom }) {
             <g key={i}>
               <line x1={padL} y1={yy} x2={W - padR} y2={yy}
                     stroke="var(--border)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-              <text x={padL - 6} y={yy + 3} textAnchor="end"
-                    style={{ fontSize: 10, fill: "var(--text-faint)" }}>{fmtMetric(kind, yv)}</text>
+              <text x={padL - 6} y={yy + 4} textAnchor="end"
+                    style={{ fontSize: 14, fill: "var(--text-faint)" }}>{fmtMetric(kind, yv)}</text>
             </g>
           );
         })}
         {xticks.map((t, i) => (
-          <text key={i} x={x(t)} y={H - 6}
+          <text key={i} x={x(t)} y={H - 8}
                 textAnchor={i === 0 ? "start" : i === xticks.length - 1 ? "end" : "middle"}
-                style={{ fontSize: 10, fill: "var(--text-faint)" }}>{fmtClock(t)}</text>
+                style={{ fontSize: 15, fill: "var(--text-faint)" }}>{fmtClock(t)}</text>
         ))}
         {series.map((s) => (
           s.points.length === 0 ? null : (

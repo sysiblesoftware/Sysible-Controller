@@ -15,6 +15,7 @@ import StandaloneTerminal from "./components/StandaloneTerminal.jsx";
 const SECTIONS = {
   hosts: "Host Enrollment",
   perf: "Fleet Performance",
+  quickactions: "Quick System Actions",
   sysadmin: "System Administration",
   connect: "Sysible Connect",
   live: "Live Activity & Logs",
@@ -28,6 +29,7 @@ const NAV = [
   { key: null, label: "Dashboard", icon: "grid", su: false, aud: true },
   { key: "perf", label: "Performance", icon: "chart", su: false, aud: true },
   { key: "hosts", label: "Host Enrollment", icon: "server", su: true },
+  { key: "quickactions", label: "Quick System Actions", icon: "bolt", su: false },
   { key: "sysadmin", label: "System Administration Tools", icon: "tools", su: false },
   { key: "connect", label: "Connect", icon: "terminal", su: false },
   { key: "live", label: "Activity & Logs", icon: "activity", su: true, aud: true },
@@ -42,6 +44,7 @@ const ICONS = {
   activity: <><path d="M4 12h4l2-6 4 12 2-6h4"/></>,
   chart: <><path d="M4 19V5M4 19h16M8 16l3-4 3 3 4-6"/></>,
   cog: <><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></>,
+  bolt: <><path d="M13 3L4 14h6l-1 7 9-11h-6z"/></>,
 };
 
 function NavIcon({ name }) {
@@ -163,6 +166,7 @@ export default function App() {
             onOpen={(section, opts) => { setView(section); setTarget(opts || null); }} />}
           {!isAuditor && view === "hosts" && <HostEnrollment />}
           {!isAuditor && view === "settings" && <Settings />}
+          {!isAuditor && view === "quickactions" && <ToolRunner solo="Quick System Actions" />}
           {!isAuditor && view === "sysadmin" && <ToolRunner openTool={target?.tool} openTab={target?.tab}
             onConsumed={() => setTarget(null)} />}
           {!isAuditor && view === "connect" && <Connect />}

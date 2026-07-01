@@ -41,11 +41,18 @@ const TOOLS = [
   ["Distro Subscription & Licensing", "Register and manage commercial-distro subscriptions: Red Hat (subscription-manager), Ubuntu Pro, and SUSE (SUSEConnect) — status, attach/enable, and repositories.", "id-card", "ico-amber"],
 ];
 
-export default function ToolRunner({ openTool, openTab, onConsumed }) {
+// `solo` pins the runner to a single tool: no grid, no "← All tools" — used by
+// dedicated sidebar entries (e.g. Quick System Actions) that promote one tool to
+// its own top-level menu item.
+export default function ToolRunner({ openTool, openTab, onConsumed, solo }) {
   const [catalog, setCatalog] = useState(null);
   const [hosts, setHosts] = useState([]);
   const [err, setErr] = useState("");
-  const [open, setOpen] = useState(null);   // {name, special?, tab?}
+  const [open, setOpen] = useState(() => {
+    if (!solo) return null;
+    const t = TOOLS.find(([name]) => name === solo);
+    return t ? { name: t[0], special: t[4] } : null;
+  });   // {name, special?, tab?}
   const [q, setQ] = useState("");
 
   const loadHosts = useCallback(() => {
@@ -81,7 +88,7 @@ export default function ToolRunner({ openTool, openTab, onConsumed }) {
     return (
       <div style={{ height: "calc(100vh - 150px)", display: "flex", flexDirection: "column" }}>
         <div className="row" style={{ marginBottom: 12 }}>
-          <button className="btn ghost sm" onClick={() => setOpen(null)}>← All tools</button>
+          {!solo && <button className="btn ghost sm" onClick={() => setOpen(null)}>← All tools</button>}
           <strong>{open.name}</strong>
         </div>
         {open.special === "env"

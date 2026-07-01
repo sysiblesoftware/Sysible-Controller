@@ -32,12 +32,16 @@ export default function Connect() {
 
   function openTerm(h) { dock.current && dock.current.open(h.id, h.label); }
 
+  const [checkinAt, setCheckinAt] = useState(0);
   async function runCheckin() {
     setBusy("checkin"); setErr("");
-    try { setCheckin((await api.checkin()).results); }
+    try { setCheckin((await api.checkin()).results); setCheckinAt(Date.now()); }
     catch (e) { setErr(e.message); }
     finally { setBusy(""); }
   }
+  const checkinSummary = checkin
+    ? `${checkin.filter((r) => r.reachable).length} of ${checkin.length} reachable`
+    : "";
 
   return (
     <div className="three-pane">
@@ -50,6 +54,13 @@ export default function Connect() {
             {busy === "checkin" ? <span className="spin" /> : "Check In / Ping"}
           </button>
         </div>
+        {checkin && (
+          <div className="faint" style={{ fontSize: 12, marginTop: 2 }}>
+            Ping: <span style={{ color: checkin.every((r) => r.reachable) ? "var(--ok, #4ec07a)" : "#e0a83a" }}>
+              {checkinSummary}</span>
+            {checkinAt ? ` · ${new Date(checkinAt).toLocaleTimeString()}` : ""}
+          </div>
+        )}
         <div className="ctl-row">
           <button className="btn ghost sm" onClick={() => setChecked(hosts.map((h) => h.id))}>Select All</button>
           <button className="btn ghost sm" onClick={() => setChecked([])}>Deselect All</button>
@@ -79,12 +90,16 @@ export default function Connect() {
                              onClick={(e) => e.stopPropagation()} />
                       <span className={"dot " + (ci ? (ci.reachable ? "ok" : "bad")
                         : h.online === true ? "ok" : h.online === false ? "bad" : "")}
-                        title={h.online === false ? "Offline (no recent agent heartbeat)" : h.online === true ? "Online" : ""} />
+                        title={ci ? (ci.reachable ? "Ping: reachable" : `Ping: unreachable${ci.detail ? " — " + ci.detail : ""}`)
+                          : h.online === false ? "Offline (no recent agent heartbeat)" : h.online === true ? "Online" : ""} />
                       <span style={{ cursor: "pointer" }}
                             onClick={() => setSel(h)} onDoubleClick={() => openTerm(h)}
                             title="Click to select · double-click to open a terminal">{h.label}</span>
                       <span className="meta">{h.has_agent ? "Agent+SSH" : "SSH"} {h.address}
-                        {h.online === false ? " · offline" : ""}</span>
+                        {h.online === false ? " · offline" : ""}
+                        {ci && <span style={{ color: ci.reachable ? "var(--ok, #4ec07a)" : "#e06c6c", marginLeft: 4 }}
+                                     title={ci.detail || ""}>· {ci.reachable ? "reachable" : "unreachable"}</span>}
+                      </span>
                     </div>
                   );
                 })}

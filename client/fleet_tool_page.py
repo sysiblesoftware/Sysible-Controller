@@ -171,6 +171,7 @@ class FleetToolPage(QWidget):
         self.tabs.clear()
         self.results = {}
         self.pending = {}
+        self._entry_env = {}
 
     # ---- hosts ----
     def checked_entries(self):
@@ -248,6 +249,7 @@ class FleetToolPage(QWidget):
         self.last_command_label = label
         self.results = {}
         self.pending = {}
+        self._entry_env = {}
         self.tabs.clear()
         self.status_label.setStyleSheet(f"color: {STATUS_NEUTRAL_COLOR};")
         self.status_label.setText(f"Running '{label}' on {len(entries)} host(s)...")
@@ -270,6 +272,17 @@ class FleetToolPage(QWidget):
         # Ignore stale results if another action was launched after this one.
         if label != self.last_command_label:
             return
+        # Group the result tabs by environment: order them (Dev, Prod, …,
+        # Unassigned last) and remember each host's env so the tab labels can be
+        # prefixed with it, mirroring the web console's env-grouped results.
+        if not hasattr(self, "_entry_env"):
+            self._entry_env = {}
+        for _k, entry, _r in dispatched:
+            self._entry_env[_entry_key(entry)] = entry.get("environment") or "Unassigned"
+        dispatched = sorted(
+            dispatched,
+            key=lambda t: ((t[1].get("environment") or "￿").lower(),
+                           (t[1].get("label") or "").lower()))
         for key, entry, result in dispatched:
             if result["sync"]:
                 self.results[key] = {
@@ -325,6 +338,17 @@ class FleetToolPage(QWidget):
         text_edit.setHtml(result_banner.result_html(
             data, ok_label=f"{label} complete", fail_label=f"{label} failed"))
 
+    def _tab_label(self, key, data):
+        """Tab caption. When a run spans more than one environment, prefix each
+        host's tab with its environment so the tabs read grouped (Dev · web1)."""
+        base = f"{data['label']}  [{self._status_text(data)}]"
+        env_map = getattr(self, "_entry_env", {})
+        if len(set(env_map.values())) > 1:
+            env = env_map.get(key)
+            if env:
+                return f"{env} · {base}"
+        return base
+
     def _add_tab(self, key):
         data = self.results.get(key)
         if not data:
@@ -333,8 +357,11 @@ class FleetToolPage(QWidget):
         te.setReadOnly(True)
         te.setStyleSheet("font-family: monospace;")
         self._render(te, data)
-        idx = self.tabs.addTab(te, f"{data['label']}  [{self._status_text(data)}]")
+        idx = self.tabs.addTab(te, self._tab_label(key, data))
         self.tabs.tabBar().setTabData(idx, key)
+        env = getattr(self, "_entry_env", {}).get(key)
+        if env:
+            self.tabs.setTabToolTip(idx, f"Environment: {env}")
 
     def _refresh_tab(self, key):
         bar = self.tabs.tabBar()
@@ -343,7 +370,7 @@ class FleetToolPage(QWidget):
                 continue
             data = self.results.get(key)
             if data:
-                self.tabs.setTabText(i, f"{data['label']}  [{self._status_text(data)}]")
+                self.tabs.setTabText(i, self._tab_label(key, data))
                 self._render(self.tabs.widget(i), data)
             return
 

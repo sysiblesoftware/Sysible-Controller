@@ -1224,6 +1224,11 @@ _register(Action(name="time_troubleshoot", tool="Time Synchronization", label="T
 _register(Action(name="cert_install", tool="Certificate Management", label="Install certificate",
     params=[Param("cert_src", "Cert path on host"), Param("key_src", "Key path on host")],
     build=lambda p: api.cmd_install_certificate(_s(p, "cert_src"), _s(p, "key_src"))))
+_register(Action(name="cert_install_certbot", tool="Certificate Management", label="Install certbot",
+    description="Install the certbot (Let's Encrypt) client on the selected hosts, "
+                "using the host's package manager (dnf/yum/zypper/apt, or snap).",
+    params=[],
+    build=lambda p: api.cmd_install_certbot()))
 _register(Action(name="cert_renew_certbot", tool="Certificate Management", label="Renew (certbot)",
     params=[Param("domain", "Domain", required=False)],
     build=lambda p: api.cmd_renew_certbot(_s(p, "domain"))))

@@ -84,12 +84,17 @@ class CertificateManagementPage(FleetToolPage):
         self.renew_domain = QLineEdit()
         self.renew_domain.setPlaceholderText("e.g. www.example.com")
         row4.addWidget(self.renew_domain, 1)
+        b_install = QPushButton("Install certbot")
+        b_install.setToolTip("Install the certbot (Let's Encrypt) client on the checked hosts "
+                             "via their package manager (dnf/yum/zypper/apt, or snap).")
+        b_install.clicked.connect(lambda: self.run_command(api.cmd_install_certbot(), "Install certbot"))
+        row4.addWidget(b_install)
         b4 = QPushButton("Renew via certbot")
         b4.clicked.connect(lambda: self.run_with("Renew Certificate", lambda: api.cmd_renew_certbot(self.renew_domain.text())))
         row4.addWidget(b4)
         g3.addLayout(row4)
-        g3.addWidget(self._hint("Check Expiry flags certificates that are expired or due within 30 days (replace those). "
-                                "Renew uses certbot for Let's Encrypt certificates."))
+        g3.addWidget(self._hint("Install certbot first if it isn't present. Check Expiry flags certificates that are "
+                                "expired or due within 30 days (replace those). Renew uses certbot for Let's Encrypt certificates."))
         layout.addWidget(box3)
 
         layout.addStretch()

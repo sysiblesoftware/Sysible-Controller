@@ -87,6 +87,23 @@ def cmd_check_certificate(cert_path: str) -> str:
     )
 
 
+def cmd_install_certbot() -> str:
+    """Install certbot (Let's Encrypt client) using whatever package manager the
+    host has — cross-distro. RHEL/CentOS pull it from EPEL if enabled; snap is a
+    last resort where a native package isn't available. No-op if already present."""
+    return (
+        "if command -v certbot >/dev/null 2>&1; then echo \"certbot already installed: $(certbot --version 2>&1)\"; exit 0; fi; "
+        "if command -v dnf >/dev/null 2>&1; then dnf install -y certbot; "
+        "elif command -v yum >/dev/null 2>&1; then yum install -y certbot; "
+        "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install certbot; "
+        "elif command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y certbot; "
+        "elif command -v snap >/dev/null 2>&1; then snap install --classic certbot && ln -sf /snap/bin/certbot /usr/bin/certbot; "
+        "else echo 'No supported package manager (dnf/yum/zypper/apt/snap) found to install certbot.' >&2; exit 1; fi; "
+        "if command -v certbot >/dev/null 2>&1; then echo \"Installed: $(certbot --version 2>&1)\"; "
+        "else echo 'certbot install did not complete (a native package may be unavailable — on RHEL enable EPEL, or install snapd).' >&2; exit 1; fi"
+    )
+
+
 def cmd_renew_certbot(domain: str = "") -> str:
     """Renew Let's Encrypt certs via certbot (all, or one domain)."""
     domain = (domain or "").strip()

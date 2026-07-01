@@ -733,6 +733,7 @@ class PostureDialog(QDialog):
         self._status.setText("Reboot requested — waiting for the host to check back in; "
                              "this refreshes automatically once it's back.")
         self._reboot_deadline = time.time() + 300
+        self._reboot_saw_down = False
         if getattr(self, "_reboot_timer", None):
             self._reboot_timer.stop()
         self._reboot_timer = QTimer(self)
@@ -754,16 +755,24 @@ class PostureDialog(QDialog):
     def _check_reboot_result(self, data):
         posture = (data or {}).get("posture")
         if not posture:
+            # Host down mid-reboot — remember it, keep polling.
+            self._reboot_saw_down = True
             return
+        # Reachable → always show the current gather (never leave it stale), and
+        # stop once we've confirmed the reboot (went down and came back / new boot
+        # time / tiny uptime / reboot flag cleared).
+        self._render(data)
         os_ = posture.get("os") or {}
         boot = os_.get("boot_epoch")
         up = _to_int(os_.get("uptime_s"))
         reboot_req = (posture.get("reboot") or {}).get("required")
         base = getattr(self, "_reboot_base", None)
-        if (base and boot and boot != base) or reboot_req == "0" or (up is not None and up < 600):
-            if getattr(self, "_reboot_timer", None):
-                self._reboot_timer.stop()
-            self._render(data)
+        rebooted = (getattr(self, "_reboot_saw_down", False)
+                    or (base and boot and boot != base)
+                    or reboot_req == "0"
+                    or (up is not None and up < 900))
+        if rebooted and getattr(self, "_reboot_timer", None):
+            self._reboot_timer.stop()
 
 
 # ---------------------------------------------------------------------------

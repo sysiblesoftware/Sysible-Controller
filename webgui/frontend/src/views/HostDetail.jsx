@@ -266,30 +266,36 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
   }, [hostId]);
   useEffect(() => { load(); }, [load]);
 
-  // After a reboot the host goes down and comes back; poll posture until it has
-  // clearly rebooted (new boot time / reboot flag cleared / tiny uptime), then
-  // swap in the fresh data so the box updates on its own.
+  // After a reboot the host goes down and comes back. Poll posture and ALWAYS
+  // swap in the latest successful gather (so the box never sits on stale uptime),
+  // and stop the "rebooting" banner once we've confirmed the reboot — either we
+  // saw the host go offline and return, its boot time changed, or its uptime is
+  // now tiny. Runs up to 5 min.
   const refreshAfterReboot = useCallback(() => {
     if (!hostId) return;
     const baseBoot = (((dataRef.current || {}).posture || {}).os || {}).boot_epoch;
     setRebooting(true);
     if (pollRef.current) clearInterval(pollRef.current);
     const t0 = Date.now();
-    pollRef.current = setInterval(async () => {
+    let sawDown = false;
+    const tick = async () => {
       if (Date.now() - t0 > 300000) { clearInterval(pollRef.current); setRebooting(false); return; }
-      try {
-        const d = await api.hostPosture(hostId);
-        const os = (d && d.posture && d.posture.os) || {};
-        const rebootReq = (d && d.posture && d.posture.reboot) ? d.posture.reboot.required : undefined;
-        const up = os.uptime_s != null ? Number(os.uptime_s) : null;
-        const backUp = d && d.posture && (
-          (baseBoot && os.boot_epoch && os.boot_epoch !== baseBoot) ||
-          rebootReq === "0" ||
-          (up != null && isFinite(up) && up < 600)
-        );
-        if (backUp) { setData(d); setRebooting(false); clearInterval(pollRef.current); }
-      } catch { /* host down mid-reboot — keep polling */ }
-    }, 10000);
+      let d = null;
+      try { d = await api.hostPosture(hostId); } catch { d = null; }
+      const reachable = !!(d && d.posture);
+      if (!reachable) { sawDown = true; return; }   // down mid-reboot — keep polling
+      setData(d);                                    // reachable → show current, never stale
+      const os = d.posture.os || {};
+      const rebootReq = (d.posture.reboot || {}).required;
+      const up = os.uptime_s != null ? Number(os.uptime_s) : null;
+      const rebooted = sawDown ||
+        (baseBoot && os.boot_epoch && os.boot_epoch !== baseBoot) ||
+        rebootReq === "0" ||
+        (up != null && isFinite(up) && up < 900);
+      if (rebooted) { clearInterval(pollRef.current); setRebooting(false); }
+    };
+    pollRef.current = setInterval(tick, 8000);
+    setTimeout(tick, 4000);   // first check soon, not after a full interval
   }, [hostId]);
 
   const posture = data && data.posture;

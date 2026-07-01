@@ -952,14 +952,21 @@ def restart_unit(host_id: str, body: RestartUnitRequest, request: Request,
     return {"unit": unit, "host": entry.get("label"), "result": result}
 
 
+class CheckinRequest(BaseModel):
+    targets: list[str] = []   # host ids to ping; empty = all
+
+
 @app.post("/api/checkin")
-def checkin(user: str = Depends(require_operator)):
-    """Lightweight reachability probe: run `true` on every host and report
-    which answered (mirrors the desktop 'Check In / Ping')."""
+def checkin(body: CheckinRequest | None = None, user: str = Depends(require_operator)):
+    """Lightweight reachability probe: run `true` on the requested hosts (or all
+    if none given) and report which answered."""
     try:
         entries = dispatch.list_merged_hosts(agent_only=False)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+    wanted = set((body.targets if body else None) or [])
+    if wanted:
+        entries = [e for e in entries if e.get("id") in wanted]
     out = []
     for entry in entries:
         # A reachability ping (`true`) never needs sudo.

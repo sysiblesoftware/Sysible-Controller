@@ -127,7 +127,7 @@ export const api = {
   // Sysible Connect
   fleet: (action, targets, command, sudoPassword = "") =>
     req("/api/fleet", { method: "POST", body: { action, targets, command, sudo_password: sudoPassword } }),
-  checkin: () => req("/api/checkin", { method: "POST" }),
+  checkin: (targets = []) => req("/api/checkin", { method: "POST", body: { targets } }),
   restartUnit: (hostId, unit, sudoPassword = "") =>
     req(`/api/host/${encodeURIComponent(hostId)}/restart-unit`,
         { method: "POST", body: { unit, sudo_password: sudoPassword } }),

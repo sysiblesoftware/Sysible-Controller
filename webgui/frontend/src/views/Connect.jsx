@@ -34,9 +34,9 @@ export default function Connect() {
 
   const [checkinAt, setCheckinAt] = useState(0);
   const [showCheckin, setShowCheckin] = useState(false);
-  async function runCheckin() {
+  async function runCheckin(targets) {
     setBusy("checkin"); setErr("");
-    try { setCheckin((await api.checkin()).results); setCheckinAt(Date.now()); setShowCheckin(true); }
+    try { setCheckin((await api.checkin(targets || [])).results); setCheckinAt(Date.now()); setShowCheckin(true); }
     catch (e) { setErr(e.message); }
     finally { setBusy(""); }
   }
@@ -48,8 +48,11 @@ export default function Connect() {
         <strong style={{ fontSize: 13 }}>Managed Hosts (agent + SSH)</strong>
         <div className="ctl-row" style={{ marginTop: 8 }}>
           <button className="btn ghost sm" onClick={loadHosts}>Refresh</button>
-          <button className="btn ghost sm" disabled={busy === "checkin"} onClick={runCheckin}>
-            {busy === "checkin" ? <span className="spin" /> : "Check In / Ping"}
+          <button className="btn ghost sm" disabled={busy === "checkin"}
+                  title={checked.length ? "Ping the checked hosts" : "Ping all hosts (check some to ping just those)"}
+                  onClick={() => runCheckin(checked)}>
+            {busy === "checkin" ? <span className="spin" />
+              : checked.length ? `Ping ${checked.length} checked` : "Ping All"}
           </button>
         </div>
         <div className="ctl-row">
@@ -81,8 +84,9 @@ export default function Connect() {
                              onClick={(e) => e.stopPropagation()} />
                       <span className={"dot " + (ci ? (ci.reachable ? "ok" : "bad")
                         : h.online === true ? "ok" : h.online === false ? "bad" : "")}
-                        title={ci ? (ci.reachable ? "Ping: reachable" : `Ping: unreachable${ci.detail ? " — " + ci.detail : ""}`)
-                          : h.online === false ? "Offline (no recent agent heartbeat)" : h.online === true ? "Online" : ""} />
+                        style={{ cursor: "pointer" }}
+                        onClick={(e) => { e.stopPropagation(); runCheckin([h.id]); }}
+                        title={"Click to ping this host" + (ci ? (ci.reachable ? " · last: reachable" : ` · last: unreachable${ci.detail ? " — " + ci.detail : ""}`) : "")} />
                       <span style={{ cursor: "pointer" }}
                             onClick={() => setSel(h)} onDoubleClick={() => openTerm(h)}
                             title="Click to select · double-click to open a terminal">{h.label}</span>

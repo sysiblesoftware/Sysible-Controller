@@ -514,10 +514,10 @@ class ServiceManagementPage(QWidget):
     # ACTIONS
     # =========================================================
     def run_list_services(self):
-        self._run_service_command(api.cmd_list_services(), "Installed Services")
+        self._run_service_command(api.cmd_list_services(), "Installed Services", needs_sudo=False)
 
     def run_list_running_services(self):
-        self._run_service_command(api.cmd_list_running_services(), "Running Services")
+        self._run_service_command(api.cmd_list_running_services(), "Running Services", needs_sudo=False)
 
     def run_start(self):
         name = self._service_name()
@@ -614,7 +614,7 @@ class ServiceManagementPage(QWidget):
 
         for entry in entries:
             try:
-                result = api.run_on_entry(entry, api.cmd_list_usernames())
+                result = api.run_on_entry(entry, api.cmd_list_usernames(), needs_sudo=False)
             except Exception:
                 continue
             if result["sync"]:
@@ -689,7 +689,7 @@ class ServiceManagementPage(QWidget):
     # =========================================================
     # DISPATCH + RESULTS (same pattern as System Health & Logs)
     # =========================================================
-    def _run_service_command(self, command, label):
+    def _run_service_command(self, command, label, needs_sudo=True):
         entries = self.checked_entries()
 
         if not entries:
@@ -709,7 +709,7 @@ class ServiceManagementPage(QWidget):
 
         for entry in entries:
             key = _entry_key(entry)
-            result = api.run_on_entry(entry, command)
+            result = api.run_on_entry(entry, command, needs_sudo=needs_sudo)
 
             if result["sync"]:
                 self.service_results[key] = {

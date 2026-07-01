@@ -1,12 +1,47 @@
+import time
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTabWidget,
-    QMessageBox,
+    QMessageBox, QListWidget,
 )
 
 from client import api
 from client import theme
 from client.tab_sizing import shrink_tabwidget_to_current_page
 from client.fleet_tool_page import FleetToolPage
+from client.fleet_dashboard_page import _Worker
+
+
+def _list_services_on(entry, running):
+    """List service unit names on one host (read-only, no sudo). Returns
+    {"names": [...]} or {"error": "..."}. Runs off the GUI thread via _Worker."""
+    cmd = api.cmd_list_running_services() if running else api.cmd_list_services()
+    out = api.run_on_entry(entry, cmd, needs_sudo=False)
+    if out.get("error"):
+        return {"error": out["error"]}
+    if out.get("sync"):
+        text = out.get("stdout") or ""
+    else:
+        tid = out.get("task_id")
+        if tid is None:
+            return {"error": "failed to queue task"}
+        text = None
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            r = api.poll_entry_result(entry, tid)
+            if r is not None:
+                text = r.get("stdout") or ""
+                break
+            time.sleep(1.0)
+        if text is None:
+            return {"error": "timed out waiting for host"}
+    names = []
+    for ln in text.splitlines():
+        ln = ln.strip()
+        if not ln or ln.lower().startswith("systemctl not"):
+            continue
+        names.append(ln.split()[0])
+    return {"names": sorted(set(n for n in names if n))}
 
 
 class QuickSystemActionsPage(FleetToolPage):
@@ -58,7 +93,25 @@ class QuickSystemActionsPage(FleetToolPage):
             "Stop Service", lambda: api.cmd_service_stop(self.svc_input.text())))
         row.addWidget(b_stop)
         g.addLayout(row)
-        g.addWidget(self._hint("Restart / start / stop any systemd service by name on every checked host."))
+
+        # Service browser: list running/installed services on the first checked
+        # host, click one to fill the field (parity with the web console).
+        browse = QHBoxLayout()
+        self._svc_list_running_btn = QPushButton("List Running Services")
+        self._svc_list_running_btn.clicked.connect(lambda: self._list_services(True))
+        browse.addWidget(self._svc_list_running_btn)
+        self._svc_list_installed_btn = QPushButton("List Installed Services")
+        self._svc_list_installed_btn.clicked.connect(lambda: self._list_services(False))
+        browse.addWidget(self._svc_list_installed_btn)
+        browse.addStretch()
+        g.addLayout(browse)
+        self.svc_list = QListWidget()
+        self.svc_list.setMaximumHeight(150)
+        self.svc_list.itemClicked.connect(lambda it: self.svc_input.setText(it.text()))
+        self.svc_input.textChanged.connect(self._filter_svc_list)
+        g.addWidget(self.svc_list)
+        g.addWidget(self._hint("List services on the first checked host, click one to select it, then "
+                               "Restart / Start / Stop — runs on every checked host. Typing filters the list."))
         layout.addWidget(box)
 
         box2, g2 = self.group("Common services")
@@ -120,6 +173,52 @@ class QuickSystemActionsPage(FleetToolPage):
 
         layout.addStretch()
         return panel
+
+    # ---------------- Service browser ----------------
+    def _list_services(self, running):
+        entries = self.checked_entries()
+        if not entries:
+            QMessageBox.information(self, "No hosts checked", "Check a host first — services are read from one host.")
+            return
+        entry = entries[0]
+        self._svc_list_running_btn.setEnabled(False)
+        self._svc_list_installed_btn.setEnabled(False)
+        self.svc_list.clear()
+        self.svc_list.addItem(f"Listing services on {entry['label']}…")
+        self._svc_worker = _Worker(lambda e=entry, r=running: _list_services_on(e, r))
+        self._svc_worker.done.connect(self._on_services_listed)
+        self._svc_worker.fail.connect(self._on_services_failed)
+        self._svc_worker.start()
+
+    def _on_services_listed(self, res):
+        self._svc_list_running_btn.setEnabled(True)
+        self._svc_list_installed_btn.setEnabled(True)
+        self.svc_list.clear()
+        if res.get("error"):
+            self.svc_list.addItem(f"Error: {res['error']}")
+            self._all_svcs = []
+            return
+        self._all_svcs = res.get("names") or []
+        self._filter_svc_list(self.svc_input.text())
+        if not self._all_svcs:
+            self.svc_list.addItem("No services found.")
+
+    def _on_services_failed(self, msg):
+        self._svc_list_running_btn.setEnabled(True)
+        self._svc_list_installed_btn.setEnabled(True)
+        self.svc_list.clear()
+        self.svc_list.addItem(f"Error: {msg}")
+        self._all_svcs = []
+
+    def _filter_svc_list(self, text):
+        names = getattr(self, "_all_svcs", None)
+        if names is None:
+            return
+        text = (text or "").lower()
+        self.svc_list.clear()
+        for n in names:
+            if text in n.lower():
+                self.svc_list.addItem(n)
 
     # ---------------- Power ----------------
     def _power_tab(self):

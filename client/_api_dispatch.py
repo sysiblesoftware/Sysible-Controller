@@ -193,8 +193,32 @@ def _dedupe_same_ip(entries):
     return result
 
 
+_SUDO_AUTH_FAIL_MARKERS = (
+    "incorrect password attempt",
+    "incorrect password attempts",
+    "sorry, try again",
+    "a password is required",
+    "no password was provided",
+    "a terminal is required to read the password",
+)
+
+
+def sudo_auth_failed(text: str) -> bool:
+    """True if command output looks like sudo rejected the become-password (wrong
+    password / none supplied). Lets callers show a precise 'your stored sudo
+    password is wrong' message instead of the raw sudo noise."""
+    t = (text or "").lower()
+    return any(m in t for m in _SUDO_AUTH_FAIL_MARKERS)
+
+
+def _sudo_hint(entry):
+    return (f"Sudo authentication failed on '{entry.get('label', 'this host')}'. "
+            "The stored sudo password looks incorrect — update it with the "
+            "“Sudo Password” button, then try again.")
+
+
 def run_on_entry(entry, command: str, kind: str = "command", description: str = None,
-                 become_password: str = None):
+                 become_password: str = None, needs_sudo: bool = True):
     """Run `command` on one merged-host entry (as produced by
     list_merged_hosts()). SSH executes synchronously over exec_remote()
     - the result is ready immediately. Agent dispatch is async - only a
@@ -231,11 +255,13 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
         except Exception:
             become_password = None
 
-    if entry.get("requires_sudo_password"):
+    if entry.get("requires_sudo_password") and needs_sudo:
         # Fail fast with a clear instruction instead of dispatching a command
         # that will just bounce off `sudo` for lack of a password. This host is
         # marked "sudo requires a password" but none is stored for the
         # logged-in admin, so there's nothing for the agent to elevate with.
+        # (Read-only callers pass needs_sudo=False — listing services/packages,
+        # a reachability ping, etc. don't elevate, so they shouldn't be blocked.)
         if not become_password:
             msg = (
                 f"'{entry.get('label', 'this host')}' is set to require a sudo password, "
@@ -248,12 +274,13 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
         try:
             result = exec_remote(entry["id"], command, description=description,
                                  become_password=become_password)
+            stderr = result.get("stderr", "")
             return {
                 "sync": True,
                 "stdout": result.get("stdout", ""),
-                "stderr": result.get("stderr", ""),
+                "stderr": stderr,
                 "code": result.get("code"),
-                "error": None,
+                "error": _sudo_hint(entry) if (become_password and sudo_auth_failed(stderr)) else None,
             }
         except Exception as e:
             return {"sync": True, "stdout": "", "stderr": "", "code": None, "error": str(e)}
@@ -279,11 +306,15 @@ def poll_entry_result(entry, task_id):
     if output is None:
         return None
 
+    stderr = output.get("stderr", "")
+    code = output.get("returncode")
     return {
         "stdout": output.get("stdout", ""),
-        "stderr": output.get("stderr", ""),
-        "code": output.get("returncode"),
-        "error": None,
+        "stderr": stderr,
+        "code": code,
+        # A non-zero result whose output reads like a sudo password rejection ->
+        # a precise hint instead of raw "sudo: 1 incorrect password attempt".
+        "error": _sudo_hint(entry) if (code not in (0, None) and sudo_auth_failed(stderr)) else None,
     }
 
 

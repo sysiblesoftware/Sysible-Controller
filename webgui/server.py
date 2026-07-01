@@ -962,8 +962,8 @@ def checkin(user: str = Depends(require_operator)):
         raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
     out = []
     for entry in entries:
-        become = sudo_store.resolve(user, entry.get("label", ""))
-        r = _dispatch_one(entry, "true", "command", become)
+        # A reachability ping (`true`) never needs sudo.
+        r = _dispatch_one(entry, "true", "command", None, needs_sudo=False)
         out.append({"host": entry["label"], "id": entry["id"],
                     "reachable": bool(r.get("ok")) or r.get("code") == 0,
                     "detail": r.get("error") or ""})
@@ -1395,8 +1395,8 @@ def services_list(body: ServicesListRequest, request: Request, user: str = Depen
         raise HTTPException(status_code=404, detail="host not found")
     spec = actions.get("svc_list_running" if body.running else "svc_list")
     cmd = spec.build({})
-    become = sudo_store.resolve(user, entry.get("label", ""))
-    r = _dispatch_one(entry, cmd, "command", become, _session_token(request))
+    # Listing services doesn't need elevation — don't block sudo-required hosts.
+    r = _dispatch_one(entry, cmd, "command", None, _session_token(request), needs_sudo=False)
     if r.get("error") and not r.get("stdout"):
         raise HTTPException(status_code=502, detail=r["error"])
     names, seen = [], set()
@@ -1428,8 +1428,8 @@ def packages_list(body: PkgListRequest, request: Request, user: str = Depends(re
         raise HTTPException(status_code=404, detail="host not found")
     from client import _api_automation
     cmd = _api_automation.cmd_list_installed_packages()
-    become = sudo_store.resolve(user, entry.get("label", ""))
-    r = _dispatch_one(entry, cmd, "command", become, _session_token(request))
+    # Listing packages doesn't need elevation — don't block sudo-required hosts.
+    r = _dispatch_one(entry, cmd, "command", None, _session_token(request), needs_sudo=False)
     if r.get("error") and not r.get("stdout"):
         raise HTTPException(status_code=502, detail=r["error"])
     pkgs, seen = [], set()
@@ -1783,7 +1783,8 @@ def files_compare(body: CompareRequest, request: Request, user: str = Depends(re
             "unreadable": unreadable, "errors": errors, "identical": identical}
 
 
-def _dispatch_one(entry, command, kind, become_password=None, token=None, description=None):
+def _dispatch_one(entry, command, kind, become_password=None, token=None, description=None,
+                  needs_sudo=True):
     """Run one command on one host and return a normalized result,
     polling agent tasks to completion (bounded) so the response is
     synchronous from the browser's point of view.
@@ -1797,7 +1798,8 @@ def _dispatch_one(entry, command, kind, become_password=None, token=None, descri
     env = entry.get("environment") or "Unassigned"
     try:
         outcome = _with_token(token, lambda: dispatch.run_on_entry(
-            entry, command, kind=kind, become_password=become_password, description=description))
+            entry, command, kind=kind, become_password=become_password, description=description,
+            needs_sudo=needs_sudo))
     except Exception as e:
         return {"host": label, "environment": env, "ok": False, "error": str(e),
                 "stdout": "", "stderr": "", "code": None}

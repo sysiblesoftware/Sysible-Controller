@@ -129,10 +129,76 @@ function fmtValue(fullKey, v) {
   return v;
 }
 
-function Row({ fullKey, label, value }) {
-  const st = evalStatus(fullKey, value);
+// Remediation per finding. Two kinds:
+//   kind "run"  — a safe fix we can execute right here (reboot).
+//   kind "tool" — jump to the System Administration tool that fixes it, so the
+//                 operator lands on the exact screen (TLS cert → Certificate
+//                 Management, weak SSH → Security Administration, etc.).
+// `tool` names MUST match the tiles in ToolRunner.jsx exactly. Only shown when
+// the row is actually in a warn/bad state — no action on a healthy signal.
+const ACTIONS = {
+  "reboot.required": { kind: "run", label: "Reboot host", confirm: "Reboot this host now?",
+                       run: (hostId) => api.fleet("reboot", [hostId]) },
+  "cert.expiring_30d": { kind: "tool", tool: "Certificate Management" },
+  "cert.nearest_days": { kind: "tool", tool: "Certificate Management" },
+  "fw.active": { kind: "tool", tool: "Firewall Administration" },
+  "mac.selinux": { kind: "tool", tool: "Security Administration" },
+  "mac.apparmor": { kind: "tool", tool: "Security Administration" },
+  "sec.auditd": { kind: "tool", tool: "Security Administration" },
+  "sec.fail2ban": { kind: "tool", tool: "Security Administration" },
+  "ssh.permit_root_login": { kind: "tool", tool: "Security Administration" },
+  "ssh.password_auth": { kind: "tool", tool: "Security Administration" },
+  "ssh.weak_ciphers": { kind: "tool", tool: "Security Administration" },
+  "ssh.weak_macs": { kind: "tool", tool: "Security Administration" },
+  "ssh.weak_kex": { kind: "tool", tool: "Security Administration" },
+  "time.synced": { kind: "tool", tool: "Time Synchronization" },
+  "svc.failed_count": { kind: "tool", tool: "Quick System Actions" },
+  "fs.disk_pct": { kind: "tool", tool: "Storage Administration" },
+  "fs.inode_pct": { kind: "tool", tool: "Storage Administration" },
+  "users.empty_pw_count": { kind: "tool", tool: "User & Group Administration" },
+  "users.uid0_count": { kind: "tool", tool: "User & Group Administration" },
+  "users.pw_complexity": { kind: "tool", tool: "Environmental Policies" },
+};
+
+function RowAction({ action, hostId, onOpen }) {
+  const [state, setState] = useState("idle"); // idle | busy | ok | err
+  const [msg, setMsg] = useState("");
+  if (action.kind === "tool") {
+    return (
+      <button className="btn ghost sm" style={{ marginLeft: 8, whiteSpace: "nowrap" }}
+              onClick={() => onOpen && onOpen("sysadmin", { tool: action.tool })}
+              title={`Open ${action.tool}`}>
+        Fix in {action.tool} →
+      </button>
+    );
+  }
+  const doRun = () => {
+    if (state === "busy") return;
+    if (action.confirm && !window.confirm(action.confirm)) return;
+    setState("busy"); setMsg("");
+    action.run(hostId)
+      .then((r) => {
+        const res = (r && r.results && r.results[0]) || {};
+        const ok = res.ok || res.code === 0 || !!(r && r.action);
+        setState(ok ? "ok" : "err");
+        setMsg(ok ? "" : (res.error || res.stderr || "failed"));
+      })
+      .catch((e) => { setState("err"); setMsg(String(e.message || e)); });
+  };
+  const color = state === "ok" ? C.good : state === "err" ? C.bad : C.warn;
   return (
-    <div className="spread" style={{ padding: "5px 0", borderBottom: "1px solid var(--border)", gap: 12 }}>
+    <button className="btn sm" style={{ marginLeft: 8, whiteSpace: "nowrap", borderColor: color, color }}
+            onClick={doRun} disabled={state === "busy" || !hostId} title={msg || action.label}>
+      {state === "busy" ? "…" : state === "ok" ? "✓ requested" : state === "err" ? "✕ failed" : action.label}
+    </button>
+  );
+}
+
+function Row({ fullKey, label, value, hostId, onOpen, canAct }) {
+  const st = evalStatus(fullKey, value);
+  const action = (canAct && (st === "bad" || st === "warn")) ? ACTIONS[fullKey] : null;
+  return (
+    <div className="spread" style={{ padding: "5px 0", borderBottom: "1px solid var(--border)", gap: 12, alignItems: "center" }}>
       <span className="faint" style={{ fontSize: 13, whiteSpace: "nowrap" }}>{label}</span>
       <span style={{ fontSize: 13, textAlign: "right", wordBreak: "break-word",
                      display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
@@ -140,12 +206,13 @@ function Row({ fullKey, label, value }) {
         <span style={{ color: st === "bad" ? C.bad : st === "warn" ? C.warn : "var(--text)", fontWeight: st === "bad" ? 600 : 400 }}>
           {fmtValue(fullKey, value)}
         </span>
+        {action && <RowAction action={action} hostId={hostId} onOpen={onOpen} />}
       </span>
     </div>
   );
 }
 
-function SectionCard({ section, posture }) {
+function SectionCard({ section, posture, hostId, onOpen, canAct }) {
   // Collect every present key within this section's categories: known keys keep
   // their friendly label and stated order; unknown ones are appended humanized.
   const rows = [];
@@ -165,12 +232,13 @@ function SectionCard({ section, posture }) {
   return (
     <div className="card" style={{ padding: "12px 14px" }}>
       <div className="section-title" style={{ marginBottom: 6 }}>{section.title}</div>
-      {rows.map((r) => <Row key={r.fullKey} fullKey={r.fullKey} label={r.label} value={r.value} />)}
+      {rows.map((r) => <Row key={r.fullKey} fullKey={r.fullKey} label={r.label} value={r.value}
+                            hostId={hostId} onOpen={onOpen} canAct={canAct} />)}
     </div>
   );
 }
 
-export default function HostDetail({ hostId, label, onBack }) {
+export default function HostDetail({ hostId, label, onBack, onOpen, canAct = true }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
@@ -219,7 +287,8 @@ export default function HostDetail({ hostId, label, onBack }) {
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))",
                       gap: 12, alignItems: "start" }}>
-          {SECTIONS.map((s) => <SectionCard key={s.title} section={s} posture={posture} />)}
+          {SECTIONS.map((s) => <SectionCard key={s.title} section={s} posture={posture}
+                                            hostId={hostId} onOpen={onOpen} canAct={canAct} />)}
         </div>
       )}
     </div>

@@ -158,8 +158,9 @@ export default function App() {
           {view === null && <Dashboard role={role} edition={edition}
             onOpen={(section, opts) => { setView(section); setTarget(opts || null); }} />}
           {view === "perf" && <Performance />}
-          {view === "host" && <HostDetail hostId={target?.id} label={target?.label}
-            onBack={() => { setView(null); setTarget(null); }} />}
+          {view === "host" && <HostDetail hostId={target?.id} label={target?.label} canAct={!isAuditor}
+            onBack={() => { setView(null); setTarget(null); }}
+            onOpen={(section, opts) => { setView(section); setTarget(opts || null); }} />}
           {!isAuditor && view === "hosts" && <HostEnrollment />}
           {!isAuditor && view === "settings" && <Settings />}
           {!isAuditor && view === "sysadmin" && <ToolRunner openTool={target?.tool} openTab={target?.tab}

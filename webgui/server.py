@@ -233,6 +233,18 @@ def _session_token(request: "Request"):
     return _token_from_session(getattr(request, "session", None))
 
 
+def _safe_upload_name(name, default):
+    """Reduce a client-supplied upload filename to a bare basename so it can't
+    traverse out of the temp dir when joined (`tmp / name`). An absolute path or
+    `../` in the multipart filename would otherwise let an authenticated operator
+    write anywhere on the CONTROLLER as root (`Path(tmp) / '/etc/...'` discards
+    tmp; `../` escapes it). Strip directory components and reject empty/dotted."""
+    base = os.path.basename((name or "").strip().replace("\\", "/"))
+    if not base or base in (".", ".."):
+        return default
+    return base
+
+
 # Run `fn` with the admin token set on client.api for its duration. Serialized
 # so concurrent requests can't clobber the process-global token. Used both for
 # superuser-gated routes AND for dispatch/terminal calls, so the controller can
@@ -1321,7 +1333,7 @@ async def install_certificate(request: Request, cert: UploadFile = File(...),
     try:
         for name, up in (("cert", cert), ("key", key), ("chain", chain)):
             if up is not None:
-                p = tmp / (up.filename or f"{name}.pem")
+                p = tmp / _safe_upload_name(up.filename, f"{name}.pem")
                 p.write_bytes(await up.read())
                 paths[name] = str(p)
         return _wrap(lambda: _as_admin(request, lambda: api.install_tls_certificate(
@@ -1457,7 +1469,7 @@ async def packages_install_local(request: Request, file: UploadFile = File(...),
     if not tids:
         raise HTTPException(status_code=400, detail="No target hosts selected.")
     tmp = Path(tempfile.mkdtemp(prefix="sysible-pkg-"))
-    fname = file.filename or "package.bin"
+    fname = _safe_upload_name(file.filename, "package.bin")
     local = tmp / fname
     remote = "/tmp/" + fname
     local.write_bytes(await file.read())
@@ -1593,7 +1605,7 @@ def portal_downloads(user: str = Depends(require_superuser_session)):
 @app.post("/api/portal/downloads")
 async def portal_download_stage(file: UploadFile = File(...), user: str = Depends(require_superuser_session)):
     tmp = Path(tempfile.mkdtemp(prefix="sysible-pd-"))
-    p = tmp / (file.filename or "file.bin")
+    p = tmp / _safe_upload_name(file.filename, "file.bin")
     try:
         p.write_bytes(await file.read())
         return _wrap(lambda: api.stage_portal_download(str(p)) or {"staged": True})
@@ -1858,7 +1870,7 @@ async def files_upload(
     file: UploadFile = File(...),
     user: str = Depends(require_operator),
 ):
-    tmp = Path(tempfile.mkdtemp(prefix="sysible-up-")) / (file.filename or "upload.bin")
+    tmp = Path(tempfile.mkdtemp(prefix="sysible-up-")) / _safe_upload_name(file.filename, "upload.bin")
     try:
         data = await file.read()
         tmp.write_bytes(data)

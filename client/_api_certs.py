@@ -112,7 +112,7 @@ def cmd_renew_certbot(domain: str = "") -> str:
     inner = "certbot renew" if not domain else f"certbot certonly --force-renewal -d {shlex.quote(domain)}"
     return (
         "if ! command -v certbot >/dev/null 2>&1; then "
-        "echo 'certbot is not installed on this host (install it via Host Software Management).' >&2; exit 1; fi; "
+        "echo 'certbot is not installed on this host. Use the \"Install certbot\" button above first.' >&2; exit 1; fi; "
         f"{inner} 2>&1"
     )
 

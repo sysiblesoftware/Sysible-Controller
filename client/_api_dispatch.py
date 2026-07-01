@@ -633,10 +633,19 @@ if command -v pro >/dev/null 2>&1; then
 fi
 
 # --- Reboot required --------------------------------------------------------
+# Use authoritative, reboot-clearing checks per distro (a naive "is anything
+# using a deleted lib" grep does NOT clear after a reboot and false-positives):
+#   Debian/Ubuntu: /var/run/reboot-required
+#   RHEL/Fedora:   needs-restarting -r  (exit != 0 => reboot needed)
+#   SUSE:          zypper needs-rebooting (exit 102 => reboot needed). It
+#                  compares the boot time to when core packages were updated, so
+#                  it clears once you've actually rebooted.
 rr=0
 [ -f /var/run/reboot-required ] && rr=1
 if command -v needs-restarting >/dev/null 2>&1; then needs-restarting -r >/dev/null 2>&1 || rr=1; fi
-if command -v zypper >/dev/null 2>&1; then zypper ps 2>/dev/null | grep -qi 'reboot' && rr=1; fi
+if command -v zypper >/dev/null 2>&1; then
+  zypper needs-rebooting >/dev/null 2>&1; [ "$?" = 102 ] && rr=1
+fi
 p reboot.required "$rr"
 
 # --- Mandatory access control / kernel hardening ----------------------------

@@ -14,7 +14,9 @@ from PySide6.QtWidgets import (
     QScrollArea, QFrame, QProgressBar, QDialog, QMenu, QMessageBox,
 )
 from PySide6.QtGui import QPainter, QPen, QColor
-from PySide6.QtCore import Qt, QThread, Signal, QRectF
+from PySide6.QtCore import Qt, QThread, Signal, QRectF, QTimer
+
+import time
 
 from client import _fleet_status as fs
 from client import api
@@ -166,19 +168,70 @@ def _card_frame():
 # ---------------------------------------------------------------------------
 # Compliance signal chip
 # ---------------------------------------------------------------------------
-def _signal_chip(label, count):
-    f = _card_frame()
+def _hosts_menu(widget, hosts, on_open, header):
+    """Pop a menu of hosts under `widget`; each entry opens that host's posture."""
+    m = QMenu(widget)
+    h0 = m.addAction(header)
+    h0.setEnabled(False)
+    m.addSeparator()
+    for h in hosts:
+        act = m.addAction(h.get("host") or h.get("id"))
+        act.triggered.connect(lambda _=False, hh=h: on_open(hh.get("id"), hh.get("host")))
+    m.exec(widget.mapToGlobal(widget.rect().bottomLeft()))
+
+
+def _signal_chip(label, hosts, on_open=None):
+    """A compliance-signal chip. When it has affected hosts, it's clickable and
+    drops a menu of those hosts, each opening its posture (parity with the web)."""
+    count = len(hosts)
+    color = "#e0a83a" if count > 0 else "#4ec07a"
+    clickable = count > 0 and on_open is not None
+    if clickable:
+        f = QPushButton()
+        f.setCursor(Qt.PointingHandCursor)
+        f.setStyleSheet(
+            f"QPushButton{{border:1px solid {PAL['border']}; border-radius:8px; text-align:left;"
+            f" background:{PAL['bg']};}} QPushButton:hover{{background:{PAL['row_hover']};}}")
+    else:
+        f = _card_frame()
     lay = QHBoxLayout(f)
     lay.setContentsMargins(10, 8, 10, 8)
-    color = "#e0a83a" if count > 0 else "#4ec07a"
     lay.addWidget(_dot(color))
     name = QLabel(label)
-    name.setStyleSheet(f"border:none; color:{PAL['text']}; font-size:12px;")
+    name.setStyleSheet(f"border:none; background:transparent; color:{PAL['text']}; font-size:12px;")
     lay.addWidget(name, 1)
     cnt = QLabel(str(count))
-    cnt.setStyleSheet(f"border:none; font-weight:bold; color:{color};")
+    cnt.setStyleSheet(f"border:none; background:transparent; font-weight:bold; color:{color};")
     lay.addWidget(cnt)
+    if clickable:
+        n = count
+        f.clicked.connect(lambda: _hosts_menu(
+            f, hosts, on_open, f"{n} host{'' if n == 1 else 's'} — open posture:"))
     return f
+
+
+def _count_row(key, lbl, hosts, on_open=None):
+    """A verdict tally row (e.g. '1 offline'). Clickable when there are hosts —
+    drops a menu of them so you can see/open which ones (parity with the web)."""
+    count = len(hosts)
+    clickable = count > 0 and on_open is not None
+    if clickable:
+        w = QPushButton()
+        w.setCursor(Qt.PointingHandCursor)
+        w.setStyleSheet("QPushButton{border:none; background:transparent; text-align:left; padding:1px 0;}")
+    else:
+        w = QWidget()
+        w.setStyleSheet("background:transparent;")
+    r = QHBoxLayout(w)
+    r.setContentsMargins(0, 0, 0, 0)
+    r.addWidget(_dot(VERDICT.get(key, "#7a7a7a")))
+    t = QLabel(f"{count} {lbl}")
+    t.setStyleSheet(f"border:none; background:transparent; color:{PAL['text']}; font-size:13px;")
+    r.addWidget(t)
+    r.addStretch()
+    if clickable:
+        w.clicked.connect(lambda: _hosts_menu(w, hosts, on_open, f"{count} {lbl} — open posture:"))
+    return w
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +516,75 @@ def _fmt_value(full_key, value):
 _STATUS_COLOR = {"bad": "#e06c6c", "warn": "#e0a83a", "good": "#4ec07a"}
 
 
+# Posture finding → remediation, mirroring the web console's HostDetail. Either
+# reboot right here, or open the desktop tool that fixes it. Only surfaced on a
+# warn/bad row.
+_POSTURE_ACTIONS = {
+    "reboot.required": {"run": "reboot"},
+    "cert.expiring_30d": {"tool": "Certificate Management"},
+    "cert.nearest_days": {"tool": "Certificate Management"},
+    "fw.active": {"tool": "Firewall Administration"},
+    "mac.selinux": {"tool": "Security Administration"},
+    "mac.apparmor": {"tool": "Security Administration"},
+    "sec.auditd": {"tool": "Security Administration"},
+    "sec.fail2ban": {"tool": "Security Administration"},
+    "ssh.permit_root_login": {"tool": "Security Administration"},
+    "ssh.password_auth": {"tool": "Security Administration"},
+    "ssh.weak_ciphers": {"tool": "Security Administration"},
+    "ssh.weak_macs": {"tool": "Security Administration"},
+    "ssh.weak_kex": {"tool": "Security Administration"},
+    "time.synced": {"tool": "Time Synchronization"},
+    "svc.failed_count": {"tool": "Quick System Actions"},
+    "fs.disk_pct": {"tool": "Storage Administration"},
+    "fs.inode_pct": {"tool": "Storage Administration"},
+    "users.empty_pw_count": {"tool": "User & Group Administration"},
+    "users.uid0_count": {"tool": "User & Group Administration"},
+    "users.pw_complexity": {"tool": "Environmental Policies"},
+}
+
+_TOOL_PAGES = {
+    "Security Administration": ("client.security_administration_page", "SecurityAdministrationPage"),
+    "Firewall Administration": ("client.firewall_administration_page", "FirewallAdministrationPage"),
+    "Storage Administration": ("client.storage_administration_page", "StorageAdministrationPage"),
+    "Time Synchronization": ("client.time_synchronization_page", "TimeSynchronizationPage"),
+    "Certificate Management": ("client.certificate_management_page", "CertificateManagementPage"),
+    "Quick System Actions": ("client.quick_system_actions_page", "QuickSystemActionsPage"),
+    "User & Group Administration": ("client.user_group_administration_page", "UserGroupAdministrationPage"),
+    "Environmental Policies": ("client.environmental_policies_page", "EnvironmentalPoliciesPage"),
+}
+_OPEN_TOOL_WINDOWS = []  # keep opened tool windows alive (not GC'd)
+
+
+def _open_tool_window(name):
+    """Open a desktop tool page as its own window — mirrors how the app launches
+    tools. Lazy import avoids import cycles."""
+    import importlib
+    spec = _TOOL_PAGES.get(name)
+    if not spec:
+        return
+    mod = importlib.import_module(spec[0])
+    win = getattr(mod, spec[1])()
+    _OPEN_TOOL_WINDOWS.append(win)
+    win.show()
+    win.raise_()
+
+
+def _reboot_host(host_id):
+    """Reboot one host as the operator (attributed/logged). Returns
+    {'ok': bool, 'detail': str}. Runs off the GUI thread (see _Worker)."""
+    entry = None
+    for e in api.list_merged_hosts():
+        if e.get("id") == host_id:
+            entry = e
+            break
+    if entry is None:
+        return {"ok": False, "detail": "host not found"}
+    out = api.run_on_entry(entry, api.cmd_reboot_host(), description="Reboot host")
+    if out.get("error"):
+        return {"ok": False, "detail": out["error"]}
+    return {"ok": True, "detail": (out.get("stdout") or "").strip()}
+
+
 class PostureDialog(QDialog):
     def __init__(self, host_id, label, parent=None):
         super().__init__(parent)
@@ -496,6 +618,8 @@ class PostureDialog(QDialog):
         self._scroll.setWidget(self._body)
         v.addWidget(self._scroll, 1)
         self._worker = None
+        self._last_posture = None
+        self._reboot_timer = None
         self._load()
 
     def _load(self):
@@ -516,6 +640,7 @@ class PostureDialog(QDialog):
             if w:
                 w.deleteLater()
         posture = (data or {}).get("posture")
+        self._last_posture = posture
         if not posture:
             self._status.setText((data or {}).get("error") or "No posture data.")
             self._status.setVisible(True)
@@ -566,7 +691,88 @@ class PostureDialog(QDialog):
             lv.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             row.addWidget(lv)
             lay.addLayout(row)
+            # Remediation on a warn/bad row: reboot here, or open the fixing tool.
+            action = _POSTURE_ACTIONS.get(full_key) if status in ("bad", "warn") else None
+            if action:
+                arow = QHBoxLayout()
+                arow.setContentsMargins(0, 0, 0, 2)
+                arow.addStretch()
+                if action.get("run") == "reboot":
+                    btn = QPushButton("Reboot host")
+                    btn.clicked.connect(self._reboot)
+                else:
+                    tool = action["tool"]
+                    btn = QPushButton(f"Fix in {tool} →")
+                    btn.clicked.connect(lambda _=False, t=tool: _open_tool_window(t))
+                btn.setStyleSheet("font-size:11px; padding:2px 8px;")
+                arow.addWidget(btn)
+                lay.addLayout(arow)
         return f
+
+    # ---- reboot from the posture dialog, with auto-refresh on the way back ----
+    def _reboot(self):
+        if QMessageBox.question(
+                self, "Reboot host", "Reboot this host now?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        self._reboot_base = ((self._last_posture or {}).get("os") or {}).get("boot_epoch")
+        self._status.setVisible(True)
+        self._status.setStyleSheet(f"color:{PAL['faint']};")
+        self._status.setText("Reboot requested…")
+        self._reboot_worker = _Worker(lambda: _reboot_host(self._host_id))
+        self._reboot_worker.done.connect(self._after_reboot_request)
+        self._reboot_worker.fail.connect(
+            lambda m: self._status.setText(f"Reboot failed: {m}"))
+        self._reboot_worker.start()
+
+    def _after_reboot_request(self, res):
+        if not res.get("ok"):
+            self._status.setStyleSheet("color:#e06c6c;")
+            self._status.setText(f"Reboot failed: {res.get('detail') or 'see host'}")
+            return
+        self._status.setText("Reboot requested — waiting for the host to check back in; "
+                             "this refreshes automatically once it's back.")
+        self._reboot_deadline = time.time() + 300
+        self._reboot_saw_down = False
+        if getattr(self, "_reboot_timer", None):
+            self._reboot_timer.stop()
+        self._reboot_timer = QTimer(self)
+        self._reboot_timer.setInterval(10000)
+        self._reboot_timer.timeout.connect(self._poll_reboot)
+        self._reboot_timer.start()
+
+    def _poll_reboot(self):
+        if time.time() > getattr(self, "_reboot_deadline", 0):
+            self._reboot_timer.stop()
+            self._status.setText("Reboot requested — the host hasn't reported back yet. "
+                                 "Use Refresh posture once it's up.")
+            return
+        w = _Worker(lambda: fs.gather_host_posture(self._host_id))
+        self._reboot_poll_worker = w
+        w.done.connect(self._check_reboot_result)
+        w.start()
+
+    def _check_reboot_result(self, data):
+        posture = (data or {}).get("posture")
+        if not posture:
+            # Host down mid-reboot — remember it, keep polling.
+            self._reboot_saw_down = True
+            return
+        # Reachable → always show the current gather (never leave it stale), and
+        # stop once we've confirmed the reboot (went down and came back / new boot
+        # time / tiny uptime / reboot flag cleared).
+        self._render(data)
+        os_ = posture.get("os") or {}
+        boot = os_.get("boot_epoch")
+        up = _to_int(os_.get("uptime_s"))
+        reboot_req = (posture.get("reboot") or {}).get("required")
+        base = getattr(self, "_reboot_base", None)
+        rebooted = (getattr(self, "_reboot_saw_down", False)
+                    or (base and boot and boot != base)
+                    or reboot_req == "0"
+                    or (up is not None and up < 900))
+        if rebooted and getattr(self, "_reboot_timer", None):
+            self._reboot_timer.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -689,14 +895,12 @@ class FleetDashboardPage(QWidget):
         self._donut.set_segments([(counts["OK"], VERDICT["OK"]), (counts["WARNING"], VERDICT["WARNING"]),
                                   (counts["CRITICAL"], VERDICT["CRITICAL"]), (counts["OFFLINE"], VERDICT["OFFLINE"])])
         _clear_layout(self._counts)
+        by_verdict = {}
+        for h in self._health:
+            by_verdict.setdefault((h.get("verdict") or "OK").upper(), []).append(
+                {"id": h.get("id"), "host": h.get("host")})
         for key, lbl in (("OK", "OK"), ("WARNING", "warning"), ("CRITICAL", "critical"), ("OFFLINE", "offline")):
-            r = QHBoxLayout()
-            r.addWidget(_dot(VERDICT[key]))
-            t = QLabel(f"{counts[key]} {lbl}")
-            t.setStyleSheet(f"color:{PAL['text']}; font-size:13px;")
-            r.addWidget(t)
-            r.addStretch()
-            self._counts.addLayout(r)
+            self._counts.addWidget(_count_row(key, lbl, by_verdict.get(key, []), self._open_host))
 
         post_by_id = {}
         for p in self._posture:
@@ -705,15 +909,26 @@ class FleetDashboardPage(QWidget):
 
         _clear_grid(self._signals_grid)
         if self._posture:
-            sigs = []
-            for key, label in fs.SIGNAL_LABELS:
-                n = sum(1 for p in self._posture if (p.get("flags") or {}).get(key) is True)
-                sigs.append((label, n))
-            sigs.append(("Disk usage critical (≥ 90%)", sum(1 for h in self._health if (h.get("disk") or 0) >= 90)))
-            sigs.append(("Failed systemd units", sum(1 for h in self._health if (h.get("failed") or 0) > 0)))
-            sigs.sort(key=lambda s: s[1], reverse=True)
-            for idx, (label, n) in enumerate(sigs):
-                self._signals_grid.addWidget(_signal_chip(label, n), idx // 2, idx % 2)
+            id_to_host = {h.get("id"): h.get("host") for h in self._health}
+
+            def hosts_for_flag(key):
+                out = []
+                for p in self._posture:
+                    if (p.get("flags") or {}).get(key) is True:
+                        hid = p.get("id")
+                        out.append({"id": hid, "host": id_to_host.get(hid) or p.get("host") or hid})
+                return out
+
+            sigs = [(label, hosts_for_flag(key)) for key, label in fs.SIGNAL_LABELS]
+            sigs.append(("Disk usage critical (≥ 90%)",
+                         [{"id": h.get("id"), "host": h.get("host")}
+                          for h in self._health if (h.get("disk") or 0) >= 90]))
+            sigs.append(("Failed systemd units",
+                         [{"id": h.get("id"), "host": h.get("host")}
+                          for h in self._health if (h.get("failed") or 0) > 0]))
+            sigs.sort(key=lambda s: len(s[1]), reverse=True)
+            for idx, (label, hosts) in enumerate(sigs):
+                self._signals_grid.addWidget(_signal_chip(label, hosts, self._open_host), idx // 2, idx % 2)
 
         groups = {}
         for h in self._health:

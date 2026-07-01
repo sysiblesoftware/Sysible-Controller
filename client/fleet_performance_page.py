@@ -13,9 +13,9 @@ import math
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QScrollArea, QProgressBar,
+    QScrollArea, QProgressBar, QDialog,
 )
-from PySide6.QtGui import QPainter, QPen, QColor, QPointF
+from PySide6.QtGui import QPainter, QPen, QColor, QPointF, QBrush
 from PySide6.QtCore import Qt, QRectF
 
 from client import api, theme
@@ -121,38 +121,91 @@ def _bucket_average(samples, value_of, t0, t1, buckets=80):
 # Inline line chart (QPainter)
 # ---------------------------------------------------------------------------
 class LineChart(QWidget):
+    """Inline multi-line chart. Interactive: hover shows a crosshair + per-series
+    values, and dragging horizontally selects a time range to zoom into (the
+    owner wires `on_zoom`)."""
+
     def __init__(self, kind):
         super().__init__()
         self._kind = kind
         self._series = []
         self._t0 = 0
         self._t1 = 1
+        self._hover_x = None
+        self._sel = None          # (x0, x1) in widget px during a drag
+        self.on_zoom = None       # callback(t0, t1) set by the page
         self.setMinimumHeight(190)
+        self.setMouseTracking(True)
 
     def set_data(self, series, t0, t1):
         self._series, self._t0, self._t1 = series, t0, t1
         self.update()
 
-    def paintEvent(self, _e):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
+    _PADL, _PADR, _PADT, _PADB = 56, 14, 10, 24
+
+    def _plot(self):
         W, H = self.width(), self.height()
-        padL, padR, padT, padB = 56, 14, 10, 24
-        plotW, plotH = W - padL - padR, H - padT - padB
-        if plotW <= 0 or plotH <= 0:
-            p.end()
-            return
+        return W, H, W - self._PADL - self._PADR, H - self._PADT - self._PADB
+
+    def _ymax(self):
         mx = 0.0
         for s in self._series:
             for _t, v in s["points"]:
                 if v > mx:
                     mx = v
         if self._kind == "pct":
-            ymax = max(100, math.ceil(mx / 25) * 25)
-        elif self._kind == "bytes":
-            ymax = max(1024, _nice_ceil(mx or 1))
-        else:
-            ymax = _nice_ceil(mx or 1)
+            return max(100, math.ceil(mx / 25) * 25)
+        if self._kind == "bytes":
+            return max(1024, _nice_ceil(mx or 1))
+        return _nice_ceil(mx or 1)
+
+    def _x_to_t(self, x):
+        _W, _H, plotW, _plotH = self._plot()
+        if plotW <= 0:
+            return None
+        frac = max(0.0, min(1.0, (x - self._PADL) / plotW))
+        return self._t0 + frac * (self._t1 - self._t0)
+
+    # ---- mouse: hover crosshair + drag-to-zoom ----
+    @staticmethod
+    def _ex(e):
+        return e.position().x() if hasattr(e, "position") else e.x()
+
+    def mouseMoveEvent(self, e):
+        self._hover_x = self._ex(e)
+        if self._sel is not None:
+            self._sel = (self._sel[0], self._hover_x)
+        self.update()
+
+    def leaveEvent(self, _e):
+        self._hover_x = None
+        self._sel = None
+        self.update()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            x = self._ex(e)
+            self._sel = (x, x)
+
+    def mouseReleaseEvent(self, e):
+        if self._sel is not None:
+            a, b = self._sel
+            self._sel = None
+            if abs(b - a) > 6 and self.on_zoom:
+                ta, tb = self._x_to_t(min(a, b)), self._x_to_t(max(a, b))
+                if ta is not None and tb is not None and tb - ta > 1:
+                    self.on_zoom(ta, tb)
+            self.update()
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        W, H, plotW, plotH = self._plot()
+        padL, padR, padT, padB = self._PADL, self._PADR, self._PADT, self._PADB
+        if plotW <= 0 or plotH <= 0:
+            p.end()
+            return
+        ymax = self._ymax()
 
         fnt = p.font()
         fnt.setPointSize(8)
@@ -178,6 +231,9 @@ class LineChart(QWidget):
         def fy(v):
             return padT + (1 - max(0, min(v, ymax)) / ymax) * plotH
 
+        # Clip series to the plot rect so a zoomed range doesn't draw over axes.
+        p.save()
+        p.setClipRect(QRectF(padL, padT, plotW, plotH))
         any_pts = False
         for s in self._series:
             pts = s["points"]
@@ -192,21 +248,80 @@ class LineChart(QWidget):
             qp = [QPointF(fx(t), fy(v)) for t, v in pts]
             for a, b in zip(qp, qp[1:]):
                 p.drawLine(a, b)
+        p.restore()
+
+        # Drag selection band.
+        if self._sel is not None:
+            a = max(padL, min(W - padR, self._sel[0]))
+            b = max(padL, min(W - padR, self._sel[1]))
+            p.setPen(QPen(QColor("#4ea1ff"), 1))
+            p.setBrush(QBrush(QColor(78, 161, 255, 40)))
+            p.drawRect(QRectF(min(a, b), padT, abs(b - a), plotH))
+
+        # Hover crosshair + per-series markers + tooltip.
+        if self._hover_x is not None and any_pts and self._sel is None \
+                and padL <= self._hover_x <= W - padR:
+            hx = self._hover_x
+            ht = self._x_to_t(hx)
+            pen = QPen(QColor(PAL["faint"]), 1)
+            pen.setStyle(Qt.DashLine)
+            p.setPen(pen)
+            p.drawLine(int(hx), int(padT), int(hx), int(padT + plotH))
+            entries = []
+            for s in self._series:
+                if not s["points"]:
+                    continue
+                best = min(s["points"], key=lambda pt: abs(pt[0] - ht))
+                p.setBrush(QColor(s["color"]))
+                p.setPen(QPen(QColor(PAL["bg"]), 1))
+                p.drawEllipse(QPointF(fx(best[0]), fy(best[1])), 3.5, 3.5)
+                entries.append((s.get("label", ""), s["color"], best[1]))
+            self._draw_tooltip(p, hx, padT, W, padL, padR, ht, entries)
         if not any_pts:
             p.setPen(QColor(PAL["faint"]))
             p.drawText(self.rect(), Qt.AlignCenter, "no samples in this window")
         p.end()
 
+    def _draw_tooltip(self, p, hx, padT, W, padL, padR, ht, entries):
+        fm = p.fontMetrics()
+        lines = [_fmt_clock(ht)] + [
+            f"{lbl}: {_fmt_metric(self._kind, v, self._kind == 'bytes')}" for lbl, _c, v in entries]
+        tw = max(fm.horizontalAdvance(t) for t in lines) + 18
+        th = len(lines) * (fm.height() + 2) + 8
+        tx = hx + 12 if hx < (padL + (W - padL - padR) / 2) else hx - 12 - tw
+        tx = max(padL, min(W - padR - tw, tx))
+        ty = padT + 6
+        p.setPen(QPen(QColor(PAL["border"]), 1))
+        p.setBrush(QColor(PAL["bg"]))
+        p.drawRoundedRect(QRectF(tx, ty, tw, th), 6, 6)
+        yy = ty + 6 + fm.ascent()
+        p.setPen(QColor(PAL["faint"]))
+        p.drawText(QPointF(tx + 9, yy), lines[0])
+        yy += fm.height() + 2
+        for lbl, color, v in entries:
+            p.setPen(QColor(color))
+            p.drawText(QPointF(tx + 9, yy), f"{lbl}: {_fmt_metric(self._kind, v, self._kind == 'bytes')}")
+            yy += fm.height() + 2
 
-def _chart_card(metric_label, now_value=None):
-    """A boxed chart cell: title (+ optional 'now' value) over a LineChart."""
+
+def _chart_card(metric_label, now_value=None, on_expand=None):
+    """A boxed chart cell: title (+ optional 'now' value) over a LineChart. The
+    title is a button that enlarges the chart into its own window for analysis."""
     card = _card_frame()
     lay = QVBoxLayout(card)
     lay.setContentsMargins(12, 8, 12, 8)
     lay.setSpacing(4)
     head = QHBoxLayout()
-    t = QLabel(metric_label)
-    t.setStyleSheet(f"border:none; background:transparent; color:{PAL['text']}; font-weight:bold; font-size:13px;")
+    if on_expand:
+        t = QPushButton(f"{metric_label}  ⤢")
+        t.setCursor(Qt.PointingHandCursor)
+        t.setStyleSheet("QPushButton{border:none; background:transparent; text-align:left;"
+                        f" color:{PAL['text']}; font-weight:bold; font-size:13px; padding:0;}}")
+        t.setToolTip("Expand for analysis")
+        t.clicked.connect(on_expand)
+    else:
+        t = QLabel(metric_label)
+        t.setStyleSheet(f"border:none; background:transparent; color:{PAL['text']}; font-weight:bold; font-size:13px;")
     head.addWidget(t)
     head.addStretch()
     if now_value is not None:
@@ -215,6 +330,49 @@ def _chart_card(metric_label, now_value=None):
         head.addWidget(nv)
     lay.addLayout(head)
     return card, lay
+
+
+class _FocusChartDialog(QDialog):
+    """A single metric blown up into its own window for analysis: a large chart
+    with the same hover tooltip + drag-to-zoom (zoom is dialog-local)."""
+
+    def __init__(self, title, series, t0, t1, kind, parent=None):
+        super().__init__(parent)
+        _refresh_pal()
+        self.setWindowTitle(title)
+        self.resize(1000, 560)
+        self.setStyleSheet(f"QDialog{{background:{PAL['page']};}}")
+        self._series, self._base = series, (t0, t1)
+        v = QVBoxLayout(self)
+        top = QHBoxLayout()
+        lab = QLabel(f"<b>{title}</b>")
+        lab.setStyleSheet(f"color:{PAL['text']};")
+        top.addWidget(lab)
+        top.addStretch()
+        self._reset = QPushButton("Reset zoom")
+        self._reset.setEnabled(False)
+        self._reset.clicked.connect(self._reset_zoom)
+        top.addWidget(self._reset)
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        top.addWidget(close)
+        v.addLayout(top)
+        hint = QLabel("Hover for values · drag across the chart to zoom")
+        hint.setStyleSheet(f"color:{PAL['faint']}; font-size:11px;")
+        v.addWidget(hint)
+        self._chart = LineChart(kind)
+        self._chart.setMinimumHeight(430)
+        self._chart.set_data(series, t0, t1)
+        self._chart.on_zoom = self._zoom
+        v.addWidget(self._chart, 1)
+
+    def _zoom(self, a, b):
+        self._chart.set_data(self._series, a, b)
+        self._reset.setEnabled(True)
+
+    def _reset_zoom(self):
+        self._chart.set_data(self._series, *self._base)
+        self._reset.setEnabled(False)
 
 
 def _stat(label, value):
@@ -263,6 +421,8 @@ class FleetPerformancePage(QWidget):
         self._snapshot = None
         self._worker = None
         self._snap_worker = None
+        self._zoom = None            # (t0, t1) drag-zoom shared by all charts
+        self._focus_dialogs = []
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -323,6 +483,7 @@ class FleetPerformancePage(QWidget):
     # ---- data ----
     def _set_window(self, secs):
         self._window = secs
+        self._zoom = None
         self._sync_window_buttons()
         self.refresh()
 
@@ -364,6 +525,7 @@ class FleetPerformancePage(QWidget):
 
         now = self._now()
         t0, t1 = now - self._window, now
+        vt0, vt1 = self._zoom if self._zoom else (t0, t1)
         hosts = self._data.get("hosts", [])
         groups = self._env_groups()
         env_names = sorted(groups.keys())
@@ -378,6 +540,14 @@ class FleetPerformancePage(QWidget):
             b2 = QPushButton(f"← {self._sel_env or 'hosts'}")
             b2.clicked.connect(self._go_env)
             self._crumb.addWidget(b2)
+        if self._zoom:
+            bz = QPushButton(f"⤢ {_fmt_clock(vt0)}–{_fmt_clock(vt1)} · reset zoom")
+            bz.clicked.connect(self._reset_zoom_page)
+            self._crumb.addWidget(bz)
+        else:
+            hint = QLabel("drag a chart to zoom")
+            hint.setStyleSheet(f"color:{PAL['faint']}; font-size:11px;")
+            self._crumb.addWidget(hint)
 
         if not hosts:
             empty = QLabel("No performance samples yet. Agents report metrics on heartbeat — "
@@ -394,7 +564,7 @@ class FleetPerformancePage(QWidget):
                 self._sel_host = None
                 self._rebuild()
                 return
-            self._render_host(host, t0, t1)
+            self._render_host(host, vt0, vt1)
             return
 
         if self._sel_env:
@@ -407,8 +577,9 @@ class FleetPerformancePage(QWidget):
             self._legend.addStretch()
             self._render_charts(lambda metric: [
                 {"label": h.get("hostname"), "color": host_color[h["host_id"]],
-                 "points": [(s["t"], metric[3](s)) for s in h["samples"] if metric[3](s) is not None]}
-                for h in drill], t0, t1)
+                 "points": [(s["t"], metric[3](s)) for s in h["samples"]
+                            if metric[3](s) is not None and vt0 <= s["t"] <= vt1]}
+                for h in drill], vt0, vt1)
             return
 
         # overview: one averaged line per environment
@@ -419,16 +590,22 @@ class FleetPerformancePage(QWidget):
         self._legend.addStretch()
         self._render_charts(lambda metric: [
             {"label": e, "color": env_color[e],
-             "points": _bucket_average([s for h in groups[e] for s in h["samples"]], metric[3], t0, t1)}
-            for e in env_names], t0, t1)
+             "points": _bucket_average([s for h in groups[e] for s in h["samples"]], metric[3], vt0, vt1)}
+            for e in env_names], vt0, vt1)
+
+    def _reset_zoom_page(self):
+        self._zoom = None
+        self._rebuild()
 
     def _render_charts(self, series_for, t0, t1):
+        self._last_series_for, self._last_t0, self._last_t1 = series_for, t0, t1
         grid = QGridLayout()
         grid.setSpacing(12)
         for i, metric in enumerate(METRICS):
-            card, lay = _chart_card(metric[1])
+            card, lay = _chart_card(metric[1], on_expand=lambda _=False, m=metric: self._open_focus(m))
             chart = LineChart(metric[2])
             chart.set_data(series_for(metric), t0, t1)
+            chart.on_zoom = self._chart_zoom
             lay.addWidget(chart)
             grid.addWidget(card, i // 2, i % 2)
         holder = QWidget()
@@ -457,14 +634,19 @@ class FleetPerformancePage(QWidget):
             sw.setLayout(strip)
             self._content_lay.addWidget(sw)
 
+        def series_for(metric):
+            return [{"label": host.get("hostname"), "color": HOST_COLORS[0],
+                     "points": [(s["t"], metric[3](s)) for s in host["samples"]
+                                if metric[3](s) is not None and t0 <= s["t"] <= t1]}]
+        self._last_series_for, self._last_t0, self._last_t1 = series_for, t0, t1
         grid = QGridLayout()
         grid.setSpacing(12)
         for i, metric in enumerate(METRICS):
             now_val = _fmt_metric(metric[2], metric[3](latest), metric[2] == "bytes") if latest else None
-            card, lay = _chart_card(metric[1], now_val)
+            card, lay = _chart_card(metric[1], now_val, on_expand=lambda _=False, m=metric: self._open_focus(m))
             chart = LineChart(metric[2])
-            chart.set_data([{"label": host.get("hostname"), "color": HOST_COLORS[0],
-                             "points": [(s["t"], metric[3](s)) for s in host["samples"] if metric[3](s) is not None]}], t0, t1)
+            chart.set_data(series_for(metric), t0, t1)
+            chart.on_zoom = self._chart_zoom
             lay.addWidget(chart)
             grid.addWidget(card, i // 2, i % 2)
         gh = QWidget()
@@ -556,20 +738,35 @@ class FleetPerformancePage(QWidget):
 
     # ---- navigation ----
     def _open_env(self, env):
-        self._sel_env, self._sel_host = env, None
+        self._sel_env, self._sel_host, self._zoom = env, None, None
         self._rebuild()
 
     def _open_host(self, host_id):
-        self._sel_host = host_id
+        self._sel_host, self._zoom = host_id, None
         self._rebuild()
 
     def _go_all(self):
         self._sel_env = self._sel_host = None
+        self._zoom = None
         self._rebuild()
 
     def _go_env(self):
         self._sel_host = None
+        self._zoom = None
         self._rebuild()
+
+    def _chart_zoom(self, t0, t1):
+        self._zoom = (t0, t1)
+        self._rebuild()
+
+    def _open_focus(self, metric):
+        sf = getattr(self, "_last_series_for", None)
+        if not sf:
+            return
+        dlg = _FocusChartDialog(metric[1], sf(metric), self._last_t0, self._last_t1, metric[2], self)
+        self._focus_dialogs.append(dlg)
+        dlg.show()
+        dlg.raise_()
 
 
 def _mini_title(text):

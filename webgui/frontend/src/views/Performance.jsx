@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
 
 // Distinct hue per environment (overview) and per host (drill-down). Two
@@ -90,9 +90,12 @@ function bucketAverage(samples, valueOf, t0, t1, buckets = 80) {
 // A single inline-SVG multi-line chart (no chart-library dependency). The
 // viewBox is scaled to width:100% of its grid cell, so a taller viewBox + wider
 // columns make the charts fill the window instead of sitting as thin slivers.
-function LineChart({ series, t0, t1, kind }) {
-  const W = 1000, H = 300, padL = 54, padR = 16, padT = 12, padB = 26;
+function LineChart({ series, t0, t1, kind, onZoom, height = 300 }) {
+  const W = 1000, H = height, padL = 60, padR = 16, padT = 12, padB = 34;
   const plotW = W - padL - padR, plotH = H - padT - padB;
+  const svgRef = useRef(null);
+  const [hoverX, setHoverX] = useState(null); // cursor x in viewBox coords, or null
+  const [sel, setSel] = useState(null);       // {a,b} brush x-coords while dragging
 
   const yMax = useMemo(() => {
     let mx = 0;
@@ -104,41 +107,103 @@ function LineChart({ series, t0, t1, kind }) {
 
   const x = (t) => padL + ((t - t0) / Math.max(1, t1 - t0)) * plotW;
   const y = (v) => padT + (1 - Math.max(0, Math.min(v, yMax)) / yMax) * plotH;
+  const clampX = (sx) => Math.max(padL, Math.min(W - padR, sx));
+  const toSvgX = (clientX) => {
+    const r = svgRef.current.getBoundingClientRect();
+    return ((clientX - r.left) / r.width) * W;
+  };
+  const xToT = (sx) => t0 + ((clampX(sx) - padL) / plotW) * (t1 - t0);
 
   const gridFracs = [0, 0.25, 0.5, 0.75, 1];
   const xticks = [t0, t0 + (t1 - t0) / 2, t1];
   const hasData = series.some((s) => s.points.length > 0);
 
+  // Nearest point per series to the cursor's time → crosshair markers + tooltip.
+  const hoverT = hoverX == null ? null : xToT(hoverX);
+  const hoverPts = hoverT == null ? [] : series.map((s) => {
+    let best = null, bd = Infinity;
+    for (const p of s.points) { const d = Math.abs(p.t - hoverT); if (d < bd) { bd = d; best = p; } }
+    return best ? { key: s.key, color: s.color, label: s.label, p: best } : null;
+  }).filter(Boolean);
+
+  const onMove = (e) => { const sx = clampX(toSvgX(e.clientX)); setHoverX(sx); if (sel) setSel({ a: sel.a, b: sx }); };
+  const onDown = (e) => { const sx = clampX(toSvgX(e.clientX)); setSel({ a: sx, b: sx }); };
+  const onUp = () => {
+    if (sel) {
+      const a = Math.min(sel.a, sel.b), b = Math.max(sel.a, sel.b);
+      if (b - a > 8 && onZoom) onZoom(xToT(a), xToT(b));  // ignore stray clicks
+      setSel(null);
+    }
+  };
+  const onLeave = () => { setHoverX(null); setSel(null); };
+
+  const tipPct = hoverX == null ? 0 : (hoverX / W) * 100;
+  const brushing = sel && Math.abs(sel.b - sel.a) > 1;
+
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block", height: "auto" }}>
-      {gridFracs.map((f, i) => {
-        const yv = yMax * f, yy = y(yv);
-        return (
-          <g key={i}>
-            <line x1={padL} y1={yy} x2={W - padR} y2={yy}
-                  stroke="var(--border)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-            <text x={padL - 6} y={yy + 3} textAnchor="end"
-                  style={{ fontSize: 10, fill: "var(--text-faint)" }}>{fmtMetric(kind, yv)}</text>
-          </g>
-        );
-      })}
-      {xticks.map((t, i) => (
-        <text key={i} x={x(t)} y={H - 6}
-              textAnchor={i === 0 ? "start" : i === xticks.length - 1 ? "end" : "middle"}
-              style={{ fontSize: 10, fill: "var(--text-faint)" }}>{fmtClock(t)}</text>
-      ))}
-      {series.map((s) => (
-        s.points.length === 0 ? null : (
-          <polyline key={s.key} fill="none" stroke={s.color} strokeWidth="2.2"
-                    strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"
-                    points={s.points.map((p) => `${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ")} />
-        )
-      ))}
-      {!hasData && (
-        <text x={W / 2} y={H / 2} textAnchor="middle"
-              style={{ fontSize: 12, fill: "var(--text-faint)" }}>no samples in this window</text>
+    <div style={{ position: "relative" }}>
+      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width="100%"
+           style={{ display: "block", height: "auto", cursor: "crosshair", touchAction: "none" }}
+           onMouseMove={onMove} onMouseDown={onDown} onMouseUp={onUp} onMouseLeave={onLeave}>
+        {gridFracs.map((f, i) => {
+          const yv = yMax * f, yy = y(yv);
+          return (
+            <g key={i}>
+              <line x1={padL} y1={yy} x2={W - padR} y2={yy}
+                    stroke="var(--border)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+              <text x={padL - 6} y={yy + 4} textAnchor="end"
+                    style={{ fontSize: 14, fill: "var(--text)" }}>{fmtMetric(kind, yv)}</text>
+            </g>
+          );
+        })}
+        {xticks.map((t, i) => (
+          <text key={i} x={x(t)} y={H - 8}
+                textAnchor={i === 0 ? "start" : i === xticks.length - 1 ? "end" : "middle"}
+                style={{ fontSize: 15, fill: "var(--text)" }}>{fmtClock(t)}</text>
+        ))}
+        {series.map((s) => (
+          s.points.length === 0 ? null : (
+            <polyline key={s.key} fill="none" stroke={s.color} strokeWidth="2.2"
+                      strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"
+                      points={s.points.map((p) => `${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ")} />
+          )
+        ))}
+        {brushing && (
+          <rect x={Math.min(sel.a, sel.b)} y={padT} width={Math.abs(sel.b - sel.a)} height={plotH}
+                fill="#4ea1ff" opacity="0.15" stroke="#4ea1ff" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        )}
+        {hoverX != null && hasData && !sel && (
+          <>
+            <line x1={hoverX} y1={padT} x2={hoverX} y2={padT + plotH}
+                  stroke="var(--text-faint)" strokeWidth="1" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
+            {hoverPts.map((h) => (
+              <circle key={h.key} cx={x(h.p.t)} cy={y(h.p.v)} r="3.4" fill={h.color}
+                      stroke="var(--bg)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+            ))}
+          </>
+        )}
+        {!hasData && (
+          <text x={W / 2} y={H / 2} textAnchor="middle"
+                style={{ fontSize: 12, fill: "var(--text-faint)" }}>no samples in this window</text>
+        )}
+      </svg>
+      {hoverX != null && hasData && !sel && hoverPts.length > 0 && (
+        <div style={{ position: "absolute", top: 6, left: `${tipPct}%`,
+                      transform: tipPct > 60 ? "translateX(calc(-100% - 10px))" : "translateX(10px)",
+                      pointerEvents: "none", background: "var(--panel-2)", border: "1px solid var(--border)",
+                      borderRadius: 6, padding: "5px 8px", fontSize: 11, whiteSpace: "nowrap", zIndex: 5,
+                      boxShadow: "0 4px 14px rgba(0,0,0,0.3)" }}>
+          <div className="faint" style={{ marginBottom: 3 }}>{fmtClock(hoverT)}</div>
+          {hoverPts.map((h) => (
+            <div key={h.key} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: h.color }} />
+              <span>{h.label}</span>
+              <span style={{ marginLeft: 14, fontWeight: 600 }}>{fmtMetric(kind, h.p.v, kind === "bytes")}</span>
+            </div>
+          ))}
+        </div>
       )}
-    </svg>
+    </div>
   );
 }
 
@@ -166,12 +231,17 @@ function Legend({ items, onClick, selectedKey }) {
 // Boxed chart: a bordered, padded card with a title (and optional latest-value
 // badge), so the stack of graphs reads as distinct panels instead of running
 // together. The box is what gives the page visual separation.
-function ChartCard({ label, value, children }) {
+function ChartCard({ label, value, children, onExpand }) {
   return (
     <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "10px 14px 6px",
                   background: "var(--panel)" }}>
       <div className="spread" style={{ marginBottom: 6 }}>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>{label}</span>
+        <button onClick={onExpand} disabled={!onExpand} title={onExpand ? "Expand for analysis" : undefined}
+                style={{ background: "none", border: "none", padding: 0, font: "inherit", fontSize: 13,
+                         fontWeight: 600, color: "var(--text)", cursor: onExpand ? "pointer" : "default",
+                         display: "flex", alignItems: "center", gap: 6 }}>
+          {label}{onExpand && <span className="faint" style={{ fontSize: 12 }}>⤢</span>}
+        </button>
         {value != null && <span className="faint" style={{ fontSize: 12 }}>now {value}</span>}
       </div>
       {children}
@@ -361,6 +431,16 @@ export default function Performance() {
   const now = data.now || Date.now() / 1000;
   const t0 = now - window, t1 = now;
 
+  // Drag-to-zoom: a sub-range [z0,z1] shared by every chart. Cleared when the
+  // window preset or the env/host selection changes.
+  const [zoom, setZoom] = useState(null);
+  useEffect(() => { setZoom(null); }, [window, selectedEnv, selectedHostId]);
+  const vt0 = zoom ? zoom[0] : t0;
+  const vt1 = zoom ? zoom[1] : t1;
+
+  // Click a chart title to blow it up into a single large window for analysis.
+  const [focus, setFocus] = useState(null); // metric key | null
+
   const envColor = useMemo(() => {
     const names = [...new Set(data.hosts.map((h) => h.environment || "Unassigned"))].sort();
     const m = {};
@@ -396,25 +476,27 @@ export default function Performance() {
     if (!selectedEnv) {
       return envNames.map((env) => ({
         key: env, label: env, color: envColor[env],
-        points: bucketAverage(envGroups[env].flatMap((h) => h.samples), metric.valueOf, t0, t1),
+        points: bucketAverage(envGroups[env].flatMap((h) => h.samples), metric.valueOf, vt0, vt1),
       }));
     }
     return [...drillHosts]
       .sort((a, b) => a.hostname.localeCompare(b.hostname))
       .map((h) => ({
         key: h.host_id, label: h.hostname, color: hostColor[h.host_id],
-        points: h.samples.map((s) => ({ t: s.t, v: metric.valueOf(s) })).filter((p) => p.v != null && isFinite(p.v)),
+        points: h.samples.map((s) => ({ t: s.t, v: metric.valueOf(s) }))
+          .filter((p) => p.v != null && isFinite(p.v) && p.t >= vt0 && p.t <= vt1),
       }));
-  }, [selectedEnv, envNames, envColor, envGroups, drillHosts, hostColor, t0, t1]);
+  }, [selectedEnv, envNames, envColor, envGroups, drillHosts, hostColor, vt0, vt1]);
 
   // Single-host series for the per-host drill-down.
   const hostSeriesFor = useCallback((metric) => {
     if (!selectedHost) return [];
     return [{
       key: selectedHost.host_id, label: selectedHost.hostname, color: HOST_COLORS[0],
-      points: selectedHost.samples.map((s) => ({ t: s.t, v: metric.valueOf(s) })).filter((p) => p.v != null && isFinite(p.v)),
+      points: selectedHost.samples.map((s) => ({ t: s.t, v: metric.valueOf(s) }))
+        .filter((p) => p.v != null && isFinite(p.v) && p.t >= vt0 && p.t <= vt1),
     }];
-  }, [selectedHost]);
+  }, [selectedHost, vt0, vt1]);
 
   const latest = selectedHost && selectedHost.samples.length ? selectedHost.samples[selectedHost.samples.length - 1] : null;
 
@@ -471,6 +553,14 @@ export default function Performance() {
                         onClick={() => setWindow(w.value)}>{w.label}</button>
               ))}
             </div>
+            {zoom ? (
+              <button className="btn sm" onClick={() => setZoom(null)} title="Show the full window"
+                      style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                ⤢ {fmtClock(vt0)}–{fmtClock(vt1)} · reset zoom
+              </button>
+            ) : (
+              <span className="faint" style={{ fontSize: 11 }}>drag a chart to zoom</span>
+            )}
             {at > 0 && <span className="faint" style={{ fontSize: 12 }}>updated {new Date(at).toLocaleTimeString()}</span>}
             <label className="checkrow" style={{ margin: 0 }}>
               <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
@@ -513,9 +603,10 @@ export default function Performance() {
             <div className="section-title" style={{ marginBottom: 6 }}>History</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(540px, 1fr))", gap: 18 }}>
               {METRICS.map((metric) => (
-                <ChartCard key={metric.key} label={metric.label}
+                <ChartCard key={metric.key} label={metric.label} onExpand={() => setFocus(metric.key)}
                   value={latest ? fmtMetric(metric.kind, metric.valueOf(latest), metric.kind === "bytes") : null}>
-                  <LineChart series={hostSeriesFor(metric)} t0={t0} t1={t1} kind={metric.kind} />
+                  <LineChart series={hostSeriesFor(metric)} t0={vt0} t1={vt1} kind={metric.kind}
+                             onZoom={(z0, z1) => setZoom([z0, z1])} />
                 </ChartCard>
               ))}
             </div>
@@ -538,14 +629,52 @@ export default function Performance() {
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(540px, 1fr))", gap: 18, marginTop: 8 }}>
               {METRICS.map((metric) => (
-                <ChartCard key={metric.key} label={metric.label}>
-                  <LineChart series={seriesFor(metric)} t0={t0} t1={t1} kind={metric.kind} />
+                <ChartCard key={metric.key} label={metric.label} onExpand={() => setFocus(metric.key)}>
+                  <LineChart series={seriesFor(metric)} t0={vt0} t1={vt1} kind={metric.kind}
+                             onZoom={(z0, z1) => setZoom([z0, z1])} />
                 </ChartCard>
               ))}
             </div>
           </>
         )}
       </div>
+
+      {focus && (() => {
+        const metric = METRICS.find((mm) => mm.key === focus);
+        if (!metric) return null;
+        const series = selectedHost ? hostSeriesFor(metric) : seriesFor(metric);
+        const scopeLabel = selectedHost ? selectedHost.hostname : selectedEnv ? selectedEnv : "all environments";
+        const legendItems = selectedHost ? null : (selectedEnv ? hostLegend : envLegend);
+        return (
+          <div onClick={() => setFocus(null)}
+               style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 50,
+                        display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+            <div onClick={(e) => e.stopPropagation()} className="card"
+                 style={{ width: "min(1100px, 95vw)", maxHeight: "92vh", overflow: "auto" }}>
+              <div className="spread" style={{ marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
+                <strong style={{ fontSize: 16 }}>{metric.label} <span className="faint" style={{ fontSize: 13, fontWeight: 400 }}>· {scopeLabel}</span></strong>
+                <div className="row" style={{ gap: 10, alignItems: "center" }}>
+                  <div className="row" style={{ gap: 4 }}>
+                    {WINDOWS.map((w) => (
+                      <button key={w.value} className={"btn sm " + (window === w.value ? "" : "ghost")}
+                              onClick={() => setWindow(w.value)}>{w.label}</button>
+                    ))}
+                  </div>
+                  {zoom
+                    ? <button className="btn sm" onClick={() => setZoom(null)}>⤢ reset zoom</button>
+                    : <span className="faint" style={{ fontSize: 11 }}>drag to zoom</span>}
+                  <button className="btn ghost sm" onClick={() => setFocus(null)}>Close ✕</button>
+                </div>
+              </div>
+              <LineChart series={series} t0={vt0} t1={vt1} kind={metric.kind} height={460}
+                         onZoom={(z0, z1) => setZoom([z0, z1])} />
+              {legendItems && legendItems.length > 0 && (
+                <div style={{ marginTop: 10 }}><Legend items={legendItems} /></div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

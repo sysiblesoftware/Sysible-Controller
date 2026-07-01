@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 
 // Per-host posture / compliance drill-down. Read-only: renders the full
@@ -129,23 +129,97 @@ function fmtValue(fullKey, v) {
   return v;
 }
 
-function Row({ fullKey, label, value }) {
-  const st = evalStatus(fullKey, value);
+// Remediation per finding. Two kinds:
+//   kind "run"  — a safe fix we can execute right here (reboot).
+//   kind "tool" — jump to the System Administration tool that fixes it, so the
+//                 operator lands on the exact screen (TLS cert → Certificate
+//                 Management, weak SSH → Security Administration, etc.).
+// `tool` names MUST match the tiles in ToolRunner.jsx exactly. Only shown when
+// the row is actually in a warn/bad state — no action on a healthy signal.
+const ACTIONS = {
+  "reboot.required": { kind: "run", label: "Reboot host", confirm: "Reboot this host now?",
+                       refreshAfter: true, run: (hostId) => api.fleet("reboot", [hostId]) },
+  "cert.expiring_30d": { kind: "tool", tool: "Certificate Management" },
+  "cert.nearest_days": { kind: "tool", tool: "Certificate Management" },
+  "fw.active": { kind: "tool", tool: "Firewall Administration" },
+  "mac.selinux": { kind: "tool", tool: "Security Administration" },
+  "mac.apparmor": { kind: "tool", tool: "Security Administration" },
+  "sec.auditd": { kind: "tool", tool: "Security Administration" },
+  "sec.fail2ban": { kind: "tool", tool: "Security Administration" },
+  "ssh.permit_root_login": { kind: "tool", tool: "Security Administration" },
+  "ssh.password_auth": { kind: "tool", tool: "Security Administration" },
+  "ssh.weak_ciphers": { kind: "tool", tool: "Security Administration" },
+  "ssh.weak_macs": { kind: "tool", tool: "Security Administration" },
+  "ssh.weak_kex": { kind: "tool", tool: "Security Administration" },
+  "time.synced": { kind: "tool", tool: "Time Synchronization" },
+  "svc.failed_count": { kind: "tool", tool: "Quick System Actions" },
+  "fs.disk_pct": { kind: "tool", tool: "Storage Administration" },
+  "fs.inode_pct": { kind: "tool", tool: "Storage Administration" },
+  "users.empty_pw_count": { kind: "tool", tool: "User & Group Administration" },
+  "users.uid0_count": { kind: "tool", tool: "User & Group Administration" },
+  "users.pw_complexity": { kind: "tool", tool: "Environmental Policies" },
+};
+
+function RowAction({ action, hostId, onOpen, onRefreshSoon }) {
+  const [state, setState] = useState("idle"); // idle | busy | ok | err
+  const [msg, setMsg] = useState("");
+  if (action.kind === "tool") {
+    return (
+      <button className="btn ghost sm" style={{ whiteSpace: "nowrap" }}
+              onClick={() => onOpen && onOpen("sysadmin", { tool: action.tool })}
+              title={`Open ${action.tool}`}>
+        Fix in {action.tool} →
+      </button>
+    );
+  }
+  const doRun = () => {
+    if (state === "busy") return;
+    if (action.confirm && !window.confirm(action.confirm)) return;
+    setState("busy"); setMsg("");
+    action.run(hostId)
+      .then((r) => {
+        const res = (r && r.results && r.results[0]) || {};
+        const ok = res.ok || res.code === 0 || !!(r && r.action);
+        setState(ok ? "ok" : "err");
+        setMsg(ok ? "" : (res.error || res.stderr || "failed"));
+        if (ok && action.refreshAfter && onRefreshSoon) onRefreshSoon();
+      })
+      .catch((e) => { setState("err"); setMsg(String(e.message || e)); });
+  };
+  const color = state === "ok" ? C.good : state === "err" ? C.bad : C.warn;
   return (
-    <div className="spread" style={{ padding: "5px 0", borderBottom: "1px solid var(--border)", gap: 12 }}>
-      <span className="faint" style={{ fontSize: 13, whiteSpace: "nowrap" }}>{label}</span>
-      <span style={{ fontSize: 13, textAlign: "right", wordBreak: "break-word",
-                     display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
-        {st !== "none" && <span className="dot" style={{ background: C[st] }} />}
-        <span style={{ color: st === "bad" ? C.bad : st === "warn" ? C.warn : "var(--text)", fontWeight: st === "bad" ? 600 : 400 }}>
-          {fmtValue(fullKey, value)}
+    <button className="btn sm" style={{ whiteSpace: "nowrap", borderColor: color, color }}
+            onClick={doRun} disabled={state === "busy" || !hostId} title={msg || action.label}>
+      {state === "busy" ? "…" : state === "ok" ? "✓ requested" : state === "err" ? "✕ failed" : action.label}
+    </button>
+  );
+}
+
+function Row({ fullKey, label, value, hostId, onOpen, canAct, onRefreshSoon }) {
+  const st = evalStatus(fullKey, value);
+  const action = (canAct && (st === "bad" || st === "warn")) ? ACTIONS[fullKey] : null;
+  return (
+    <div style={{ padding: "5px 0", borderBottom: "1px solid var(--border)" }}>
+      <div className="spread" style={{ gap: 12, alignItems: "baseline" }}>
+        <span className="faint" style={{ fontSize: 13, whiteSpace: "nowrap" }}>{label}</span>
+        <span style={{ fontSize: 13, textAlign: "right", minWidth: 0, overflowWrap: "anywhere",
+                       display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
+          {st !== "none" && <span className="dot" style={{ background: C[st], flex: "0 0 auto" }} />}
+          <span style={{ color: st === "bad" ? C.bad : st === "warn" ? C.warn : "var(--text)", fontWeight: st === "bad" ? 600 : 400 }}>
+            {fmtValue(fullKey, value)}
+          </span>
         </span>
-      </span>
+      </div>
+      {action && (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 5 }}>
+          <RowAction action={action} hostId={hostId} onOpen={onOpen} onRefreshSoon={onRefreshSoon} />
+        </div>
+      )}
     </div>
   );
 }
 
-function SectionCard({ section, posture }) {
+function SectionCard({ section, posture, hostId, onOpen, canAct, onRefreshSoon }) {
   // Collect every present key within this section's categories: known keys keep
   // their friendly label and stated order; unknown ones are appended humanized.
   const rows = [];
@@ -165,15 +239,22 @@ function SectionCard({ section, posture }) {
   return (
     <div className="card" style={{ padding: "12px 14px" }}>
       <div className="section-title" style={{ marginBottom: 6 }}>{section.title}</div>
-      {rows.map((r) => <Row key={r.fullKey} fullKey={r.fullKey} label={r.label} value={r.value} />)}
+      {rows.map((r) => <Row key={r.fullKey} fullKey={r.fullKey} label={r.label} value={r.value}
+                            hostId={hostId} onOpen={onOpen} canAct={canAct} onRefreshSoon={onRefreshSoon} />)}
     </div>
   );
 }
 
-export default function HostDetail({ hostId, label, onBack }) {
+export default function HostDetail({ hostId, label, onBack, onOpen, canAct = true }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+
+  const [rebooting, setRebooting] = useState(false);
+  const pollRef = useRef(null);
+  const dataRef = useRef(null);
+  useEffect(() => { dataRef.current = data; }, [data]);
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
   const load = useCallback(() => {
     if (!hostId) { setErr("No host selected."); return; }
@@ -184,6 +265,38 @@ export default function HostDetail({ hostId, label, onBack }) {
       .finally(() => setLoading(false));
   }, [hostId]);
   useEffect(() => { load(); }, [load]);
+
+  // After a reboot the host goes down and comes back. Poll posture and ALWAYS
+  // swap in the latest successful gather (so the box never sits on stale uptime),
+  // and stop the "rebooting" banner once we've confirmed the reboot — either we
+  // saw the host go offline and return, its boot time changed, or its uptime is
+  // now tiny. Runs up to 5 min.
+  const refreshAfterReboot = useCallback(() => {
+    if (!hostId) return;
+    const baseBoot = (((dataRef.current || {}).posture || {}).os || {}).boot_epoch;
+    setRebooting(true);
+    if (pollRef.current) clearInterval(pollRef.current);
+    const t0 = Date.now();
+    let sawDown = false;
+    const tick = async () => {
+      if (Date.now() - t0 > 300000) { clearInterval(pollRef.current); setRebooting(false); return; }
+      let d = null;
+      try { d = await api.hostPosture(hostId); } catch { d = null; }
+      const reachable = !!(d && d.posture);
+      if (!reachable) { sawDown = true; return; }   // down mid-reboot — keep polling
+      setData(d);                                    // reachable → show current, never stale
+      const os = d.posture.os || {};
+      const rebootReq = (d.posture.reboot || {}).required;
+      const up = os.uptime_s != null ? Number(os.uptime_s) : null;
+      const rebooted = sawDown ||
+        (baseBoot && os.boot_epoch && os.boot_epoch !== baseBoot) ||
+        rebootReq === "0" ||
+        (up != null && isFinite(up) && up < 900);
+      if (rebooted) { clearInterval(pollRef.current); setRebooting(false); }
+    };
+    pollRef.current = setInterval(tick, 8000);
+    setTimeout(tick, 4000);   // first check soon, not after a full interval
+  }, [hostId]);
 
   const posture = data && data.posture;
 
@@ -200,6 +313,14 @@ export default function HostDetail({ hostId, label, onBack }) {
       </div>
 
       {err && <div className="error-box">{err}</div>}
+
+      {rebooting && (
+        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "9px 12px",
+                      marginBottom: 12, fontSize: 12.5, display: "flex", alignItems: "center", gap: 8 }}>
+          <span className="spin" /> Reboot requested — waiting for {label || "the host"} to check back in;
+          this will refresh automatically once it's back.
+        </div>
+      )}
 
       {posture && (posture.meta || {}).privileged === "0" && (
         <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "9px 12px",
@@ -219,7 +340,9 @@ export default function HostDetail({ hostId, label, onBack }) {
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))",
                       gap: 12, alignItems: "start" }}>
-          {SECTIONS.map((s) => <SectionCard key={s.title} section={s} posture={posture} />)}
+          {SECTIONS.map((s) => <SectionCard key={s.title} section={s} posture={posture}
+                                            hostId={hostId} onOpen={onOpen} canAct={canAct}
+                                            onRefreshSoon={refreshAfterReboot} />)}
         </div>
       )}
     </div>

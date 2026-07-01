@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QMessageBox, QFrame, QComboBox, QTableWidget, QTableWidgetItem,
     QAbstractItemView, QScrollArea, QCheckBox, QDialog, QFileDialog, QApplication,
-    QProgressBar,
+    QProgressBar, QPlainTextEdit,
 )
 
 from client import api, session
@@ -502,6 +502,10 @@ class AdminConfigurationPage(QWidget):
         self.update_agents_btn = QPushButton("Update Agents")
         self.update_agents_btn.clicked.connect(self._update_agents)
         row.addWidget(self.update_agents_btn)
+        self.download_log_btn = QPushButton("Download Update Log")
+        self.download_log_btn.setToolTip("Save the most recent controller update's full output to a file.")
+        self.download_log_btn.clicked.connect(self._download_update_log)
+        row.addWidget(self.download_log_btn)
         row.addStretch()
         layout.addLayout(row)
 
@@ -524,6 +528,18 @@ class AdminConfigurationPage(QWidget):
         self.software_update_status.setWordWrap(True)
         layout.addWidget(self.software_update_status)
 
+        # Live console: the controller update's actual commands (git pull → rsync
+        # → rebuild → restart), or the per-host agent rollout status.
+        self.update_console = QPlainTextEdit()
+        self.update_console.setReadOnly(True)
+        self.update_console.setMaximumBlockCount(5000)
+        self.update_console.setFixedHeight(220)
+        self.update_console.setStyleSheet(
+            "QPlainTextEdit{background:#0d1117; color:#c9d1d9; border:1px solid #30363d;"
+            " border-radius:8px; font-family:monospace; font-size:12px;}")
+        self.update_console.setVisible(False)
+        layout.addWidget(self.update_console)
+
         self._ctrl_timer = None
         self._agents_timer = None
 
@@ -538,6 +554,8 @@ class AdminConfigurationPage(QWidget):
         self.update_controller_btn.setEnabled(False)
         self.software_update_status.setStyleSheet(f"color:{STATUS_NEUTRAL_COLOR};")
         self.software_update_status.setText("Starting controller update…")
+        self.update_console.setPlainText("Waiting for the controller to start the update…")
+        self.update_console.setVisible(True)
         try:
             r = api.controller_update()
         except Exception as e:
@@ -551,6 +569,9 @@ class AdminConfigurationPage(QWidget):
         self.controller_progress.setVisible(True)
         self._ctrl_saw_down = False
         self._ctrl_start = datetime.datetime.now()
+        # Baseline: only an update-status record written at/after now counts as
+        # THIS run's outcome (small margin for clock skew). See _poll_controller.
+        self._ctrl_start_ts = self._ctrl_start.timestamp() - 5
         if self._ctrl_timer:
             self._ctrl_timer.stop()
         self._ctrl_timer = QTimer(self)
@@ -559,22 +580,90 @@ class AdminConfigurationPage(QWidget):
         self._ctrl_timer.start()
 
     def _poll_controller(self):
+        # The updater records the TRUE outcome (run/last_update.json); read it
+        # whenever the backend is reachable. On a failed update the console never
+        # restarts (reachable throughout); on success it's briefly down then
+        # returns "success". This replaces guessing from the restart, which
+        # falsely reported success when the update had aborted (e.g. git pull).
+        # Stream the update's command output too (unreachable during the restart
+        # window — keep the last content and resume when the backend is back).
         try:
-            api.get_controller_config()   # succeeds once the backend is back
-            up = True
+            lg = api.controller_update_log()
+            if isinstance(lg, dict) and isinstance(lg.get("log"), str) and lg["log"].strip():
+                self._set_console(lg["log"])
         except Exception:
-            up = False
-        if not up:
-            self._ctrl_saw_down = True
+            pass
+        try:
+            rec = api.controller_update_status()
+        except Exception:
+            rec = None
+        ts = (rec or {}).get("ts")
+        if rec and isinstance(ts, (int, float)) and ts >= self._ctrl_start_ts:
+            status = rec.get("status")
+            if status == "failed":
+                self._ctrl_timer.stop()
+                self.controller_progress.setVisible(False)
+                self.update_controller_btn.setEnabled(True)
+                self.software_update_status.setStyleSheet(f"color:{STATUS_ERROR_COLOR};")
+                self.software_update_status.setText(
+                    "✗ Update failed — " + (rec.get("message") or "see the controller's update log")
+                    + "  Nothing changed; you're still signed in.")
+                return
+            if status == "success":
+                self._ctrl_timer.stop()
+                self.controller_progress.setVisible(False)
+                self.software_update_status.setStyleSheet(f"color:{STATUS_SUCCESS_COLOR};")
+                ver = rec.get("version")
+                self.software_update_status.setText(
+                    "✓ Controller updated" + (f" to {ver}" if ver else "") + " — signing you out…")
+                QTimer.singleShot(900, bus.logout_requested.emit)
+                return
+            # status "running" → keep waiting.
         elapsed = (datetime.datetime.now() - self._ctrl_start).total_seconds()
-        if (up and self._ctrl_saw_down) or elapsed > 150:
+        if elapsed > 180:
+            # Couldn't confirm (e.g. updating FROM a build predating the status
+            # file). Stop guessing; don't force a sign-out.
             self._ctrl_timer.stop()
             self.controller_progress.setVisible(False)
-            self.software_update_status.setStyleSheet(f"color:{STATUS_SUCCESS_COLOR};")
-            self.software_update_status.setText("Controller is back up — signing you out…")
-            # A controller update should end the session; return to the login
-            # screen (a brief delay so the message is visible first).
-            QTimer.singleShot(900, bus.logout_requested.emit)
+            self.update_controller_btn.setEnabled(True)
+            self.software_update_status.setStyleSheet(f"color:{STATUS_WARNING_COLOR};")
+            self.software_update_status.setText(
+                "⚠ Couldn't confirm the update from here. Check the controller's update log "
+                "(journalctl -u sysible-self-update). If the version changed, it succeeded.")
+
+    def _set_console(self, text):
+        """Replace the console contents and keep it pinned to the newest line."""
+        self.update_console.setPlainText(text)
+        sb = self.update_console.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _download_update_log(self):
+        """Save the most recent controller update's full output to a file."""
+        self.download_log_btn.setEnabled(False)
+        try:
+            r = api.controller_update_log(0)   # 0 = full log
+        except Exception as e:
+            self.download_log_btn.setEnabled(True)
+            QMessageBox.warning(self, "Download failed", f"Could not fetch the update log:\n{e}")
+            return
+        self.download_log_btn.setEnabled(True)
+        text = (r or {}).get("log") or ""
+        if not text.strip():
+            QMessageBox.information(self, "No update log",
+                                   "There's no update log yet — run a controller update first.")
+            return
+        default = f"sysible-update-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save update log", default, "Log files (*.log);;All files (*)")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        except Exception as e:
+            QMessageBox.warning(self, "Save failed", f"Could not write the file:\n{e}")
+            return
+        QMessageBox.information(self, "Saved", f"Update log saved to:\n{path}")
 
     def _update_agents(self):
         if QMessageBox.question(
@@ -586,6 +675,8 @@ class AdminConfigurationPage(QWidget):
             return
         self.software_update_status.setStyleSheet(f"color:{STATUS_NEUTRAL_COLOR};")
         self.software_update_status.setText("Queuing agent update…")
+        self.update_console.setPlainText("Queuing agent update…")
+        self.update_console.setVisible(True)
         try:
             r = api.update_agents()
         except Exception as e:
@@ -620,6 +711,16 @@ class AdminConfigurationPage(QWidget):
         except Exception:
             return
         updated = sum(1 for a in agents if a.get("agent_version") == self._agent_ver)
+        # Per-host rollout status in the console: updated hosts first.
+        rows = sorted(
+            ((a.get("hostname") or a.get("host_id"), a.get("agent_version") == self._agent_ver,
+              a.get("environment") or "") for a in agents),
+            key=lambda r: (r[1], r[0] or ""))
+        lines = [f"{'✓' if up else '·'} {name}"
+                 + (f"   [{env}]" if env else "")
+                 + ("   updated" if up else "   applying on next check-in…")
+                 for name, up, env in rows]
+        self._set_console("\n".join(lines) if lines else "No agent hosts.")
         self.agents_progress.setValue(min(updated, self._agent_total))
         elapsed = (datetime.datetime.now() - self._agents_start).total_seconds()
         done = updated >= self._agent_total

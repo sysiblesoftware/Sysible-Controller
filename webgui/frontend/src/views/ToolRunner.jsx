@@ -6,6 +6,7 @@ import ServiceManagementPage from "./ServiceManagementPage.jsx";
 import HostSoftwarePage from "./HostSoftwarePage.jsx";
 import CronTimersPage from "./CronTimersPage.jsx";
 import EnvironmentalPolicies from "./EnvironmentalPolicies.jsx";
+import QuickSystemActionsPage from "./QuickSystemActionsPage.jsx";
 import ToolIcon from "../components/ToolIcons.jsx";
 
 // Tools with a bespoke page instead of the generic three-pane runner.
@@ -14,6 +15,7 @@ const CUSTOM_PAGES = {
   "Service Management": ServiceManagementPage,
   "Host Software Management": HostSoftwarePage,
   "Cron & Systemd Timers": CronTimersPage,
+  "Quick System Actions": QuickSystemActionsPage,
 };
 
 // The System Administration tile grid — mirrors the desktop page exactly:
@@ -22,7 +24,9 @@ const CUSTOM_PAGES = {
 const TOOLS = [
   ["User & Group Administration", "Create, lock, and manage user accounts, passwords, sudo access, and groups across agent and SSH hosts.", "users", "ico-slate"],
   ["System Health, Logs & Recovery", "Disk usage, memory/CPU, failed services, logs, and process tools, plus boot/GRUB and kernel recovery — across agent and SSH hosts.", "heartbeat", "ico-green"],
-  ["Quick System Actions", "One-click common fixes across selected hosts: reboot or power off, restart a service (NetworkManager, SSH, time sync, or any by name), flush DNS, clear failed units, and reload systemd.", "bolt", "ico-amber"],
+  // hidden:true → resolvable by name (sidebar `solo` mode + "Fix in…" links) but
+  // NOT shown as a tile here; it lives only in its own left-sidebar entry.
+  ["Quick System Actions", "One-click common fixes across selected hosts: reboot or power off, restart a service (NetworkManager, SSH, time sync, or any by name), flush DNS, clear failed units, and reload systemd.", "bolt", "ico-amber", "", true],
   ["Service Management", "Start, stop, restart, enable/disable, and troubleshoot systemd services, or create and configure new ones.", "cogs", "ico-purple"],
   ["Environmental Policies", "Set the baseline password, lockout, sudo, and umask policy for accounts on managed hosts, and push it out.", "shield-alt", "ico-coral", "env"],
   ["Cron & Systemd Timers", "View, add, and remove cron jobs, and view, create, start/stop, enable/disable, and delete systemd timers.", "clock", "ico-amber"],
@@ -41,11 +45,18 @@ const TOOLS = [
   ["Distro Subscription & Licensing", "Register and manage commercial-distro subscriptions: Red Hat (subscription-manager), Ubuntu Pro, and SUSE (SUSEConnect) — status, attach/enable, and repositories.", "id-card", "ico-amber"],
 ];
 
-export default function ToolRunner({ openTool, openTab, onConsumed }) {
+// `solo` pins the runner to a single tool: no grid, no "← All tools" — used by
+// dedicated sidebar entries (e.g. Quick System Actions) that promote one tool to
+// its own top-level menu item.
+export default function ToolRunner({ openTool, openTab, onConsumed, solo }) {
   const [catalog, setCatalog] = useState(null);
   const [hosts, setHosts] = useState([]);
   const [err, setErr] = useState("");
-  const [open, setOpen] = useState(null);   // {name, special?, tab?}
+  const [open, setOpen] = useState(() => {
+    if (!solo) return null;
+    const t = TOOLS.find(([name]) => name === solo);
+    return t ? { name: t[0], special: t[4] } : null;
+  });   // {name, special?, tab?}
   const [q, setQ] = useState("");
 
   const loadHosts = useCallback(() => {
@@ -67,9 +78,10 @@ export default function ToolRunner({ openTool, openTab, onConsumed }) {
   }, [openTool, openTab]);
 
   const filtered = useMemo(() => {
+    const visible = TOOLS.filter((t) => !t[5]);   // drop grid-hidden tools
     const s = q.trim().toLowerCase();
-    if (!s) return TOOLS;
-    return TOOLS.filter(([t, d]) => t.toLowerCase().includes(s) || d.toLowerCase().includes(s));
+    if (!s) return visible;
+    return visible.filter(([t, d]) => t.toLowerCase().includes(s) || d.toLowerCase().includes(s));
   }, [q]);
 
   if (err) return <div className="error-box">{err}</div>;
@@ -81,7 +93,7 @@ export default function ToolRunner({ openTool, openTab, onConsumed }) {
     return (
       <div style={{ height: "calc(100vh - 150px)", display: "flex", flexDirection: "column" }}>
         <div className="row" style={{ marginBottom: 12 }}>
-          <button className="btn ghost sm" onClick={() => setOpen(null)}>← All tools</button>
+          {!solo && <button className="btn ghost sm" onClick={() => setOpen(null)}>← All tools</button>}
           <strong>{open.name}</strong>
         </div>
         {open.special === "env"

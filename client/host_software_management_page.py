@@ -377,7 +377,7 @@ class HostSoftwareManagementPage(QWidget):
         self._run_pkg_command(api.cmd_detect_host_environment(), "Detected Host Environment")
 
     def run_list_installed(self):
-        self._run_pkg_command(api.cmd_list_installed_packages(), "Installed Packages")
+        self._run_pkg_command(api.cmd_list_installed_packages(), "Installed Packages", needs_sudo=False)
 
     def run_search_packages(self):
         term = self.package_name_input.text().strip()
@@ -501,7 +501,7 @@ class HostSoftwareManagementPage(QWidget):
     # =========================================================
     # DISPATCH + RESULTS (same pattern as Service Management)
     # =========================================================
-    def _run_pkg_command(self, command, label, entries=None):
+    def _run_pkg_command(self, command, label, entries=None, needs_sudo=True):
         if entries is None:
             entries = self.checked_entries()
 
@@ -523,7 +523,7 @@ class HostSoftwareManagementPage(QWidget):
 
         for entry in entries:
             key = _entry_key(entry)
-            result = api.run_on_entry(entry, command)
+            result = api.run_on_entry(entry, command, needs_sudo=needs_sudo)
 
             if result["sync"]:
                 self.pkg_results[key] = {

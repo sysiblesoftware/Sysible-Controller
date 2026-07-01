@@ -15,6 +15,7 @@ import StandaloneTerminal from "./components/StandaloneTerminal.jsx";
 const SECTIONS = {
   hosts: "Host Enrollment",
   perf: "Fleet Performance",
+  quickactions: "Quick System Actions",
   sysadmin: "System Administration",
   connect: "Sysible Connect",
   live: "Live Activity & Logs",
@@ -28,6 +29,7 @@ const NAV = [
   { key: null, label: "Dashboard", icon: "grid", su: false, aud: true },
   { key: "perf", label: "Performance", icon: "chart", su: false, aud: true },
   { key: "hosts", label: "Host Enrollment", icon: "server", su: true },
+  { key: "quickactions", label: "Quick System Actions", icon: "bolt", su: false },
   { key: "sysadmin", label: "System Administration Tools", icon: "tools", su: false },
   { key: "connect", label: "Connect", icon: "terminal", su: false },
   { key: "live", label: "Activity & Logs", icon: "activity", su: true, aud: true },
@@ -42,6 +44,7 @@ const ICONS = {
   activity: <><path d="M4 12h4l2-6 4 12 2-6h4"/></>,
   chart: <><path d="M4 19V5M4 19h16M8 16l3-4 3 3 4-6"/></>,
   cog: <><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></>,
+  bolt: <><path d="M13 3L4 14h6l-1 7 9-11h-6z"/></>,
 };
 
 function NavIcon({ name }) {
@@ -59,6 +62,7 @@ export default function App() {
   const [checking, setChecking] = useState(true);
   const [view, setView] = useState(null); // null = dashboard
   const [target, setTarget] = useState(null);
+  const [history, setHistory] = useState([]); // breadcrumb stack of {view,target}
   const [edition, setEdition] = useState(null);
   const [sudoOpen, setSudoOpen] = useState(false);
   const [theme, setTheme] = useState(localStorage.getItem("sysible_theme") || "dark");
@@ -79,7 +83,24 @@ export default function App() {
   const onLoggedIn = useCallback((username, r) => { setUser(username); setRole(r || ""); }, []);
   const onLogout = useCallback(async () => {
     try { await api.logout(); } catch { /* ignore */ }
-    setUser(null); setView(null);
+    setUser(null); setView(null); setHistory([]);
+  }, []);
+
+  // Navigate, remembering where we came from so a global Back button can return
+  // there (e.g. Performance → a tool → Back to Performance) without walking the
+  // menus again. Used by both the sidebar and in-app "Fix in…"/drill links.
+  const go = useCallback((v, t = null) => {
+    if (v === view && JSON.stringify(t) === JSON.stringify(target)) return;
+    setHistory((h) => [...h, { view, target }]);
+    setView(v); setTarget(t);
+  }, [view, target]);
+  const goBack = useCallback(() => {
+    setHistory((h) => {
+      if (!h.length) return h;
+      const prev = h[h.length - 1];
+      setView(prev.view); setTarget(prev.target || null);
+      return h.slice(0, -1);
+    });
   }, []);
 
   const toggleTheme = () => {
@@ -113,7 +134,7 @@ export default function App() {
   return (
     <div className="shell">
       <nav className="rail">
-        <div className="rail-brand" onClick={() => setView(null)}>
+        <div className="rail-brand" onClick={() => go(null)}>
           <img className="rail-mark" src="/sysible_logo.png" alt=""
                onError={(e) => { e.target.style.display = "none"; e.target.nextSibling.style.display = "flex"; }} />
           <span className="rail-mark-fallback" style={{ display: "none" }}>S</span>
@@ -124,7 +145,7 @@ export default function App() {
           {nav.map((n) => (
             <button key={n.key ?? "dash"}
                     className={"rail-item" + (view === n.key ? " active" : "")}
-                    onClick={() => { setView(n.key); setTarget(null); }}>
+                    onClick={() => go(n.key, null)}>
               <NavIcon name={n.icon} /><span>{n.label}</span>
             </button>
           ))}
@@ -151,17 +172,24 @@ export default function App() {
 
       <main className="main">
         <div className="main-top">
-          <h2>{view === "host" ? (target?.label || "Host Posture") : (view ? SECTIONS[view] : "Dashboard")}</h2>
+          <div className="row" style={{ alignItems: "center", gap: 10, minWidth: 0 }}>
+            {history.length > 0 && (
+              <button className="btn ghost sm" onClick={goBack} title="Back to the previous screen">← Back</button>
+            )}
+            <h2 style={{ margin: 0 }}>{view === "host" ? (target?.label || "Host Posture") : (view ? SECTIONS[view] : "Dashboard")}</h2>
+          </div>
           <div className="main-top-sub">{view ? "" : `Signed in as ${user}${role ? ` · ${role}` : ""}`}</div>
         </div>
         <div className="main-scroll">
           {view === null && <Dashboard role={role} edition={edition}
-            onOpen={(section, opts) => { setView(section); setTarget(opts || null); }} />}
+            onOpen={(section, opts) => go(section, opts || null)} />}
           {view === "perf" && <Performance />}
-          {view === "host" && <HostDetail hostId={target?.id} label={target?.label}
-            onBack={() => { setView(null); setTarget(null); }} />}
+          {view === "host" && <HostDetail hostId={target?.id} label={target?.label} canAct={!isAuditor}
+            onBack={() => (history.length > 0 ? goBack() : go(null))}
+            onOpen={(section, opts) => go(section, opts || null)} />}
           {!isAuditor && view === "hosts" && <HostEnrollment />}
           {!isAuditor && view === "settings" && <Settings />}
+          {!isAuditor && view === "quickactions" && <ToolRunner solo="Quick System Actions" />}
           {!isAuditor && view === "sysadmin" && <ToolRunner openTool={target?.tool} openTab={target?.tab}
             onConsumed={() => setTarget(null)} />}
           {!isAuditor && view === "connect" && <Connect />}

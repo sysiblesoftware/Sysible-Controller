@@ -952,17 +952,25 @@ def restart_unit(host_id: str, body: RestartUnitRequest, request: Request,
     return {"unit": unit, "host": entry.get("label"), "result": result}
 
 
+class CheckinRequest(BaseModel):
+    targets: list[str] = []   # host ids to ping; empty = all
+
+
 @app.post("/api/checkin")
-def checkin(user: str = Depends(require_operator)):
-    """Lightweight reachability probe: run `true` on every host and report
-    which answered (mirrors the desktop 'Check In / Ping')."""
+def checkin(body: CheckinRequest | None = None, user: str = Depends(require_operator)):
+    """Lightweight reachability probe: run `true` on the requested hosts (or all
+    if none given) and report which answered."""
     try:
         entries = dispatch.list_merged_hosts(agent_only=False)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+    wanted = set((body.targets if body else None) or [])
+    if wanted:
+        entries = [e for e in entries if e.get("id") in wanted]
     out = []
     for entry in entries:
-        r = _dispatch_one(entry, "true", "command", None)
+        # A reachability ping (`true`) never needs sudo.
+        r = _dispatch_one(entry, "true", "command", None, needs_sudo=False)
         out.append({"host": entry["label"], "id": entry["id"],
                     "reachable": bool(r.get("ok")) or r.get("code") == 0,
                     "detail": r.get("error") or ""})
@@ -1228,6 +1236,22 @@ def controller_update(request: Request, user: str = Depends(require_superuser_se
     return _wrap(lambda: _as_admin(request, lambda: api.controller_update()))
 
 
+@app.get("/api/controller-update-status")
+def controller_update_status(request: Request, user: str = Depends(require_superuser_session)):
+    """Outcome of the most recent controller self-update, so the UI can report
+    the truth (updated to X / failed: reason) rather than guessing from the
+    restart. Superuser-only."""
+    return _wrap(lambda: _as_admin(request, lambda: api.controller_update_status()))
+
+
+@app.get("/api/controller-update-log")
+def controller_update_log(lines: int = 400, request: Request = None,
+                          user: str = Depends(require_superuser_session)):
+    """Live output of the controller self-update (git pull → rebuild → restart),
+    so the UI can show the commands running. Superuser-only."""
+    return _wrap(lambda: _as_admin(request, lambda: api.controller_update_log(lines)))
+
+
 @app.post("/api/update-agents")
 def update_agents(request: Request, user: str = Depends(require_superuser_session)):
     """Push the controller's current agent to every managed host over the
@@ -1378,7 +1402,8 @@ def services_list(body: ServicesListRequest, request: Request, user: str = Depen
         raise HTTPException(status_code=404, detail="host not found")
     spec = actions.get("svc_list_running" if body.running else "svc_list")
     cmd = spec.build({})
-    r = _dispatch_one(entry, cmd, "command", None, _session_token(request))
+    # Listing services doesn't need elevation — don't block sudo-required hosts.
+    r = _dispatch_one(entry, cmd, "command", None, _session_token(request), needs_sudo=False)
     if r.get("error") and not r.get("stdout"):
         raise HTTPException(status_code=502, detail=r["error"])
     names, seen = [], set()
@@ -1410,7 +1435,8 @@ def packages_list(body: PkgListRequest, request: Request, user: str = Depends(re
         raise HTTPException(status_code=404, detail="host not found")
     from client import _api_automation
     cmd = _api_automation.cmd_list_installed_packages()
-    r = _dispatch_one(entry, cmd, "command", None, _session_token(request))
+    # Listing packages doesn't need elevation — don't block sudo-required hosts.
+    r = _dispatch_one(entry, cmd, "command", None, _session_token(request), needs_sudo=False)
     if r.get("error") and not r.get("stdout"):
         raise HTTPException(status_code=502, detail=r["error"])
     pkgs, seen = [], set()
@@ -1764,7 +1790,8 @@ def files_compare(body: CompareRequest, request: Request, user: str = Depends(re
             "unreadable": unreadable, "errors": errors, "identical": identical}
 
 
-def _dispatch_one(entry, command, kind, become_password=None, token=None, description=None):
+def _dispatch_one(entry, command, kind, become_password=None, token=None, description=None,
+                  needs_sudo=True):
     """Run one command on one host and return a normalized result,
     polling agent tasks to completion (bounded) so the response is
     synchronous from the browser's point of view.
@@ -1775,19 +1802,21 @@ def _dispatch_one(entry, command, kind, become_password=None, token=None, descri
     The subsequent agent-result polling does not need the token, so it isn't
     held during the (bounded) poll loop."""
     label = entry["label"]
+    env = entry.get("environment") or "Unassigned"
     try:
         outcome = _with_token(token, lambda: dispatch.run_on_entry(
-            entry, command, kind=kind, become_password=become_password, description=description))
+            entry, command, kind=kind, become_password=become_password, description=description,
+            needs_sudo=needs_sudo))
     except Exception as e:
-        return {"host": label, "ok": False, "error": str(e),
+        return {"host": label, "environment": env, "ok": False, "error": str(e),
                 "stdout": "", "stderr": "", "code": None}
 
     if outcome.get("error"):
-        return {"host": label, "ok": False, "error": outcome["error"],
+        return {"host": label, "environment": env, "ok": False, "error": outcome["error"],
                 "stdout": "", "stderr": "", "code": None}
 
     if outcome.get("sync"):
-        return _normalize(label, outcome)
+        return _normalize(label, outcome, env)
 
     # Agent task: poll until the agent reports back, or time out.
     import time
@@ -1796,16 +1825,17 @@ def _dispatch_one(entry, command, kind, become_password=None, token=None, descri
     while time.time() < deadline:
         polled = dispatch.poll_entry_result(entry, task_id)
         if polled is not None:
-            return _normalize(label, polled)
+            return _normalize(label, polled, env)
         time.sleep(1.0)
-    return {"host": label, "ok": False, "error": "timed out waiting for agent",
+    return {"host": label, "environment": env, "ok": False, "error": "timed out waiting for agent",
             "stdout": "", "stderr": "", "code": None}
 
 
-def _normalize(label, r):
+def _normalize(label, r, env="Unassigned"):
     code = r.get("code")
     return {
         "host": label,
+        "environment": env,
         "ok": (code == 0) if code is not None else (not r.get("stderr")),
         "error": r.get("error"),
         "stdout": r.get("stdout", ""),

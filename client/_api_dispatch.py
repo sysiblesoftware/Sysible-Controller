@@ -193,8 +193,32 @@ def _dedupe_same_ip(entries):
     return result
 
 
+_SUDO_AUTH_FAIL_MARKERS = (
+    "incorrect password attempt",
+    "incorrect password attempts",
+    "sorry, try again",
+    "a password is required",
+    "no password was provided",
+    "a terminal is required to read the password",
+)
+
+
+def sudo_auth_failed(text: str) -> bool:
+    """True if command output looks like sudo rejected the become-password (wrong
+    password / none supplied). Lets callers show a precise 'your stored sudo
+    password is wrong' message instead of the raw sudo noise."""
+    t = (text or "").lower()
+    return any(m in t for m in _SUDO_AUTH_FAIL_MARKERS)
+
+
+def _sudo_hint(entry):
+    return (f"Sudo authentication failed on '{entry.get('label', 'this host')}'. "
+            "The stored sudo password looks incorrect — update it with the "
+            "“Sudo Password” button, then try again.")
+
+
 def run_on_entry(entry, command: str, kind: str = "command", description: str = None,
-                 become_password: str = None):
+                 become_password: str = None, needs_sudo: bool = True):
     """Run `command` on one merged-host entry (as produced by
     list_merged_hosts()). SSH executes synchronously over exec_remote()
     - the result is ready immediately. Agent dispatch is async - only a
@@ -231,11 +255,13 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
         except Exception:
             become_password = None
 
-    if entry.get("requires_sudo_password"):
+    if entry.get("requires_sudo_password") and needs_sudo:
         # Fail fast with a clear instruction instead of dispatching a command
         # that will just bounce off `sudo` for lack of a password. This host is
         # marked "sudo requires a password" but none is stored for the
         # logged-in admin, so there's nothing for the agent to elevate with.
+        # (Read-only callers pass needs_sudo=False — listing services/packages,
+        # a reachability ping, etc. don't elevate, so they shouldn't be blocked.)
         if not become_password:
             msg = (
                 f"'{entry.get('label', 'this host')}' is set to require a sudo password, "
@@ -248,12 +274,13 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
         try:
             result = exec_remote(entry["id"], command, description=description,
                                  become_password=become_password)
+            stderr = result.get("stderr", "")
             return {
                 "sync": True,
                 "stdout": result.get("stdout", ""),
-                "stderr": result.get("stderr", ""),
+                "stderr": stderr,
                 "code": result.get("code"),
-                "error": None,
+                "error": _sudo_hint(entry) if (become_password and sudo_auth_failed(stderr)) else None,
             }
         except Exception as e:
             return {"sync": True, "stdout": "", "stderr": "", "code": None, "error": str(e)}
@@ -279,11 +306,15 @@ def poll_entry_result(entry, task_id):
     if output is None:
         return None
 
+    stderr = output.get("stderr", "")
+    code = output.get("returncode")
     return {
         "stdout": output.get("stdout", ""),
-        "stderr": output.get("stderr", ""),
-        "code": output.get("returncode"),
-        "error": None,
+        "stderr": stderr,
+        "code": code,
+        # A non-zero result whose output reads like a sudo password rejection ->
+        # a precise hint instead of raw "sudo: 1 incorrect password attempt".
+        "error": _sudo_hint(entry) if (code not in (0, None) and sudo_auth_failed(stderr)) else None,
     }
 
 
@@ -498,6 +529,53 @@ def cmd_flush_dns() -> str:
     )
 
 
+def cmd_drop_caches() -> str:
+    """Free reclaimable memory: sync, then drop the page cache / dentries /
+    inodes. Safe — the kernel only drops CLEAN caches, no data is lost; it just
+    releases 'used' memory that was really cache."""
+    return "sync && echo 3 > /proc/sys/vm/drop_caches && echo 'Dropped page cache, dentries and inodes.'"
+
+
+def cmd_clean_package_cache() -> str:
+    """Clean the package manager's download cache to reclaim disk (dnf/yum clean
+    all, zypper clean, apt-get clean)."""
+    return (
+        "if command -v dnf >/dev/null 2>&1; then dnf clean all; "
+        "elif command -v yum >/dev/null 2>&1; then yum clean all; "
+        "elif command -v zypper >/dev/null 2>&1; then zypper clean; "
+        "elif command -v apt-get >/dev/null 2>&1; then apt-get clean; "
+        "else echo 'No supported package manager found' >&2; exit 1; fi; "
+        "echo 'Package cache cleaned.'"
+    )
+
+
+def cmd_vacuum_journal(keep_days: int = 7) -> str:
+    """Shrink the systemd journal to the last N days to reclaim disk."""
+    d = max(1, int(keep_days))
+    return (
+        "if ! command -v journalctl >/dev/null 2>&1; then echo 'journalctl not available' >&2; exit 1; fi; "
+        f"journalctl --vacuum-time={d}d && echo 'Journal vacuumed to the last {d} day(s).'"
+    )
+
+
+def cmd_fstrim() -> str:
+    """Discard unused blocks on all mounted filesystems (SSD / thin-LVM trim)."""
+    return (
+        "if ! command -v fstrim >/dev/null 2>&1; then echo 'fstrim not available on this host' >&2; exit 1; fi; "
+        "fstrim -av"
+    )
+
+
+def cmd_sync_time_now() -> str:
+    """Force an immediate clock sync (chrony makestep / ntpd step / timedatectl)."""
+    return (
+        "if command -v chronyc >/dev/null 2>&1; then chronyc makestep && echo 'Requested a chrony step.' && exit 0; fi; "
+        "if command -v ntpd >/dev/null 2>&1; then ntpd -gq && echo 'Stepped the clock via ntpd.' && exit 0; fi; "
+        "if command -v timedatectl >/dev/null 2>&1; then timedatectl set-ntp true && echo 'Enabled NTP via timedatectl.' && exit 0; fi; "
+        "echo 'No time-sync tool available (chrony/ntpd/timedatectl).' >&2; exit 1"
+    )
+
+
 def cmd_restart_agent() -> str:
     """Restart the Sysible agent service. Launched detached via systemd-run
     so it survives the agent process (its own parent) being stopped, and
@@ -586,10 +664,19 @@ if command -v pro >/dev/null 2>&1; then
 fi
 
 # --- Reboot required --------------------------------------------------------
+# Use authoritative, reboot-clearing checks per distro (a naive "is anything
+# using a deleted lib" grep does NOT clear after a reboot and false-positives):
+#   Debian/Ubuntu: /var/run/reboot-required
+#   RHEL/Fedora:   needs-restarting -r  (exit != 0 => reboot needed)
+#   SUSE:          zypper needs-rebooting (exit 102 => reboot needed). It
+#                  compares the boot time to when core packages were updated, so
+#                  it clears once you've actually rebooted.
 rr=0
 [ -f /var/run/reboot-required ] && rr=1
 if command -v needs-restarting >/dev/null 2>&1; then needs-restarting -r >/dev/null 2>&1 || rr=1; fi
-if command -v zypper >/dev/null 2>&1; then zypper ps 2>/dev/null | grep -qi 'reboot' && rr=1; fi
+if command -v zypper >/dev/null 2>&1; then
+  zypper needs-rebooting >/dev/null 2>&1; [ "$?" = 102 ] && rr=1
+fi
 p reboot.required "$rr"
 
 # --- Mandatory access control / kernel hardening ----------------------------

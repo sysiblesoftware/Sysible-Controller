@@ -41,6 +41,23 @@ function HostRow({ r, single }) {
   );
 }
 
+const envOf = (r) => r.environment || "Unassigned";
+
+// Small env header with its own ok/problem tally.
+function EnvHeader({ env, rows }) {
+  const ok = rows.filter((r) => r.ok).length;
+  const prob = rows.length - ok;
+  return (
+    <div className="spread" style={{ padding: "7px 4px 5px", borderTop: "1px solid var(--border)", alignItems: "center" }}>
+      <span style={{ fontWeight: 700, fontSize: 12, textTransform: "uppercase", letterSpacing: 0.4 }}>{env}</span>
+      <span className="faint" style={{ fontSize: 12 }}>
+        {rows.length} host{rows.length === 1 ? "" : "s"} · <span className="ok-text">{ok} ok</span>
+        {prob > 0 && <> · <span className="badge amber">{prob}</span></>}
+      </span>
+    </div>
+  );
+}
+
 export default function HostResults({ rows }) {
   const [onlyProblems, setOnlyProblems] = useState(false);
   const [filter, setFilter] = useState("");
@@ -51,8 +68,16 @@ export default function HostResults({ rows }) {
   const shown = list
     .filter((r) => !onlyProblems || !r.ok)
     .filter((r) => !q ||
-      `${r.host} ${r.stdout || ""} ${r.stderr || ""} ${r.error || ""}`.toLowerCase().includes(q))
+      `${r.host} ${envOf(r)} ${r.stdout || ""} ${r.stderr || ""} ${r.error || ""}`.toLowerCase().includes(q))
     .slice().sort((a, b) => (a.ok === b.ok ? 0 : a.ok ? 1 : -1)); // problems first
+
+  // Group by environment once more than one environment is present in the run —
+  // a fleet-wide action reads as "Dev / Prod / Stage" sections, not one long
+  // flat list. Single-environment (or single-host) runs stay flat.
+  const envs = [...new Set(list.map(envOf))];
+  const grouped = envs.length > 1;
+  const sortedEnvs = [...envs].sort((a, b) =>
+    a === "Unassigned" ? 1 : b === "Unassigned" ? -1 : a.localeCompare(b));
 
   return (
     <>
@@ -70,7 +95,18 @@ export default function HostResults({ rows }) {
                  value={filter} onChange={(e) => setFilter(e.target.value)} />
         </div>
       )}
-      {shown.map((r, j) => <HostRow key={(r.host || "") + j} r={r} single={list.length <= 1} />)}
+      {grouped
+        ? sortedEnvs.map((env) => {
+            const envShown = shown.filter((r) => envOf(r) === env);
+            if (envShown.length === 0) return null;
+            return (
+              <div key={env}>
+                <EnvHeader env={env} rows={list.filter((r) => envOf(r) === env)} />
+                {envShown.map((r, j) => <HostRow key={(r.host || "") + j} r={r} single={false} />)}
+              </div>
+            );
+          })
+        : shown.map((r, j) => <HostRow key={(r.host || "") + j} r={r} single={list.length <= 1} />)}
       {shown.length === 0 && <div className="empty" style={{ padding: 12 }}>No hosts match the filter.</div>}
     </>
   );

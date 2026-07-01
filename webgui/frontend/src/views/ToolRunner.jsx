@@ -22,6 +22,7 @@ const CUSTOM_PAGES = {
 const TOOLS = [
   ["User & Group Administration", "Create, lock, and manage user accounts, passwords, sudo access, and groups across agent and SSH hosts.", "users", "ico-slate"],
   ["System Health, Logs & Recovery", "Disk usage, memory/CPU, failed services, logs, and process tools, plus boot/GRUB and kernel recovery — across agent and SSH hosts.", "heartbeat", "ico-green"],
+  ["Quick System Actions", "One-click common fixes across selected hosts: reboot or power off, restart a service (NetworkManager, SSH, time sync, or any by name), flush DNS, clear failed units, and reload systemd.", "bolt", "ico-amber"],
   ["Service Management", "Start, stop, restart, enable/disable, and troubleshoot systemd services, or create and configure new ones.", "cogs", "ico-purple"],
   ["Environmental Policies", "Set the baseline password, lockout, sudo, and umask policy for accounts on managed hosts, and push it out.", "shield-alt", "ico-coral", "env"],
   ["Cron & Systemd Timers", "View, add, and remove cron jobs, and view, create, start/stop, enable/disable, and delete systemd timers.", "clock", "ico-amber"],

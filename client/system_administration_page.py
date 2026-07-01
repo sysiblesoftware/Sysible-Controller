@@ -8,6 +8,7 @@ from client.branding import make_page_header
 from client import theme
 from client.user_group_administration_page import UserGroupAdministrationPage
 from client.system_health_recovery_page import SystemHealthRecoveryPage
+from client.quick_system_actions_page import QuickSystemActionsPage
 from client.service_management_page import ServiceManagementPage
 from client.environmental_policies_page import EnvironmentalPoliciesPage
 from client.cron_systemd_timers_page import CronSystemdTimersPage
@@ -47,6 +48,7 @@ class SystemAdministrationPage(QWidget):
 
         self.user_group_window = None
         self.diagnostics_window = None
+        self.quick_actions_window = None
         self.service_window = None
         self.environmental_policies_window = None
         self.cron_timers_window = None
@@ -104,6 +106,11 @@ class SystemAdministrationPage(QWidget):
              "Disk usage, memory/CPU, failed services, logs, and process tools, plus boot/GRUB "
              "and kernel recovery — across agent and SSH hosts.",
              self.open_system_diagnostics, "fa5s.heartbeat", "green"),
+            ("Quick System Actions",
+             "One-click common fixes across selected hosts: reboot or power off, restart a service "
+             "(NetworkManager, SSH, time sync, or any by name), flush DNS, clear failed units, and "
+             "reload systemd.",
+             self.open_quick_actions, "fa5s.bolt", "amber"),
             ("Service Management",
              "Start, stop, restart, enable/disable, and troubleshoot systemd services, or create and configure new ones.",
              self.open_service_management, "fa5s.cogs", "purple"),
@@ -242,6 +249,13 @@ class SystemAdministrationPage(QWidget):
         # Kept so the dashboard feature search ("disk usage", "tail logs", ...)
         # still works: opens the combined window on its Health & Logs tab.
         return self.open_system_diagnostics().show_health()
+
+    def open_quick_actions(self):
+        if self.quick_actions_window is None:
+            self.quick_actions_window = QuickSystemActionsPage()
+        self.quick_actions_window.show()
+        self.quick_actions_window.raise_()
+        return self.quick_actions_window
 
     def open_service_management(self):
         if self.service_window is None:

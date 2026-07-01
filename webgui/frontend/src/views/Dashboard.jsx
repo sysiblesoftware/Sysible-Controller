@@ -41,6 +41,44 @@ function Meter({ label, pct }) {
   );
 }
 
+// A failed systemd unit rendered as a one-click "restart it" chip. Right-click
+// or left-click both offer to restart the unit on that host (a write, so an
+// auditor can't; the command is built server-side from the unit name). Clicks
+// stopPropagation so they don't also trigger the card's drill-down.
+function UnitChip({ hostId, unit }) {
+  const [state, setState] = useState("idle"); // idle | busy | ok | err
+  const [msg, setMsg] = useState("");
+  const canRestart = !!(hostId && unit && unit !== "…");
+  const restart = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (!canRestart || state === "busy") return;
+    if (!window.confirm(`Restart ${unit} on this host?`)) return;
+    setState("busy"); setMsg("");
+    api.restartUnit(hostId, unit)
+      .then((r) => {
+        const res = r.result || {};
+        const ok = res.ok || res.code === 0;
+        setState(ok ? "ok" : "err");
+        setMsg(ok ? "restarted" : (res.error || res.stderr || `exit ${res.code}`));
+      })
+      .catch((err) => { setState("err"); setMsg(String(err.message || err)); });
+  };
+  const color = state === "ok" ? VERDICT_COLOR.OK : state === "err" ? VERDICT_COLOR.CRITICAL : VERDICT_COLOR.WARNING;
+  return (
+    <button onClick={restart} onContextMenu={restart} disabled={!canRestart || state === "busy"}
+      title={canRestart ? `Restart ${unit} on this host` : unit}
+      style={{ font: "inherit", fontSize: 11, cursor: canRestart ? "pointer" : "default",
+               border: `1px solid ${color}`, color, background: "transparent",
+               borderRadius: 10, padding: "0 7px", margin: "2px 4px 0 0", lineHeight: "17px",
+               whiteSpace: "nowrap" }}>
+      {state === "busy" ? "restarting…" : unit}
+      {state === "ok" && " ✓"}{state === "err" && " ✕"}
+      {msg && state === "err" ? <span className="faint" style={{ marginLeft: 4 }}>{msg}</span> : null}
+    </button>
+  );
+}
+
 function FleetHostCard({ h, onOpenHost }) {
   const v = (h.verdict || "OK").toUpperCase();
   const noData = v === "OFFLINE" || h.disk == null;
@@ -73,8 +111,17 @@ function FleetHostCard({ h, onOpenHost }) {
           {(h.failed > 0 || (h.units && h.units.length) || h.oom > 0 || (h.sysd && h.sysd !== "running")) && (
             <div style={{ fontSize: 12, marginTop: 4, color: VERDICT_COLOR.WARNING }}>
               {h.failed > 0 && (
-                <div>{h.failed} crashed service{h.failed > 1 ? "s" : ""}
-                  {h.units && h.units.length ? `: ${h.units.join(", ")}${h.failed > h.units.length ? "…" : ""}` : ""}</div>
+                <div>
+                  <div>{h.failed} crashed service{h.failed > 1 ? "s" : ""}
+                    {h.units && h.units.length ? "" : "."}
+                    {h.units && h.units.length ? <span className="faint" style={{ marginLeft: 4 }}>— click a unit to restart it</span> : null}</div>
+                  {h.units && h.units.length ? (
+                    <div style={{ display: "flex", flexWrap: "wrap", marginTop: 2 }}>
+                      {h.units.map((u) => <UnitChip key={u} hostId={h.id} unit={u} />)}
+                      {h.failed > h.units.length && <span className="faint" style={{ fontSize: 11, marginTop: 2 }}>+{h.failed - h.units.length} more</span>}
+                    </div>
+                  ) : null}
+                </div>
               )}
               {h.oom > 0 && <div>{h.oom} OOM kill{h.oom > 1 ? "s" : ""} (out-of-memory)</div>}
               {h.sysd && h.sysd !== "running" && h.sysd !== "unknown" && <div>systemd: {h.sysd}</div>}

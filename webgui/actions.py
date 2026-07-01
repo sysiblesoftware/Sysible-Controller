@@ -1459,6 +1459,77 @@ def _apply_layout():
                 idx += 1
 
 
+# ---- Tool: Quick System Actions --------------------------------------
+# One-click common remediations, so an operator doesn't have to hand-craft a
+# command for the everyday "just reboot it / restart NetworkManager / clear the
+# failed units" tasks. Every build= delegates to an existing cmd_* builder.
+_register(Action(
+    name="qsa_restart_service", tool="Quick System Actions", group="Services",
+    label="Restart a service",
+    description="Restart any systemd service by name on the selected hosts.",
+    params=[Param("service", "Service name", help="e.g. nginx, docker, postgresql")],
+    build=lambda p: api.cmd_service_restart(_s(p, "service")),
+))
+_register(Action(
+    name="qsa_restart_networkmanager", tool="Quick System Actions", group="Common services",
+    label="Restart NetworkManager",
+    description="Restart NetworkManager (re-applies connection profiles).",
+    params=[],
+    build=lambda p: api.cmd_service_restart("NetworkManager"),
+))
+_register(Action(
+    name="qsa_flush_dns", tool="Quick System Actions", group="Common services",
+    label="Flush DNS cache",
+    description="Flush the local DNS resolver cache (systemd-resolved / nscd / dnsmasq).",
+    params=[],
+    build=lambda p: api.cmd_flush_dns(),
+))
+_register(Action(
+    name="qsa_restart_ssh", tool="Quick System Actions", group="Common services",
+    label="Restart SSH server",
+    description="Restart sshd/ssh (does not drop existing sessions).",
+    params=[],
+    build=lambda p: api.cmd_restart_ssh(),
+))
+_register(Action(
+    name="qsa_restart_timesync", tool="Quick System Actions", group="Common services",
+    label="Restart time sync",
+    description="Restart the active time-sync daemon (chrony / systemd-timesyncd / ntp).",
+    params=[],
+    build=lambda p: api.cmd_restart_timesync(),
+))
+_register(Action(
+    name="qsa_reset_failed", tool="Quick System Actions", group="Systemd housekeeping",
+    label="Clear failed units",
+    description="Clear stale 'failed' markers so `systemctl --failed` is clean again "
+                "(does not start anything).",
+    params=[],
+    build=lambda p: api.cmd_reset_failed_units(),
+))
+_register(Action(
+    name="qsa_daemon_reload", tool="Quick System Actions", group="Systemd housekeeping",
+    label="Reload systemd (daemon-reload)",
+    description="Reload the systemd manager so edited unit files take effect.",
+    params=[],
+    build=lambda p: api.cmd_daemon_reload(),
+))
+_register(Action(
+    name="qsa_reboot", tool="Quick System Actions", group="Power (careful)",
+    label="Reboot host", danger=True,
+    description="Reboot the selected hosts now.",
+    params=[],
+    build=lambda p: api.cmd_reboot_host(),
+))
+_register(Action(
+    name="qsa_poweroff", tool="Quick System Actions", group="Power (careful)",
+    label="Power off host", danger=True,
+    description="Power off the selected hosts now (they will NOT come back until "
+                "powered on out-of-band).",
+    params=[],
+    build=lambda p: api.cmd_poweroff_host(),
+))
+
+
 _apply_layout()
 
 

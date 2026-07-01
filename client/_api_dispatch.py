@@ -425,6 +425,79 @@ def cmd_poweroff_host() -> str:
     return "shutdown -P +0 || systemctl poweroff"
 
 
+# ---- Quick System Actions (one-click common fixes) --------------------
+# Small, safe, cross-distro remediations exposed as one-click buttons in the
+# "Quick System Actions" tool. Each prints what it did and exits with the real
+# return code so the GUI colours it success/failure. No 2>&1 on the systemctl
+# calls: a privilege failure must stay on stderr so the agent's run-as-user
+# path recognizes it and retries under the host's sudo.
+def cmd_reset_failed_units() -> str:
+    """Clear the 'failed' state of every systemd unit (systemctl reset-failed).
+    Cosmetic-only: it does not start anything, it just wipes stale failure
+    markers so `systemctl --failed` is clean again."""
+    return (
+        "if ! command -v systemctl >/dev/null 2>&1; then "
+        "echo 'systemctl not available on this host' >&2; exit 1; fi; "
+        "systemctl reset-failed; rc=$?; "
+        "if [ \"$rc\" -eq 0 ]; then echo 'Cleared failed-unit state.'; "
+        "else echo \"reset-failed exited $rc\" >&2; fi; exit \"$rc\""
+    )
+
+
+def cmd_daemon_reload() -> str:
+    """Reload the systemd manager configuration (systemctl daemon-reload) so
+    edited unit files take effect without a reboot."""
+    return (
+        "if ! command -v systemctl >/dev/null 2>&1; then "
+        "echo 'systemctl not available on this host' >&2; exit 1; fi; "
+        "systemctl daemon-reload; rc=$?; "
+        "if [ \"$rc\" -eq 0 ]; then echo 'Reloaded systemd manager configuration.'; "
+        "else echo \"daemon-reload exited $rc\" >&2; fi; exit \"$rc\""
+    )
+
+
+def cmd_restart_ssh() -> str:
+    """Restart the SSH server, whichever unit this distro ships it under
+    (sshd on RHEL/SUSE, ssh on Debian/Ubuntu). Restarting sshd does not drop
+    existing sessions, so this is safe to run against a live host."""
+    return (
+        "if systemctl list-unit-files 2>/dev/null | grep -q '^sshd\\.service'; then u=sshd; "
+        "elif systemctl list-unit-files 2>/dev/null | grep -q '^ssh\\.service'; then u=ssh; "
+        "else echo 'No sshd/ssh service found' >&2; exit 1; fi; "
+        "systemctl restart \"$u\"; rc=$?; "
+        "if [ \"$rc\" -eq 0 ]; then echo \"Restarted $u.\"; "
+        "else echo \"Failed to restart $u (exit $rc).\" >&2; fi; exit \"$rc\""
+    )
+
+
+def cmd_restart_timesync() -> str:
+    """Restart the active time-sync daemon (chronyd / systemd-timesyncd / ntpd),
+    whichever this host actually runs."""
+    return (
+        "for u in chronyd chrony systemd-timesyncd ntpd ntp; do "
+        "if systemctl list-unit-files 2>/dev/null | grep -q \"^$u\\.service\"; then "
+        "systemctl restart \"$u\"; rc=$?; "
+        "if [ \"$rc\" -eq 0 ]; then echo \"Restarted $u.\"; else echo \"Failed to restart $u (exit $rc).\" >&2; fi; "
+        "exit \"$rc\"; fi; done; "
+        "echo 'No time-sync service (chrony/timesyncd/ntp) found' >&2; exit 1"
+    )
+
+
+def cmd_flush_dns() -> str:
+    """Flush the local DNS cache. Prefers systemd-resolved's flush, then falls
+    back to restarting nscd / dnsmasq if either is what's caching."""
+    return (
+        "if command -v resolvectl >/dev/null 2>&1; then "
+        "resolvectl flush-caches && echo 'Flushed systemd-resolved cache.' && exit 0; fi; "
+        "if command -v systemd-resolve >/dev/null 2>&1; then "
+        "systemd-resolve --flush-caches && echo 'Flushed systemd-resolved cache.' && exit 0; fi; "
+        "for u in nscd dnsmasq; do "
+        "if systemctl list-unit-files 2>/dev/null | grep -q \"^$u\\.service\"; then "
+        "systemctl restart \"$u\" && echo \"Restarted $u (DNS cache cleared).\" && exit 0; fi; done; "
+        "echo 'No local DNS cache to flush (no resolved/nscd/dnsmasq).'"
+    )
+
+
 def cmd_restart_agent() -> str:
     """Restart the Sysible agent service. Launched detached via systemd-run
     so it survives the agent process (its own parent) being stopped, and

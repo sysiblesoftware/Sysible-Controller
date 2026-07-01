@@ -922,6 +922,36 @@ def fleet(body: FleetRequest, request: Request, user: str = Depends(require_oper
     return {"action": body.action, "command": command, "results": results}
 
 
+class RestartUnitRequest(BaseModel):
+    unit: str
+    sudo_password: str = ""
+
+
+@app.post("/api/host/{host_id}/restart-unit")
+def restart_unit(host_id: str, body: RestartUnitRequest, request: Request,
+                 user: str = Depends(require_operator)):
+    """Restart one systemd unit on one host — the one-click 'fix it' behind a
+    failed unit on the dashboard. The command is built server-side from the unit
+    name (shlex-quoted by cmd_service_restart), so the only input is the unit;
+    dispatched as the operator (attributed/logged), so it's an ordinary write an
+    auditor can't perform."""
+    unit = (body.unit or "").strip()
+    if not unit:
+        raise HTTPException(status_code=400, detail="A unit name is required.")
+    try:
+        all_entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+    entry = all_entries.get(host_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Host not found.")
+    command = api.cmd_service_restart(unit)
+    become = body.sudo_password or sudo_store.resolve(user, entry.get("label", ""))
+    token = _session_token(request)
+    result = _dispatch_one(entry, command, "command", become, token, f"Restart unit {unit}")
+    return {"unit": unit, "host": entry.get("label"), "result": result}
+
+
 @app.post("/api/checkin")
 def checkin(user: str = Depends(require_operator)):
     """Lightweight reachability probe: run `true` on every host and report

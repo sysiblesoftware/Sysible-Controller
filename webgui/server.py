@@ -962,7 +962,8 @@ def checkin(user: str = Depends(require_operator)):
         raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
     out = []
     for entry in entries:
-        r = _dispatch_one(entry, "true", "command", None)
+        become = sudo_store.resolve(user, entry.get("label", ""))
+        r = _dispatch_one(entry, "true", "command", become)
         out.append({"host": entry["label"], "id": entry["id"],
                     "reachable": bool(r.get("ok")) or r.get("code") == 0,
                     "detail": r.get("error") or ""})
@@ -1394,7 +1395,8 @@ def services_list(body: ServicesListRequest, request: Request, user: str = Depen
         raise HTTPException(status_code=404, detail="host not found")
     spec = actions.get("svc_list_running" if body.running else "svc_list")
     cmd = spec.build({})
-    r = _dispatch_one(entry, cmd, "command", None, _session_token(request))
+    become = sudo_store.resolve(user, entry.get("label", ""))
+    r = _dispatch_one(entry, cmd, "command", become, _session_token(request))
     if r.get("error") and not r.get("stdout"):
         raise HTTPException(status_code=502, detail=r["error"])
     names, seen = [], set()
@@ -1426,7 +1428,8 @@ def packages_list(body: PkgListRequest, request: Request, user: str = Depends(re
         raise HTTPException(status_code=404, detail="host not found")
     from client import _api_automation
     cmd = _api_automation.cmd_list_installed_packages()
-    r = _dispatch_one(entry, cmd, "command", None, _session_token(request))
+    become = sudo_store.resolve(user, entry.get("label", ""))
+    r = _dispatch_one(entry, cmd, "command", become, _session_token(request))
     if r.get("error") and not r.get("stdout"):
         raise HTTPException(status_code=502, detail=r["error"])
     pkgs, seen = [], set()

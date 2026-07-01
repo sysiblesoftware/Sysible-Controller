@@ -73,6 +73,7 @@ export const api = {
     req("/api/controller-config", { method: "POST", body: cfg }),
   controllerUpdate: () => req("/api/controller-update", { method: "POST" }),
   controllerUpdateStatus: () => req("/api/controller-update-status"),
+  controllerUpdateLog: (lines = 400) => req(`/api/controller-update-log?lines=${lines}`),
   updateAgents: () => req("/api/update-agents", { method: "POST" }),
   auditLog: (limit = 200) => req(`/api/audit-log?limit=${limit}`),
   license: () => req("/api/license"),

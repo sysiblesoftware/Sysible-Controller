@@ -1126,6 +1126,30 @@ def controller_update_status_route():
     return rec
 
 
+@app.get("/controller/update-log", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def controller_update_log_route(lines: int = 400):
+    """Recent output of the controller self-update transient unit
+    (sysible-self-update) so the UI can show the update's commands running live —
+    git pull, rsync, dependency + web-console rebuild, restart. Superuser-only.
+    Still readable after the unit is reaped (--collect): journal entries outlive
+    the unit. `-o cat` gives just the messages (the command echoes), no prefix."""
+    import subprocess
+    lines = max(1, min(int(lines), 5000))
+    try:
+        proc = subprocess.run(
+            ["journalctl", "-u", "sysible-self-update", "-n", str(lines), "--no-pager", "-o", "cat"],
+            capture_output=True, text=True, timeout=10,
+        )
+        out = proc.stdout
+        if proc.returncode != 0 and not out:
+            out = f"(no update output yet: {proc.stderr.strip() or 'journalctl returned nothing'})"
+    except FileNotFoundError:
+        out = "(journalctl not available on this host)"
+    except subprocess.TimeoutExpired:
+        out = "(timed out reading the update log)"
+    return {"log": out}
+
+
 @app.get("/controller-config/tls/trust-bundle", dependencies=[Depends(require_api_key)])
 def download_trust_bundle_route():
     """Current trust.crt content - what an admin hands to GUI

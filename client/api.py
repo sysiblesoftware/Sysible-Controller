@@ -256,6 +256,12 @@ def controller_update_status():
     return _request("GET", "/controller/update-status", timeout=15)
 
 
+def controller_update_log(lines: int = 400):
+    """Recent output of the controller self-update (the commands it's running:
+    git pull, rsync, rebuild, restart). Returns {"log": "..."}."""
+    return _request("GET", "/controller/update-log", params={"lines": lines}, timeout=15)
+
+
 def update_agents():
     """Push the controller's current agent to every managed host over the
     existing task channel. Returns {"queued", "version", "message"}. Agents

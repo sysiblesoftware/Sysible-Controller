@@ -314,11 +314,17 @@ function SoftwareUpdate() {
   const [ctrl, setCtrl] = useState(null);
   const [ctrlMsg, setCtrlMsg] = useState("");
   const [agents, setAgents] = useState(null);   // null | {total, updated, ver, done, timedOut}
+  const [ctrlLog, setCtrlLog] = useState("");   // live self-update output
+  const [agentRows, setAgentRows] = useState(null); // per-host update status list
   const pollRef = useRef(null);
+  const logRef = useRef(null);
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+  // Keep the console pinned to the newest output.
+  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [ctrlLog]);
 
   async function startController() {
-    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setAgents(null); setCtrlMsg("");
+    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setAgents(null); setAgentRows(null);
+    setCtrlMsg(""); setCtrlLog("");
     // Baseline: only a status record written at/after we kicked this off counts
     // as THIS run's outcome (the updater writes run/last_update.json). Small
     // margin for clock skew between browser and server.
@@ -343,6 +349,10 @@ function SoftwareUpdate() {
       };
       if (pollRef.current) clearInterval(pollRef.current);
       pollRef.current = setInterval(async () => {
+        // Stream the update's command output (git pull → rsync → rebuild →
+        // restart). Unreachable during the brief restart window — keep the last
+        // content and resume when it's back.
+        try { const lg = await api.controllerUpdateLog(); if (lg && typeof lg.log === "string") setCtrlLog(lg.log); } catch { /* keep last */ }
         // The updater records the true outcome. Read it whenever the backend is
         // reachable (on a failed update the console never restarts, so this is
         // reachable the whole time; on success it's briefly down then returns
@@ -371,7 +381,7 @@ function SoftwareUpdate() {
   }
 
   async function startAgents() {
-    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setCtrl(null);
+    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setCtrl(null); setCtrlLog(""); setAgentRows(null);
     try {
       const r = await api.updateAgents();
       const ver = r?.version, total = r?.queued || 0;
@@ -380,16 +390,24 @@ function SoftwareUpdate() {
       setAgents({ total, updated: 0, ver, done: false, timedOut: false });
       const t0 = Date.now();
       if (pollRef.current) clearInterval(pollRef.current);
-      pollRef.current = setInterval(async () => {
+      const tick = async () => {
         try {
           const d = await api.agents();
-          const updated = (d.agents || []).filter((a) => a.agent_version === ver).length;
+          const list = (d.agents || []).map((a) => ({
+            host: a.hostname || a.host_id,
+            env: a.environment || "",
+            updated: a.agent_version === ver,
+          })).sort((x, y) => (x.updated - y.updated) || x.host.localeCompare(y.host));
+          setAgentRows(list);
+          const updated = list.filter((a) => a.updated).length;
           const done = updated >= total;
           const timedOut = !done && Date.now() - t0 > 240000;
           setAgents({ total, updated, ver, done, timedOut });
           if (done || timedOut) clearInterval(pollRef.current);
         } catch { /* transient — keep polling */ }
-      }, 4000);
+      };
+      pollRef.current = setInterval(tick, 4000);
+      tick();
     } catch (e) { setErr(e.message); }
     finally { setBusy(false); }
   }
@@ -407,8 +425,9 @@ function SoftwareUpdate() {
     )
   );
 
+  const showConsole = ctrl || ctrlLog;
   return (
-    <div className="card" style={{ maxWidth: 460, marginTop: 16 }}>
+    <div className="card" style={{ maxWidth: 680, marginTop: 16 }}>
       <strong>Software updates</strong>
       <p className="faint" style={{ marginTop: 8 }}>
         Update the controller in place (git pull → redeploy → restart), then push the
@@ -447,6 +466,17 @@ function SoftwareUpdate() {
           </button>
         </div>
       )}
+      {showConsole && (
+        <div style={{ marginTop: 8 }}>
+          <div className="faint" style={{ fontSize: 11, marginBottom: 4 }}>Update output (journalctl -u sysible-self-update)</div>
+          <pre ref={logRef} style={{ margin: 0, maxHeight: 240, overflow: "auto", background: "#0d1117",
+                 color: "#c9d1d9", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px",
+                 fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, lineHeight: 1.5,
+                 whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+            {ctrlLog || "Waiting for the controller to start the update…"}
+          </pre>
+        </div>
+      )}
 
       <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: "wrap" }}>
         <Button which="agents" label="Update agents" start={startAgents} />
@@ -463,6 +493,20 @@ function SoftwareUpdate() {
           </div>
           <ProgressBar value={agents.updated} max={agents.total}
                        color={agents.done ? "#4ec07a" : undefined} />
+        </div>
+      )}
+      {agentRows && agentRows.length > 0 && (
+        <div style={{ marginTop: 8, maxHeight: 220, overflow: "auto", border: "1px solid var(--border)",
+                      borderRadius: 8, padding: "6px 8px" }}>
+          {agentRows.map((a) => (
+            <div key={a.host} className="spread" style={{ fontSize: 12, padding: "3px 0" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span className="dot" style={{ background: a.updated ? "#4ec07a" : "#e0a83a" }} />
+                {a.host}{a.env ? <span className="faint" style={{ fontSize: 11 }}>{a.env}</span> : null}
+              </span>
+              <span className="faint">{a.updated ? "updated ✓" : "applying on next check-in…"}</span>
+            </div>
+          ))}
         </div>
       )}
 

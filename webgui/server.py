@@ -1236,6 +1236,14 @@ def controller_update_status(request: Request, user: str = Depends(require_super
     return _wrap(lambda: _as_admin(request, lambda: api.controller_update_status()))
 
 
+@app.get("/api/controller-update-log")
+def controller_update_log(lines: int = 400, request: Request = None,
+                          user: str = Depends(require_superuser_session)):
+    """Live output of the controller self-update (git pull → rebuild → restart),
+    so the UI can show the commands running. Superuser-only."""
+    return _wrap(lambda: _as_admin(request, lambda: api.controller_update_log(lines)))
+
+
 @app.post("/api/update-agents")
 def update_agents(request: Request, user: str = Depends(require_superuser_session)):
     """Push the controller's current agent to every managed host over the

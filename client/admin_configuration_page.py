@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QMessageBox, QFrame, QComboBox, QTableWidget, QTableWidgetItem,
     QAbstractItemView, QScrollArea, QCheckBox, QDialog, QFileDialog, QApplication,
-    QProgressBar,
+    QProgressBar, QPlainTextEdit,
 )
 
 from client import api, session
@@ -524,6 +524,18 @@ class AdminConfigurationPage(QWidget):
         self.software_update_status.setWordWrap(True)
         layout.addWidget(self.software_update_status)
 
+        # Live console: the controller update's actual commands (git pull → rsync
+        # → rebuild → restart), or the per-host agent rollout status.
+        self.update_console = QPlainTextEdit()
+        self.update_console.setReadOnly(True)
+        self.update_console.setMaximumBlockCount(5000)
+        self.update_console.setFixedHeight(220)
+        self.update_console.setStyleSheet(
+            "QPlainTextEdit{background:#0d1117; color:#c9d1d9; border:1px solid #30363d;"
+            " border-radius:8px; font-family:monospace; font-size:12px;}")
+        self.update_console.setVisible(False)
+        layout.addWidget(self.update_console)
+
         self._ctrl_timer = None
         self._agents_timer = None
 
@@ -538,6 +550,8 @@ class AdminConfigurationPage(QWidget):
         self.update_controller_btn.setEnabled(False)
         self.software_update_status.setStyleSheet(f"color:{STATUS_NEUTRAL_COLOR};")
         self.software_update_status.setText("Starting controller update…")
+        self.update_console.setPlainText("Waiting for the controller to start the update…")
+        self.update_console.setVisible(True)
         try:
             r = api.controller_update()
         except Exception as e:
@@ -567,6 +581,14 @@ class AdminConfigurationPage(QWidget):
         # restarts (reachable throughout); on success it's briefly down then
         # returns "success". This replaces guessing from the restart, which
         # falsely reported success when the update had aborted (e.g. git pull).
+        # Stream the update's command output too (unreachable during the restart
+        # window — keep the last content and resume when the backend is back).
+        try:
+            lg = api.controller_update_log()
+            if isinstance(lg, dict) and isinstance(lg.get("log"), str) and lg["log"].strip():
+                self._set_console(lg["log"])
+        except Exception:
+            pass
         try:
             rec = api.controller_update_status()
         except Exception:
@@ -605,6 +627,12 @@ class AdminConfigurationPage(QWidget):
                 "⚠ Couldn't confirm the update from here. Check the controller's update log "
                 "(journalctl -u sysible-self-update). If the version changed, it succeeded.")
 
+    def _set_console(self, text):
+        """Replace the console contents and keep it pinned to the newest line."""
+        self.update_console.setPlainText(text)
+        sb = self.update_console.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
     def _update_agents(self):
         if QMessageBox.question(
             self, "Update agents",
@@ -615,6 +643,8 @@ class AdminConfigurationPage(QWidget):
             return
         self.software_update_status.setStyleSheet(f"color:{STATUS_NEUTRAL_COLOR};")
         self.software_update_status.setText("Queuing agent update…")
+        self.update_console.setPlainText("Queuing agent update…")
+        self.update_console.setVisible(True)
         try:
             r = api.update_agents()
         except Exception as e:
@@ -649,6 +679,16 @@ class AdminConfigurationPage(QWidget):
         except Exception:
             return
         updated = sum(1 for a in agents if a.get("agent_version") == self._agent_ver)
+        # Per-host rollout status in the console: updated hosts first.
+        rows = sorted(
+            ((a.get("hostname") or a.get("host_id"), a.get("agent_version") == self._agent_ver,
+              a.get("environment") or "") for a in agents),
+            key=lambda r: (r[1], r[0] or ""))
+        lines = [f"{'✓' if up else '·'} {name}"
+                 + (f"   [{env}]" if env else "")
+                 + ("   updated" if up else "   applying on next check-in…")
+                 for name, up, env in rows]
+        self._set_console("\n".join(lines) if lines else "No agent hosts.")
         self.agents_progress.setValue(min(updated, self._agent_total))
         elapsed = (datetime.datetime.now() - self._agents_start).total_seconds()
         done = updated >= self._agent_total

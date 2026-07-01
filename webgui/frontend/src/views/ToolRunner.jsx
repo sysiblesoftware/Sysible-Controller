@@ -6,6 +6,7 @@ import ServiceManagementPage from "./ServiceManagementPage.jsx";
 import HostSoftwarePage from "./HostSoftwarePage.jsx";
 import CronTimersPage from "./CronTimersPage.jsx";
 import EnvironmentalPolicies from "./EnvironmentalPolicies.jsx";
+import QuickSystemActionsPage from "./QuickSystemActionsPage.jsx";
 import ToolIcon from "../components/ToolIcons.jsx";
 
 // Tools with a bespoke page instead of the generic three-pane runner.
@@ -14,6 +15,7 @@ const CUSTOM_PAGES = {
   "Service Management": ServiceManagementPage,
   "Host Software Management": HostSoftwarePage,
   "Cron & Systemd Timers": CronTimersPage,
+  "Quick System Actions": QuickSystemActionsPage,
 };
 
 // The System Administration tile grid — mirrors the desktop page exactly:

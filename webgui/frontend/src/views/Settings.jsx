@@ -310,35 +310,60 @@ function SoftwareUpdate() {
   const [confirm, setConfirm] = useState(null); // null | "controller" | "agents"
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useErr(); const [msg, setMsg] = useState("");
-  const [ctrl, setCtrl] = useState(null);       // null | "restarting" | "back"
+  // ctrl: null | "restarting" | "success" | "failed" | "unconfirmed"
+  const [ctrl, setCtrl] = useState(null);
+  const [ctrlMsg, setCtrlMsg] = useState("");
   const [agents, setAgents] = useState(null);   // null | {total, updated, ver, done, timedOut}
   const pollRef = useRef(null);
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
   async function startController() {
-    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setAgents(null);
+    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setAgents(null); setCtrlMsg("");
+    // Baseline: only a status record written at/after we kicked this off counts
+    // as THIS run's outcome (the updater writes run/last_update.json). Small
+    // margin for clock skew between browser and server.
+    const startTs = Math.floor(Date.now() / 1000) - 5;
     try {
       const r = await api.controllerUpdate();
       setMsg(r?.message || "Controller update started.");
       setCtrl("restarting");
-      let sawDown = false;
       const t0 = Date.now();
+      const finish = async (state, detail) => {
+        clearInterval(pollRef.current);
+        setCtrl(state); setCtrlMsg(detail || "");
+        if (state === "success") {
+          // Real success: the update ran and the code changed. A controller
+          // update ends your session — the cookie survives the restart, so log
+          // out explicitly, then reload to the sign-in screen.
+          try { await api.logout(); } catch { /* ignore */ }
+          setTimeout(() => window.location.reload(), 900);
+        }
+        // On failure/unconfirmed we deliberately DO NOT sign out — keep the
+        // session so the operator can read the reason and retry.
+      };
       if (pollRef.current) clearInterval(pollRef.current);
       pollRef.current = setInterval(async () => {
-        let up;
-        try { await api.me(); up = true; }                 // resolved → console is up
-        catch (e) { up = !!(e && e.status); }              // HTTP status (401) = up; network error = down
-        if (!up) sawDown = true;
-        // Done once the console has gone down (restart) and come back, or as a
-        // time fallback in case the restart was too quick to observe.
-        if ((up && sawDown) || Date.now() - t0 > 150000) {
-          clearInterval(pollRef.current);
-          setCtrl("back");
-          // A controller update should end your session — but the session cookie
-          // survives the restart, so reloading alone would keep you logged in.
-          // Log out explicitly, then reload to the sign-in screen.
-          try { await api.logout(); } catch { /* ignore */ }
-          setTimeout(() => window.location.reload(), 700);
+        // The updater records the true outcome. Read it whenever the backend is
+        // reachable (on a failed update the console never restarts, so this is
+        // reachable the whole time; on success it's briefly down then returns
+        // "success"). This replaces guessing from the restart.
+        let rec = null;
+        try { rec = await api.controllerUpdateStatus(); } catch { rec = null; }
+        if (rec && typeof rec.ts === "number" && rec.ts >= startTs) {
+          if (rec.status === "failed") {
+            return finish("failed", rec.message || "The update failed on the controller host.");
+          }
+          if (rec.status === "success") {
+            return finish("success", rec.version ? `Updated to ${rec.version}.` : (rec.message || ""));
+          }
+          // status "running" → keep waiting.
+        }
+        // Fallback: if we could never confirm (e.g. updating FROM a build that
+        // predates this status file), stop guessing after 3 min and say so.
+        if (Date.now() - t0 > 180000) {
+          return finish("unconfirmed",
+            "Couldn't confirm the update from the console. Check the server's update log " +
+            "(journalctl -u sysible-self-update). If the version changed, it succeeded.");
         }
       }, 2500);
     } catch (e) { setErr(e.message); setCtrl(null); }
@@ -396,16 +421,29 @@ function SoftwareUpdate() {
       </div>
       {ctrl === "restarting" && (
         <div style={{ marginTop: 8 }}>
-          <div className="faint" style={{ fontSize: 12 }}>Rebuilding and restarting the controller… reconnecting (this can take 30–90 s).</div>
+          <div className="faint" style={{ fontSize: 12 }}>Updating the controller… confirming the result (this can take 30–90 s).</div>
           <ProgressBar indeterminate />
         </div>
       )}
-      {ctrl === "back" && (
+      {ctrl === "success" && (
         <div style={{ marginTop: 8 }}>
-          <div className="ok-text" style={{ fontSize: 13 }}>✓ Controller is back up — signing you out…</div>
+          <div className="ok-text" style={{ fontSize: 13 }}>✓ Controller updated{ctrlMsg ? ` — ${ctrlMsg}` : ""} Signing you out…</div>
+        </div>
+      )}
+      {ctrl === "failed" && (
+        <div style={{ marginTop: 8 }}>
+          <div className="error-box" style={{ fontSize: 13 }}>✗ Update failed — {ctrlMsg}</div>
+          <div className="faint" style={{ fontSize: 12, marginTop: 4 }}>
+            Nothing was changed and you're still signed in. Fix the cause on the controller host, then try again.
+          </div>
+        </div>
+      )}
+      {ctrl === "unconfirmed" && (
+        <div style={{ marginTop: 8 }}>
+          <div className="faint" style={{ fontSize: 13 }}>⚠ {ctrlMsg}</div>
           <button className="btn sm" style={{ marginTop: 6 }}
                   onClick={async () => { try { await api.logout(); } catch { /* ignore */ } window.location.reload(); }}>
-            Sign in
+            Sign in again
           </button>
         </div>
       )}

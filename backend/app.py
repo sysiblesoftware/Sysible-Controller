@@ -1102,6 +1102,30 @@ def controller_update_route():
     }
 
 
+@app.get("/controller/update-status", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def controller_update_status_route():
+    """Report the outcome of the most recent controller self-update, so the
+    'Update controller' buttons can show the TRUTH (updated to X / failed:
+    reason) instead of guessing from whether the console bounced. The updater
+    (sysible_controller cmd_update) writes run/last_update.json at each stage;
+    we read it back here. Returns status 'none' if no update has ever run."""
+    import json
+    import time as _t
+    from pathlib import Path
+
+    status_file = Path(__file__).resolve().parent.parent / "run" / "last_update.json"
+    try:
+        rec = json.loads(status_file.read_text())
+    except FileNotFoundError:
+        return {"status": "none"}
+    except Exception as e:
+        return {"status": "unknown", "message": f"could not read update status: {e}"}
+    ts = rec.get("ts")
+    if isinstance(ts, (int, float)):
+        rec["age_seconds"] = max(0, int(_t.time() - ts))
+    return rec
+
+
 @app.get("/controller-config/tls/trust-bundle", dependencies=[Depends(require_api_key)])
 def download_trust_bundle_route():
     """Current trust.crt content - what an admin hands to GUI

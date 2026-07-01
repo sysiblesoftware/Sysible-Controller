@@ -551,6 +551,9 @@ class AdminConfigurationPage(QWidget):
         self.controller_progress.setVisible(True)
         self._ctrl_saw_down = False
         self._ctrl_start = datetime.datetime.now()
+        # Baseline: only an update-status record written at/after now counts as
+        # THIS run's outcome (small margin for clock skew). See _poll_controller.
+        self._ctrl_start_ts = self._ctrl_start.timestamp() - 5
         if self._ctrl_timer:
             self._ctrl_timer.stop()
         self._ctrl_timer = QTimer(self)
@@ -559,22 +562,48 @@ class AdminConfigurationPage(QWidget):
         self._ctrl_timer.start()
 
     def _poll_controller(self):
+        # The updater records the TRUE outcome (run/last_update.json); read it
+        # whenever the backend is reachable. On a failed update the console never
+        # restarts (reachable throughout); on success it's briefly down then
+        # returns "success". This replaces guessing from the restart, which
+        # falsely reported success when the update had aborted (e.g. git pull).
         try:
-            api.get_controller_config()   # succeeds once the backend is back
-            up = True
+            rec = api.controller_update_status()
         except Exception:
-            up = False
-        if not up:
-            self._ctrl_saw_down = True
+            rec = None
+        ts = (rec or {}).get("ts")
+        if rec and isinstance(ts, (int, float)) and ts >= self._ctrl_start_ts:
+            status = rec.get("status")
+            if status == "failed":
+                self._ctrl_timer.stop()
+                self.controller_progress.setVisible(False)
+                self.update_controller_btn.setEnabled(True)
+                self.software_update_status.setStyleSheet(f"color:{STATUS_ERROR_COLOR};")
+                self.software_update_status.setText(
+                    "✗ Update failed — " + (rec.get("message") or "see the controller's update log")
+                    + "  Nothing changed; you're still signed in.")
+                return
+            if status == "success":
+                self._ctrl_timer.stop()
+                self.controller_progress.setVisible(False)
+                self.software_update_status.setStyleSheet(f"color:{STATUS_SUCCESS_COLOR};")
+                ver = rec.get("version")
+                self.software_update_status.setText(
+                    "✓ Controller updated" + (f" to {ver}" if ver else "") + " — signing you out…")
+                QTimer.singleShot(900, bus.logout_requested.emit)
+                return
+            # status "running" → keep waiting.
         elapsed = (datetime.datetime.now() - self._ctrl_start).total_seconds()
-        if (up and self._ctrl_saw_down) or elapsed > 150:
+        if elapsed > 180:
+            # Couldn't confirm (e.g. updating FROM a build predating the status
+            # file). Stop guessing; don't force a sign-out.
             self._ctrl_timer.stop()
             self.controller_progress.setVisible(False)
-            self.software_update_status.setStyleSheet(f"color:{STATUS_SUCCESS_COLOR};")
-            self.software_update_status.setText("Controller is back up — signing you out…")
-            # A controller update should end the session; return to the login
-            # screen (a brief delay so the message is visible first).
-            QTimer.singleShot(900, bus.logout_requested.emit)
+            self.update_controller_btn.setEnabled(True)
+            self.software_update_status.setStyleSheet(f"color:{STATUS_WARNING_COLOR};")
+            self.software_update_status.setText(
+                "⚠ Couldn't confirm the update from here. Check the controller's update log "
+                "(journalctl -u sysible-self-update). If the version changed, it succeeded.")
 
     def _update_agents(self):
         if QMessageBox.question(

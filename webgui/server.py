@@ -1228,6 +1228,14 @@ def controller_update(request: Request, user: str = Depends(require_superuser_se
     return _wrap(lambda: _as_admin(request, lambda: api.controller_update()))
 
 
+@app.get("/api/controller-update-status")
+def controller_update_status(request: Request, user: str = Depends(require_superuser_session)):
+    """Outcome of the most recent controller self-update, so the UI can report
+    the truth (updated to X / failed: reason) rather than guessing from the
+    restart. Superuser-only."""
+    return _wrap(lambda: _as_admin(request, lambda: api.controller_update_status()))
+
+
 @app.post("/api/update-agents")
 def update_agents(request: Request, user: str = Depends(require_superuser_session)):
     """Push the controller's current agent to every managed host over the

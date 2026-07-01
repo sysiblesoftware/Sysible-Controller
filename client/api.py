@@ -248,6 +248,14 @@ def controller_update():
     return _request("POST", "/controller/update", timeout=30)
 
 
+def controller_update_status():
+    """Outcome of the most recent controller self-update:
+    {"status": running|success|failed|none|unknown, "message", "version", "ts",
+    "age_seconds"}. Lets the caller confirm the update actually applied (or show
+    why it didn't) instead of inferring success from a service restart."""
+    return _request("GET", "/controller/update-status", timeout=15)
+
+
 def update_agents():
     """Push the controller's current agent to every managed host over the
     existing task channel. Returns {"queued", "version", "message"}. Agents

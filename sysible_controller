@@ -331,8 +331,23 @@ cmd_restart() {
 # --delete sync removes the stale bundle and start_webgui.sh rebuilds it
 # when the web console comes back up.
 # =========================================================
+# Record the outcome of a self-update so the API (and thus the web/desktop
+# "Update controller" buttons) can report the TRUTH instead of guessing from
+# whether the console bounced. Written to $RUN_DIR (excluded from the rsync
+# --delete, so it survives the redeploy). Read by GET /controller/update-status.
+_write_update_status() {
+  # $1=status (running|success|failed)   $2=message   $3=version (optional)
+  local f="$RUN_DIR/last_update.json"
+  mkdir -p "$RUN_DIR" 2>/dev/null || true
+  local msg="${2//\\/\\\\}"; msg="${msg//\"/\\\"}"; msg="${msg//$'\n'/ }"
+  printf '{"status":"%s","message":"%s","version":"%s","ts":%s}\n' \
+    "$1" "$msg" "${3:-}" "$(date +%s)" > "$f" 2>/dev/null || true
+  chmod 644 "$f" 2>/dev/null || true
+}
+
 cmd_update() {
   _require_root update
+  _write_update_status running "Update started" ""
 
   local SRC=""
   [[ -f "$BASE/.install_src" ]] && SRC="$(cat "$BASE/.install_src" 2>/dev/null)"
@@ -341,6 +356,7 @@ cmd_update() {
     echo "       (its path is recorded in $BASE/.install_src at install time)."
     echo "Re-run the installer from your git checkout instead:"
     echo "   cd <your-checkout> && sudo git pull && sudo ./install_sysible.sh"
+    _write_update_status failed "Can't find the source checkout to update from ($BASE/.install_src missing or invalid)."
     exit 1
   fi
 
@@ -349,8 +365,9 @@ cmd_update() {
   # 1) Refresh the checkout (best-effort - skip cleanly if it isn't a git repo).
   if [[ -d "$SRC/.git" ]] && command -v git >/dev/null 2>&1; then
     echo "Pulling latest code (git) ..."
-    if ! git -C "$SRC" pull --ff-only; then
+    if ! git -C "$SRC" pull --ff-only 2>&1; then
       echo "ERROR: 'git pull' failed in $SRC - resolve it there, then re-run update."
+      _write_update_status failed "'git pull --ff-only' failed in $SRC (local changes, a diverged branch, or no upstream). Resolve it on the host, then retry."
       exit 1
     fi
   else
@@ -363,6 +380,7 @@ cmd_update() {
   if [[ "$SRC" != "$BASE" ]]; then
     if ! command -v rsync >/dev/null 2>&1; then
       echo "ERROR: rsync not found - run 'sudo $SRC/install_sysible.sh' instead."
+      _write_update_status failed "rsync not found on the host - run 'sudo $SRC/install_sysible.sh' instead."
       exit 1
     fi
     echo "Syncing code into $BASE ..."
@@ -445,6 +463,14 @@ cmd_update() {
     echo "Ensuring the web console is up ..."
     _start_webgui
   fi
+
+  # Record success with the version we landed on, so the API can confirm the
+  # code actually changed (and to what) rather than the UI guessing.
+  local _newver=""
+  if [[ -d "$SRC/.git" ]] && command -v git >/dev/null 2>&1; then
+    _newver="$(git -C "$SRC" rev-parse --short HEAD 2>/dev/null)"
+  fi
+  _write_update_status success "Update complete." "$_newver"
 
   echo ""
   echo "Update complete."

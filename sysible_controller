@@ -363,9 +363,13 @@ cmd_update() {
   echo "Updating Sysible Controller from $SRC ..."
 
   # 1) Refresh the checkout (best-effort - skip cleanly if it isn't a git repo).
+  #    -c safe.directory="$SRC": the updater runs as root (systemd-run) but the
+  #    checkout is usually owned by the install user, so modern git refuses to
+  #    operate ("detected dubious ownership") and the pull aborts. Trust this one
+  #    path inline (no global git config change) so the update actually applies.
   if [[ -d "$SRC/.git" ]] && command -v git >/dev/null 2>&1; then
     echo "Pulling latest code (git) ..."
-    if ! git -C "$SRC" pull --ff-only 2>&1; then
+    if ! git -C "$SRC" -c safe.directory="$SRC" pull --ff-only 2>&1; then
       echo "ERROR: 'git pull' failed in $SRC - resolve it there, then re-run update."
       _write_update_status failed "'git pull --ff-only' failed in $SRC (local changes, a diverged branch, or no upstream). Resolve it on the host, then retry."
       exit 1
@@ -468,7 +472,7 @@ cmd_update() {
   # code actually changed (and to what) rather than the UI guessing.
   local _newver=""
   if [[ -d "$SRC/.git" ]] && command -v git >/dev/null 2>&1; then
-    _newver="$(git -C "$SRC" rev-parse --short HEAD 2>/dev/null)"
+    _newver="$(git -C "$SRC" -c safe.directory="$SRC" rev-parse --short HEAD 2>/dev/null)"
   fi
   _write_update_status success "Update complete." "$_newver"
 

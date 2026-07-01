@@ -235,6 +235,52 @@ function SignalChip({ label, hosts, onOpenHost }) {
   );
 }
 
+// A top-strip metric that, when it has an associated host list, becomes
+// clickable and drops down links to those specific hosts (e.g. click
+// "Offline / stale 1" to see which host, "Online 3" for the three, etc.).
+// Each host link opens that host's detail page.
+function MetricCard({ label, value, extra, hosts, onOpenHost }) {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef(null);
+  const clickable = Array.isArray(hosts) && hosts.length > 0;
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  return (
+    <div className="metric" ref={ref}
+         style={{ position: "relative", cursor: clickable ? "pointer" : "default" }}
+         onClick={() => clickable && setOpen((o) => !o)}
+         title={clickable ? "Click to see which host(s)" : undefined}>
+      <div className="label">{label}</div>
+      <div className="value">{value}{extra}
+        {clickable && <span className="faint" style={{ fontSize: 11, marginLeft: 6 }}>{open ? "▲" : "▾"}</span>}
+      </div>
+      {open && clickable && (
+        <div onClick={(e) => e.stopPropagation()}
+             style={{ position: "absolute", top: "100%", left: 0, zIndex: 30, marginTop: 4,
+                      minWidth: 200, maxHeight: 280, overflowY: "auto", background: "var(--panel-2)",
+                      border: "1px solid var(--border)", borderRadius: 8, padding: 6,
+                      boxShadow: "0 8px 24px rgba(0,0,0,0.35)" }}>
+          {hosts.map((h) => (
+            <button key={h.id ?? h.host} className="btn ghost sm"
+                    style={{ display: "flex", width: "100%", justifyContent: "space-between",
+                             gap: 8, textAlign: "left", marginBottom: 4 }}
+                    disabled={!h.id}
+                    onClick={() => { if (h.id && onOpenHost) onOpenHost(h); setOpen(false); }}
+                    title={h.id ? "View host detail" : ""}>
+              <span>{h.host}</span>
+              {h.env ? <span className="faint" style={{ fontSize: 11 }}>{h.env}</span> : null}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Fleet overview: at-a-glance metrics + recent activity. Navigation lives in
 // the sidebar, so this is a real home screen rather than a duplicate tile grid.
 
@@ -274,6 +320,15 @@ export default function Dashboard({ role, edition, onOpen }) {
     const online = agents.filter((a) => seenAgo(a.last_seen) <= ONLINE_WINDOW_S).length;
     const envs = new Set(agents.map((a) => a.environment || "Unassigned")).size;
     return { total, online, offline: total - online, envs };
+  }, [agents]);
+
+  // Host lists behind the top-strip counts, so each count can drop down the
+  // specific hosts (id → drill-down, hostname + environment shown).
+  const hostLists = useMemo(() => {
+    const mk = (a) => ({ id: a.host_id, host: a.hostname || a.host_id, env: a.environment || "Unassigned" });
+    const online = [], offline = [];
+    for (const a of agents) (seenAgo(a.last_seen) <= ONLINE_WINDOW_S ? online : offline).push(mk(a));
+    return { all: agents.map(mk), online, offline };
   }, [agents]);
 
   const recent = useMemo(
@@ -441,18 +496,14 @@ export default function Dashboard({ role, edition, onOpen }) {
       )}
 
       <div className="metric-row">
-        <div className="metric">
-          <div className="label">Hosts enrolled</div>
-          <div className="value">{m.total}{edition?.host_limit ? <span className="faint" style={{ fontSize: 14, fontWeight: 400 }}>/ {edition.host_limit}</span> : null}</div>
-        </div>
-        <div className="metric">
-          <div className="label">Online</div>
-          <div className="value">{m.online}<span className="dot ok" /></div>
-        </div>
-        <div className="metric">
-          <div className="label">Offline / stale</div>
-          <div className="value">{m.offline}{m.offline > 0 && <span className="dot bad" />}</div>
-        </div>
+        <MetricCard label="Hosts enrolled" value={m.total}
+          extra={edition?.host_limit ? <span className="faint" style={{ fontSize: 14, fontWeight: 400 }}> / {edition.host_limit}</span> : null}
+          hosts={hostLists.all} onOpenHost={openHost} />
+        <MetricCard label="Online" value={m.online} extra={<span className="dot ok" />}
+          hosts={hostLists.online} onOpenHost={openHost} />
+        <MetricCard label="Offline / stale" value={m.offline}
+          extra={m.offline > 0 ? <span className="dot bad" /> : null}
+          hosts={hostLists.offline} onOpenHost={openHost} />
         <div className="metric">
           <div className="label">Environments</div>
           <div className="value">{m.envs}</div>

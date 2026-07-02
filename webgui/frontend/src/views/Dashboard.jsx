@@ -3,6 +3,9 @@ import { api } from "../api.js";
 import { searchTasks } from "../featureSearch.js";
 
 const VERDICT_COLOR = { OK: "#4ec07a", WARNING: "#e0a83a", CRITICAL: "#e06c6c", OFFLINE: "#7a7a7a" };
+// Severity for the "Needs attention" list: 0 (offline) / 1 (critical) both red,
+// 2 (warning) amber. Lower = more urgent (sorted first).
+const SEV_COLOR = { 0: VERDICT_COLOR.CRITICAL, 1: VERDICT_COLOR.CRITICAL, 2: VERDICT_COLOR.WARNING };
 
 // Inline SVG donut (no chart-library dependency): one ring segment per value.
 function Donut({ segments, size = 88, stroke = 13 }) {
@@ -441,6 +444,34 @@ export default function Dashboard({ role, edition, onOpen }) {
     return { counts };
   }, [fleet]);
 
+  // Ranked triage list: every host with something wrong, worst first, each with
+  // its specific reasons. Built from the health + posture data already loaded —
+  // the "what do I look at first" view a per-environment grid doesn't give.
+  const attention = useMemo(() => {
+    const postById = {};
+    for (const p of posture) postById[p.id] = p;
+    const rows = [];
+    for (const h of fleet) {
+      const reasons = [];
+      let sev = 3;
+      if (h.online === false) { reasons.push("offline"); sev = 0; }
+      else {
+        if ((h.disk ?? 0) >= 90) { reasons.push(`disk ${h.disk}%`); sev = Math.min(sev, 1); }
+        else if ((h.disk ?? 0) >= 80) { reasons.push(`disk ${h.disk}%`); sev = Math.min(sev, 2); }
+        if ((h.mem ?? 0) >= 90) { reasons.push(`mem ${h.mem}%`); sev = Math.min(sev, 1); }
+        if ((h.failed ?? 0) > 0) { reasons.push(`${h.failed} failed unit${h.failed > 1 ? "s" : ""}`); sev = Math.min(sev, 1); }
+        if ((h.oom ?? 0) > 0) { reasons.push(`${h.oom} OOM`); sev = Math.min(sev, 1); }
+        if (h.reboot) { reasons.push("reboot required"); sev = Math.min(sev, 2); }
+        const p = postById[h.id];
+        const issues = p && p.flags ? Object.values(p.flags).filter((v) => v === true).length : 0;
+        if (issues > 0) { reasons.push(`${issues} compliance`); sev = Math.min(sev, 2); }
+      }
+      if (reasons.length) rows.push({ id: h.id, host: h.host, env: h.environment || "Unassigned", sev, reasons });
+    }
+    rows.sort((a, b) => a.sev - b.sev || b.reasons.length - a.reasons.length);
+    return rows;
+  }, [fleet, posture]);
+
   // Single environment-grouped rollup joining the two lenses by host id: each
   // host carries its live health (verdict, disk/mem, problem signals) AND its
   // posture issue count; each environment carries worst verdict, peak disk/mem,
@@ -547,6 +578,37 @@ export default function Dashboard({ role, edition, onOpen }) {
           <div className="value">{m.envs}</div>
         </div>
       </div>
+
+      {attention.length > 0 && (
+        <div className="card" style={{ marginTop: 14 }}>
+          <div className="spread" style={{ marginBottom: 8 }}>
+            <strong>Needs attention
+              <span className="faint" style={{ fontSize: 12, marginLeft: 6 }}>
+                {attention.length} host{attention.length === 1 ? "" : "s"} — worst first
+              </span>
+            </strong>
+          </div>
+          <div style={{ display: "grid", gap: 6 }}>
+            {attention.slice(0, 8).map((r) => (
+              <div key={r.id} onClick={() => openHost(r)} title="View host detail"
+                   style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 9px",
+                            border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer" }}>
+                <span className="dot" style={{ background: SEV_COLOR[r.sev] || VERDICT_COLOR.WARNING }} />
+                <strong style={{ whiteSpace: "nowrap" }}>{r.host}</strong>
+                <span className="faint" style={{ fontSize: 11 }}>{r.env}</span>
+                <span style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {r.reasons.map((x, i) => (
+                    <span key={i} style={{ fontSize: 11, color: SEV_COLOR[r.sev] || VERDICT_COLOR.WARNING,
+                                           border: `1px solid ${SEV_COLOR[r.sev] || VERDICT_COLOR.WARNING}`,
+                                           borderRadius: 10, padding: "0 8px" }}>{x}</span>
+                  ))}
+                </span>
+              </div>
+            ))}
+            {attention.length > 8 && <div className="faint" style={{ fontSize: 11 }}>+{attention.length - 8} more</div>}
+          </div>
+        </div>
+      )}
 
       <div className="card" style={{ marginTop: 14 }}>
         <div className="spread" style={{ marginBottom: 10 }}>

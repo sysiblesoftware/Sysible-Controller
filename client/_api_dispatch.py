@@ -529,15 +529,27 @@ def cmd_flush_dns() -> str:
     )
 
 
-def cmd_update_status() -> str:
+def cmd_update_status(refresh: bool = False) -> str:
     """Read-only fleet patch status as one machine-readable line:
     `SYSUPDATES|mgr=<dnf|zypper|apt|unknown>|total=<n>|security=<n>|reboot=<0|1>`.
     Counts pending package updates (best-effort, cross-distro) and whether a
-    reboot is required. Uses each manager's already-downloaded metadata — it does
-    NOT force a network refresh, so it's fast and stays a read; counts reflect the
-    host's last repo refresh. All probes are `command -v`-guarded; anything
-    missing yields 0."""
+    reboot is required. All probes are `command -v`-guarded; anything missing
+    yields 0.
+
+    refresh=False (default): use each manager's already-downloaded metadata — fast
+    and read-only; counts reflect the host's last repo refresh.
+    refresh=True ("live"): force a metadata refresh first (dnf makecache / zypper
+    refresh / apt-get update) so the counts are current. Slower and hits the
+    mirrors, so it's opt-in from the UI."""
+    prep = ""
+    if refresh:
+        prep = (
+            "if command -v dnf >/dev/null 2>&1; then dnf -q makecache --refresh >/dev/null 2>&1; "
+            "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive -q refresh >/dev/null 2>&1; "
+            "elif command -v apt-get >/dev/null 2>&1; then apt-get -qq update >/dev/null 2>&1; fi\n"
+        )
     return (
+        prep +
         "mgr=unknown; total=0; sec=0; rr=0\n"
         "if command -v dnf >/dev/null 2>&1; then mgr=dnf; "
         "total=$(dnf -q check-update 2>/dev/null | awk 'NF>=3 && $1!~/^(Obsoleting|Last|Security|Loaded|Dependencies)/{c++} END{print c+0}'); "

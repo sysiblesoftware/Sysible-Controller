@@ -16,12 +16,13 @@ export default function Updates({ role }) {
   const [results, setResults] = useState(null);
   const [busy, setBusy] = useState("");
 
-  const load = useCallback((refresh = 0) => {
-    setLoading(true); setErr("");
-    api.fleetUpdates(refresh)
+  const [liveLoading, setLiveLoading] = useState(false);
+  const load = useCallback((refresh = 0, live = 0) => {
+    (live ? setLiveLoading : setLoading)(true); setErr("");
+    api.fleetUpdates(refresh, live)
       .then((d) => setData({ hosts: d.hosts || [], ts: (d.ts ? d.ts * 1000 : Date.now()) }))
       .catch((e) => setErr(e.message))
-      .finally(() => setLoading(false));
+      .finally(() => { setLoading(false); setLiveLoading(false); });
   }, []);
   useEffect(() => { load(0); }, [load]);
 
@@ -80,8 +81,12 @@ export default function Updates({ role }) {
         </div>
         <div className="row" style={{ gap: 10, alignItems: "center" }}>
           {data.ts > 0 && <span className="faint" style={{ fontSize: 12 }}>scanned {new Date(data.ts).toLocaleTimeString()}</span>}
-          <button className="btn ghost sm" onClick={() => load(1)} disabled={loading}>
+          <button className="btn ghost sm" onClick={() => load(1)} disabled={loading || liveLoading}
+                  title="Recount using each host's cached repo metadata (fast)">
             {loading ? <span className="spin" /> : "Rescan"}</button>
+          <button className="btn ghost sm" onClick={() => load(1, 1)} disabled={loading || liveLoading}
+                  title="Refresh each host's repo metadata first, then count (live, slower)">
+            {liveLoading ? <span className="spin" /> : "Refresh metadata & rescan"}</button>
         </div>
       </div>
 
@@ -157,8 +162,9 @@ export default function Updates({ role }) {
       )}
 
       <p className="faint" style={{ fontSize: 12, marginTop: 12 }}>
-        Counts reflect each host's last repo-metadata refresh (the scan doesn't force a network update).
-        Security counts are best-effort per package manager.
+        "Rescan" recounts from each host's cached repo metadata (fast). "Refresh metadata &amp; rescan"
+        forces a repo refresh first for live counts (slower, hits mirrors). Security counts are best-effort
+        per package manager.
       </p>
     </div>
   );

@@ -878,15 +878,17 @@ def _probe_updates(e, cmd, last_seen, now):
 
 
 @app.get("/api/fleet-updates")
-def fleet_updates(refresh: int = 0, user: str = Depends(require_login)):
+def fleet_updates(refresh: int = 0, live: int = 0, user: str = Depends(require_login)):
     """On-demand fleet patch-status sweep: pending updates, security updates, and
     reboot-required per host. Read-only, tokenless (auditor-visible), cached for
-    ~15 min unless ?refresh=1 (the per-host scan is heavier than posture)."""
+    ~15 min unless ?refresh=1 (the per-host scan is heavier than posture).
+    ?live=1 forces a repo-metadata refresh on each host first for current counts
+    (slower); it always bypasses the cache."""
     import concurrent.futures
     import time as _t
 
     def _fresh():
-        return (not refresh) and _UPDATES_CACHE["hosts"] is not None \
+        return (not refresh and not live) and _UPDATES_CACHE["hosts"] is not None \
             and (_t.time() - _UPDATES_CACHE["ts"]) < _UPDATES_TTL
 
     if _fresh():
@@ -903,7 +905,7 @@ def fleet_updates(refresh: int = 0, user: str = Depends(require_login)):
         except Exception:
             last_seen = {}
         now = _t.time()
-        cmd = api.cmd_update_status()
+        cmd = api.cmd_update_status(refresh=bool(live))
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
             hosts = list(ex.map(lambda e: _probe_updates(e, cmd, last_seen, now), entries)) if entries else []
         _UPDATES_CACHE["hosts"] = hosts

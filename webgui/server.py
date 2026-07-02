@@ -2360,13 +2360,28 @@ _FQ_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+@:-]{0,127}$")
 _FQ_PATH_RE = re.compile(r"^/[A-Za-z0-9 ._/@:+-]{0,255}$")
 
 FLEET_QUERY_TYPES = {
-    "package": {"label": "Package installed", "arg": "Package name", "example": "nginx"},
-    "service": {"label": "Service state", "arg": "Service name", "example": "sshd"},
-    "user":    {"label": "User exists", "arg": "Username", "example": "deploy"},
-    "file":    {"label": "File exists", "arg": "Path", "example": "/etc/nginx/nginx.conf"},
-    "port":    {"label": "Listening on port", "arg": "Port", "example": "443"},
-    "kernel":  {"label": "Kernel version", "arg": "", "example": ""},
+    "package": {"label": "Package installed", "arg": "Package name", "example": "nginx", "group": "env", "summary": "match"},
+    "service": {"label": "Service active", "arg": "Service name", "example": "sshd", "group": "env", "summary": "match"},
+    "user":    {"label": "User exists", "arg": "Username", "example": "deploy", "group": "env", "summary": "match"},
+    "file":    {"label": "File exists", "arg": "Path", "example": "/etc/nginx/nginx.conf", "group": "env", "summary": "match"},
+    "port":    {"label": "Listening on port", "arg": "Port", "example": "443", "group": "env", "summary": "match"},
+    "journal": {"label": "Journal matches (last 2000 lines)", "arg": "Pattern (regex)", "example": "error|failed|oom", "group": "env", "summary": "match"},
+    "kernel":  {"label": "Kernel version", "arg": "", "example": "", "group": "env", "summary": "count"},
+    "filehash": {"label": "File content — drift", "arg": "Path", "example": "/etc/ssh/sshd_config", "group": "value", "summary": "count"},
 }
+
+
+def _fq_matched(qtype, val):
+    """Whether a host 'matches' the query (drives the M-of-N summary + green)."""
+    if not val:
+        return False
+    if qtype == "journal":
+        return val != "0"
+    if qtype == "service":
+        return val == "active"
+    if qtype in ("kernel", "filehash"):
+        return False   # descriptive, not a yes/no match
+    return True         # package/user/file/port: a non-empty value = present
 
 
 def _fq_command(qtype, arg):
@@ -2396,6 +2411,19 @@ def _fq_command(qtype, arg):
             raise ValueError("invalid port")
         return (f"if ss -Hltn 2>/dev/null | awk '{{print $4}}' | grep -qE ':{arg}$'; "
                 f"then printf 'SYSQUERY yes\\n'; else printf 'SYSQUERY \\n'; fi")
+    if qtype == "journal":
+        # Pattern is single-quoted in the shell; reject a single quote so it
+        # can't break out. grep -E metachars are fine inside the quotes.
+        if not arg or "'" in arg or len(arg) > 200:
+            raise ValueError("invalid pattern")
+        return f"printf 'SYSQUERY %s\\n' \"$(journalctl --no-pager -n 2000 2>/dev/null | grep -icE '{arg}')\""
+    if qtype == "filehash":
+        if not _FQ_PATH_RE.match(arg):
+            raise ValueError("invalid path")
+        return (f"p='{arg}'; if [ ! -e \"$p\" ]; then printf 'SYSQUERY missing\\n'; "
+                f"elif [ -d \"$p\" ]; then printf 'SYSQUERY (dir)\\n'; "
+                f"elif h=$(sha256sum \"$p\" 2>/dev/null | cut -c1-12); [ -n \"$h\" ]; then "
+                f"printf 'SYSQUERY %s\\n' \"$h\"; else printf 'SYSQUERY unreadable\\n'; fi")
     raise ValueError(f"unknown query type: {qtype}")
 
 
@@ -2438,7 +2466,7 @@ def fleet_query(body: FleetQueryRequest, user: str = Depends(require_operator)):
                 break
         err = None if val is not None else (r.get("error") or (r.get("stderr") or "no result").strip()[:120] or "no result")
         return {"host": e.get("label"), "env": e.get("environment") or "Unassigned",
-                "value": val, "present": bool(val), "error": err}
+                "value": val, "present": _fq_matched(body.qtype, val), "error": err}
 
     import concurrent.futures
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:

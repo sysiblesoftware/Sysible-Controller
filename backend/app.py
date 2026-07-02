@@ -23,6 +23,8 @@ from backend.db import (
     list_agents,
     delete_agent,
     get_agent_secret,
+    revoke_agent,
+    is_agent_revoked,
     agent_exists,
     queue_task,
     fetch_pending_tasks,
@@ -153,6 +155,14 @@ def verify_agent(host_id: str, agent_secret: str):
 
     if not agent_exists(host_id):
         raise HTTPException(status_code=404, detail="Unknown host_id")
+
+    # Revoked hosts are locked out regardless of a correct secret, until an admin
+    # re-enrolls them (which mints a fresh secret and clears revocation).
+    if is_agent_revoked(host_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Agent secret revoked — re-enroll this host to restore it.",
+        )
 
     expected = get_agent_secret(host_id)
 
@@ -354,6 +364,14 @@ def heartbeat(req: HeartbeatRequest):
     verify_agent(req.host_id, req.agent_secret)
 
     update_agent_heartbeat(req.host_id, req.ip, req.hostname, agent_version=req.agent_version)
+
+    # Agent integrity (Tier 1): when the agent reports a self-measurement,
+    # compare it against this host's sealed baseline (trust-on-first-use) and
+    # quarantine on mismatch. evaluate() never raises, so integrity can't break
+    # the heartbeat path. Quarantine is enforced in poll_agent_tasks below.
+    if req.measurements is not None:
+        from backend import agent_integrity
+        agent_integrity.evaluate(req.host_id, req.measurements)
 
     # Persist a performance sample if this heartbeat carried one (newer agents
     # attach one ~once per SYSIBLE_METRICS_INTERVAL). Wrapped so a malformed
@@ -607,6 +625,14 @@ def poll_agent_tasks(host_id: str, agent_secret: str = "",
     # param so already-deployed agents keep working.
     verify_agent(host_id, x_agent_secret or agent_secret)
 
+    # Agent integrity: a quarantined host (self-measurement diverged from its
+    # sealed baseline) keeps heartbeating but is handed NO work — the soft
+    # lockout — so a tampered agent is cut off from dispatch. Enforced here on
+    # the controller (the trust anchor). Cleared by an admin resume/rebaseline.
+    from backend import agent_integrity
+    if agent_integrity.is_quarantined(host_id):
+        return {"tasks": [], "quarantined": True}
+
     tasks = fetch_pending_tasks(host_id)
     # Attach any RAM-held become-password to its task, exactly once. Only this
     # host's authenticated agent reaches here (verify_agent above), so a
@@ -737,11 +763,18 @@ def get_metrics_snapshot_route(host_id: str):
 @app.get("/agents", dependencies=[Depends(require_api_key)])
 def get_agents():
 
+    from backend import agent_integrity
     agents = list_agents()
     for a in agents:
         st = get_agent_ssh_state(a.get("host_id"))
         # "enabled" | "pending" | "sshd_missing" | "error" | None
         a["ssh_terminal_state"] = (st or {}).get("status")
+        # Agent integrity: let the console flag a host whose self-measurement
+        # diverged from its sealed baseline ('revoked' already comes from
+        # list_agents). integrity_detail carries the mismatch reasons for the UI.
+        _ist = agent_integrity.status(a.get("host_id"))
+        a["integrity_quarantined"] = _ist.get("status") == "quarantined"
+        a["integrity_detail"] = _ist.get("mismatches", [])
 
     return {
         "agents": agents
@@ -771,6 +804,55 @@ def remove_agent(host_id: str):
         "status": "removed",
         "host_id": host_id
     }
+
+
+@app.post("/agents/{host_id}/revoke", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def revoke_agent_route(host_id: str,
+                       x_admin_token: str = Header(default=None, alias="X-Sysible-Admin-Token")):
+    """Hard lock-out: invalidate the host's agent secret so every authenticated
+    request (heartbeat/poll/result) is rejected until an admin re-enrolls it with
+    a fresh single-use token. This is the escalation from an integrity quarantine
+    ('no tasks') to 'cannot talk to the controller at all'. The sealed integrity
+    baseline is dropped too, so a re-enrolled/reimaged host re-seals cleanly."""
+    if not agent_exists(host_id):
+        raise HTTPException(status_code=404, detail="Unknown host_id")
+
+    revoke_agent(host_id)
+    from backend import agent_integrity
+    agent_integrity.rebaseline(host_id)
+
+    actor = None
+    if x_admin_token:
+        from backend.db import resolve_admin_token
+        admin = resolve_admin_token(x_admin_token)
+        actor = admin["username"] if admin else None
+    log_admin_audit("agent_secret_revoked", actor or "superuser", f"host {host_id}")
+
+    return {"status": "revoked", "host_id": host_id}
+
+
+@app.post("/agents/{host_id}/resume", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def resume_agent_route(host_id: str,
+                       x_admin_token: str = Header(default=None, alias="X-Sysible-Admin-Token")):
+    """Clear an integrity QUARANTINE (the soft lockout): drop the sealed baseline
+    so the next heartbeat re-seals from the host's current measurements and
+    dispatch resumes. Use after a legitimate change (e.g. an agent upgrade) that
+    tripped the check. Does NOT un-revoke a hard-revoked host — that needs a
+    re-enroll."""
+    if not agent_exists(host_id):
+        raise HTTPException(status_code=404, detail="Unknown host_id")
+
+    from backend import agent_integrity
+    agent_integrity.rebaseline(host_id)
+
+    actor = None
+    if x_admin_token:
+        from backend.db import resolve_admin_token
+        admin = resolve_admin_token(x_admin_token)
+        actor = admin["username"] if admin else None
+    log_admin_audit("agent_integrity_resumed", actor or "superuser", f"host {host_id}")
+
+    return {"status": "resumed", "host_id": host_id}
 
 
 # =========================================================

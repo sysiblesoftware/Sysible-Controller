@@ -30,6 +30,11 @@ class HeartbeatRequest(BaseModel):
     # network, per-mount disk, top processes) for the per-host drill-down. Latest
     # only - overwritten each interval. See host_agent/agent.py's _sample_snapshot().
     snapshot: Optional[Dict[str, Any]] = None
+    # Agent integrity (Tier 1): the agent's self-measurement manifest (sha256 of
+    # its own files + version). Optional so older agents that don't send it keep
+    # working; when present the controller compares it to the host's sealed
+    # baseline and quarantines on mismatch. See backend/agent_integrity.py.
+    measurements: Optional[dict] = None
 
 
 class SelfDisenrollRequest(BaseModel):

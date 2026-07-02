@@ -175,6 +175,7 @@ _register(Action(
     danger=True,
     params=[Param("username", "Username")],
     build=lambda p: api.cmd_delete_user(_s(p, "username")),
+    op_verb="user.delete", op_args=lambda p: {"user": _s(p, "username")},
 ))
 _register(Action(
     name="user_lock",
@@ -182,6 +183,7 @@ _register(Action(
     label="Lock user",
     params=[Param("username", "Username")],
     build=lambda p: api.cmd_lock_user(_s(p, "username")),
+    op_verb="user.lock", op_args=lambda p: {"user": _s(p, "username")},
 ))
 _register(Action(
     name="user_unlock",
@@ -189,6 +191,7 @@ _register(Action(
     label="Unlock user",
     params=[Param("username", "Username")],
     build=lambda p: api.cmd_unlock_user(_s(p, "username")),
+    op_verb="user.unlock", op_args=lambda p: {"user": _s(p, "username")},
 ))
 _register(Action(
     name="user_set_shell",
@@ -405,7 +408,8 @@ _register(Action(name="sec_install_selinux", tool="Security Administration",
 _register(Action(name="sec_set_selinux_mode", tool="Security Administration",
     label="Set SELinux mode",
     params=[Param("mode", "Mode", type="select", options=["enforcing", "permissive"], default="enforcing")],
-    build=lambda p: api.cmd_set_selinux_mode(_s(p, "mode", "enforcing"))))
+    build=lambda p: api.cmd_set_selinux_mode(_s(p, "mode", "enforcing")),
+    op_verb="selinux.setenforce", op_args=lambda p: {"mode": _s(p, "mode", "enforcing")}))
 _register(Action(name="sec_sshd_status", tool="Security Administration",
     label="SSH daemon status", params=[], build=lambda p: api.cmd_sshd_status()))
 _register(Action(name="sec_sshd_set", tool="Security Administration", label="Set sshd option",
@@ -534,7 +538,8 @@ _register(Action(name="time_set_ntp", tool="Time Synchronization", label="Set NT
     build=lambda p: api.cmd_set_ntp_servers(_s(p, "servers"))))
 _register(Action(name="time_set_tz", tool="Time Synchronization", label="Set timezone",
     params=[Param("tz", "Timezone", help="e.g. America/New_York")],
-    build=lambda p: api.cmd_set_timezone(_s(p, "tz"))))
+    build=lambda p: api.cmd_set_timezone(_s(p, "tz")),
+    op_verb="system.set_timezone", op_args=lambda p: {"timezone": _s(p, "tz")}))
 _register(Action(name="time_list_tz", tool="Time Synchronization", label="List timezones",
     params=[Param("filter_text", "Filter", required=False)],
     build=lambda p: api.cmd_list_timezones(_s(p, "filter_text"))))
@@ -694,10 +699,12 @@ _register(Action(name="user_set_aging", tool="User & Group Administration",
                                                       _io(p, "min_days"), _io(p, "warn_days"))))
 _register(Action(name="group_create", tool="User & Group Administration",
     label="Create group", params=[Param("name", "Group name")],
-    build=lambda p: api.cmd_create_group(_s(p, "name"))))
+    build=lambda p: api.cmd_create_group(_s(p, "name")),
+    op_verb="group.create", op_args=lambda p: {"group": _s(p, "name")}))
 _register(Action(name="group_delete", tool="User & Group Administration",
     label="Delete group", danger=True, params=[Param("name", "Group name")],
-    build=lambda p: api.cmd_delete_group(_s(p, "name"))))
+    build=lambda p: api.cmd_delete_group(_s(p, "name")),
+    op_verb="group.delete", op_args=lambda p: {"group": _s(p, "name")}))
 _register(Action(name="group_add_user", tool="User & Group Administration",
     label="Add user to group", params=[Param("group", "Group"), Param("username", "Username")],
     build=lambda p: api.cmd_add_user_to_group(_s(p, "group"), _s(p, "username"))))
@@ -826,7 +833,8 @@ _register(Action(name="timer_delete", tool="Cron & Systemd Timers", label="Delet
 # ---- Network Management (advanced) -----------------------------------
 _register(Action(name="net_set_hostname", tool="Network Management", label="Set hostname",
     params=[Param("new_hostname", "Hostname")],
-    build=lambda p: api.cmd_set_hostname(_s(p, "new_hostname"))))
+    build=lambda p: api.cmd_set_hostname(_s(p, "new_hostname")),
+    op_verb="system.set_hostname", op_args=lambda p: {"hostname": _s(p, "new_hostname")}))
 _register(Action(name="net_set_gateway", tool="Network Management", label="Set gateway",
     params=[Param("connection", "Connection"), Param("gateway", "Gateway")],
     build=lambda p: api.cmd_set_gateway(_s(p, "connection"), _s(p, "gateway"))))
@@ -1585,6 +1593,7 @@ _register(Action(
                 "(does not start anything).",
     params=[],
     build=lambda p: api.cmd_reset_failed_units(),
+    op_verb="service.reset_failed", op_args=lambda p: {},
 ))
 _register(Action(
     name="qsa_daemon_reload", tool="Quick System Actions", group="Systemd housekeeping",
@@ -1592,6 +1601,7 @@ _register(Action(
     description="Reload the systemd manager so edited unit files take effect.",
     params=[],
     build=lambda p: api.cmd_daemon_reload(),
+    op_verb="service.daemon_reload", op_args=lambda p: {},
 ))
 _register(Action(
     name="qsa_reboot", tool="Quick System Actions", group="Power (careful)",
@@ -1599,6 +1609,7 @@ _register(Action(
     description="Reboot the selected hosts now.",
     params=[],
     build=lambda p: api.cmd_reboot_host(),
+    op_verb="power.reboot", op_args=lambda p: {},
 ))
 _register(Action(
     name="qsa_poweroff", tool="Quick System Actions", group="Power (careful)",
@@ -1607,6 +1618,7 @@ _register(Action(
                 "powered on out-of-band).",
     params=[],
     build=lambda p: api.cmd_poweroff_host(),
+    op_verb="power.poweroff", op_args=lambda p: {},
 ))
 
 

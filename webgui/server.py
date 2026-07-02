@@ -923,6 +923,23 @@ def fleet_updates(refresh: int = 0, live: int = 0, user: str = Depends(require_l
 from webgui import schedules  # noqa: E402
 
 
+# Scheduled actions that map 1:1 to a bounded dispatcher verb. On a
+# dispatcher-capable agent these run as a vetted `op` (no arbitrary root shell);
+# on every other host they fall back to the shell builder below. security_updates
+# stays shell (the verb table has no security-only upgrade — pkg.update is a full
+# upgrade), so we don't silently widen it.
+_SCHED_OP = {
+    "all_updates":        ("pkg.update", lambda job: {}),
+    "clean_pkg_cache":    ("pkg.clean", lambda job: {}),
+    "vacuum_journal":     ("journal.vacuum", lambda job: {"days": 7}),
+    "fstrim":             ("fstrim", lambda job: {}),
+    "clear_failed_units": ("service.reset_failed", lambda job: {}),
+    "sync_time":          ("system.sync_time", lambda job: {}),
+    "restart_service":    ("service.restart", lambda job: {"unit": (job.get("arg") or "").strip()}),
+    "reboot":             ("power.reboot", lambda job: {}),
+}
+
+
 def _run_scheduled_job(job):
     """Execute one scheduled job across its targets. Returns (status, detail)."""
     import time as _t
@@ -978,14 +995,25 @@ def _run_scheduled_job(job):
     else:
         return "error", f"unknown action {action}"
 
+    # If this action maps to a bounded verb, precompute its op spec once; used
+    # only for dispatcher-capable agents (else the shell `cmd` below).
+    op_json = None
+    if action in _SCHED_OP:
+        verb, argf = _SCHED_OP[action]
+        op_json = json.dumps({"op": verb, "args": {k: str(v) for k, v in argf(job).items()}})
+
+    label = schedules.ACTIONS.get(action, action)
+    desc = f"[scheduled by {job.get('created_by') or '?'}] {label}"
     ok = 0
     for e in entries:
         # Tokenless (unattended root) + needs_sudo=False: no operator/become needed.
-        # Name the creator in the description so the activity log still attributes
-        # the (root) run to whoever set the schedule up.
-        r = _dispatch_one(e, cmd, "command", None, None,
-                          f"[scheduled by {job.get('created_by') or '?'}] {schedules.ACTIONS.get(action, action)}",
-                          needs_sudo=False)
+        # The creator is named in the description so the activity log still
+        # attributes the (root) run to whoever set the schedule up. On a
+        # dispatcher-capable agent, run the bounded verb instead of shell.
+        if op_json and e.get("kind") == "agent" and e.get("dispatcher"):
+            r = _dispatch_one(e, op_json, "op", None, None, desc, needs_sudo=False)
+        else:
+            r = _dispatch_one(e, cmd, "command", None, None, desc, needs_sudo=False)
         if r.get("ok") or r.get("code") == 0 or (action == "reboot" and not r.get("error")):
             ok += 1
     status = "ok" if ok == len(entries) else "error"

@@ -937,6 +937,9 @@ def heartbeat(state):
         "hostname": socket.gethostname(),
         # Lets the controller track which hosts run the current agent build.
         "agent_version": AGENT_VERSION,
+        # Privilege-dispatcher capability: True when this agent runs confined
+        # behind sysible-priv, so the controller can route op verbs to it.
+        "dispatcher": bool(_PRIV_DISPATCHER),
     }
 
     # Agent integrity (Tier 1): self-measurement manifest the controller compares

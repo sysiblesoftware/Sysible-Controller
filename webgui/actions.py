@@ -53,6 +53,13 @@ class Action:
     danger: bool = False        # UI confirms before running (delete, etc.)
     tab: str = ""               # desktop tab this action lives under
     group: str = ""             # titled section (QGroupBox) within the tab
+    # Privilege dispatcher (hybrid): when set, this action can run as a confined
+    # `op` verb on dispatcher-capable agent hosts. `op_verb` is the sysible-priv
+    # verb; `op_args(params) -> dict` maps the form params to its arguments. The
+    # shell `build` above stays the fallback for SSH hosts and non-dispatcher
+    # agents, so op wiring is always non-breaking.
+    op_verb: str = ""
+    op_args: Callable[[dict], dict] = None
 
 
 # ----------------------------------------------------------------------
@@ -128,6 +135,7 @@ _register(Action(
     label="Start service",
     params=[Param("name", "Service name")],
     build=lambda p: api.cmd_service_start(_s(p, "name")),
+    op_verb="service.start", op_args=lambda p: {"unit": _s(p, "name")},
 ))
 _register(Action(
     name="svc_stop",
@@ -136,6 +144,7 @@ _register(Action(
     danger=True,
     params=[Param("name", "Service name")],
     build=lambda p: api.cmd_service_stop(_s(p, "name")),
+    op_verb="service.stop", op_args=lambda p: {"unit": _s(p, "name")},
 ))
 _register(Action(
     name="svc_restart",
@@ -143,6 +152,7 @@ _register(Action(
     label="Restart service",
     params=[Param("name", "Service name")],
     build=lambda p: api.cmd_service_restart(_s(p, "name")),
+    op_verb="service.restart", op_args=lambda p: {"unit": _s(p, "name")},
 ))
 
 # ---- Tool: User & Group Administration -------------------------------

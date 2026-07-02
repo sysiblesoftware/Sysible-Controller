@@ -41,6 +41,7 @@ Serve the built SPA (frontend/dist) from the same service, or put both
 behind a TLS-terminating reverse proxy. See README.md.
 """
 import asyncio
+import json
 import os
 import secrets
 import sys
@@ -2273,6 +2274,18 @@ def run_tool(action_name: str, body: RunRequest, request: Request, user: str = D
             desc = f"{spec.label}: {v}"
             break
 
+    # If this action is op-capable, precompute its confined dispatcher spec once.
+    # It's used only for dispatcher-capable AGENT hosts; every other target
+    # (SSH, or an agent without the dispatcher) still gets the shell `command`,
+    # so op routing is always non-breaking.
+    op_json = None
+    if getattr(spec, "op_verb", "") and spec.op_args:
+        try:
+            _args = {k: str(v) for k, v in (spec.op_args(body.params) or {}).items()}
+            op_json = json.dumps({"op": spec.op_verb, "args": _args})
+        except Exception:
+            op_json = None
+
     token = _session_token(request)
     results = []
     for target in body.targets:
@@ -2284,7 +2297,12 @@ def run_tool(action_name: str, body: RunRequest, request: Request, user: str = D
         # Resolve this admin's sudo password for the target (host scope wins
         # over fleet default); only used if the host is flagged sudo-required.
         become = sudo_store.resolve(user, entry.get("label", ""))
-        results.append(_dispatch_one(entry, command, spec.kind, become, token, desc))
+        if op_json and entry.get("kind") == "agent" and entry.get("dispatcher"):
+            # Confined path: the agent runs the vetted verb via sysible-priv.
+            results.append(_dispatch_one(entry, op_json, "op", become, token, desc,
+                                         needs_sudo=False))
+        else:
+            results.append(_dispatch_one(entry, command, spec.kind, become, token, desc))
 
     return {"action": action_name, "command": command, "results": results}
 

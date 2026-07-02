@@ -127,6 +127,10 @@ def list_merged_hosts(agent_only=True):
             # Host forbids passwordless sudo: dispatch supplies the operator's
             # sudo password (the agent then uses `sudo -S`). See run_on_entry.
             "requires_sudo_password": bool(a.get("requires_sudo_password")),
+            # Agent reports the privilege dispatcher is active (SYSIBLE_PRIV set):
+            # op-capable actions dispatch confined kind="op" verbs to it instead
+            # of a shell command. Absent/false => shell path (non-breaking).
+            "dispatcher": bool(a.get("dispatcher")),
         })
 
     try:

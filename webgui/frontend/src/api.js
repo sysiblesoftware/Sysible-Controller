@@ -135,6 +135,9 @@ export const api = {
   scheduleUpdate: (id, body) => req(`/api/schedules/${encodeURIComponent(id)}`, { method: "PATCH", body }),
   scheduleDelete: (id) => req(`/api/schedules/${encodeURIComponent(id)}`, { method: "DELETE" }),
   scheduleRunNow: (id) => req(`/api/schedules/${encodeURIComponent(id)}/run-now`, { method: "POST" }),
+  alertsGet: () => req("/api/alerts"),
+  alertsSet: (body) => req("/api/alerts", { method: "POST", body }),
+  alertsTest: () => req("/api/alerts/test", { method: "POST" }),
   restartUnit: (hostId, unit, sudoPassword = "") =>
     req(`/api/host/${encodeURIComponent(hostId)}/restart-unit`,
         { method: "POST", body: { unit, sudo_password: sudoPassword } }),

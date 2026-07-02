@@ -11,6 +11,7 @@ import HostEnrollment from "./views/HostEnrollment.jsx";
 import HostDetail from "./views/HostDetail.jsx";
 import Updates from "./views/Updates.jsx";
 import Schedules from "./views/Schedules.jsx";
+import Alerts from "./views/Alerts.jsx";
 import SudoModal from "./components/SudoModal.jsx";
 import StandaloneTerminal from "./components/StandaloneTerminal.jsx";
 
@@ -19,6 +20,7 @@ const SECTIONS = {
   perf: "Fleet Performance",
   updates: "Fleet Patch Status",
   schedules: "Scheduled Jobs",
+  alerts: "Alerting",
   quickactions: "Quick System Actions",
   sysadmin: "System Administration",
   connect: "Sysible Connect",
@@ -34,6 +36,7 @@ const NAV = [
   { key: "perf", label: "Performance", icon: "chart", su: false, aud: true },
   { key: "updates", label: "Updates", icon: "download", su: false, aud: true },
   { key: "schedules", label: "Schedules", icon: "clock", su: false },
+  { key: "alerts", label: "Alerts", icon: "bell", su: false },
   { key: "hosts", label: "Host Enrollment", icon: "server", su: true },
   { key: "quickactions", label: "Quick System Actions", icon: "bolt", su: false },
   { key: "sysadmin", label: "System Administration Tools", icon: "tools", su: false },
@@ -53,6 +56,7 @@ const ICONS = {
   bolt: <><path d="M13 3L4 14h6l-1 7 9-11h-6z"/></>,
   download: <><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></>,
   clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
+  bell: <><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 0 0 4 0"/></>,
 };
 
 function NavIcon({ name }) {
@@ -194,6 +198,7 @@ export default function App() {
           {view === "perf" && <Performance />}
           {view === "updates" && <Updates role={role} />}
           {!isAuditor && view === "schedules" && <Schedules />}
+          {!isAuditor && view === "alerts" && <Alerts />}
           {view === "host" && <HostDetail hostId={target?.id} label={target?.label} canAct={!isAuditor}
             onBack={() => (history.length > 0 ? goBack() : go(null))}
             onOpen={(section, opts) => go(section, opts || null)} />}

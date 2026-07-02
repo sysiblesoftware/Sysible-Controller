@@ -1055,6 +1055,116 @@ def schedules_run_now(job_id: str, user: str = Depends(require_operator)):
 _start_scheduler()
 
 
+# ----------------------------------------------------------------------
+# Alerting: evaluate rules against the sweeps and notify on threshold crossings.
+# ----------------------------------------------------------------------
+from webgui import alerts  # noqa: E402
+
+
+def _alerts_gather_hosts():
+    """Merged per-host view for alert rules: online/disk/failed from a fresh
+    metrics sweep (cheap), + security/reboot from the updates cache and cert-days
+    from the posture cache (populated by the dashboard / scheduled scans)."""
+    import concurrent.futures
+    import time as _t
+    entries = dispatch.list_merged_hosts(agent_only=False)
+    try:
+        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+    except Exception:
+        last_seen = {}
+    now = _t.time()
+    cmd = api.cmd_metrics_snapshot()
+
+    def probe(e):
+        aid = e["id"] if e["kind"] == "agent" else (e.get("agent_entry") or {}).get("id") if e["kind"] == "merged" else None
+        ls = last_seen.get(aid) if aid else None
+        online = (bool(ls and (now - ls) <= 20)) if aid else None
+        base = {"id": e.get("id"), "host": e.get("label"), "online": online, "disk": None, "failed": None}
+        if aid is not None and not online:
+            base["online"] = False
+            return base
+        pe = {**e, "requires_sudo_password": False}
+        if e.get("agent_entry"):
+            pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+        r = _dispatch_one(pe, cmd, "command", None, None, None, needs_sudo=False)
+        m = _parse_sysmetrics((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
+        if m:
+            base.update(online=True, disk=m.get("disk"), failed=m.get("failed"))
+        return base
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
+        health = list(ex.map(probe, entries)) if entries else []
+    upd = {h.get("id"): h for h in (_UPDATES_CACHE["hosts"] or [])}
+    pos = {h.get("id"): h for h in (_POSTURE_CACHE["hosts"] or [])}
+    for h in health:
+        u = upd.get(h["id"]) or {}
+        h["security"], h["reboot"] = u.get("security"), u.get("reboot")
+        posture = (pos.get(h["id"]) or {}).get("posture") or {}
+        cd = (posture.get("cert") or {}).get("nearest_days")
+        try:
+            h["cert_days"] = int(cd) if cd not in (None, "") else None
+        except (TypeError, ValueError):
+            h["cert_days"] = None
+    return health
+
+
+def _alerts_loop():
+    import time as _t
+    _t.sleep(60)   # let caches warm on startup
+    while True:
+        try:
+            cfg = alerts.load()
+            ch = cfg["channels"]
+            enabled = ch["email"].get("enabled") or ch["webhook"].get("enabled")
+            if enabled and any(r.get("enabled") for r in cfg["rules"].values()):
+                hosts = _alerts_gather_hosts()
+                firing = alerts.evaluate_rules(cfg, hosts)
+                newly, resolved = alerts.diff_state(cfg, firing)
+                lines = [f"NEW: {f['message']}" for f in newly] + \
+                        [f"RESOLVED: {r['message']}" for r in resolved]
+                if lines:
+                    subj = f"[Sysible] {len(newly)} new alert(s), {len(resolved)} resolved"
+                    alerts.notify(cfg, subj, "\n".join(lines))
+        except Exception:
+            pass
+        _t.sleep(300)
+
+
+_ALERTS_STARTED = False
+
+
+def _start_alerts():
+    global _ALERTS_STARTED
+    if _ALERTS_STARTED:
+        return
+    _ALERTS_STARTED = True
+    import threading
+    threading.Thread(target=_alerts_loop, name="sysible-alerts", daemon=True).start()
+
+
+@app.get("/api/alerts")
+def alerts_get(user: str = Depends(require_operator)):
+    return alerts.get_config_redacted()
+
+
+@app.post("/api/alerts")
+def alerts_set(body: dict, user: str = Depends(require_operator)):
+    return alerts.set_config(body or {})
+
+
+@app.post("/api/alerts/test")
+def alerts_test(user: str = Depends(require_operator)):
+    cfg = alerts.load()
+    if not (cfg["channels"]["email"].get("enabled") or cfg["channels"]["webhook"].get("enabled")):
+        raise HTTPException(status_code=400, detail="Enable and save at least one channel first.")
+    results = alerts.notify(cfg, "[Sysible] Test alert",
+                            "This is a test alert from the Sysible controller.")
+    return {"results": {k: {"ok": v[0], "detail": v[1]} for k, v in results.items()}}
+
+
+_start_alerts()
+
+
 @app.get("/api/environments")
 def environments(user: str = Depends(require_login)):
     try:

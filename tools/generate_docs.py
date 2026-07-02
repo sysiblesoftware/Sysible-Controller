@@ -1,4 +1,44 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Sysible Controller — Administrator &amp; User Guide</title><meta name="viewport" content="width=device-width, initial-scale=1"><style>
+#!/usr/bin/env python3
+"""
+Generate the Sysible Controller HTML guides from the current source of truth.
+
+Produces (at the repo root):
+  - Sysible_Controller_Documentation.html   full administrator & user guide
+  - Sysible_Controller_Quickstart.html       condensed quick-start
+
+Web-console only (the desktop GUI was removed). The tool list is parsed live
+from webgui/frontend/src/views/ToolRunner.jsx so it never drifts; the version
+comes from version.py. No external dependencies. Re-run after changing tools or
+features:  python3 tools/generate_docs.py
+"""
+import datetime
+import html
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def read_version():
+    m = re.search(r'VERSION\s*=\s*"([^"]+)"', (ROOT / "version.py").read_text())
+    return m.group(1) if m else "0.0.0"
+
+
+def read_tools():
+    """[(name, description)] from ToolRunner.jsx's TOOLS array (excluding the
+    hidden Quick System Actions tile, which has its own section)."""
+    src = (ROOT / "webgui/frontend/src/views/ToolRunner.jsx").read_text()
+    block = re.search(r"const TOOLS = \[(.*?)\n\];", src, re.S)
+    tools = []
+    if block:
+        for name, desc in re.findall(r'\["((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"', block.group(1)):
+            if name == "Quick System Actions":
+                continue
+            tools.append((name, desc.replace('\\"', '"')))
+    return tools
+
+
+CSS = """
 :root{--navy:#1a2744;--blue:#2f6fed;--ink:#202733;--dim:#5b6573;--hair:#e2e6ee;
 --bg:#eef1f6;--paper:#fff;--green:#2f9e44;--amber:#e0a93c;--red:#e05656;--code:#f4f6fa;}
 *{box-sizing:border-box;}
@@ -27,7 +67,39 @@ th{background:#f6f8fc;}
 ol li,ul li{margin:4px 0;}
 .pill{display:inline-block;background:#eef2fb;color:var(--blue);border-radius:10px;padding:1px 9px;font-size:12px;font-weight:600;}
 footer{max-width:900px;margin:0 auto 40px;text-align:center;color:var(--dim);font-size:12px;padding:10px;}
-</style></head><body><div class="cover"><h1>Sysible Controller</h1><div class="sub">Administrator &amp; User Guide</div><div class="meta">Version 3.0.0 · 2026-07-02 · Web console edition</div></div><div class="page"><h2>Contents</h2><div class="toc"><a href="#overview">1. Overview</a><a href="#requirements">2. Requirements</a><a href="#install">3. Installation</a><a href="#first-login">4. First login &amp; accounts</a><a href="#roles">5. Roles &amp; identity</a><a href="#sudo">6. Sudo modes</a><a href="#dashboard">7. Dashboard</a><a href="#updates">8. Update Hosts (patching)</a><a href="#schedules">9. Scheduled jobs</a><a href="#alerts">10. Alerting</a><a href="#performance">11. Performance</a><a href="#enroll">12. Host enrollment</a><a href="#tools">13. System Administration Tools</a><a href="#qsa">14. Quick System Actions</a><a href="#connect">15. Sysible Connect</a><a href="#activity">16. Activity &amp; logs</a><a href="#settings">17. Settings</a><a href="#portal">18. Webserver Portal</a><a href="#cli">19. CLI reference</a><a href="#security">20. Security model</a></div></div><div class="page">
+"""
+
+
+def page(inner):
+    return f'<div class="page">{inner}</div>'
+
+
+def tool_cards(tools):
+    return "\n".join(
+        f'<div class="card"><h4>{html.escape(n)}</h4><p>{html.escape(d)}</p></div>'
+        for n, d in tools)
+
+
+def build_full(version, tools, today):
+    toc_items = [
+        ("overview", "1. Overview"), ("requirements", "2. Requirements"),
+        ("install", "3. Installation"), ("first-login", "4. First login & accounts"),
+        ("roles", "5. Roles & identity"), ("sudo", "6. Sudo modes"),
+        ("dashboard", "7. Dashboard"), ("updates", "8. Update Hosts (patching)"),
+        ("schedules", "9. Scheduled jobs"), ("alerts", "10. Alerting"),
+        ("performance", "11. Performance"), ("enroll", "12. Host enrollment"),
+        ("tools", "13. System Administration Tools"), ("qsa", "14. Quick System Actions"),
+        ("connect", "15. Sysible Connect"), ("activity", "16. Activity & logs"),
+        ("settings", "17. Settings"), ("portal", "18. Webserver Portal"),
+        ("cli", "19. CLI reference"), ("security", "20. Security model"),
+    ]
+    toc = "".join(f'<a href="#{i}">{html.escape(t)}</a>' for i, t in toc_items)
+
+    cover = (f'<div class="cover"><h1>Sysible Controller</h1>'
+             f'<div class="sub">Administrator &amp; User Guide</div>'
+             f'<div class="meta">Version {version} · {today} · Web console edition</div></div>')
+
+    body = f"""
 <h2 id="overview">1. Overview</h2>
 <p><b>Sysible Controller</b> is a self-hosted, point-and-click way to manage a fleet of Linux hosts.
 It is two pieces: a <b>FastAPI backend</b> (the <code>sysible-backend</code> service, HTTPS on port 9000,
@@ -120,24 +192,7 @@ terminal when an SSH server is present.</p>
 <p>Every tool follows the same pattern: <b>check the target hosts</b> on the left, fill any fields, and run an action —
 results come back per host, <b>grouped by environment</b>, each collapsible with a one-line summary, an "Only problems"
 filter, and a search.</p>
-<div class="card"><h4>User &amp; Group Administration</h4><p>Create, lock, and manage user accounts, passwords, sudo access, and groups across agent and SSH hosts.</p></div>
-<div class="card"><h4>System Health, Logs &amp; Recovery</h4><p>Disk usage, memory/CPU, failed services, logs, and process tools, plus boot/GRUB and kernel recovery — across agent and SSH hosts.</p></div>
-<div class="card"><h4>Service Management</h4><p>Start, stop, restart, enable/disable, and troubleshoot systemd services, or create and configure new ones.</p></div>
-<div class="card"><h4>Environmental Policies</h4><p>Set the baseline password, lockout, sudo, and umask policy for accounts on managed hosts, and push it out.</p></div>
-<div class="card"><h4>Cron &amp; Systemd Timers</h4><p>View, add, and remove cron jobs, and view, create, start/stop, enable/disable, and delete systemd timers.</p></div>
-<div class="card"><h4>Host Software Management</h4><p>Detect each host&#x27;s package manager, then install, remove, update, query, verify, and clean packages across dnf/yum, zypper, and apt hosts alike.</p></div>
-<div class="card"><h4>Repository Management</h4><p>List, add, enable, disable, and remove software repositories across dnf/yum, zypper, and apt hosts.</p></div>
-<div class="card"><h4>Network Management</h4><p>Diagnose connectivity and DNS, inspect ports and capture packets, and configure IP/DHCP/DNS/gateway/routing/hostname/bonding/teaming/VLANs/bridges/MTU across managed hosts.</p></div>
-<div class="card"><h4>File System Management</h4><p>Create/remove directories, copy/move/rename files, manage ownership/permissions/ACLs and links, mount/unmount/resize/repair filesystems, configure /etc/fstab and quotas, and archive/compress files across managed hosts.</p></div>
-<div class="card"><h4>Storage Administration</h4><p>Partition, format, and monitor disks, manage LVM physical volumes/volume groups/logical volumes, configure RAID and replace failed disks, and set up swap space across managed hosts.</p></div>
-<div class="card"><h4>Firewall Administration</h4><p>Configure firewalld zones, ports, and rich rules, and manage the underlying nftables and iptables rule sets across managed hosts.</p></div>
-<div class="card"><h4>Security Administration</h4><p>Configure and troubleshoot SELinux, harden SSH access and rotate keys, review audit logs and failed logins, install security updates, set password policy, harden systems, and run vulnerability scans across managed hosts.</p></div>
-<div class="card"><h4>Backup &amp; Recovery</h4><p>Back up and restore files, verify backup integrity, schedule backups, create and restore LVM snapshots, guide deleted-file recovery, and run disaster-recovery drills.</p></div>
-<div class="card"><h4>Time Synchronization</h4><p>Configure NTP/chrony, verify synchronization, troubleshoot clock drift, and set the system time zone across managed hosts.</p></div>
-<div class="card"><h4>Certificate Management</h4><p>Generate CSRs, install/renew/replace certificates, verify certificate chains, and troubleshoot TLS endpoints across managed hosts.</p></div>
-<div class="card"><h4>Containers &amp; VMs</h4><p>List and start/stop/restart Docker or Podman containers, view container logs and images, and manage libvirt virtual machines across managed hosts.</p></div>
-<div class="card"><h4>Directory Services (Active Directory / LDAP)</h4><p>Join hosts to Active Directory (realmd/SSSD), manage realm status and login permits, enable home-dir creation, and configure/test LDAP and LDAPS.</p></div>
-<div class="card"><h4>Distro Subscription &amp; Licensing</h4><p>Register and manage commercial-distro subscriptions: Red Hat (subscription-manager), Ubuntu Pro, and SUSE (SUSEConnect) — status, attach/enable, and repositories.</p></div>
+{tool_cards(tools)}
 
 <h2 id="qsa">14. Quick System Actions</h2>
 <p>A fast lane for everyday fixes across selected hosts, in its own sidebar item: restart/start/stop a service (with a
@@ -177,7 +232,7 @@ and manage its credentials and sessions from Settings.</p>
 <tr><td><code>start</code></td><td>Yes</td><td>Start the backend service.</td></tr>
 <tr><td><code>stop</code> / <code>restart</code></td><td>Yes</td><td>Stop / restart the backend (and web console).</td></tr>
 <tr><td><code>status</code> / <code>logs</code></td><td>No</td><td>Backend + web console status; tail the backend log.</td></tr>
-<tr><td><code>webgui {start|stop|restart|status|logs}</code></td><td>Yes*</td><td>Control the web console service; builds the front end on start.</td></tr>
+<tr><td><code>webgui {{start|stop|restart|status|logs}}</code></td><td>Yes*</td><td>Control the web console service; builds the front end on start.</td></tr>
 <tr><td><code>update</code></td><td>Yes</td><td>Pull latest code, redeploy, and restart in place.</td></tr>
 <tr><td><code>reset-admin [user] [pass]</code></td><td>Yes</td><td>Set/create a web-console admin password (printed once).</td></tr>
 <tr><td><code>destroy</code></td><td>Yes</td><td>Remove the deployment.</td></tr>
@@ -190,4 +245,55 @@ and manage its credentials and sessions from Settings.</p>
 <li><b>HTTPS everywhere</b>, TOFU SSH host-key pinning, and secrets (sudo/SMTP passwords) encrypted at rest.</li>
 <li><b>Session cookie</b> — signed, http-only, SameSite=Strict; the controller API key never reaches the browser.</li>
 </ul>
-</div><footer>Sysible Controller v3.0.0 — generated 2026-07-02 by tools/generate_docs.py</footer></body></html>
+"""
+    toc_page = page('<h2>Contents</h2><div class="toc">' + toc + '</div>')
+    return (f'<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+            f'<title>Sysible Controller — Administrator &amp; User Guide</title>'
+            f'<meta name="viewport" content="width=device-width, initial-scale=1">'
+            f'<style>{CSS}</style></head><body>'
+            f'{cover}{toc_page}{page(body)}'
+            f'<footer>Sysible Controller v{version} — generated {today} by tools/generate_docs.py</footer>'
+            f'</body></html>')
+
+
+def build_quickstart(version, today):
+    body = """
+<h2>Quick start</h2>
+<ol>
+<li><b>Install.</b> On the controller, run <code>sudo ./install_sysible.sh</code>. Copy the one-time
+<code>admin</code> password printed in red at the end.</li>
+<li><b>Sign in.</b> Browse to <code>https://&lt;controller&gt;:8800/</code>, log in as <code>admin</code>, and change your
+password under <b>Settings → My Account</b>.</li>
+<li><b>Enroll a host.</b> Go to <b>Host Enrollment</b> — install the agent bundle on the host, or SSH-enroll it with a
+one-time password.</li>
+<li><b>Do something.</b> Open a <b>System Administration</b> tool, check your hosts on the left, fill the fields, and run
+an action — results come back per host, grouped by environment.</li>
+<li><b>Patch the fleet.</b> Open <b>Update Hosts</b>, review pending/security updates, select hosts, and install — with
+live per-host progress.</li>
+<li><b>Automate.</b> Add a <b>Schedule</b> (e.g. weekly security updates) and set up <b>Alerts</b> (email/webhook) so you
+hear about problems before your users do.</li>
+</ol>
+<div class="note">Full detail for every screen is in the <a href="Sysible_Controller_Documentation.html">Administrator &amp; User Guide</a>.</div>
+"""
+    return (f'<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+            f'<title>Sysible Controller — Quick Start</title>'
+            f'<meta name="viewport" content="width=device-width, initial-scale=1">'
+            f'<style>{CSS}</style></head><body>'
+            f'<div class="cover"><h1>Sysible Controller</h1><div class="sub">Quick Start</div>'
+            f'<div class="meta">Version {version} · {today}</div></div>'
+            f'{page(body)}'
+            f'<footer>Sysible Controller v{version} — generated {today}</footer>'
+            f'</body></html>')
+
+
+def main():
+    version = read_version()
+    tools = read_tools()
+    today = datetime.date.today().isoformat()
+    (ROOT / "Sysible_Controller_Documentation.html").write_text(build_full(version, tools, today))
+    (ROOT / "Sysible_Controller_Quickstart.html").write_text(build_quickstart(version, today))
+    print(f"Generated guides for v{version} with {len(tools)} tools.")
+
+
+if __name__ == "__main__":
+    main()

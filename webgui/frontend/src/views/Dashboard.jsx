@@ -96,7 +96,10 @@ function FleetHostCard({ h, onOpenHost }) {
           {h.issues > 0 && <span style={{ color: VERDICT_COLOR.WARNING, fontWeight: 700 }}>⚠ {h.issues}</span>}
           {h.limited && <span style={{ color: VERDICT_COLOR.OFFLINE }} title="Posture gathered without root — some checks incomplete">limited</span>}
           {h.postureError && <span style={{ color: VERDICT_COLOR.OFFLINE }}>posture n/a</span>}
-          {v}
+          {v === "OFFLINE"
+            ? <span style={{ color: VERDICT_COLOR.CRITICAL, fontWeight: 700 }}
+                    title="Not reporting — unreachable or powered off">⚠ OFFLINE</span>
+            : v}
         </span>
       </div>
       {noData ? (
@@ -156,14 +159,20 @@ function EnvFleetCard({ group, postureLoaded, onOpenHost }) {
             {group.hosts.length} host{group.hosts.length === 1 ? "" : "s"}
           </span>
         </span>
-        {postureLoaded && (
-          <span style={{ fontSize: 11, color: group.problematic > 0 ? VERDICT_COLOR.WARNING : VERDICT_COLOR.OK }}>
-            {group.problematic > 0 ? `${group.problematic} need attention` : "all clear"}
-            {group.limited > 0 && (
-              <span className="faint" style={{ marginLeft: 6 }}>· {group.limited} limited</span>
-            )}
-          </span>
-        )}
+        <span style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 8 }}>
+          {group.counts.OFFLINE > 0 && (
+            <span style={{ color: VERDICT_COLOR.CRITICAL, fontWeight: 700 }}
+                  title="Host(s) not reporting — unreachable or powered off">
+              ⚠ {group.counts.OFFLINE} offline
+            </span>
+          )}
+          {postureLoaded && (group.problematic > 0
+            ? <span style={{ color: VERDICT_COLOR.WARNING }}>{group.problematic} need attention</span>
+            : group.counts.OFFLINE === 0 && <span style={{ color: VERDICT_COLOR.OK }}>all clear</span>)}
+          {group.limited > 0 && (
+            <span className="faint">· {group.limited} limited</span>
+          )}
+        </span>
       </button>
       <div style={{ padding: "0 10px 8px" }}>
         <Meter label="disk" pct={group.disk} />
@@ -315,21 +324,10 @@ export default function Dashboard({ role, edition, onOpen }) {
 
   const results = useMemo(() => searchTasks(q), [q]);
 
-  const m = useMemo(() => {
-    const total = agents.length;
-    const online = agents.filter((a) => seenAgo(a.last_seen) <= ONLINE_WINDOW_S).length;
-    const envs = new Set(agents.map((a) => a.environment || "Unassigned")).size;
-    return { total, online, offline: total - online, envs };
-  }, [agents]);
-
-  // Host lists behind the top-strip counts, so each count can drop down the
-  // specific hosts (id → drill-down, hostname + environment shown).
-  const hostLists = useMemo(() => {
-    const mk = (a) => ({ id: a.host_id, host: a.hostname || a.host_id, env: a.environment || "Unassigned" });
-    const online = [], offline = [];
-    for (const a of agents) (seenAgo(a.last_seen) <= ONLINE_WINDOW_S ? online : offline).push(mk(a));
-    return { all: agents.map(mk), online, offline };
-  }, [agents]);
+  // NOTE: the top-strip counts (m) and hostLists are computed AFTER the
+  // fleet-health state below, so online/offline track the SAME server-side
+  // reachability the fleet donut uses (and refresh with it) instead of a stale,
+  // never-refreshed last_seen window that left "Online" frozen at page-load.
 
   const recent = useMemo(
     () => [...activity].sort((a, b) => (b.id || 0) - (a.id || 0)).slice(0, 10),
@@ -345,6 +343,9 @@ export default function Dashboard({ role, edition, onOpen }) {
 
   const loadFleet = useCallback(() => {
     setFleetLoading(true); setFleetErr("");
+    // Refresh the agent inventory alongside health so the top-strip counts
+    // (total/envs) and last_seen stay current, not frozen at page load.
+    api.agents().then((d) => setAgents(d.agents || [])).catch(() => {});
     api.fleetHealth()
       .then((d) => { setFleet(d.hosts || []); setFleetAt(Date.now()); })
       .catch((e) => setFleetErr(e.message))
@@ -356,6 +357,37 @@ export default function Dashboard({ role, edition, onOpen }) {
     const t = setInterval(loadFleet, 30000);
     return () => clearInterval(t);
   }, [fleetAuto, loadFleet]);
+
+  // Authoritative per-host reachability from the fleet-health sweep (server-side
+  // 20s-stale check). Preferred over a client-side last_seen window so the top
+  // strip agrees with the fleet donut and updates live with it.
+  const onlineById = useMemo(() => {
+    const map = {};
+    for (const h of fleet) if (h && h.id != null) map[h.id] = h.online;
+    return map;
+  }, [fleet]);
+  const isAgentOnline = (a) => {
+    const f = onlineById[a.host_id];
+    if (f === true) return true;
+    if (f === false) return false;
+    return seenAgo(a.last_seen) <= ONLINE_WINDOW_S;  // fallback before health loads
+  };
+
+  const m = useMemo(() => {
+    const total = agents.length;
+    const online = agents.filter(isAgentOnline).length;
+    const envs = new Set(agents.map((a) => a.environment || "Unassigned")).size;
+    return { total, online, offline: total - online, envs };
+  }, [agents, onlineById]);
+
+  // Host lists behind the top-strip counts, so each count can drop down the
+  // specific hosts (id → drill-down, hostname + environment shown).
+  const hostLists = useMemo(() => {
+    const mk = (a) => ({ id: a.host_id, host: a.hostname || a.host_id, env: a.environment || "Unassigned" });
+    const online = [], offline = [];
+    for (const a of agents) (isAgentOnline(a) ? online : offline).push(mk(a));
+    return { all: agents.map(mk), online, offline };
+  }, [agents, onlineById]);
 
   const openHost = useCallback((h) => onOpen("host", { id: h.id, label: h.host }), [onOpen]);
 

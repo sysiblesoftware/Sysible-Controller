@@ -18,3 +18,10 @@ portal_files/
 # Runtime state (PID/port/secret) and logs - never commit
 run/
 logs/
+
+# Documentation tooling - kept local, NOT published on GitHub.
+# (The generated HTML guides at the repo root ARE committed; only the
+#  generator, the doc-regenerate hook, and the screenshot kit stay local.)
+/tools/generate_docs.py
+/docs/screenshots/
+/.claude/settings.json

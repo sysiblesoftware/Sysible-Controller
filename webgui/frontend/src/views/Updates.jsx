@@ -47,21 +47,28 @@ export default function Updates({ role }) {
   const actionable = hosts.filter((h) => h.online !== false && (h.total || 0) > 0).map((h) => h.id);
   const toggle = (id) => setChecked((c) => c.includes(id) ? c.filter((x) => x !== id) : [...c, id]);
 
+  const [installing, setInstalling] = useState("");   // message while a background install runs
+
   async function run(kind) {
     if (!checked.length) { setErr("Select one or more hosts first."); return; }
-    const label = kind === "security" ? "Install security updates"
-      : kind === "all" ? "Install all updates" : "Reboot host";
-    const prompt = kind === "reboot" ? "Reboot the selected hosts now?"
-      : `${label} on ${checked.length} host(s)? This runs the package manager and can take a while.`;
-    if (!window.confirm(prompt)) return;
-    setBusy(kind); setErr(""); setResults(null);
+    if (kind === "reboot") {
+      if (!window.confirm("Reboot the selected hosts now?")) return;
+      setBusy("reboot"); setErr(""); setResults(null);
+      try { const r = await api.fleet("reboot", checked); setResults({ label: "Reboot host", rows: r.results || [] }); load(1); }
+      catch (e) { setErr(e.message); } finally { setBusy(""); }
+      return;
+    }
+    // Installs run in the BACKGROUND (a package upgrade can take minutes — a
+    // synchronous call would just spin). Kick it, then poll the counts.
+    const label = kind === "security" ? "security updates" : "all updates";
+    if (!window.confirm(`Install ${label} on ${checked.length} host(s)? This runs in the background; counts refresh as it completes.`)) return;
+    setBusy(kind); setErr(""); setResults(null); setInstalling("");
     try {
-      let r;
-      if (kind === "security") r = await api.runTool("sec_install_updates", checked, {});
-      else if (kind === "all") r = await api.runTool("pkg_update", checked, { names: "" });
-      else r = await api.fleet("reboot", checked);
-      setResults({ label, rows: r.results || [] });
-      load(1);   // re-scan so counts reflect the change
+      const r = await api.fleetInstall(checked, kind);
+      setInstalling(`Installing ${label} on ${r.hosts || checked.length} host(s) in the background… counts update as hosts finish.`);
+      // Poll for a few minutes so the table reflects the drop without a manual rescan.
+      let n = 0;
+      const t = setInterval(() => { n += 1; load(1); if (n >= 30) { clearInterval(t); setInstalling(""); } }, 15000);
     } catch (e) { setErr(e.message); }
     finally { setBusy(""); }
   }
@@ -91,6 +98,7 @@ export default function Updates({ role }) {
       </div>
 
       {err && <div className="error-box">{err}</div>}
+      {installing && <div className="ok-text" style={{ marginBottom: 10 }}>⏳ {installing}</div>}
 
       {canAct && (
         <div className="row" style={{ gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>

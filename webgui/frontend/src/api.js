@@ -130,6 +130,7 @@ export const api = {
   checkin: (targets = []) => req("/api/checkin", { method: "POST", body: { targets } }),
   fleetUpdates: (refresh = 0, live = 0) =>
     req("/api/fleet-updates" + (live ? "?refresh=1&live=1" : refresh ? "?refresh=1" : "")),
+  fleetInstall: (targets, kind) => req("/api/fleet-updates/install", { method: "POST", body: { targets, kind } }),
   schedules: () => req("/api/schedules"),
   scheduleCreate: (body) => req("/api/schedules", { method: "POST", body }),
   scheduleUpdate: (id, body) => req(`/api/schedules/${encodeURIComponent(id)}`, { method: "PATCH", body }),

@@ -1055,6 +1055,33 @@ def schedules_run_now(job_id: str, user: str = Depends(require_operator)):
 _start_scheduler()
 
 
+class InstallUpdatesRequest(BaseModel):
+    targets: list[str] = []       # host ids; empty = all
+    kind: str = "security"        # "security" | "all"
+
+
+@app.post("/api/fleet-updates/install")
+def fleet_updates_install(body: InstallUpdatesRequest, user: str = Depends(require_operator)):
+    """Kick a fleet update install in the BACKGROUND and return immediately — a
+    package upgrade can run for minutes, so it must not block the request (that's
+    what made the Update-Hosts install 'spin forever'). Dispatched as root
+    (tokenless), so it needs no operator sudo password. The UI polls
+    /api/fleet-updates to watch the counts drop; the cache is invalidated when the
+    install finishes so the next scan re-sweeps."""
+    action = "all_updates" if body.kind == "all" else "security_updates"
+    job = {"action": action, "targets": list(body.targets or [])}
+
+    def work():
+        try:
+            _run_scheduled_job(job)
+        finally:
+            _UPDATES_CACHE["ts"] = 0   # force a fresh sweep on the next poll
+
+    import threading
+    threading.Thread(target=work, name="sysible-fleet-install", daemon=True).start()
+    return {"started": True, "kind": body.kind, "hosts": len(body.targets or [])}
+
+
 # ----------------------------------------------------------------------
 # Alerting: evaluate rules against the sweeps and notify on threshold crossings.
 # ----------------------------------------------------------------------

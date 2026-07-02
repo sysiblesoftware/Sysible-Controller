@@ -1614,7 +1614,7 @@ def catalog():
     for a in _ACTIONS.values():
         by_tool.setdefault(a.tool, []).append({
             "name": a.name,
-            "label": a.label,
+            "label": (a.label[:1].upper() + a.label[1:]) if a.label else a.label,
             "description": a.description,
             "danger": a.danger,
             "tab": a.tab,

@@ -10,13 +10,12 @@ Sysible Controller is a self-hosted infrastructure management console for Linux 
 
 ## Overview
 
-Sysible Controller is made up of a backend and **two interchangeable front ends** — use whichever fits the machine you're sitting at:
+Sysible Controller is made up of a backend and a browser-based console:
 
 - A **FastAPI backend** that runs as a systemd service on the controller machine, holding the fleet's inventory, credentials, and task queue in a local SQLite database.
-- A **PySide6 desktop GUI** that an administrator runs locally to drive that backend over HTTPS.
-- A **browser-based web console** (a React single-page app served by its own `sysible-webgui` service) that delivers the same dashboard, tools, and terminals from any browser on the network — so the controller can live on a headless server with no desktop session, and administrators can work from Windows, macOS, or a locked-down workstation. The web console has **full feature parity** with the desktop GUI (all 18 tools, 323 actions, the live terminals, file transfer, and the activity feed).
+- A **browser-based web console** (a React single-page app served by its own `sysible-webgui` service) that delivers the dashboard, tools, and live terminals from any browser on the network — so the controller can live on a headless server with no desktop session, and administrators can work from Windows, macOS, Linux, or a locked-down workstation.
 
-Both front ends talk to the same backend and enforce the same roles, run-as identity, and audit trail, so nothing about how you manage the fleet changes between them — only where you launch it from.
+The console talks to the backend over HTTPS and enforces the fleet's roles, run-as identity, and audit trail.
 
 ![The Sysible Controller dashboard with its task search box and tool tiles](docs/screenshots/screenshot_dashboard.png)
 
@@ -33,16 +32,13 @@ Both paths feed the exact same fleet-wide tools, so day to day you don't think a
 
 **Every action runs as the administrator who triggered it.** When the operator logged in as `alice` runs a command, the agent executes it as the local `alice` account on the target host (`runuser -u alice`), with exactly that user's sudo rights — not as a faceless root daemon. Privileged steps are tried unprivileged first (so reads succeed without sudo), then escalated only when the OS reports a privilege error. The run-as identity is derived from the administrator's signed login token on the controller, never from anything the client can spoof, so the host's own sudo policy and audit trail stay meaningful. Hosts whose sudo requires a password are fully supported too — see **Sudo modes** below.
 
-A separate, optional **Webserver Portal** gives host operators — not Sysible administrators — a self-service way to grab the agent bundle or exchange files with the controller from a browser, without ever needing GUI or shell access.
+A separate, optional **Webserver Portal** gives host operators — not Sysible administrators — a self-service way to grab the agent bundle or exchange files with the controller from a browser, without ever needing shell access.
 
-## Two ways in: desktop GUI or browser console
+## The web console
 
-The controller exposes the same administrative experience through two front ends, and you can run either or both:
+Sign in at `https://<controller>:8800/` (start it with `sysible_controller webgui start`) with any controller administrator account, and you get the dashboard tiles, the tools with grouped actions and per-host results, multiple live terminals (xterm.js) per host, file upload/download, the activity feed, and the dark/light theme toggle. Multi-host results are **scannable at fleet scale**: each host collapses to a one-line summary (status dot + a one-line verdict such as `HEALTH: OK`), grouped by environment, with a "N hosts · X ok · Y need attention" header, an **Only problems** filter, and a host/output search — OK hosts collapsed, problem hosts expanded and sorted first.
 
-- **Desktop GUI** (`sysible_controller gui`) — the native PySide6 client. Best when you're sitting at the controller or a Linux workstation with a desktop session. Minimizes to a tray icon; the backend keeps running whether or not the GUI is open.
-- **Web console** (`sysible_controller webgui start`, then browse to `https://<controller>:8800/`) — a React single-page app served by the dedicated `sysible-webgui` service. Best for headless controllers and for administrators on Windows/macOS or restricted machines. Sign in with any controller administrator account and you get the same dashboard tiles, the same 18 tools with the same grouped actions and per-host results, multiple live terminals (xterm.js) per host, file upload/download, the superuser activity feed, and the dark/light theme toggle. Multi-host results are **scannable at fleet scale**: each host collapses to a one-line summary (status dot + a one-line verdict such as `HEALTH: OK`), with a "N hosts · X ok · Y need attention" header, an **Only problems** filter, and a host/output search — OK hosts collapsed, problem hosts expanded and sorted first.
-
-Under the hood the web console is a **backend-for-frontend (BFF)**: the `sysible-webgui` service reuses the desktop client's exact Python command-builders and dispatch logic, so the browser and the desktop always run the *identical* command for a given action. The controller's admin API key stays server-side and never reaches the browser; the browser authenticates with a signed, http-only session cookie. Every action still runs as the administrator who triggered it (the run-as model below applies unchanged), and the activity log attributes it to them. See [`webgui/README.md`](webgui/README.md) for the web console's architecture, environment variables, and reverse-proxy/TLS guidance.
+Under the hood the console is a **backend-for-frontend (BFF)**: the `sysible-webgui` service builds every command from shared Python command-builders and dispatch logic. The controller's admin API key stays server-side and never reaches the browser; the browser authenticates with a signed, http-only session cookie. Every action runs as the administrator who triggered it (the run-as model below applies), and the activity log attributes it to them. See [`webgui/README.md`](webgui/README.md) for the console's architecture, environment variables, and reverse-proxy/TLS guidance.
 
 ## Why Sysible Controller
 
@@ -60,8 +56,8 @@ What that buys you in practice:
 - **Self-service without handing out admin access.** The Webserver Portal lets a host owner fetch their own agent bundle or drop off a file without ever touching the admin GUI, SSH, or a credential that could be used for anything else.
 - **Cross-distro by design.** The installer and every package/repository action detect `dnf`, `yum`, `zypper`, or `apt-get` at the moment they run, so a mixed RHEL/SUSE/Debian fleet is one fleet, not three separate runbooks.
 - **Find any action by name.** A search box on the dashboard matches plain-language tasks — "create a user", "add a repository", "open a firewall port" — and jumps straight to the right tool (and, for User & Group Administration, the right tab), so you never have to remember which of the eighteen System Administration tools owns it.
-- **Dark or light, your call.** A header toggle switches the entire interface between a dark and a light theme on the fly — every open window or page re-skins immediately, no restart — and remembers the choice for next time. (Works in both the desktop GUI and the browser console.)
-- **Desktop app or browser, same console.** Run the native desktop GUI on a workstation, or point a browser at the controller's web console — including from machines that can't run the desktop client at all (Windows, macOS, or a headless server with no desktop session). Same tools, same buttons, same security model; see *Two ways in* below.
+- **Dark or light, your call.** A header toggle switches the entire interface between a dark and a light theme on the fly — every page re-skins immediately, no restart — and remembers the choice for next time.
+- **Browser-based, works anywhere.** Point any modern browser at the controller's web console — including from machines that couldn't run a native client (Windows, macOS, or a headless server with no desktop session). The controller itself needs no desktop environment.
 
 ## Key capabilities
 
@@ -135,7 +131,7 @@ The terminal's *Send sudo password* button on Sysible Connect is itself **opt-in
 - **Admin API key** — every GUI-to-backend call is gated by a single key issued at install time.
 - **Per-administrator login tokens** — logging in issues a signed, expiring token; the action's run-as identity is derived from that token, so dispatch identity can't be forged by the client.
 - **Role-gated sensitive surfaces** — administrator management, the controller/agent software updates, the Webserver Portal controls, the controller's TLS-certificate install, and the Live Activity & Controller Log views require a **Superuser** token; the backend enforces the role server-side, not just in the GUI.
-- **Read-only Auditor role** — an auditor can view the dashboard, posture/compliance, performance, and the activity log but **cannot act**: the controller refuses to queue any host task for an auditor token, the web BFF rejects every write/dispatch route (run a tool, fleet actions, file transfer, the terminal websocket, …), and the desktop GUI refuses auditor login outright. Oversight without a path to act.
+- **Read-only Auditor role** — an auditor can view the dashboard, posture/compliance, performance, and the activity log but **cannot act**: the controller refuses to queue any host task for an auditor token, the web BFF rejects every write/dispatch route (run a tool, fleet actions, file transfer, the terminal websocket, …). Oversight without a path to act.
 - **System-critical path guard** — deleting, unmounting, or removing the fstab entry of a critical system file/mount (`/`, `/etc`, `/etc/fstab`, `/boot`, `/usr`, …) is **blocked for sysadmins** and requires an explicit **superuser confirmation**; a backstop in the command builders refuses it regardless of which front end (or a crafted request) asks.
 - **Sudo-on-Connect is opt-in** — the terminal's *Send sudo password* button is granted per administrator by a superuser (off by default), enforced server-side in the web console.
 - **Login throttling** — repeated failed administrator logins are rate-limited and briefly lock out, blunting password-guessing.
@@ -157,7 +153,6 @@ For the full trust model, controls, and deployment guidance (firewalling the con
 
 - A Linux controller host running **Debian/Ubuntu**, **RHEL/CentOS/Fedora**, or **openSUSE/SLES**, with root access for installation.
 - Python 3, provisioned automatically by the installer along with the rest of the system package list.
-- **For the desktop GUI:** a desktop environment on the controller (or any machine you copy the GUI to) to run the PySide6 client — see the application menu launcher below for getting back into it without a terminal. *Not required* if you only use the web console.
 - **For the web console:** Node.js 18+ to build the front end — the installer installs it from your distro (`apt`/`dnf`/`zypper`); it's **build-time only**, so once `webgui/frontend/dist/` exists no Node is needed at run time. Plus any modern browser on a machine that can reach the controller. No desktop environment is needed on the controller itself. (On a distro with no suitable Node package, install Node 18+ from [NodeSource](https://github.com/nodesource/distributions), then `sudo sysible_controller webgui restart` to build.)
 - Managed hosts need either outbound network access for the Sysible agent, or SSH access for the SSH-managed path. The host agent itself only depends on the `requests` library.
 
@@ -170,9 +165,9 @@ sudo sysible_controller start          # the controller backend (systemd: sysibl
 sudo sysible_controller webgui start   # the browser console  (systemd: sysible-webgui)
 ```
 
-The installer detects your package manager, deploys the project to `/opt/sysible`, sets up a Python virtual environment, generates a self-signed TLS certificate and admin API key, and installs two systemd services — the API backend as **`sysible-backend`** (HTTPS on port 9000) and the browser console as **`sysible-webgui`** (HTTPS on port 8800). It also installs the `sysible_controller` CLI, installs Node.js/npm and builds the web console front end, installs an RDP client (FreeRDP — `xfreerdp`) for Sysible Connect's "RDP To A Windows Host" action, and — on a machine with a desktop environment — adds a **Sysible Controller** entry to the application menu using the same logo shown throughout the GUI.
+The installer detects your package manager, deploys the project to `/opt/sysible`, sets up a Python virtual environment, generates a self-signed TLS certificate and admin API key, and installs two systemd services — the API backend as **`sysible-backend`** (HTTPS on port 9000) and the browser console as **`sysible-webgui`** (HTTPS on port 8800). It also installs the `sysible_controller` CLI, installs Node.js/npm and builds the web console front end, and installs an RDP client (FreeRDP — `xfreerdp`) for Sysible Connect's "RDP To A Windows Host" action.
 
-The backend, the web console, and the desktop GUI are **separate, independently started** pieces: `sysible_controller start` brings up only the backend, `sysible_controller webgui start` brings up the browser console, and `sysible_controller gui` launches the desktop client (it needs a desktop session). Start whichever you need.
+The backend and the web console are **separate, independently started** pieces: `sysible_controller start` brings up only the backend, and `sysible_controller webgui start` brings up the browser console.
 
 ### Updating
 
@@ -193,57 +188,9 @@ The order matters: *Update controller* first (so the controller holds the new ag
 
 ## First launch — your administrator account
 
-Administrator accounts are shared between both front ends: the **same** account logs you into the desktop GUI and the web console. There are two ways the first account comes to exist, depending on how you first sign in:
+The installer **seeds a default superuser** named `admin` on a fresh install (only when no administrator exists yet) with a randomly generated one-time password. That password is printed **once, in red, at the end of the install output** — copy it then. Log in to the web console at `https://<controller>:8800/` as `admin` with that password, then change it immediately under **Settings → My Account**. If administrators already existed at install time, no default is seeded; create or reset a login with `sudo sysible_controller reset-admin` (see CLI reference), which prints a fresh password the same way.
 
-**Web console (and the usual fresh-install path).** Because a browser can't be walked through an interactive first-run setup the way the desktop app can, the installer **seeds a default superuser** named `admin` on a fresh install (only when no administrator exists yet) with a randomly generated one-time password. That password is printed **once, in red, at the end of the install output** — copy it then. Log in to the web console at `https://<controller>:8800/` as `admin` with that password, then change it immediately under **Settings → My Account**. If administrators already existed at install time, no default is seeded; create or reset a web-console login with `sudo sysible_controller reset-admin` (see CLI reference), which prints a fresh password the same way.
-
-**Desktop GUI, with no admin yet.** If you start the desktop GUI while *no* administrator account exists at all (for example, the seed was skipped because Node/Python steps didn't run, or every admin was later removed), it shows a **Create Administrator Account** screen instead of a login: pick a username and password (entered twice) and you're logged straight in — no `admin`/`admin`, no separate "now change your password" step. The password must satisfy the Administrator Password Policy in effect.
-
-Either way, the first account is a **Superuser** — it can manage other administrators and see the live activity/controller logs. When a superuser later adds another administrator from Sysible Controller Settings, they pick that account's **role** (Superuser, Sysadmin, or read-only Auditor); the new account gets a temporary password and is required to set its own on first login. A superuser can also **reset another administrator's password** from Settings → Administrators (no need to know the old one); that account is then required to change it at next login.
-
-## Getting back in
-
-Closing the dashboard window doesn't stop anything — it minimizes to a system tray icon, and the backend keeps running as a systemd service regardless. If the GUI process has fully exited (tray dismissed, "Quit" chosen, or the window manager has no tray support), there are two ways back in:
-
-```bash
-sudo sysible_controller gui
-```
-
-or, with no terminal at all, click the **Sysible Controller** icon in your application menu — it prompts graphically for the admin/root password and reopens the dashboard against the already-running backend.
-
-## Remote GUI access over SSH (PuTTY / X11)
-
-The Sysible Controller GUI is a Linux desktop application. Rather than install it on a Windows workstation, an admin can run it **on the controller** and have its window appear on their own machine over SSH X11 forwarding — the GUI runs where it already lives, only the display is forwarded.
-
-![The Sysible Controller GUI running on a Windows desktop over SSH X11 forwarding — PuTTY plus a local X server (VcXsrv), no Windows install of the client](docs/screenshots/screenshot_remote_gui_x11.png)
-
-> The Sysible Controller administrator login, forwarded from the controller to a Windows desktop with PuTTY's X11 forwarding and a local X server (VcXsrv) — `sysible_controller gui` run over the PuTTY session, no client installed on Windows.
-
-This is **opt-in** and off by default (a base install never alters the controller's SSH configuration). To turn it on:
-
-```bash
-sudo sysible_controller enable-remote-gui
-```
-
-That installs `xauth`, installs the Qt `libxcb-cursor0` / `xcb-util-cursor` library the GUI needs, sets `X11Forwarding yes` in `/etc/ssh/sshd_config` (backing the file up first), and reloads sshd. Then, from a **Windows** admin's machine:
-
-1. Install and start an X server — **VcXsrv** or **X410** — on **display 0** ("Multiple windows", "Disable access control"), and leave it running. (Or use **MobaXterm**, which bundles an X server and SSH client together and needs no separate X-server setup.)
-2. In **PuTTY**: *Connection → SSH → X11 → tick "Enable X11 forwarding"*, then open a session to the controller as a normal admin user.
-3. At the shell, run `sysible_controller gui` — **not** with `sudo`. The Sysible window opens on the Windows desktop. Keep the PuTTY session open while you use it — closing it closes the forwarded window.
-
-From **Linux/macOS**, the equivalent is `ssh -Y user@<controller>` then `sysible_controller gui` (macOS needs **XQuartz** running locally).
-
-Run `sudo sysible_controller disable-remote-gui` to turn it back off. Note this forwards Sysible's *own* GUI from the controller; it is independent of the "RDP To A Windows Host" action, which connects your local machine directly to a Windows host.
-
-**Troubleshooting.** Before launching the GUI, confirm forwarding is live: `echo $DISPLAY` should print `localhost:10.0` (not empty, and not `:0` — `:0` is the controller's own console, the wrong screen), and `xeyes` should open a window. Common pitfalls:
-
-| Symptom | Cause / fix |
-|---|---|
-| `echo $DISPLAY` is empty | Forwarding not requested — reconnect with `ssh -Y` (or tick PuTTY's X11 box). You must open a *new* session. |
-| `DISPLAY` is `:0` | Don't set `DISPLAY` by hand; let sshd set it. Remove any `export DISPLAY=:0` from your shell profile. |
-| `PuTTY X11 proxy: ... Connection refused` | No X server running on Windows — start VcXsrv on **display 0**. |
-| `PuTTY X11 proxy: No authorisation provided` | You ran the GUI with `sudo` (root has no X cookie). Run `sysible_controller gui` as your **own user**. |
-| `Could not load the Qt platform plugin "xcb"` / `libxcb-cursor0 is needed` | Missing GUI dependency — `enable-remote-gui` now installs it; otherwise `sudo apt-get install -y libxcb-cursor0` (or `dnf install -y xcb-util-cursor`). |
+The first account is a **Superuser** — it can manage other administrators and see the live activity/controller logs. When a superuser later adds another administrator from Sysible Controller Settings, they pick that account's **role** (Superuser, Sysadmin, or read-only Auditor); the new account gets a temporary password and is required to set its own on first login. A superuser can also **reset another administrator's password** from Settings → Administrators (no need to know the old one); that account is then required to change it at next login.
 
 ## Logging out
 
@@ -259,31 +206,28 @@ sysible_controller {start|stop|restart|status|logs|gui|webgui|reset-admin|enable
 
 | Command | Root? | What it does |
 |---|---|---|
-| `start` | Yes | Starts the **backend** service and confirms the API is reachable. (The web console and desktop GUI are separate — start them on their own.) |
-| `stop` | Yes | Stops the web console, the desktop GUI, the backend, the portal, and anything still bound to the backend's port. |
+| `start` | Yes | Starts the **backend** service and confirms the API is reachable. (The web console is separate — start it on its own.) |
+| `stop` | Yes | Stops the web console, the backend, the portal, and anything still bound to the backend's port. |
 | `restart` | Yes | `stop` then `start`. |
-| `status` | No | Backend systemd status, plus desktop GUI process state and web console state. |
+| `status` | No | Backend systemd status plus web console state. |
 | `logs` | No | Tails the backend's live log stream. |
-| `gui` | Yes | Starts only the desktop GUI — the way back in described above. Needs a desktop session, or an SSH X11 session (see **Remote GUI access over SSH** above). |
 | `webgui {start\|stop\|restart\|status\|logs}` | Yes (start/stop/restart) | Controls the browser console's `sysible-webgui` service independently of the backend. `start` builds the front end if needed and serves it over HTTPS on port 8800; `restart` stops then starts it (picking up new code); `status`/`logs` report on it. |
 | `reset-admin [username] [password]` | Yes | Sets (or creates) a web-console administrator's password and prints it once in red. Use when the install-time default was skipped (admins already existed) or a password was lost. Username defaults to `admin`; the password is generated if omitted. The account must change it at next login. |
-| `enable-remote-gui` | Yes | Turns on SSH X11 forwarding (installs `xauth` + `libxcb-cursor0`, sets `X11Forwarding yes`, reloads sshd) so admins can run the desktop GUI over SSH/PuTTY. Opt-in; a base install does not change sshd. |
-| `disable-remote-gui` | Yes | Reverts the above (`X11Forwarding no`, reloads sshd). |
 | `destroy [--purge]` | Yes | Irreversible uninstall. Requires typing `destroy` to confirm; stops and disables both the `sysible-backend` and `sysible-webgui` services, backs up the database to `/tmp` first, and never touches already-enrolled hosts. `--purge` additionally removes the leftover `/tmp` database backups and the source checkout the installer was run from. |
 
 ## Documentation
 
-For a fast visual tour, the [`Sysible_Controller_Quickstart.html`](Sysible_Controller_Quickstart.html) guide gives a screenshot and a three-step how-to for every screen.
+The full administrator and user guide lives in [`Sysible_Controller_Documentation.html`](Sysible_Controller_Documentation.html) and [`Sysible_Controller_Quickstart.html`](Sysible_Controller_Quickstart.html).
 
-The full administrator and user guide — installation walkthrough, every screen with an accurate screenshot, and a numbered recipe for every button in the product — lives in [`Sysible_Controller_Documentation.html`](Sysible_Controller_Documentation.html).
+> **Note:** these HTML guides predate the web-console-only redesign — they still show the old desktop client and don't yet cover the newer web features (patch management, scheduler, alerting). They are being regenerated from the current web console.
 
 ## Project structure
 
 ```
 backend/        FastAPI service: routes, models, services, the SQLite layer (db.py), and the Webserver Portal app
-client/         PySide6 desktop GUI: the dashboard and every popout page
-webgui/         Browser web console — a BFF (server.py) that reuses client.* command-builders,
-                an action registry (actions.py), and a React single-page app (frontend/)
+client/         Shared command-builder + dispatch library (api.py, _api_*.py) reused by the web console
+webgui/         Browser web console — a BFF (server.py) that builds commands via client.*,
+                an action registry (actions.py), a scheduler + alerting, and a React single-page app (frontend/)
 host_agent/     The lightweight agent installed on managed hosts (bundled separately, requests-only)
 tools/          Standalone maintenance scripts
 install_sysible.sh   Installer (sets up the sysible-backend and sysible-webgui services)

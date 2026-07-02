@@ -556,7 +556,7 @@ export default function Performance() {
             {zoom ? (
               <button className="btn sm" onClick={() => setZoom(null)} title="Show the full window"
                       style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                ⤢ {fmtClock(vt0)}–{fmtClock(vt1)} · reset zoom
+                ⤢ {fmtClock(vt0)}–{fmtClock(vt1)} · Reset zoom
               </button>
             ) : (
               <span className="faint" style={{ fontSize: 11 }}>drag a chart to zoom</span>
@@ -661,7 +661,7 @@ export default function Performance() {
                     ))}
                   </div>
                   {zoom
-                    ? <button className="btn sm" onClick={() => setZoom(null)}>⤢ reset zoom</button>
+                    ? <button className="btn sm" onClick={() => setZoom(null)}>⤢ Reset zoom</button>
                     : <span className="faint" style={{ fontSize: 11 }}>drag to zoom</span>}
                   <button className="btn ghost sm" onClick={() => setFocus(null)}>Close ✕</button>
                 </div>

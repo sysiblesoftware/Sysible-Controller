@@ -1,15 +1,16 @@
-# Sysible Web GUI
+# Sysible Web Console
 
-A browser-based front end to the Sysible Controller, for Windows (and
-any) machines that can't run the PySide6 desktop client but can reach
-the controller over the network.
+The browser-based console for the Sysible Controller — reachable from any
+machine on the network, including Windows/macOS and headless servers with
+no desktop environment.
 
-It is a **separate service** from the controller and the desktop app. It
-runs as its own process on its own port (`sysible-webgui`, HTTPS on 8800
-by default), reuses the desktop client's existing Python logic, and
-serves a React single-page app. It has **full feature parity** with the
-desktop GUI — all 18 tools, every action, the live terminals, file
-transfer, the superuser activity feed, and the dark/light theme toggle.
+It is a **separate service** from the controller backend. It runs as its
+own process on its own port (`sysible-webgui`, HTTPS on 8800 by default),
+builds every command from the shared Python command-builder library
+(`client/api.py` + `client/_api_*.py`), and serves a React single-page
+app: the dashboard, all the tools with grouped actions, live terminals,
+file transfer, the activity feed, patch/update management, a scheduler,
+alerting, and the dark/light theme toggle.
 
 On a normal install you don't run any of the commands below by hand: the
 installer (`install_sysible.sh`) builds the front end, installs the
@@ -40,11 +41,11 @@ sudo sysible_controller reset-admin       # set/reset a web-console login passwo
  Sysible Controller API  ◄─────────────────────────────────────────┘
 ```
 
-Why a BFF rather than a JS rewrite: the desktop tools are hundreds of
+Why a BFF rather than a JS rewrite: the command-builders are hundreds of
 pure-Python `cmd_*` functions that build exact shell strings, plus a
 dispatch layer that hides "agent task queue vs. synchronous SSH exec."
 The browser sends `{action, params, targets}`; the server builds the
-**same** command the desktop would and dispatches it. The two front ends
+**same** command it always would and dispatches it. The builders and the SPA
 stay in lockstep, and the controller API key never reaches the browser.
 
 ---
@@ -54,9 +55,9 @@ stay in lockstep, and the controller API key never reaches the browser.
 - The Sysible Controller running and reachable.
 - This service runs in (or alongside) the controller's Python
   environment so `import client.*` works and the controller API key +
-  base URL are available the same way the desktop app reads them:
+  base URL are available the same way client.api reads them:
   - `SYSIBLE_API_BASE_URL` (e.g. `https://controller.local:8000`)
-  - `SYSIBLE_API_KEY` **or** the on-disk key file the desktop client uses
+  - `SYSIBLE_API_KEY` **or** the on-disk key file client.api uses
   - `SYSIBLE_CA_CERT` if the controller uses a pinned TLS cert
 - Node.js 18+ to build the front end (build-time only; not needed at run
   time once `dist/` exists).
@@ -91,7 +92,7 @@ uvicorn server:app --host 0.0.0.0 --port 8800
 ```
 
 Open `https://<this-host>:8800/` and sign in with a controller administrator
-account — the **same accounts** the desktop app uses (administrators are stored
+account — the **same** controller administrator accounts (administrators are stored
 once on the controller and shared by both front ends).
 
 On a fresh install the installer seeds a default superuser named `admin` and
@@ -103,14 +104,14 @@ password the same way and flags the account to change it at next login. A
 superuser can also reset any other administrator's password from
 **Settings → Administrators** without knowing the old one.
 
-### Identity & run-as (same model as the desktop)
+### Identity & run-as
 
 Signing in issues a signed login token; the BFF encrypts that token into the
 session cookie with a server-side key, so it survives a service restart, is
 never stored in the clear, and is never echoed back to the browser. Every
 action and terminal the browser runs is dispatched **as the administrator who
 is signed in** — the controller derives the run-as Linux user from the token
-(`runuser -u <admin>` on agent hosts), exactly as the desktop client does, so
+(`runuser -u <admin>` on agent hosts), exactly as client.api does, so
 the host's own sudo policy and audit trail stay authoritative and the activity
 feed attributes each action to the right person. Password ("become") sudo is
 supported: each administrator stores their own sudo password (encrypted at rest
@@ -128,7 +129,7 @@ on the controller) from the header's **Sudo Password** button, and it's fed to
 | `SYSIBLE_WEBGUI_LOGIN_WINDOW`  | Lockout/counting window in seconds (default 300). |
 | `SYSIBLE_WEBGUI_TASK_TIMEOUT`  | Seconds to wait for an agent task result (default 60). |
 | `SYSIBLE_WEBGUI_NOBUILD`       | `1` to skip the front-end build on start (serve the existing `dist/` as-is). |
-| `SYSIBLE_API_BASE_URL`, `SYSIBLE_API_KEY`, `SYSIBLE_CA_CERT` | Controller connection — read by `client.api`, same as the desktop app. |
+| `SYSIBLE_API_BASE_URL`, `SYSIBLE_API_KEY`, `SYSIBLE_CA_CERT` | Controller connection — read by `client.api`. |
 
 ## Updating / redeploying
 
@@ -182,10 +183,10 @@ work without CORS.
 
 ---
 
-## Extending toward full desktop parity
+## Extending the tool catalog
 
 All tool behavior lives in **`webgui/actions.py`**. To expose another
-desktop action in the browser, register an `Action` that points at the
+action in the browser, register an `Action` that points at the
 `cmd_*` builder that already exists in `client/_api_*.py`:
 
 ```python
@@ -208,9 +209,9 @@ Param types the form supports: `text`, `password`, `number`, `select`
 
 ### Current coverage
 
-**Full parity: all 18 desktop tiles, 323 actions, every `cmd_*` builder
+**All 18 tool tiles, 323 actions, every `cmd_*` builder
 wired (100%).** Each action maps to the existing `cmd_*` builder, so the
-web action runs the identical shell command the desktop tool would.
+web action runs the identical shell command every time.
 Highlights:
 
 - **Run Command**, **Service Management**, **User & Group Administration**
@@ -264,7 +265,7 @@ Connection "upgrade";`).
 ## File transfer
 
 The **File Transfer** dashboard tile uploads a local file to a host path
-or downloads a file from a host, reusing the desktop client's SSH
+or downloads a file from a host, reusing the shared client library's SSH
 transfer. Uploads are spooled to a server-side temp file and pushed with
 `upload_file_ssh`; downloads are fetched with `download_file_ssh` and
 streamed back to the browser as an attachment (temp files are cleaned up
@@ -272,5 +273,5 @@ either way). SSH-based, so the host picker lists SSH and agent+SSH hosts.
 
 ## Parity status
 
-The browser GUI now covers the full desktop surface: all 18 tool tiles
+The console covers the full tool surface: all 18 tool tiles
 (every `cmd_*` builder), the Sysible Connect terminal, and file transfer.

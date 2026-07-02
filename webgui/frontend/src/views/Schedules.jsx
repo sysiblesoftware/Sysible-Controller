@@ -16,7 +16,7 @@ export default function Schedules() {
   const [showNew, setShowNew] = useState(false);
 
   const load = useCallback(() => {
-    api.schedules().then((d) => { setJobs(d.schedules || []); setMeta({ actions: d.actions || {}, cadences: d.cadences || [] }); })
+    api.schedules().then((d) => { setJobs(d.schedules || []); setMeta({ actions: d.actions || {}, cadences: d.cadences || [], arg_actions: d.arg_actions || {} }); })
       .catch((e) => setErr(e.message));
     api.hosts().then((d) => setHosts(d.hosts || [])).catch(() => {});
   }, []);
@@ -69,7 +69,8 @@ export default function Schedules() {
               {jobs.map((j) => (
                 <tr key={j.id} style={{ borderTop: "1px solid var(--border)", opacity: j.enabled ? 1 : 0.5 }}>
                   <td style={{ padding: "7px 10px", fontWeight: 600 }}>{j.name}</td>
-                  <td style={{ padding: "7px 10px" }}>{meta.actions[j.action] || j.action}</td>
+                  <td style={{ padding: "7px 10px" }}>{meta.actions[j.action] || j.action}
+                    {j.arg ? <span className="faint" style={{ fontSize: 12 }}> · {j.arg}</span> : null}</td>
                   <td style={{ padding: "7px 10px" }}>{cadenceText(j)}</td>
                   <td style={{ padding: "7px 10px", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                       title={targetsText(j)}>{targetsText(j)}</td>
@@ -102,16 +103,18 @@ export default function Schedules() {
 
 function NewSchedule({ meta, hosts, onDone, onErr }) {
   const actionKeys = Object.keys(meta.actions);
+  const argActions = meta.arg_actions || {};
   const [f, setF] = useState({ name: "", action: actionKeys[0] || "patch_scan",
-    cadence: "daily", at: "02:00", weekday: 0 });
+    arg: "", cadence: "daily", at: "02:00", weekday: 0 });
   const [targets, setTargets] = useState([]);
   const [saving, setSaving] = useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const argLabel = argActions[f.action];
 
   async function save() {
     setSaving(true); onErr("");
     try {
-      await api.scheduleCreate({ name: f.name, action: f.action, targets, cadence: f.cadence,
+      await api.scheduleCreate({ name: f.name, action: f.action, arg: f.arg, targets, cadence: f.cadence,
         at: f.at, weekday: Number(f.weekday), enabled: true });
       onDone();
     } catch (e) { onErr(e.message); } finally { setSaving(false); }
@@ -127,6 +130,11 @@ function NewSchedule({ meta, hosts, onDone, onErr }) {
           <select value={f.action} onChange={(e) => set("action", e.target.value)}>
             {actionKeys.map((k) => <option key={k} value={k}>{meta.actions[k]}</option>)}
           </select></label>
+        {argLabel && (
+          <label className="field" style={{ minWidth: 200 }}><span>{argLabel}</span>
+            <input value={f.arg} onChange={(e) => set("arg", e.target.value)}
+                   placeholder={f.action === "run_command" ? "e.g. dnf -y autoremove" : "e.g. nginx"} /></label>
+        )}
         <label className="field"><span>Cadence</span>
           <select value={f.cadence} onChange={(e) => set("cadence", e.target.value)}>
             {(meta.cadences || []).map((c) => <option key={c} value={c}>{c}</option>)}

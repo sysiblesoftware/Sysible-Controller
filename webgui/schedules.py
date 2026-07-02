@@ -24,8 +24,17 @@ ACTIONS = {
     "posture_scan": "Rescan compliance posture",
     "security_updates": "Install security updates",
     "all_updates": "Install all updates",
+    "clean_pkg_cache": "Clean package cache",
+    "vacuum_journal": "Vacuum journal logs (7 days)",
+    "fstrim": "Trim filesystems (fstrim)",
+    "clear_failed_units": "Clear failed units",
+    "sync_time": "Sync clock now",
+    "restart_service": "Restart a service",
+    "run_command": "Run a shell command",
     "reboot": "Reboot",
 }
+# actions that need a free-text argument -> the field's label.
+ARG_ACTIONS = {"restart_service": "Service name", "run_command": "Command"}
 CADENCES = ("hourly", "daily", "weekly")
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -90,11 +99,13 @@ def _now():
     return time.time()
 
 
-def validate(action, cadence):
+def validate(action, cadence, arg=""):
     if action not in ACTIONS:
         raise ValueError(f"Unknown action: {action}")
     if cadence not in CADENCES:
         raise ValueError(f"Unknown cadence: {cadence}")
+    if action in ARG_ACTIONS and not (arg or "").strip():
+        raise ValueError(f"{ARG_ACTIONS[action]} is required for this action.")
 
 
 def list_jobs():
@@ -105,12 +116,13 @@ def get_job(job_id):
     return next((j for j in _load() if j.get("id") == job_id), None)
 
 
-def create_job(name, action, targets, cadence, at, weekday, created_by):
-    validate(action, cadence)
+def create_job(name, action, targets, cadence, at, weekday, created_by, arg=""):
+    validate(action, cadence, arg)
     job = {
         "id": uuid.uuid4().hex[:12],
         "name": (name or ACTIONS[action]).strip(),
         "action": action,
+        "arg": (arg or "").strip(),
         "targets": list(targets or []),
         "cadence": cadence,
         "at": at or "02:00",
@@ -133,10 +145,10 @@ def update_job(job_id, **fields):
     jobs = _load()
     for j in jobs:
         if j.get("id") == job_id:
-            for k in ("name", "action", "targets", "cadence", "at", "weekday", "enabled"):
+            for k in ("name", "action", "arg", "targets", "cadence", "at", "weekday", "enabled"):
                 if k in fields and fields[k] is not None:
                     j[k] = fields[k]
-            validate(j["action"], j["cadence"])
+            validate(j["action"], j["cadence"], j.get("arg", ""))
             j["next_run"] = compute_next_run(j)
             _save(jobs)
             return j

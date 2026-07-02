@@ -949,10 +949,29 @@ def _run_scheduled_job(job):
         _POSTURE_CACHE["ts"] = now
         return "ok", f"rescanned {len(entries)} host(s)"
 
+    arg = (job.get("arg") or "").strip()
     if action == "security_updates":
         cmd = actions.get("sec_install_updates").build({})
     elif action == "all_updates":
         cmd = actions.get("pkg_update").build({"names": ""})
+    elif action == "clean_pkg_cache":
+        cmd = api.cmd_clean_package_cache()
+    elif action == "vacuum_journal":
+        cmd = api.cmd_vacuum_journal(7)
+    elif action == "fstrim":
+        cmd = api.cmd_fstrim()
+    elif action == "clear_failed_units":
+        cmd = api.cmd_reset_failed_units()
+    elif action == "sync_time":
+        cmd = api.cmd_sync_time_now()
+    elif action == "restart_service":
+        if not arg:
+            return "error", "no service name configured"
+        cmd = api.cmd_service_restart(arg)
+    elif action == "run_command":
+        if not arg:
+            return "error", "no command configured"
+        cmd = arg
     elif action == "reboot":
         cmd = api.cmd_reboot_host()
     else:
@@ -999,6 +1018,7 @@ def _start_scheduler():
 class ScheduleRequest(BaseModel):
     name: str = ""
     action: str
+    arg: str = ""
     targets: list[str] = []
     cadence: str = "daily"
     at: str = "02:00"
@@ -1009,14 +1029,14 @@ class ScheduleRequest(BaseModel):
 @app.get("/api/schedules")
 def schedules_list(user: str = Depends(require_operator)):
     return {"schedules": schedules.list_jobs(), "actions": schedules.ACTIONS,
-            "cadences": list(schedules.CADENCES)}
+            "arg_actions": schedules.ARG_ACTIONS, "cadences": list(schedules.CADENCES)}
 
 
 @app.post("/api/schedules")
 def schedules_create(body: ScheduleRequest, user: str = Depends(require_operator)):
     try:
         job = schedules.create_job(body.name, body.action, body.targets, body.cadence,
-                                   body.at, body.weekday, user)
+                                   body.at, body.weekday, user, arg=body.arg)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return job
@@ -1025,9 +1045,9 @@ def schedules_create(body: ScheduleRequest, user: str = Depends(require_operator
 @app.patch("/api/schedules/{job_id}")
 def schedules_update(job_id: str, body: ScheduleRequest, user: str = Depends(require_operator)):
     try:
-        job = schedules.update_job(job_id, name=body.name, action=body.action, targets=body.targets,
-                                   cadence=body.cadence, at=body.at, weekday=body.weekday,
-                                   enabled=body.enabled)
+        job = schedules.update_job(job_id, name=body.name, action=body.action, arg=body.arg,
+                                   targets=body.targets, cadence=body.cadence, at=body.at,
+                                   weekday=body.weekday, enabled=body.enabled)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not job:

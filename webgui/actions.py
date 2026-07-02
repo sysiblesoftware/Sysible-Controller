@@ -1417,8 +1417,10 @@ _LAYOUT: dict[str, list] = {
         ("Schedule & DR", "Schedule & DR", ["backup_schedule", "backup_test_dr"]),
     ],
     "Certificate Management": [
-        ("Certificates", "Certificates", ["cert_generate_csr", "cert_check", "cert_install", "cert_renew_certbot"]),
-        ("Chain & TLS", "Chain & TLS", ["cert_verify_chain", "cert_troubleshoot_tls"]),
+        # Single-pane (empty tab keys): titled sections, no tab bar — it all fits.
+        ("", "Certificates", ["cert_generate_csr", "cert_check", "cert_install"]),
+        ("", "Let's Encrypt (certbot)", ["cert_install_certbot", "cert_renew_certbot"]),
+        ("", "Chain & TLS", ["cert_verify_chain", "cert_troubleshoot_tls"]),
     ],
     # ---- single-pane tools: no tab bar, just titled group sections ----
     "Service Management": [

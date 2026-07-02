@@ -17,6 +17,11 @@ export default function Alerts() {
   const setEmail = (k, v) => setCfg({ ...cfg, channels: { ...cfg.channels, email: { ...email, [k]: v } } });
   const setWebhook = (k, v) => setCfg({ ...cfg, channels: { ...cfg.channels, webhook: { ...webhook, [k]: v } } });
   const setRule = (k, field, v) => setCfg({ ...cfg, rules: { ...cfg.rules, [k]: { ...cfg.rules[k], [field]: v } } });
+  const custom = cfg.custom_rules || [];
+  const setCustom = (list) => setCfg({ ...cfg, custom_rules: list });
+  const setCustomAt = (i, k, v) => setCustom(custom.map((r, idx) => idx === i ? { ...r, [k]: v } : r));
+  const addCustom = () => setCustom([...custom, { name: "", command: "", regex: "", mode: "present", enabled: true }]);
+  const removeCustom = (i) => setCustom(custom.filter((_, idx) => idx !== i));
 
   async function save() {
     setBusy("save"); setErr(""); setMsg("");
@@ -96,6 +101,40 @@ export default function Alerts() {
             );
           })}
         </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="spread">
+          <strong>Custom rules (regex)</strong>
+          <button className="btn ghost sm" onClick={addCustom}>+ Add rule</button>
+        </div>
+        <p className="faint" style={{ fontSize: 12, marginTop: 6 }}>
+          Run a command on each host and alert on its output. e.g. command
+          <code> journalctl -p err --since -5m </code> with regex <code>error|failed</code>, or a health
+          check with "doesn't match" to alert when the expected output is missing.
+        </p>
+        {custom.length === 0 && <div className="faint" style={{ fontSize: 12 }}>No custom rules.</div>}
+        {custom.map((r, i) => (
+          <div key={i} style={{ borderTop: "1px solid var(--border)", padding: "8px 0" }}>
+            <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <label className="checkrow" style={{ margin: 0 }}>
+                <input type="checkbox" checked={!!r.enabled} onChange={(e) => setCustomAt(i, "enabled", e.target.checked)} /></label>
+              <input style={{ flex: 1, minWidth: 140 }} placeholder="Rule name"
+                     value={r.name || ""} onChange={(e) => setCustomAt(i, "name", e.target.value)} />
+              <select value={r.mode || "present"} onChange={(e) => setCustomAt(i, "mode", e.target.value)}>
+                <option value="present">Alert when output matches</option>
+                <option value="absent">Alert when it doesn't match</option>
+              </select>
+              <button className="btn ghost sm danger" onClick={() => removeCustom(i)}>Remove</button>
+            </div>
+            <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+              <input style={{ flex: 2, minWidth: 220, fontFamily: "monospace" }} placeholder="command, e.g. systemctl is-failed nginx"
+                     value={r.command || ""} onChange={(e) => setCustomAt(i, "command", e.target.value)} />
+              <input style={{ flex: 1, minWidth: 140, fontFamily: "monospace" }} placeholder="regex, e.g. failed"
+                     value={r.regex || ""} onChange={(e) => setCustomAt(i, "regex", e.target.value)} />
+            </div>
+          </div>
+        ))}
       </div>
 
       <div className="row" style={{ gap: 8 }}>

@@ -25,11 +25,20 @@ _DATA_FILE = _RUN_DIR / "webgui_alerts.json"
 RULES = {
     "host_offline":    ("Host offline", False, None),
     "disk_critical":   ("Disk usage ≥ threshold%", True, 90),
+    "mem_high":        ("Memory usage ≥ threshold%", True, 90),
+    "load_high":       ("Load average (1m) ≥ threshold", True, 8),
     "failed_units":    ("Failed systemd units", False, None),
+    "oom_events":      ("OOM (out-of-memory) kills", False, None),
+    "updates_pending": ("Pending updates ≥ threshold", True, 1),
     "security_updates": ("Security updates pending", False, None),
     "reboot_required": ("Reboot required", False, None),
     "cert_expiring":   ("TLS cert expiring < threshold days", True, 30),
+    "firewall_disabled": ("Firewall disabled", False, None),
+    "mac_not_enforcing": ("SELinux/AppArmor not enforcing", False, None),
+    "ssh_root_login":  ("SSH root login enabled", False, None),
+    "time_unsynced":   ("Clock not synchronized", False, None),
 }
+_DEFAULT_ON = ("host_offline", "disk_critical", "failed_units")
 
 
 def _default_config():
@@ -39,9 +48,11 @@ def _default_config():
                       "username": "", "password_enc": "", "from_addr": "", "to_addrs": ""},
             "webhook": {"enabled": False, "url": ""},
         },
-        "rules": {k: {"enabled": k in ("host_offline", "disk_critical", "failed_units"),
-                      "threshold": d} for k, (_l, _t, d) in RULES.items()},
-        "state": {},   # "host_id|rule" -> True while firing
+        "rules": {k: {"enabled": k in _DEFAULT_ON, "threshold": d} for k, (_l, _t, d) in RULES.items()},
+        # Operator-defined regex checks: run `command` on each host, alert when
+        # the output matches (mode "present") or fails to match (mode "absent").
+        "custom_rules": [],   # [{id, name, command, regex, mode, enabled}]
+        "state": {},          # "host_id|rule" -> True while firing
     }
 
 
@@ -56,6 +67,7 @@ def _load():
     for k in RULES:
         if k in cfg.get("rules", {}):
             base["rules"][k].update(cfg["rules"][k])
+    base["custom_rules"] = cfg.get("custom_rules", [])
     base["state"] = cfg.get("state", {})
     return base
 
@@ -94,8 +106,32 @@ def get_config_redacted():
     email = dict(cfg["channels"]["email"])
     email["has_password"] = bool(email.pop("password_enc", ""))
     return {"channels": {"email": email, "webhook": cfg["channels"]["webhook"]},
-            "rules": cfg["rules"], "rule_meta": {k: {"label": l, "has_threshold": t}
-                                                 for k, (l, t, _d) in RULES.items()}}
+            "rules": cfg["rules"], "custom_rules": cfg.get("custom_rules", []),
+            "rule_meta": {k: {"label": l, "has_threshold": t} for k, (l, t, _d) in RULES.items()}}
+
+
+def _sanitize_custom(rules):
+    """Validate operator custom rules; assign ids, drop invalid regexes."""
+    import re
+    import uuid
+    out = []
+    for r in (rules or []):
+        cmd = (r.get("command") or "").strip()
+        rx = (r.get("regex") or "").strip()
+        if not cmd or not rx:
+            continue
+        try:
+            re.compile(rx)
+        except re.error:
+            continue
+        out.append({
+            "id": r.get("id") or uuid.uuid4().hex[:12],
+            "name": (r.get("name") or "custom check").strip(),
+            "command": cmd, "regex": rx,
+            "mode": "absent" if r.get("mode") == "absent" else "present",
+            "enabled": bool(r.get("enabled", True)),
+        })
+    return out
 
 
 def set_config(new):
@@ -114,6 +150,8 @@ def set_config(new):
         if k in new.get("rules", {}):
             cfg["rules"][k].update({kk: new["rules"][k][kk]
                                     for kk in ("enabled", "threshold") if kk in new["rules"][k]})
+    if "custom_rules" in new:
+        cfg["custom_rules"] = _sanitize_custom(new["custom_rules"])
     _save(cfg)
     return get_config_redacted()
 
@@ -138,8 +176,22 @@ def evaluate_rules(cfg, hosts):
             thr = int(rules["disk_critical"].get("threshold", 90))
             if h["disk"] >= thr:
                 add(h, "disk_critical", f"{name} disk at {h['disk']}% (≥ {thr}%)")
+        if rules.get("mem_high", {}).get("enabled") and h.get("mem") is not None:
+            thr = int(rules["mem_high"].get("threshold", 90))
+            if h["mem"] >= thr:
+                add(h, "mem_high", f"{name} memory at {h['mem']}% (≥ {thr}%)")
+        if rules.get("load_high", {}).get("enabled") and h.get("load1") is not None:
+            thr = float(rules["load_high"].get("threshold", 8))
+            if h["load1"] >= thr:
+                add(h, "load_high", f"{name} load {h['load1']} (≥ {thr})")
         if rules.get("failed_units", {}).get("enabled") and (h.get("failed") or 0) > 0:
             add(h, "failed_units", f"{name} has {h['failed']} failed unit(s)")
+        if rules.get("oom_events", {}).get("enabled") and (h.get("oom") or 0) > 0:
+            add(h, "oom_events", f"{name} had {h['oom']} OOM kill(s)")
+        if rules.get("updates_pending", {}).get("enabled") and h.get("total") is not None:
+            thr = int(rules["updates_pending"].get("threshold", 1))
+            if (h["total"] or 0) >= thr:
+                add(h, "updates_pending", f"{name} has {h['total']} pending update(s)")
         if rules.get("security_updates", {}).get("enabled") and (h.get("security") or 0) > 0:
             add(h, "security_updates", f"{name} has {h['security']} pending security update(s)")
         if rules.get("reboot_required", {}).get("enabled") and h.get("reboot"):
@@ -148,7 +200,28 @@ def evaluate_rules(cfg, hosts):
             thr = int(rules["cert_expiring"].get("threshold", 30))
             if h["cert_days"] < thr:
                 add(h, "cert_expiring", f"{name} TLS cert expires in {h['cert_days']} day(s)")
+        for flag, label in (("firewall_disabled", "firewall disabled"),
+                            ("mac_not_enforcing", "SELinux/AppArmor not enforcing"),
+                            ("ssh_root_login", "SSH root login enabled"),
+                            ("time_unsynced", "clock not synchronized")):
+            if rules.get(flag, {}).get("enabled") and h.get(flag) is True:
+                add(h, flag, f"{name}: {label}")
     return firing
+
+
+def custom_match(rule, output):
+    """For a custom rule, return the 'why' string if it should fire against this
+    command output, else None. mode 'present' fires when the regex matches;
+    'absent' fires when it does NOT (a health check that must return something)."""
+    import re
+    try:
+        rx = re.compile(rule.get("regex", ""))
+    except re.error:
+        return None
+    m = rx.search(output or "")
+    if rule.get("mode") == "absent":
+        return "(expected pattern not found)" if not m else None
+    return (m.group(0)[:200] if m else None)
 
 
 def diff_state(cfg, firing):

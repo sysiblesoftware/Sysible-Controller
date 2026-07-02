@@ -1217,7 +1217,8 @@ def _alerts_gather_hosts():
         aid = e["id"] if e["kind"] == "agent" else (e.get("agent_entry") or {}).get("id") if e["kind"] == "merged" else None
         ls = last_seen.get(aid) if aid else None
         online = (bool(ls and (now - ls) <= 20)) if aid else None
-        base = {"id": e.get("id"), "host": e.get("label"), "online": online, "disk": None, "failed": None}
+        base = {"id": e.get("id"), "host": e.get("label"), "online": online,
+                "disk": None, "failed": None, "mem": None, "load1": None, "oom": None}
         if aid is not None and not online:
             base["online"] = False
             return base
@@ -1227,7 +1228,8 @@ def _alerts_gather_hosts():
         r = _dispatch_one(pe, cmd, "command", None, None, None, needs_sudo=False)
         m = _parse_sysmetrics((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
         if m:
-            base.update(online=True, disk=m.get("disk"), failed=m.get("failed"))
+            base.update(online=True, disk=m.get("disk"), failed=m.get("failed"),
+                        mem=m.get("mem"), load1=m.get("load1"), oom=m.get("oom"))
         return base
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
@@ -1236,14 +1238,45 @@ def _alerts_gather_hosts():
     pos = {h.get("id"): h for h in (_POSTURE_CACHE["hosts"] or [])}
     for h in health:
         u = upd.get(h["id"]) or {}
-        h["security"], h["reboot"] = u.get("security"), u.get("reboot")
-        posture = (pos.get(h["id"]) or {}).get("posture") or {}
-        cd = (posture.get("cert") or {}).get("nearest_days")
+        h["security"], h["reboot"], h["total"] = u.get("security"), u.get("reboot"), u.get("total")
+        p = pos.get(h["id"]) or {}
+        flags = p.get("flags") or {}
+        for fl in ("firewall_disabled", "mac_not_enforcing", "ssh_root_login", "time_unsynced"):
+            h[fl] = flags.get(fl) is True
+        cd = ((p.get("posture") or {}).get("cert") or {}).get("nearest_days")
         try:
             h["cert_days"] = int(cd) if cd not in (None, "") else None
         except (TypeError, ValueError):
             h["cert_days"] = None
     return health
+
+
+def _eval_custom_rules(cfg, firing):
+    """Run each enabled custom rule's command on every host and append firings
+    where the regex matches (or is absent, per mode). Appends to `firing`."""
+    import concurrent.futures
+    custom = [r for r in cfg.get("custom_rules", []) if r.get("enabled") and r.get("command") and r.get("regex")]
+    if not custom:
+        return
+    try:
+        entries = dispatch.list_merged_hosts(agent_only=False)
+    except Exception:
+        return
+    pairs = [(r, e) for r in custom for e in entries]
+
+    def check(pair):
+        r, e = pair
+        res = _dispatch_one(e, r["command"], "command", None, None, None, needs_sudo=False)
+        out = (res.get("stdout") or "") + "\n" + (res.get("stderr") or "")
+        why = alerts.custom_match(r, out)
+        if not why:
+            return None
+        return {"key": f"{e.get('id')}|custom:{r['id']}", "host_id": e.get("id"), "host": e.get("label"),
+                "rule": r.get("name") or "custom", "message": f"{e.get('label')}: {r.get('name') or 'custom'} — {why}"}
+
+    if pairs:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(pairs))) as ex:
+            firing.extend([f for f in ex.map(check, pairs) if f])
 
 
 def _alerts_loop():
@@ -1254,9 +1287,12 @@ def _alerts_loop():
             cfg = alerts.load()
             ch = cfg["channels"]
             enabled = ch["email"].get("enabled") or ch["webhook"].get("enabled")
-            if enabled and any(r.get("enabled") for r in cfg["rules"].values()):
-                hosts = _alerts_gather_hosts()
+            has_builtin = any(r.get("enabled") for r in cfg["rules"].values())
+            has_custom = any(r.get("enabled") for r in cfg.get("custom_rules", []))
+            if enabled and (has_builtin or has_custom):
+                hosts = _alerts_gather_hosts() if has_builtin else []
                 firing = alerts.evaluate_rules(cfg, hosts)
+                _eval_custom_rules(cfg, firing)
                 newly, resolved = alerts.diff_state(cfg, firing)
                 lines = [f"NEW: {f['message']}" for f in newly] + \
                         [f"RESOLVED: {r['message']}" for r in resolved]

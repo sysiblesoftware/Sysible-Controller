@@ -132,6 +132,10 @@ export const api = {
   fleet: (action, targets, command, sudoPassword = "") =>
     req("/api/fleet", { method: "POST", body: { action, targets, command, sudo_password: sudoPassword } }),
   checkin: (targets = []) => req("/api/checkin", { method: "POST", body: { targets } }),
+  // Fleet Query — ask one read-only question across the fleet.
+  fleetQueryTypes: () => req("/api/fleet-query/types"),
+  fleetQuery: (qtype, arg, targets = []) =>
+    req("/api/fleet-query", { method: "POST", body: { qtype, arg, targets } }),
   fleetUpdates: (refresh = 0, live = 0) =>
     req("/api/fleet-updates" + (live ? "?refresh=1&live=1" : refresh ? "?refresh=1" : "")),
   fleetInstall: (targets, kind) => req("/api/fleet-updates/install", { method: "POST", body: { targets, kind } }),

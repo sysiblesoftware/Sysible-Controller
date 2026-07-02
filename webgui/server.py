@@ -43,6 +43,7 @@ behind a TLS-terminating reverse proxy. See README.md.
 import asyncio
 import json
 import os
+import re
 import secrets
 import sys
 import tempfile
@@ -2346,6 +2347,105 @@ def run_tool(action_name: str, body: RunRequest, request: Request, user: str = D
             pass
 
     return {"action": action_name, "command": command, "results": results}
+
+
+# ----------------------------------------------------------------------
+# Fleet Query — ask one read-only question across the fleet, get a table.
+# Each query prints a single line `SYSQUERY <value>` (empty value = not
+# present). Args are charset-validated so embedding them in the shell command
+# is injection-safe. Read-only + tokenless (no operator sudo needed for these
+# reads); require_operator (dispatches, so auditor-blocked).
+# ----------------------------------------------------------------------
+_FQ_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+@:-]{0,127}$")
+_FQ_PATH_RE = re.compile(r"^/[A-Za-z0-9 ._/@:+-]{0,255}$")
+
+FLEET_QUERY_TYPES = {
+    "package": {"label": "Package installed", "arg": "Package name", "example": "nginx"},
+    "service": {"label": "Service state", "arg": "Service name", "example": "sshd"},
+    "user":    {"label": "User exists", "arg": "Username", "example": "deploy"},
+    "file":    {"label": "File exists", "arg": "Path", "example": "/etc/nginx/nginx.conf"},
+    "port":    {"label": "Listening on port", "arg": "Port", "example": "443"},
+    "kernel":  {"label": "Kernel version", "arg": "", "example": ""},
+}
+
+
+def _fq_command(qtype, arg):
+    if qtype == "kernel":
+        return "printf 'SYSQUERY %s\\n' \"$(uname -r)\""
+    if qtype in ("package", "service", "user"):
+        if not _FQ_NAME_RE.match(arg):
+            raise ValueError(f"invalid {FLEET_QUERY_TYPES[qtype]['arg'].lower()}")
+    if qtype == "package":
+        return (f"v=''; if command -v dpkg-query >/dev/null 2>&1; then "
+                f"v=$(dpkg-query -W -f='${{Version}}' {arg} 2>/dev/null); "
+                f"elif command -v rpm >/dev/null 2>&1; then "
+                f"v=$(rpm -q --qf '%{{VERSION}}-%{{RELEASE}}' {arg} 2>/dev/null); "
+                f"case \"$v\" in *'is not installed'*) v='';; esac; fi; "
+                f"printf 'SYSQUERY %s\\n' \"$v\"")
+    if qtype == "service":
+        return f"printf 'SYSQUERY %s\\n' \"$(systemctl is-active {arg} 2>/dev/null || echo inactive)\""
+    if qtype == "user":
+        return (f"if id -u {arg} >/dev/null 2>&1; then printf 'SYSQUERY uid=%s\\n' "
+                f"\"$(id -u {arg})\"; else printf 'SYSQUERY \\n'; fi")
+    if qtype == "file":
+        if not _FQ_PATH_RE.match(arg):
+            raise ValueError("invalid path")
+        return f"if [ -e '{arg}' ]; then printf 'SYSQUERY yes\\n'; else printf 'SYSQUERY \\n'; fi"
+    if qtype == "port":
+        if not re.match(r"^[0-9]{1,5}$", arg) or not (1 <= int(arg) <= 65535):
+            raise ValueError("invalid port")
+        return (f"if ss -Hltn 2>/dev/null | awk '{{print $4}}' | grep -qE ':{arg}$'; "
+                f"then printf 'SYSQUERY yes\\n'; else printf 'SYSQUERY \\n'; fi")
+    raise ValueError(f"unknown query type: {qtype}")
+
+
+class FleetQueryRequest(BaseModel):
+    qtype: str
+    arg: str = ""
+    targets: list[str] = []
+
+
+@app.get("/api/fleet-query/types")
+def fleet_query_types(user: str = Depends(require_operator)):
+    return {"types": FLEET_QUERY_TYPES}
+
+
+@app.post("/api/fleet-query")
+def fleet_query(body: FleetQueryRequest, user: str = Depends(require_operator)):
+    """Run one read-only structured query across hosts (all, or a target subset)
+    and return a table: host, environment, value, present."""
+    if body.qtype not in FLEET_QUERY_TYPES:
+        raise HTTPException(status_code=400, detail="Unknown query type.")
+    try:
+        cmd = _fq_command(body.qtype, (body.arg or "").strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    try:
+        all_entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+    tgt = set(body.targets or [])
+    entries = [e for e in all_entries.values() if (not tgt or e["id"] in tgt)]
+    if not entries:
+        raise HTTPException(status_code=400, detail="No matching target hosts.")
+
+    def probe(e):
+        r = _dispatch_one(e, cmd, "command", None, None, None, needs_sudo=False, log=False)
+        val = None
+        for line in (r.get("stdout") or "").splitlines():
+            if line.startswith("SYSQUERY "):
+                val = line[len("SYSQUERY "):].strip()
+                break
+        err = None if val is not None else (r.get("error") or (r.get("stderr") or "no result").strip()[:120] or "no result")
+        return {"host": e.get("label"), "env": e.get("environment") or "Unassigned",
+                "value": val, "present": bool(val), "error": err}
+
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
+        rows = list(ex.map(probe, entries))
+    rows.sort(key=lambda r: (r["env"], r["host"]))
+    return {"qtype": body.qtype, "arg": body.arg, "rows": rows,
+            "count": len(rows), "matched": sum(1 for r in rows if r["present"])}
 
 
 def _parse_filehash(text):

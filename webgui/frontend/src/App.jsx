@@ -12,6 +12,7 @@ import HostDetail from "./views/HostDetail.jsx";
 import Updates from "./views/Updates.jsx";
 import Schedules from "./views/Schedules.jsx";
 import Alerts from "./views/Alerts.jsx";
+import FleetQuery from "./views/FleetQuery.jsx";
 import SudoModal from "./components/SudoModal.jsx";
 import StandaloneTerminal from "./components/StandaloneTerminal.jsx";
 
@@ -23,6 +24,7 @@ const SECTIONS = {
   alerts: "Alerting",
   quickactions: "Quick System Actions",
   sysadmin: "System Administration",
+  fleetquery: "Fleet Query",
   connect: "Sysible Connect",
   live: "Live Activity & Logs",
   settings: "Settings",
@@ -40,6 +42,7 @@ const NAV = [
   { key: "hosts", label: "Host Enrollment", icon: "server", su: true },
   { key: "quickactions", label: "Quick System Actions", icon: "bolt", su: false },
   { key: "sysadmin", label: "System Administration Tools", icon: "tools", su: false },
+  { key: "fleetquery", label: "Fleet Query", icon: "search", su: false },
   { key: "connect", label: "Connect", icon: "terminal", su: false },
   { key: "live", label: "Activity & Logs", icon: "activity", su: true, aud: true },
   { key: "settings", label: "Settings", icon: "cog", su: true },
@@ -57,6 +60,7 @@ const ICONS = {
   download: <><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></>,
   clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
   bell: <><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 0 0 4 0"/></>,
+  search: <><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.8-3.8"/></>,
 };
 
 function NavIcon({ name }) {
@@ -205,6 +209,7 @@ export default function App() {
           {!isAuditor && view === "hosts" && <HostEnrollment />}
           {!isAuditor && view === "settings" && <Settings />}
           {!isAuditor && view === "quickactions" && <ToolRunner solo="Quick System Actions" />}
+          {!isAuditor && view === "fleetquery" && <FleetQuery />}
           {!isAuditor && view === "sysadmin" && <ToolRunner openTool={target?.tool} openTab={target?.tab}
             onConsumed={() => setTarget(null)} />}
           {!isAuditor && view === "connect" && <Connect />}

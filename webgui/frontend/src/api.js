@@ -130,6 +130,11 @@ export const api = {
   checkin: (targets = []) => req("/api/checkin", { method: "POST", body: { targets } }),
   fleetUpdates: (refresh = 0, live = 0) =>
     req("/api/fleet-updates" + (live ? "?refresh=1&live=1" : refresh ? "?refresh=1" : "")),
+  schedules: () => req("/api/schedules"),
+  scheduleCreate: (body) => req("/api/schedules", { method: "POST", body }),
+  scheduleUpdate: (id, body) => req(`/api/schedules/${encodeURIComponent(id)}`, { method: "PATCH", body }),
+  scheduleDelete: (id) => req(`/api/schedules/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  scheduleRunNow: (id) => req(`/api/schedules/${encodeURIComponent(id)}/run-now`, { method: "POST" }),
   restartUnit: (hostId, unit, sudoPassword = "") =>
     req(`/api/host/${encodeURIComponent(hostId)}/restart-unit`,
         { method: "POST", body: { unit, sudo_password: sudoPassword } }),

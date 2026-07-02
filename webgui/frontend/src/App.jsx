@@ -10,6 +10,7 @@ import Settings from "./views/Settings.jsx";
 import HostEnrollment from "./views/HostEnrollment.jsx";
 import HostDetail from "./views/HostDetail.jsx";
 import Updates from "./views/Updates.jsx";
+import Schedules from "./views/Schedules.jsx";
 import SudoModal from "./components/SudoModal.jsx";
 import StandaloneTerminal from "./components/StandaloneTerminal.jsx";
 
@@ -17,6 +18,7 @@ const SECTIONS = {
   hosts: "Host Enrollment",
   perf: "Fleet Performance",
   updates: "Fleet Patch Status",
+  schedules: "Scheduled Jobs",
   quickactions: "Quick System Actions",
   sysadmin: "System Administration",
   connect: "Sysible Connect",
@@ -31,6 +33,7 @@ const NAV = [
   { key: null, label: "Dashboard", icon: "grid", su: false, aud: true },
   { key: "perf", label: "Performance", icon: "chart", su: false, aud: true },
   { key: "updates", label: "Updates", icon: "download", su: false, aud: true },
+  { key: "schedules", label: "Schedules", icon: "clock", su: false },
   { key: "hosts", label: "Host Enrollment", icon: "server", su: true },
   { key: "quickactions", label: "Quick System Actions", icon: "bolt", su: false },
   { key: "sysadmin", label: "System Administration Tools", icon: "tools", su: false },
@@ -49,6 +52,7 @@ const ICONS = {
   cog: <><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></>,
   bolt: <><path d="M13 3L4 14h6l-1 7 9-11h-6z"/></>,
   download: <><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></>,
+  clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
 };
 
 function NavIcon({ name }) {
@@ -189,6 +193,7 @@ export default function App() {
             onOpen={(section, opts) => go(section, opts || null)} />}
           {view === "perf" && <Performance />}
           {view === "updates" && <Updates role={role} />}
+          {!isAuditor && view === "schedules" && <Schedules />}
           {view === "host" && <HostDetail hostId={target?.id} label={target?.label} canAct={!isAuditor}
             onBack={() => (history.length > 0 ? goBack() : go(null))}
             onOpen={(section, opts) => go(section, opts || null)} />}

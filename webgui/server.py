@@ -913,6 +913,148 @@ def fleet_updates(refresh: int = 0, live: int = 0, user: str = Depends(require_l
         return {"hosts": hosts, "cached": False, "ts": now}
 
 
+# ----------------------------------------------------------------------
+# Scheduled fleet jobs (recurring maintenance) — store in webgui/schedules.py,
+# runner thread + executor here (they need the dispatch/actions machinery).
+# Unattended jobs dispatch TOKENLESS (agent root, read-only override), so they
+# run without an operator's stored sudo password (mirrors posture/metrics).
+# ----------------------------------------------------------------------
+from webgui import schedules  # noqa: E402
+
+
+def _run_scheduled_job(job):
+    """Execute one scheduled job across its targets. Returns (status, detail)."""
+    import time as _t
+    action = job.get("action")
+    try:
+        all_entries = dispatch.list_merged_hosts(agent_only=False)
+    except Exception as e:
+        return "error", f"controller unreachable: {e}"
+    tgt = set(job.get("targets") or [])
+    entries = [e for e in all_entries if (not tgt or e.get("id") in tgt)]
+    if not entries:
+        return "error", "no matching target hosts"
+
+    # Scans just refresh the shared caches; no per-host action result.
+    if action == "patch_scan":
+        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+        now = _t.time(); cmd = api.cmd_update_status(refresh=True)
+        _UPDATES_CACHE["hosts"] = [_probe_updates(e, cmd, last_seen, now) for e in entries]
+        _UPDATES_CACHE["ts"] = now
+        return "ok", f"rescanned {len(entries)} host(s)"
+    if action == "posture_scan":
+        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+        now = _t.time(); cmd = _posture_command()
+        _POSTURE_CACHE["hosts"] = [_probe_posture(e, cmd, last_seen, now) for e in entries]
+        _POSTURE_CACHE["ts"] = now
+        return "ok", f"rescanned {len(entries)} host(s)"
+
+    if action == "security_updates":
+        cmd = actions.get("sec_install_updates").build({})
+    elif action == "all_updates":
+        cmd = actions.get("pkg_update").build({"names": ""})
+    elif action == "reboot":
+        cmd = api.cmd_reboot_host()
+    else:
+        return "error", f"unknown action {action}"
+
+    ok = 0
+    for e in entries:
+        # Tokenless (unattended root) + needs_sudo=False: no operator/become needed.
+        r = _dispatch_one(e, cmd, "command", None, None, f"[scheduled] {schedules.ACTIONS.get(action, action)}",
+                          needs_sudo=False)
+        if r.get("ok") or r.get("code") == 0 or (action == "reboot" and not r.get("error")):
+            ok += 1
+    status = "ok" if ok == len(entries) else "error"
+    return status, f"{ok}/{len(entries)} host(s) succeeded"
+
+
+_SCHED_STARTED = False
+
+
+def _scheduler_loop():
+    import time as _t
+    while True:
+        try:
+            for job in schedules.due_jobs():
+                try:
+                    st, detail = _run_scheduled_job(job)
+                except Exception as e:  # never let one job kill the loop
+                    st, detail = "error", str(e)
+                schedules.record_run(job["id"], st, detail)
+        except Exception:
+            pass
+        _t.sleep(30)
+
+
+def _start_scheduler():
+    global _SCHED_STARTED
+    if _SCHED_STARTED:
+        return
+    _SCHED_STARTED = True
+    import threading
+    threading.Thread(target=_scheduler_loop, name="sysible-scheduler", daemon=True).start()
+
+
+class ScheduleRequest(BaseModel):
+    name: str = ""
+    action: str
+    targets: list[str] = []
+    cadence: str = "daily"
+    at: str = "02:00"
+    weekday: int = 0
+    enabled: bool = True
+
+
+@app.get("/api/schedules")
+def schedules_list(user: str = Depends(require_operator)):
+    return {"schedules": schedules.list_jobs(), "actions": schedules.ACTIONS,
+            "cadences": list(schedules.CADENCES)}
+
+
+@app.post("/api/schedules")
+def schedules_create(body: ScheduleRequest, user: str = Depends(require_operator)):
+    try:
+        job = schedules.create_job(body.name, body.action, body.targets, body.cadence,
+                                   body.at, body.weekday, user)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return job
+
+
+@app.patch("/api/schedules/{job_id}")
+def schedules_update(job_id: str, body: ScheduleRequest, user: str = Depends(require_operator)):
+    try:
+        job = schedules.update_job(job_id, name=body.name, action=body.action, targets=body.targets,
+                                   cadence=body.cadence, at=body.at, weekday=body.weekday,
+                                   enabled=body.enabled)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not job:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return job
+
+
+@app.delete("/api/schedules/{job_id}")
+def schedules_delete(job_id: str, user: str = Depends(require_operator)):
+    if not schedules.delete_job(job_id):
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return {"deleted": True}
+
+
+@app.post("/api/schedules/{job_id}/run-now")
+def schedules_run_now(job_id: str, user: str = Depends(require_operator)):
+    job = schedules.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    st, detail = _run_scheduled_job(job)
+    schedules.record_run(job_id, st, detail)
+    return {"status": st, "detail": detail}
+
+
+_start_scheduler()
+
+
 @app.get("/api/environments")
 def environments(user: str = Depends(require_login)):
     try:

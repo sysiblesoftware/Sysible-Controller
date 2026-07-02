@@ -128,6 +128,7 @@ export const api = {
   fleet: (action, targets, command, sudoPassword = "") =>
     req("/api/fleet", { method: "POST", body: { action, targets, command, sudo_password: sudoPassword } }),
   checkin: (targets = []) => req("/api/checkin", { method: "POST", body: { targets } }),
+  fleetUpdates: (refresh = 0) => req("/api/fleet-updates" + (refresh ? "?refresh=1" : "")),
   restartUnit: (hostId, unit, sudoPassword = "") =>
     req(`/api/host/${encodeURIComponent(hostId)}/restart-unit`,
         { method: "POST", body: { unit, sudo_password: sudoPassword } }),

@@ -828,6 +828,89 @@ def host_posture(host_id: str, user: str = Depends(require_login)):
     return _probe_posture(entry, _posture_command(), last_seen, _t.time())
 
 
+# ----------------------------------------------------------------------
+# Fleet patch/update status (read-only sweep, same shape as posture)
+# ----------------------------------------------------------------------
+_UPDATES_CACHE = {"ts": 0.0, "hosts": None}
+_UPDATES_TTL = 900.0   # patch status changes slowly; the scan is heavier
+_UPDATES_LOCK = _posture_threading.Lock()
+
+
+def _parse_updates(text):
+    """Parse the `SYSUPDATES|k=v|...` line from cmd_update_status, or None."""
+    for line in (text or "").splitlines():
+        if line.startswith("SYSUPDATES|"):
+            d = {}
+            for kv in line.split("|")[1:]:
+                if "=" in kv:
+                    k, v = kv.split("=", 1)
+                    d[k] = v
+
+            def num(k):
+                try:
+                    return int(d.get(k, 0))
+                except (TypeError, ValueError):
+                    return 0
+            return {"mgr": d.get("mgr", "unknown"), "total": num("total"),
+                    "security": num("security"), "reboot": d.get("reboot") == "1"}
+    return None
+
+
+def _probe_updates(e, cmd, last_seen, now):
+    base = {"id": e.get("id"), "host": e.get("label"),
+            "environment": e.get("environment") or "Unassigned"}
+    aid = e["id"] if e["kind"] == "agent" else (e.get("agent_entry") or {}).get("id") if e["kind"] == "merged" else None
+    ls = last_seen.get(aid) if aid else None
+    online = (bool(ls and (now - ls) <= 20)) if aid else None
+    if aid is not None and not online:
+        return {**base, "online": False, "error": "offline", "mgr": None,
+                "total": None, "security": None, "reboot": None}
+    pe = {**e, "requires_sudo_password": False}
+    if e.get("agent_entry"):
+        pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+    r = _dispatch_one(pe, cmd, "command", None, None, None, needs_sudo=False)
+    u = _parse_updates((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
+    if not u:
+        return {**base, "online": True if r.get("ok") else online,
+                "error": r.get("error") or "no update data returned",
+                "mgr": None, "total": None, "security": None, "reboot": None}
+    return {**base, "online": True, "error": None, **u}
+
+
+@app.get("/api/fleet-updates")
+def fleet_updates(refresh: int = 0, user: str = Depends(require_login)):
+    """On-demand fleet patch-status sweep: pending updates, security updates, and
+    reboot-required per host. Read-only, tokenless (auditor-visible), cached for
+    ~15 min unless ?refresh=1 (the per-host scan is heavier than posture)."""
+    import concurrent.futures
+    import time as _t
+
+    def _fresh():
+        return (not refresh) and _UPDATES_CACHE["hosts"] is not None \
+            and (_t.time() - _UPDATES_CACHE["ts"]) < _UPDATES_TTL
+
+    if _fresh():
+        return {"hosts": _UPDATES_CACHE["hosts"], "cached": True, "ts": _UPDATES_CACHE["ts"]}
+    with _UPDATES_LOCK:
+        if _fresh():
+            return {"hosts": _UPDATES_CACHE["hosts"], "cached": True, "ts": _UPDATES_CACHE["ts"]}
+        try:
+            entries = dispatch.list_merged_hosts(agent_only=False)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        try:
+            last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+        except Exception:
+            last_seen = {}
+        now = _t.time()
+        cmd = api.cmd_update_status()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
+            hosts = list(ex.map(lambda e: _probe_updates(e, cmd, last_seen, now), entries)) if entries else []
+        _UPDATES_CACHE["hosts"] = hosts
+        _UPDATES_CACHE["ts"] = now
+        return {"hosts": hosts, "cached": False, "ts": now}
+
+
 @app.get("/api/environments")
 def environments(user: str = Depends(require_login)):
     try:

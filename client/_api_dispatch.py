@@ -529,6 +529,34 @@ def cmd_flush_dns() -> str:
     )
 
 
+def cmd_update_status() -> str:
+    """Read-only fleet patch status as one machine-readable line:
+    `SYSUPDATES|mgr=<dnf|zypper|apt|unknown>|total=<n>|security=<n>|reboot=<0|1>`.
+    Counts pending package updates (best-effort, cross-distro) and whether a
+    reboot is required. Uses each manager's already-downloaded metadata — it does
+    NOT force a network refresh, so it's fast and stays a read; counts reflect the
+    host's last repo refresh. All probes are `command -v`-guarded; anything
+    missing yields 0."""
+    return (
+        "mgr=unknown; total=0; sec=0; rr=0\n"
+        "if command -v dnf >/dev/null 2>&1; then mgr=dnf; "
+        "total=$(dnf -q check-update 2>/dev/null | awk 'NF>=3 && $1!~/^(Obsoleting|Last|Security|Loaded|Dependencies)/{c++} END{print c+0}'); "
+        "sec=$(dnf -q --security check-update 2>/dev/null | awk 'NF>=3 && $1!~/^(Obsoleting|Last|Security|Loaded|Dependencies)/{c++} END{print c+0}'); "
+        "elif command -v zypper >/dev/null 2>&1; then mgr=zypper; "
+        "total=$(zypper --non-interactive -q list-updates 2>/dev/null | grep -cE '^v \\|'); "
+        "sec=$(zypper --non-interactive -q list-patches --category security 2>/dev/null | grep -cE '\\| *needed'); "
+        "elif command -v apt-get >/dev/null 2>&1; then mgr=apt; "
+        "up=$(apt-get -s -o Debug::NoLocking=true upgrade 2>/dev/null | grep '^Inst '); "
+        "total=$(printf '%s\\n' \"$up\" | grep -c '^Inst '); "
+        "sec=$(printf '%s\\n' \"$up\" | grep -ci security); "
+        "fi\n"
+        "[ -f /var/run/reboot-required ] && rr=1\n"
+        "if command -v needs-restarting >/dev/null 2>&1; then needs-restarting -r >/dev/null 2>&1 || rr=1; fi\n"
+        "if command -v zypper >/dev/null 2>&1; then zypper needs-rebooting >/dev/null 2>&1; [ \"$?\" = 102 ] && rr=1; fi\n"
+        "printf 'SYSUPDATES|mgr=%s|total=%s|security=%s|reboot=%s\\n' \"$mgr\" \"${total:-0}\" \"${sec:-0}\" \"$rr\"\n"
+    )
+
+
 def cmd_drop_caches() -> str:
     """Free reclaimable memory: sync, then drop the page cache / dentries /
     inodes. Safe — the kernel only drops CLEAN caches, no data is lost; it just

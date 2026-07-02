@@ -1571,6 +1571,22 @@ def set_host_environment(host_id: str, body: HostEnvRequest, request: Request,
     return _wrap(lambda: _as_admin(request, lambda: api.set_agent_environment(host_id, body.environment)))
 
 
+@app.post("/api/host/{host_id}/revoke")
+def revoke_host(host_id: str, request: Request, user: str = Depends(require_superuser_session)):
+    """Hard lock-out a (possibly compromised/tampered) agent host: revoke its
+    secret so it can't heartbeat/poll/report until re-enrolled. Superuser-only at
+    both layers (require_superuser_session here + require_superuser on the
+    controller, via the caller's token in _as_admin)."""
+    return _wrap(lambda: _as_admin(request, lambda: api.revoke_agent(host_id)))
+
+
+@app.post("/api/host/{host_id}/resume")
+def resume_host(host_id: str, request: Request, user: str = Depends(require_superuser_session)):
+    """Clear an integrity quarantine (soft lockout): rebaseline the host so it
+    re-seals and dispatch resumes. Superuser-only (see revoke_host)."""
+    return _wrap(lambda: _as_admin(request, lambda: api.resume_agent(host_id)))
+
+
 @app.delete("/api/host/{host_id}")
 def remove_host(host_id: str, request: Request, user: str = Depends(require_login)):
     """Disenroll an agent host. Matches the desktop Host Enrollment "Remove"

@@ -163,6 +163,21 @@ export default function HostEnrollment() {
     }, `Disenrolled ${checked.length} host(s).`);
   }
 
+  async function revokeHost(a, e) {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    const name = a.hostname || a.host_id;
+    if (!window.confirm(`Revoke ${name}? Its agent is locked out — it can't heartbeat, poll, or report — until you re-enroll the host. Use this for a host you believe is compromised or tampered.`)) return;
+    await run(async () => { await api.revokeHost(idOf(a)); }, `Revoked ${name}. Re-enroll the host to restore it.`);
+    load();
+  }
+
+  async function resumeHost(a, e) {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    const name = a.hostname || a.host_id;
+    await run(async () => { await api.resumeHost(idOf(a)); }, `Cleared the integrity quarantine on ${name}; it re-seals on the next heartbeat.`);
+    load();
+  }
+
   // curl one-liner (built from portal status + controller config)
   const curlHost = cfg.address || "<this machine's address>";
   const curlPort = portPort || portal.configured_port || portal.port || 8090;
@@ -226,9 +241,17 @@ export default function HostEnrollment() {
                       <span className="he-host-body">
                         <span className="he-host-name">{a.hostname || a.host_id}
                           {a.requires_sudo_password && <span className="badge" style={{ marginLeft: 6, fontSize: 10 }}>pw-sudo</span>}
+                          {a.revoked && <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "var(--red, #e05656)", color: "#fff" }} title="Agent secret revoked — re-enroll to restore">revoked</span>}
+                          {!a.revoked && a.integrity_quarantined && <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "var(--amber, #e0a93c)", color: "#1a2744" }} title={(a.integrity_detail || []).join("\n") || "Integrity mismatch — dispatch paused"}>⚠ quarantined</span>}
                         </span>
                         <span className="he-host-meta">{a.address || a.ip || "—"}
                           {a.last_seen != null ? ` · seen ${fmtSeen(a.last_seen)}` : ""}</span>
+                      </span>
+                      <span className="he-host-actions" style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                        {!a.revoked && a.integrity_quarantined &&
+                          <button className="btn ghost sm" title="Rebaseline: clear the quarantine and resume dispatch (use after a legitimate change)" onClick={(e) => resumeHost(a, e)}>Resume</button>}
+                        {!a.revoked &&
+                          <button className="btn danger sm" title="Hard lock-out: revoke this agent's secret until re-enrolled" onClick={(e) => revokeHost(a, e)}>Revoke</button>}
                       </span>
                     </label>
                   ))}

@@ -116,6 +116,10 @@ export const api = {
   installLocalPackage: (file, targets) => { const fd = new FormData(); fd.append("file", file); fd.append("targets", JSON.stringify(targets)); return req("/api/packages/install-local", { method: "POST", body: fd }); },
   // Host Enrollment
   agents: () => req("/api/agents"),
+  revokeHost: (hostId) =>
+    req(`/api/host/${encodeURIComponent(hostId)}/revoke`, { method: "POST" }),
+  resumeHost: (hostId) =>
+    req(`/api/host/${encodeURIComponent(hostId)}/resume`, { method: "POST" }),
   enrollToken: () => req("/api/enroll-token", { method: "POST" }),
   agentBundleUrl: () => "/api/agent-bundle",
   // Sudo (become) password — encrypted at rest on the controller, per admin.

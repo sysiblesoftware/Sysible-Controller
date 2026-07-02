@@ -47,6 +47,17 @@ class TaskCreateRequest(BaseModel):
     kind: str = "command"
     description: Optional[str] = None  # human label for the activity log
     become_password: Optional[str] = None  # held in RAM only, never persisted
+    # When False, skip the per-host activity-feed entry. The web console sets
+    # this for multi-host tool runs so it can log ONE grouped summary entry
+    # instead of N near-identical rows ("List disks · dev1", "· prod1", ...).
+    log: bool = True
+
+
+class ActivityLogRequest(BaseModel):
+    """One attributed activity-feed entry, written by the web console to record a
+    single grouped summary for a multi-host tool run."""
+    host: str = ""
+    description: str
 
 
 class TaskResultRequest(BaseModel):

@@ -143,6 +143,13 @@ def get_agents():
     return _request("GET", "/agents").get("agents", [])
 
 
+def log_action(host: str, description: str):
+    """Record ONE attributed activity-feed entry — a grouped summary for a
+    multi-host tool run, so the feed shows "List disks · dev1, prod1" instead of
+    one row per host. See backend POST /activity."""
+    return _request("POST", "/activity", json={"host": host, "description": description})
+
+
 def get_metrics_timeseries(window=3600):
     """Per-host performance time-series (load/mem/disk) for the last `window`
     seconds. Returns {"hosts": [...], "window": int, "now": float}."""

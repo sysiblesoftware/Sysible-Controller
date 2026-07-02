@@ -207,12 +207,15 @@ def become_password_for_host(host_id):
 
 
 def queue_command_on_hosts(host_ids, command: str, kind: str = "command",
-                           description: str = None, become_password: str = None):
+                           description: str = None, become_password: str = None,
+                           log: bool = True):
     body_base = {"command": command, "kind": kind}
     if description:
         body_base["description"] = description
     if become_password:
         body_base["become_password"] = become_password
+    if not log:
+        body_base["log"] = False
     task_ids = {}
     for host_id in host_ids:
         try:

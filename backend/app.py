@@ -79,6 +79,7 @@ from backend.db import (
 from backend import portal_auth, portal_files, portal_manager, tls_manager
 from backend.policy import validate_password_against_policy
 from backend.models.agent_models import (
+    ActivityLogRequest,
     EnrollRequest,
     HeartbeatRequest,
     SelfDisenrollRequest,
@@ -495,7 +496,7 @@ def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
     # tasks (run_as set), and not background/internal reads - the user-list
     # sync and SSH auto-enroll aren't operator actions and would just be
     # noise (showing as "ran a script" after an unrelated click).
-    if run_as and body.kind not in _NON_LOGGED_KINDS:
+    if run_as and body.log and body.kind not in _NON_LOGGED_KINDS:
         log_activity(run_as, get_agent_hostname(host_id),
                      body.description or _describe_command(body.command), body.command)
 
@@ -503,6 +504,22 @@ def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
         "task_id": task_id,
         "status": "queued"
     }
+
+
+@app.post("/activity", dependencies=[Depends(require_api_key)])
+def post_activity_route(body: ActivityLogRequest, request: Request):
+    """Record ONE attributed activity entry. The web console uses this to log a
+    single grouped summary for a multi-host tool run (e.g. "List disks · dev1,
+    prod1, prod2") instead of one near-identical row per host. Attributed to the
+    caller's admin token; read-only auditors are refused."""
+    token = request.headers.get("X-Sysible-Admin-Token")
+    admin = resolve_admin_token(token) if token else None
+    if not admin:
+        raise HTTPException(status_code=401, detail="A login token is required for this action.")
+    if admin.get("role") == "auditor":
+        raise HTTPException(status_code=403, detail="Auditor accounts are read-only.")
+    log_activity(admin["username"], body.host, body.description, "")
+    return {"ok": True}
 
 
 def _build_agent_update_command():
@@ -595,8 +612,11 @@ def _describe_command(command: str) -> str:
         or first.startswith(("import ", "python", "#!", "cat <<", "base64", "{"))
         or len(first) > 80
     )
+    # Never the words "ran a script" here — that phrasing is reserved for the
+    # explicit "Run a script on all hosts" action from Connect (which passes its
+    # own description). A generic multi-line/opaque command is just "ran a command".
     if is_scripty:
-        return "ran a script"
+        return "ran a command"
     return "ran: " + first[:80]
 
 

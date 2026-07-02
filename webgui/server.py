@@ -2259,6 +2259,7 @@ def run_tool(action_name: str, body: RunRequest, request: Request, user: str = D
 
     token = _session_token(request)
     results = []
+    ran_labels = []
     for target in body.targets:
         entry = all_entries.get(target)
         if entry is None:
@@ -2268,7 +2269,19 @@ def run_tool(action_name: str, body: RunRequest, request: Request, user: str = D
         # Resolve this admin's sudo password for the target (host scope wins
         # over fleet default); only used if the host is flagged sudo-required.
         become = sudo_store.resolve(user, entry.get("label", ""))
-        results.append(_dispatch_one(entry, command, spec.kind, become, token, desc))
+        # Suppress the per-host activity entry — we log ONE grouped summary below
+        # ("List disks · dev1, prod1, prod2") instead of one near-identical row
+        # per host.
+        results.append(_dispatch_one(entry, command, spec.kind, become, token, desc, log=False))
+        ran_labels.append(entry.get("label") or target)
+
+    # One attributed summary entry for the whole run, listing the hosts it ran on.
+    if ran_labels:
+        shown = ", ".join(ran_labels[:6]) + (f" +{len(ran_labels) - 6} more" if len(ran_labels) > 6 else "")
+        try:
+            _as_admin(request, lambda: api.log_action(shown, desc))
+        except Exception:
+            pass
 
     return {"action": action_name, "command": command, "results": results}
 
@@ -2349,7 +2362,7 @@ def files_compare(body: CompareRequest, request: Request, user: str = Depends(re
 
 
 def _dispatch_one(entry, command, kind, become_password=None, token=None, description=None,
-                  needs_sudo=True):
+                  needs_sudo=True, log=True):
     """Run one command on one host and return a normalized result,
     polling agent tasks to completion (bounded) so the response is
     synchronous from the browser's point of view.
@@ -2364,7 +2377,7 @@ def _dispatch_one(entry, command, kind, become_password=None, token=None, descri
     try:
         outcome = _with_token(token, lambda: dispatch.run_on_entry(
             entry, command, kind=kind, become_password=become_password, description=description,
-            needs_sudo=needs_sudo))
+            needs_sudo=needs_sudo, log=log))
     except Exception as e:
         return {"host": label, "environment": env, "ok": False, "error": str(e),
                 "stdout": "", "stderr": "", "code": None}

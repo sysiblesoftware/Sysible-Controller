@@ -423,7 +423,7 @@ _register(Action(name="fs_list_dir", tool="File System Management", label="List 
     params=[Param("path", "Path", default="/", help="e.g. /opt")],
     build=lambda p: api.cmd_list_directory(_s(p, "path", "/") or "/")))
 _register(Action(name="fs_view", tool="File System Management", label="View file",
-    params=[Param("path", "Path")], build=lambda p: api.cmd_view_file(_s(p, "path"))))
+    params=[Param("path", "Path", help="e.g. /etc/hosts")], build=lambda p: api.cmd_view_file(_s(p, "path"))))
 # Cross-host file comparison: check several hosts, enter a path, and see which
 # hosts have a different version (grouped by content hash). The web console
 # handles this specially (POST /api/files/compare aggregates the per-host
@@ -433,24 +433,24 @@ _register(Action(name="fs_compare", tool="File System Management",
     params=[Param("path", "Path", help="e.g. /etc/ssh/sshd_config")],
     build=lambda p: api.cmd_file_fingerprint(_s(p, "path"))))
 _register(Action(name="fs_mkdir", tool="File System Management", label="Create directory",
-    params=[Param("path", "Path")], build=lambda p: api.cmd_create_directory(_s(p, "path"))))
+    params=[Param("path", "Path", help="e.g. /etc/hosts")], build=lambda p: api.cmd_create_directory(_s(p, "path"))))
 _register(Action(name="fs_rmdir", tool="File System Management", label="Remove directory",
-    danger=True, params=[Param("path", "Path"),
+    danger=True, params=[Param("path", "Path", help="e.g. /etc/hosts"),
                          Param("recursive", "Recursive", type="checkbox", default=False, required=False)],
     build=lambda p: api.cmd_remove_directory(_s(p, "path"), _b(p, "recursive"),
                                              allow_critical=_b(p, "allow_critical", False))))
 _register(Action(name="fs_copy", tool="File System Management", label="Copy",
-    params=[Param("source", "Source"), Param("destination", "Destination")],
+    params=[Param("source", "Source", help="e.g. /tmp/file.txt"), Param("destination", "Destination", help="e.g. /opt/file.txt")],
     build=lambda p: api.cmd_copy_file(_s(p, "source"), _s(p, "destination"))))
 _register(Action(name="fs_move", tool="File System Management", label="Move",
-    params=[Param("source", "Source"), Param("destination", "Destination")],
+    params=[Param("source", "Source", help="e.g. /tmp/file.txt"), Param("destination", "Destination", help="e.g. /opt/file.txt")],
     build=lambda p: api.cmd_move_file(_s(p, "source"), _s(p, "destination"))))
 _register(Action(name="fs_chmod", tool="File System Management", label="Change permissions",
-    params=[Param("path", "Path"), Param("mode", "Mode", help="e.g. 0644"),
+    params=[Param("path", "Path", help="e.g. /etc/hosts"), Param("mode", "Mode", help="e.g. 0644"),
             Param("recursive", "Recursive", type="checkbox", default=False, required=False)],
     build=lambda p: api.cmd_change_permissions(_s(p, "path"), _s(p, "mode"), _b(p, "recursive"))))
 _register(Action(name="fs_chown", tool="File System Management", label="Change ownership",
-    params=[Param("path", "Path"), Param("owner", "Owner", required=False),
+    params=[Param("path", "Path", help="e.g. /etc/hosts"), Param("owner", "Owner", required=False),
             Param("group", "Group", required=False),
             Param("recursive", "Recursive", type="checkbox", default=False, required=False)],
     build=lambda p: api.cmd_change_ownership(_s(p, "path"), _s(p, "owner"),
@@ -464,12 +464,12 @@ _register(Action(name="fs_archive", tool="File System Management", label="Create
 _register(Action(name="fs_show_fstab", tool="File System Management", label="Show fstab",
     params=[], build=lambda p: api.cmd_show_fstab()))
 _register(Action(name="fs_mount_nfs", tool="File System Management", label="Mount NFS",
-    params=[Param("server", "Server"), Param("export_path", "Export path"),
-            Param("mount_point", "Mount point")],
+    params=[Param("server", "Server", help="e.g. 192.168.1.50 or nfs.example.com"), Param("export_path", "Export path"),
+            Param("mount_point", "Mount point", help="e.g. /mnt/data")],
     build=lambda p: api.cmd_mount_nfs(_s(p, "server"), _s(p, "export_path"), _s(p, "mount_point"))))
 _register(Action(name="fs_mount_cifs", tool="File System Management", label="Mount CIFS/SMB",
-    params=[Param("server", "Server"), Param("share", "Share"),
-            Param("mount_point", "Mount point"),
+    params=[Param("server", "Server", help="e.g. 192.168.1.50 or nfs.example.com"), Param("share", "Share"),
+            Param("mount_point", "Mount point", help="e.g. /mnt/data"),
             Param("username", "Username", required=False),
             Param("password", "Password", type="password", required=False)],
     build=lambda p: api.cmd_mount_cifs(_s(p, "server"), _s(p, "share"), _s(p, "mount_point"),
@@ -1015,9 +1015,9 @@ _register(Action(name="sec_selinux_journal", tool="Security Administration", lab
     params=[Param("lines", "Lines", type="number", default="50", required=False)],
     build=lambda p: api.cmd_selinux_journal_denials(_i(p, "lines", 50))))
 _register(Action(name="sec_selinux_getctx", tool="Security Administration", label="Get SELinux context",
-    params=[Param("path", "Path")], build=lambda p: api.cmd_selinux_get_context(_s(p, "path"))))
+    params=[Param("path", "Path", help="e.g. /etc/hosts")], build=lambda p: api.cmd_selinux_get_context(_s(p, "path"))))
 _register(Action(name="sec_selinux_restorectx", tool="Security Administration", label="Restore SELinux context",
-    params=[Param("path", "Path"), Param("recursive", "Recursive", type="checkbox", default=False, required=False)],
+    params=[Param("path", "Path", help="e.g. /etc/hosts"), Param("recursive", "Recursive", type="checkbox", default=False, required=False)],
     build=lambda p: api.cmd_selinux_restore_context(_s(p, "path"), _b(p, "recursive"))))
 _register(Action(name="sec_selinux_list_fctx", tool="Security Administration", label="List file contexts",
     params=[Param("pattern", "Pattern", required=False)],
@@ -1099,7 +1099,7 @@ _register(Action(name="sec_run_rkhunter", tool="Security Administration", label=
 
 # ---- File System Management (advanced) -------------------------------
 _register(Action(name="fs_rename", tool="File System Management", label="Rename",
-    params=[Param("path", "Path"), Param("new_name", "New name")],
+    params=[Param("path", "Path", help="e.g. /etc/hosts"), Param("new_name", "New name")],
     build=lambda p: api.cmd_rename_file(_s(p, "path"), _s(p, "new_name"))))
 _register(Action(name="fs_symlink", tool="File System Management", label="Create symlink",
     params=[Param("target", "Target"), Param("link_path", "Link path")],
@@ -1108,24 +1108,24 @@ _register(Action(name="fs_hardlink", tool="File System Management", label="Creat
     params=[Param("target", "Target"), Param("link_path", "Link path")],
     build=lambda p: api.cmd_create_hardlink(_s(p, "target"), _s(p, "link_path"))))
 _register(Action(name="fs_show_acl", tool="File System Management", label="Show ACL",
-    params=[Param("path", "Path")], build=lambda p: api.cmd_show_acl(_s(p, "path"))))
+    params=[Param("path", "Path", help="e.g. /etc/hosts")], build=lambda p: api.cmd_show_acl(_s(p, "path"))))
 _register(Action(name="fs_set_acl", tool="File System Management", label="Set ACL",
-    params=[Param("path", "Path"), Param("acl_entries", "ACL entries", help="e.g. u:bob:rwx"),
+    params=[Param("path", "Path", help="e.g. /etc/hosts"), Param("acl_entries", "ACL entries", help="e.g. u:bob:rwx"),
             Param("recursive", "Recursive", type="checkbox", default=False, required=False)],
     build=lambda p: api.cmd_set_acl(_s(p, "path"), _s(p, "acl_entries"), _b(p, "recursive"))))
 _register(Action(name="fs_extract", tool="File System Management", label="Extract archive",
     params=[Param("archive_path", "Archive"), Param("destination_dir", "Destination dir")],
     build=lambda p: api.cmd_extract_archive(_s(p, "archive_path"), _s(p, "destination_dir"))))
 _register(Action(name="fs_compress", tool="File System Management", label="Compress file",
-    params=[Param("path", "Path"),
+    params=[Param("path", "Path", help="e.g. /etc/hosts"),
             Param("method", "Method", type="select", options=["gzip", "bzip2", "xz"], default="gzip"),
             Param("keep_original", "Keep original", type="checkbox", default=True, required=False)],
     build=lambda p: api.cmd_compress_file(_s(p, "path"), _s(p, "method", "gzip"), _b(p, "keep_original", True))))
 _register(Action(name="fs_decompress", tool="File System Management", label="Decompress file",
-    params=[Param("path", "Path"), Param("keep_original", "Keep original", type="checkbox", default=True, required=False)],
+    params=[Param("path", "Path", help="e.g. /etc/hosts"), Param("keep_original", "Keep original", type="checkbox", default=True, required=False)],
     build=lambda p: api.cmd_decompress_file(_s(p, "path"), _b(p, "keep_original", True))))
 _register(Action(name="fs_mount", tool="File System Management", label="Mount filesystem",
-    params=[Param("device", "Device"), Param("mount_point", "Mount point"),
+    params=[Param("device", "Device"), Param("mount_point", "Mount point", help="e.g. /mnt/data"),
             Param("fstype", "FS type", required=False), Param("options", "Options", required=False)],
     build=lambda p: api.cmd_mount_filesystem(_s(p, "device"), _s(p, "mount_point"),
                                              _s(p, "fstype"), _s(p, "options"))))
@@ -1135,30 +1135,31 @@ _register(Action(name="fs_unmount", tool="File System Management", label="Unmoun
     build=lambda p: api.cmd_unmount_filesystem(_s(p, "target"), _b(p, "force"),
                                                allow_critical=_b(p, "allow_critical", False))))
 _register(Action(name="fs_add_fstab", tool="File System Management", label="Add fstab entry",
-    params=[Param("device", "Device"), Param("mount_point", "Mount point"), Param("fstype", "FS type"),
+    params=[Param("device", "Device"), Param("mount_point", "Mount point", help="e.g. /mnt/data"), Param("fstype", "FS type"),
             Param("options", "Options", default="defaults", required=False),
             Param("dump", "dump", type="number", default="0", required=False),
             Param("pass_num", "pass", type="number", default="0", required=False)],
     build=lambda p: api.cmd_add_fstab_entry(_s(p, "device"), _s(p, "mount_point"), _s(p, "fstype"),
         _s(p, "options", "defaults") or "defaults", _i(p, "dump", 0), _i(p, "pass_num", 0))))
 _register(Action(name="fs_remove_fstab", tool="File System Management", label="Remove fstab entry",
-    danger=True, params=[Param("mount_point", "Mount point")],
+    danger=True, params=[Param("mount_point", "Mount point", help="e.g. /mnt/data")],
     build=lambda p: api.cmd_remove_fstab_entry(_s(p, "mount_point"),
                                                allow_critical=_b(p, "allow_critical", False))))
 _register(Action(name="fs_resize", tool="File System Management", label="Resize filesystem",
-    params=[Param("target", "Target"), Param("new_size", "New size", required=False, help="blank = grow to max")],
+    params=[Param("target", "Target", help="mount point or device, e.g. /data or /dev/mapper/vg-lv"),
+            Param("new_size", "New size", required=False, help="e.g. 20G — blank = grow to max")],
     build=lambda p: api.cmd_resize_filesystem(_s(p, "target"), _s(p, "new_size"))))
 _register(Action(name="fs_repair", tool="File System Management", label="Repair filesystem",
-    danger=True, params=[Param("device", "Device")],
+    danger=True, params=[Param("device", "Device", help="e.g. /dev/sda1")],
     build=lambda p: api.cmd_repair_filesystem(_s(p, "device"))))
 _register(Action(name="fs_show_quotas", tool="File System Management", label="Show quotas",
     params=[Param("mount_point", "Mount point", required=False)],
     build=lambda p: api.cmd_show_quotas(_s(p, "mount_point"))))
 _register(Action(name="fs_enable_quotas", tool="File System Management", label="Enable quotas",
-    params=[Param("mount_point", "Mount point")],
+    params=[Param("mount_point", "Mount point", help="e.g. /mnt/data")],
     build=lambda p: api.cmd_enable_quotas(_s(p, "mount_point"))))
 _register(Action(name="fs_set_quota", tool="File System Management", label="Set user quota",
-    params=[Param("username", "User"), Param("mount_point", "Mount point"),
+    params=[Param("username", "User"), Param("mount_point", "Mount point", help="e.g. /mnt/data"),
             Param("block_soft", "Block soft (KB)", type="number"), Param("block_hard", "Block hard (KB)", type="number"),
             Param("inode_soft", "Inode soft", type="number", default="0", required=False),
             Param("inode_hard", "Inode hard", type="number", default="0", required=False)],
@@ -1264,11 +1265,11 @@ _register(Action(name="dir_realm_permit", tool="Directory Services (Active Direc
 _register(Action(name="dir_mkhomedir", tool="Directory Services (Active Directory / LDAP)",
     label="Enable mkhomedir", params=[], build=lambda p: api.cmd_enable_mkhomedir()))
 _register(Action(name="dir_test_ldaps", tool="Directory Services (Active Directory / LDAP)",
-    label="Test LDAPS", params=[Param("server", "Server"), Param("port", "Port", default="636", required=False),
+    label="Test LDAPS", params=[Param("server", "Server", help="e.g. 192.168.1.50 or nfs.example.com"), Param("port", "Port", default="636", required=False),
         Param("base_dn", "Base DN", required=False)],
     build=lambda p: api.cmd_test_ldaps(_s(p, "server"), _s(p, "port", "636") or "636", _s(p, "base_dn"))))
 _register(Action(name="dir_config_ldap_client", tool="Directory Services (Active Directory / LDAP)",
-    label="Configure LDAP client", params=[Param("server", "Server"), Param("base_dn", "Base DN"),
+    label="Configure LDAP client", params=[Param("server", "Server", help="e.g. 192.168.1.50 or nfs.example.com"), Param("base_dn", "Base DN"),
         Param("use_ldaps", "Use LDAPS", type="checkbox", default=True, required=False)],
     build=lambda p: api.cmd_configure_ldap_client(_s(p, "server"), _s(p, "base_dn"), _b(p, "use_ldaps", True))))
 
@@ -1385,16 +1386,17 @@ _LAYOUT: dict[str, list] = {
         ("Diagnostics", "Boot & GRUB", ["health_list_kernels", "health_grub", "boot_analyze", "boot_set_grub_default", "boot_set_grub_timeout", "boot_rebuild_grub", "boot_set_target", "boot_set_cmdline", "boot_regen_initramfs", "boot_remove_kernels"]),
         ("Support & Reports", "Support", ["health_support_info", "health_sos_report", "health_install_sos", "health_install_auditd"]),
     ],
+    # Single-pane (empty tab key): all groups on one page instead of 7 tabs.
     "File System Management": [
-        ("Directories and Files", "Directories & Files", ["fs_list_dir", "fs_view", "fs_mkdir", "fs_rmdir", "fs_copy", "fs_move", "fs_rename"]),
-        ("Permissions, Ownership and Links", "Permissions & Ownership", ["fs_chmod", "fs_chown", "fs_show_acl", "fs_set_acl"]),
-        ("Permissions, Ownership and Links", "Links", ["fs_symlink", "fs_hardlink"]),
-        ("Mount / Unmount", "Mount / Unmount", ["fs_mount", "fs_unmount"]),
-        ("Network Mounts (NFS/CIFS)", "Network Mounts", ["fs_mount_nfs", "fs_mount_cifs"]),
-        ("Resize & Repair", "Resize & Repair", ["fs_resize", "fs_repair"]),
-        ("fstab and Quotas", "fstab", ["fs_show_fstab", "fs_add_fstab", "fs_remove_fstab"]),
-        ("fstab and Quotas", "Quotas", ["fs_show_quotas", "fs_enable_quotas", "fs_set_quota"]),
-        ("Archive and Compress", "Archive & Compress", ["fs_archive", "fs_extract", "fs_compress", "fs_decompress"]),
+        ("", "Directories & Files", ["fs_list_dir", "fs_view", "fs_mkdir", "fs_rmdir", "fs_copy", "fs_move", "fs_rename"]),
+        ("", "Permissions & Ownership", ["fs_chmod", "fs_chown", "fs_show_acl", "fs_set_acl"]),
+        ("", "Links", ["fs_symlink", "fs_hardlink"]),
+        ("", "Mount / Unmount", ["fs_mount", "fs_unmount"]),
+        ("", "Network Mounts (NFS/CIFS)", ["fs_mount_nfs", "fs_mount_cifs"]),
+        ("", "Resize & Repair", ["fs_resize", "fs_repair"]),
+        ("", "fstab", ["fs_show_fstab", "fs_add_fstab", "fs_remove_fstab"]),
+        ("", "Quotas", ["fs_show_quotas", "fs_enable_quotas", "fs_set_quota"]),
+        ("", "Archive & Compress", ["fs_archive", "fs_extract", "fs_compress", "fs_decompress"]),
     ],
     "Distro Subscription & Licensing": [
         ("Overview", "Overview", ["sub_detect", "sub_register_all"]),

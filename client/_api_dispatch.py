@@ -218,7 +218,7 @@ def _sudo_hint(entry):
 
 
 def run_on_entry(entry, command: str, kind: str = "command", description: str = None,
-                 become_password: str = None, needs_sudo: bool = True):
+                 become_password: str = None, needs_sudo: bool = True, log: bool = True):
     """Run `command` on one merged-host entry (as produced by
     list_merged_hosts()). SSH executes synchronously over exec_remote()
     - the result is ready immediately. Agent dispatch is async - only a
@@ -273,7 +273,7 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
     if entry["kind"] == "ssh":
         try:
             result = exec_remote(entry["id"], command, description=description,
-                                 become_password=become_password)
+                                 become_password=become_password, log=log)
             stderr = result.get("stderr", "")
             return {
                 "sync": True,
@@ -286,7 +286,8 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
             return {"sync": True, "stdout": "", "stderr": "", "code": None, "error": str(e)}
 
     task_ids = queue_command_on_hosts([entry["id"]], command, kind=kind,
-                                      description=description, become_password=become_password)
+                                      description=description, become_password=become_password,
+                                      log=log)
     task_id = task_ids.get(entry["id"])
     return {
         "sync": False,

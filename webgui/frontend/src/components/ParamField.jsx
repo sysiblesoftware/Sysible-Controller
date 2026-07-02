@@ -26,6 +26,7 @@ export default function ParamField({ p, value, onChange }) {
         <input
           type={p.type === "password" ? "password" : p.type === "number" ? "number" : "text"}
           value={value ?? ""}
+          placeholder={p.placeholder || p.help || ""}
           onChange={(e) => onChange(p.name, e.target.value)}
         />
       )}

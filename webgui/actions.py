@@ -225,7 +225,8 @@ _register(Action(
 _register(Action(
     name="pkg_install", tool="Host Software Management", label="Install packages",
     params=[Param("names", "Package name(s)", help="space-separated")],
-    build=lambda p: api.cmd_install_packages(_s(p, "names"))))
+    build=lambda p: api.cmd_install_packages(_s(p, "names")),
+    op_verb="pkg.install", op_args=lambda p: {"pkgs": ",".join(_s(p, "names").split())}))
 _register(Action(
     name="pkg_update", tool="Host Software Management",
     label="Update / upgrade packages",
@@ -235,7 +236,8 @@ _register(Action(
 _register(Action(
     name="pkg_remove", tool="Host Software Management", label="Remove packages",
     danger=True, params=[Param("names", "Package name(s)")],
-    build=lambda p: api.cmd_remove_packages(_s(p, "names"))))
+    build=lambda p: api.cmd_remove_packages(_s(p, "names")),
+    op_verb="pkg.remove", op_args=lambda p: {"pkgs": ",".join(_s(p, "names").split())}))
 _register(Action(
     name="pkg_clean_cache", tool="Host Software Management",
     label="Clean package cache", params=[],

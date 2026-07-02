@@ -145,7 +145,8 @@ function EnvFleetCard({ group, postureLoaded, onOpenHost }) {
   const v = group.verdict;
   const [open, setOpen] = useState(v !== "OK" || group.problematic > 0);
   return (
-    <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+    <div style={{ border: "1px solid " + (v === "CRITICAL" ? VERDICT_COLOR.CRITICAL : "var(--border)"),
+                  borderRadius: 8, overflow: "hidden" }}>
       <button onClick={() => setOpen((o) => !o)}
         style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
                  gap: 8, padding: "8px 10px", background: "none", border: "none", cursor: "pointer",
@@ -167,7 +168,7 @@ function EnvFleetCard({ group, postureLoaded, onOpenHost }) {
             </span>
           )}
           {postureLoaded && (group.problematic > 0
-            ? <span style={{ color: VERDICT_COLOR.WARNING }}>{group.problematic} need attention</span>
+            ? <span style={{ color: v === "CRITICAL" ? VERDICT_COLOR.CRITICAL : VERDICT_COLOR.WARNING }}>{group.problematic} need attention</span>
             : group.counts.OFFLINE === 0 && <span style={{ color: VERDICT_COLOR.OK }}>all clear</span>)}
           {group.limited > 0 && (
             <span className="faint">· {group.limited} limited</span>
@@ -481,7 +482,9 @@ export default function Dashboard({ role, edition, onOpen }) {
       if (v === "OK" && !trouble && !host.limited) clear += 1;
     }
     const envs = Object.values(g).map((e) => {
-      e.verdict = e.counts.CRITICAL > 0 ? "CRITICAL"
+      // A down host makes the whole environment critical (red), not grey/amber —
+      // an unreachable host is the most urgent thing to see at a glance.
+      e.verdict = (e.counts.CRITICAL > 0 || e.counts.OFFLINE > 0) ? "CRITICAL"
         : e.counts.WARNING > 0 ? "WARNING"
         : e.counts.OK > 0 ? "OK" : "OFFLINE";
       e.hosts.sort((a, b) =>

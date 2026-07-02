@@ -14,6 +14,7 @@ class ExecRequest(BaseModel):
     cmd: str
     description: Optional[str] = None  # human label for the activity log
     log: bool = True  # False for background/internal reads (e.g. user-list sync)
+    become_password: Optional[str] = None  # admin's sudo password for password-sudo hosts (RAM only)
 
 
 class EnrollSSHRequest(BaseModel):

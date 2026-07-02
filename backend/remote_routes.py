@@ -619,6 +619,46 @@ def enroll_ssh(body: EnrollSSHRequest):
 # SSH EXECUTION (key-based - the target must already have the
 # controller's public key installed via /enroll-ssh or out-of-band)
 # =========================================================
+# "This failed because it needs more privilege" — mirrors the agent's
+# _looks_like_privilege_error so SSH dispatch escalates the SAME, safe way (retry
+# under sudo ONLY on a genuine privilege error, never on an ordinary failure).
+_SSH_PRIV_ERR = re.compile(
+    r"permission denied|operation not permitted|must be run as root|must be root|"
+    r"not in the sudoers|a terminal is required|no tty present|password is required|"
+    r"not allowed to execute|are not allowed|superuser privileges|run with superuser",
+    re.I)
+
+
+def _ssh_argv(key_path, target, remote_cmd):
+    return [
+        "ssh", "-i", key_path,
+        "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", f"UserKnownHostsFile={KNOWN_HOSTS_PATH}",
+        "-o", "HashKnownHosts=no", "-o", "ConnectTimeout=10",
+        target, remote_cmd,
+    ]
+
+
+def _as_admin_remote(ssh_user: str, admin: str, cmd: str, elevate=False, password=False) -> str:
+    """Remote command that runs `cmd` AS the initiating admin (per-user) — the
+    same least-privilege model as agent hosts and the SSH terminal: `runuser`
+    from a root SSH login, else the login user's `sudo -u`. `elevate` runs it
+    under the admin's OWN sudo (for a privileged op; `-S` reads their password
+    from stdin). Exits 126 with a clear message if the admin has no local account
+    here, rather than silently running as the SSH login user."""
+    u = shlex.quote(admin)
+    inner_c = shlex.quote(cmd)
+    if elevate:
+        inner = f"sudo -S -p '' bash -c {inner_c}" if password else f"sudo -n bash -c {inner_c}"
+    else:
+        inner = f"bash -c {inner_c}"
+    switch = f"runuser -u {u} -- {inner}" if ssh_user == "root" else f"sudo -n -u {u} -- {inner}"
+    return (f"id {u} >/dev/null 2>&1 || {{ echo \"[sysible] user {admin} does not exist on this "
+            f"host - create it (with the sudo policy you want) so commands run as that role\" >&2; "
+            f"exit 126; }}; {switch}")
+
+
 @router.post("/hosts/{name}/exec")
 def exec_remote(name: str, body: ExecRequest, request: Request):
     hosts = load_hosts()
@@ -635,32 +675,37 @@ def exec_remote(name: str, body: ExecRequest, request: Request):
         log_activity(admin, name, body.description or ("ran: " + body.cmd[:80]), body.cmd)
 
     host = hosts[name]
-    target = f"{host['user']}@{host['ip']}"
+    ssh_user = host["user"]
+    target = f"{ssh_user}@{host['ip']}"
     key_path = host.get("key_path") or str(CONTROLLER_KEY_PATH)
 
-    # Share the one TOFU trust store with the paramiko paths above, rather than
-    # using root's default ~/.ssh/known_hosts: a key pinned during enrollment or
-    # a terminal session is then honoured here too (and vice versa).
-    # accept-new = pin a first-seen host, but refuse a CHANGED key (exit 255).
+    # Share the one TOFU trust store with the paramiko paths above.
     _ensure_known_hosts_file()
 
+    def _run(remote_cmd, stdin=None):
+        return subprocess.run(_ssh_argv(key_path, target, remote_cmd),
+                              capture_output=True, text=True, input=stdin, timeout=60)
+
     try:
-        result = subprocess.run(
-            [
-                "ssh",
-                "-i", key_path,
-                "-o", "IdentitiesOnly=yes",
-                "-o", "BatchMode=yes",
-                "-o", "StrictHostKeyChecking=accept-new",
-                "-o", f"UserKnownHostsFile={KNOWN_HOSTS_PATH}",
-                "-o", "HashKnownHosts=no",
-                "-o", "ConnectTimeout=10",
-                target, body.cmd
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
+        if admin:
+            # Per-user (attributed) dispatch: run AS the initiating admin, then
+            # escalate via THEIR own sudo only on a genuine privilege error —
+            # exactly like the agent's _run_as_user (no unsafe blind retry). This
+            # aligns SSH hosts with agent hosts: an operator is constrained by
+            # their per-user account + sudo, not handed the SSH login user (root).
+            result = _run(_as_admin_remote(ssh_user, admin, body.cmd))
+            combined = (result.stderr or "") + "\n" + (result.stdout or "")
+            if result.returncode not in (0, 126) and _SSH_PRIV_ERR.search(combined):
+                if body.become_password:
+                    result = _run(_as_admin_remote(ssh_user, admin, body.cmd, elevate=True, password=True),
+                                  stdin=body.become_password + "\n")
+                else:
+                    result = _run(_as_admin_remote(ssh_user, admin, body.cmd, elevate=True))
+        else:
+            # Tokenless / internal (background reads, e.g. user-list sync, the
+            # fleet-health/query probes) run as the SSH login user — the SSH
+            # analogue of the agent's tokenless=root path.
+            result = _run(body.cmd)
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="Command timed out")
 
@@ -669,7 +714,7 @@ def exec_remote(name: str, body: ExecRequest, request: Request):
         "cmd": body.cmd,
         "stdout": result.stdout,
         "stderr": result.stderr,
-        "code": result.returncode
+        "code": result.returncode,
     }
 
 
@@ -995,7 +1040,10 @@ def _resolve_remote_upload_path(sftp, remote_path: str, filename: str) -> str:
         return remote_path
 
     if stat_module.S_ISDIR(st.st_mode):
-        return posixpath.join(remote_path.rstrip("/") or "/", filename)
+        # Basename the client-supplied filename so a crafted "../" can't place the
+        # file outside the chosen directory on the remote host.
+        safe = posixpath.basename((filename or "").strip()) or "uploaded_file"
+        return posixpath.join(remote_path.rstrip("/") or "/", safe)
 
     return remote_path
 

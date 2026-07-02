@@ -537,7 +537,11 @@ def post_activity_route(body: ActivityLogRequest, request: Request):
         raise HTTPException(status_code=401, detail="A login token is required for this action.")
     if admin.get("role") == "auditor":
         raise HTTPException(status_code=403, detail="Auditor accounts are read-only.")
-    log_activity(admin["username"], body.host, body.description, "")
+    # Bound the free-text fields — this is a one-line summary, not a payload.
+    desc = (body.description or "").strip()[:200]
+    if not desc:
+        raise HTTPException(status_code=400, detail="description required")
+    log_activity(admin["username"], (body.host or "")[:200], desc, "")
     return {"ok": True}
 
 

@@ -52,6 +52,8 @@ def set_meta(name, tags=None, owner=None, notes=None, criticality=None):
     store tidy. Returns the resulting record."""
     if not name:
         raise ValueError("host name required")
+    if len(name) > 200:
+        raise ValueError("host name too long")
     data = _load()
     cur = {**_DEFAULT, **(data.get(name) or {})}
     if tags is not None:

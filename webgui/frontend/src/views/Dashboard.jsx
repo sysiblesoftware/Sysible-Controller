@@ -344,6 +344,8 @@ export default function Dashboard({ role, edition, onOpen }) {
   const [fleetLoading, setFleetLoading] = useState(false);
   const [fleetErr, setFleetErr] = useState("");
   const [fleetAuto, setFleetAuto] = useState(true);   // on by default; refreshes every 10s
+  const [updates, setUpdates] = useState([]);         // cached patch status for the summary tile
+  useEffect(() => { api.fleetUpdates(0, 0).then((d) => setUpdates(d.hosts || [])).catch(() => {}); }, []);
 
   const loadFleet = useCallback(() => {
     setFleetLoading(true); setFleetErr("");
@@ -443,6 +445,12 @@ export default function Dashboard({ role, edition, onOpen }) {
     }
     return { counts };
   }, [fleet]);
+
+  const patch = useMemo(() => {
+    let withUpd = 0, sec = 0;
+    for (const h of updates) { if ((h.total || 0) > 0) withUpd++; sec += h.security || 0; }
+    return { withUpd, sec, loaded: updates.length > 0 };
+  }, [updates]);
 
   // Ranked triage list: every host with something wrong, worst first, each with
   // its specific reasons. Built from the health + posture data already loaded —
@@ -573,6 +581,15 @@ export default function Dashboard({ role, edition, onOpen }) {
         <MetricCard label="Offline / stale" value={m.offline}
           extra={m.offline > 0 ? <span className="dot bad" /> : null}
           hosts={hostLists.offline} onOpenHost={openHost} />
+        {patch.loaded && (
+          <div className="metric" style={{ cursor: "pointer" }} onClick={() => onOpen("updates")}
+               title="Open Update Hosts">
+            <div className="label">Needs patching</div>
+            <div className="value">{patch.withUpd}
+              {patch.sec > 0 && <span style={{ fontSize: 14, fontWeight: 400, color: VERDICT_COLOR.CRITICAL }}> · {patch.sec} sec</span>}
+            </div>
+          </div>
+        )}
         <div className="metric">
           <div className="label">Environments</div>
           <div className="value">{m.envs}</div>

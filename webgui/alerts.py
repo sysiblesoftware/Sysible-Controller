@@ -191,6 +191,9 @@ def _send_webhook(cfg, subject, body):
     w = cfg["channels"]["webhook"]
     if not w.get("enabled") or not w.get("url"):
         return False, "webhook not configured"
+    from urllib.parse import urlparse
+    if urlparse(w["url"]).scheme not in ("http", "https"):
+        return False, "webhook URL must be http(s)"
     try:
         import urllib.request
         payload = json.dumps({"text": f"*{subject}*\n{body}"}).encode()

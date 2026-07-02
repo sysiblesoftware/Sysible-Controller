@@ -18,7 +18,7 @@ import StandaloneTerminal from "./components/StandaloneTerminal.jsx";
 const SECTIONS = {
   hosts: "Host Enrollment",
   perf: "Fleet Performance",
-  updates: "Fleet Patch Status",
+  updates: "Update Hosts",
   schedules: "Scheduled Jobs",
   alerts: "Alerting",
   quickactions: "Quick System Actions",
@@ -34,7 +34,7 @@ const SECTIONS = {
 const NAV = [
   { key: null, label: "Dashboard", icon: "grid", su: false, aud: true },
   { key: "perf", label: "Performance", icon: "chart", su: false, aud: true },
-  { key: "updates", label: "Updates", icon: "download", su: false, aud: true },
+  { key: "updates", label: "Update Hosts", icon: "download", su: false, aud: true },
   { key: "schedules", label: "Schedules", icon: "clock", su: false },
   { key: "alerts", label: "Alerts", icon: "bell", su: false },
   { key: "hosts", label: "Host Enrollment", icon: "server", su: true },

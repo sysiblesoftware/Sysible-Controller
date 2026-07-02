@@ -317,14 +317,15 @@ function SoftwareUpdate() {
   const [ctrlLog, setCtrlLog] = useState("");   // live self-update output
   const [agentRows, setAgentRows] = useState(null); // per-host update status list
   const pollRef = useRef(null);
+  const agentPollRef = useRef(null);
   const logRef = useRef(null);
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+  useEffect(() => () => { [pollRef, agentPollRef].forEach((r) => r.current && clearInterval(r.current)); }, []);
   // Keep the console pinned to the newest output.
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [ctrlLog]);
 
-  async function startController() {
-    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setAgents(null); setAgentRows(null);
-    setCtrlMsg(""); setCtrlLog("");
+  async function startController({ keepAgents = false } = {}) {
+    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setCtrlMsg(""); setCtrlLog("");
+    if (!keepAgents) { setAgents(null); setAgentRows(null); }
     // Baseline: only a status record written at/after we kicked this off counts
     // as THIS run's outcome (the updater writes run/last_update.json). Small
     // margin for clock skew between browser and server.
@@ -380,34 +381,49 @@ function SoftwareUpdate() {
     finally { setBusy(false); }
   }
 
+  // Kick the agent update + N-of-M polling on its OWN interval (so it can run
+  // alongside the controller update). Doesn't reset controller state.
+  async function kickAgents() {
+    const r = await api.updateAgents();
+    const ver = r?.version, total = r?.queued || 0;
+    setMsg(r?.message || `Agent update queued for ${total} host(s).`);
+    if (!ver || !total) return;
+    setAgents({ total, updated: 0, ver, done: false, timedOut: false });
+    const t0 = Date.now();
+    if (agentPollRef.current) clearInterval(agentPollRef.current);
+    const tick = async () => {
+      try {
+        const d = await api.agents();
+        const list = (d.agents || []).map((a) => ({
+          host: a.hostname || a.host_id, env: a.environment || "",
+          updated: a.agent_version === ver,
+        })).sort((x, y) => (x.updated - y.updated) || x.host.localeCompare(y.host));
+        setAgentRows(list);
+        const updated = list.filter((a) => a.updated).length;
+        const done = updated >= total;
+        const timedOut = !done && Date.now() - t0 > 240000;
+        setAgents({ total, updated, ver, done, timedOut });
+        if (done || timedOut) clearInterval(agentPollRef.current);
+      } catch { /* transient — keep polling */ }
+    };
+    agentPollRef.current = setInterval(tick, 4000);
+    tick();
+  }
+
   async function startAgents() {
-    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setCtrl(null); setCtrlLog(""); setAgentRows(null);
+    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setCtrl(null); setCtrlLog(""); setAgentRows(null); setAgents(null);
+    try { await kickAgents(); } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+
+  // Combined: kick the agents first (their progress bar starts), then the
+  // controller update runs alongside it. The controller restart signs you out;
+  // agents keep applying in the background and finish on their own.
+  async function startBoth() {
+    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setCtrl(null); setCtrlLog(""); setAgents(null); setAgentRows(null);
     try {
-      const r = await api.updateAgents();
-      const ver = r?.version, total = r?.queued || 0;
-      setMsg(r?.message || `Agent update queued for ${total} host(s).`);
-      if (!ver || !total) return;
-      setAgents({ total, updated: 0, ver, done: false, timedOut: false });
-      const t0 = Date.now();
-      if (pollRef.current) clearInterval(pollRef.current);
-      const tick = async () => {
-        try {
-          const d = await api.agents();
-          const list = (d.agents || []).map((a) => ({
-            host: a.hostname || a.host_id,
-            env: a.environment || "",
-            updated: a.agent_version === ver,
-          })).sort((x, y) => (x.updated - y.updated) || x.host.localeCompare(y.host));
-          setAgentRows(list);
-          const updated = list.filter((a) => a.updated).length;
-          const done = updated >= total;
-          const timedOut = !done && Date.now() - t0 > 240000;
-          setAgents({ total, updated, ver, done, timedOut });
-          if (done || timedOut) clearInterval(pollRef.current);
-        } catch { /* transient — keep polling */ }
-      };
-      pollRef.current = setInterval(tick, 4000);
-      tick();
+      await kickAgents();
+      await startController({ keepAgents: true });
     } catch (e) { setErr(e.message); }
     finally { setBusy(false); }
   }
@@ -445,13 +461,16 @@ function SoftwareUpdate() {
     <div className="card" style={{ maxWidth: 680, marginTop: 16 }}>
       <strong>Software updates</strong>
       <p className="faint" style={{ marginTop: 8 }}>
-        Update the controller in place (git pull → redeploy → restart), then push the
-        current agent to every managed host over its existing check-in — no SSH or
-        re-enrollment. Each restarts itself; a controller update signs you out briefly.
+        Update the controller in place (git pull → redeploy → restart) and push the current
+        agent to every managed host. "Update controller + agents" does both — the agents'
+        progress shows below while the controller updates. A controller update signs you out
+        briefly; agents keep applying in the background.
       </p>
 
       <div className="row" style={{ gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-        <Button which="controller" label="Update controller" start={startController} />
+        <Button which="both" label="Update controller + agents" start={startBoth} />
+        <Button which="controller" label="Update controller only" start={startController} />
+        <Button which="agents" label="Update agents only" start={startAgents} />
       </div>
       {ctrl === "restarting" && (
         <div style={{ marginTop: 8 }}>
@@ -496,11 +515,8 @@ function SoftwareUpdate() {
         </div>
       )}
 
-      <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-        <Button which="agents" label="Update agents" start={startAgents} />
-      </div>
       {agents && (
-        <div style={{ marginTop: 8 }}>
+        <div style={{ marginTop: 12 }}>
           <div className="spread" style={{ fontSize: 12 }}>
             <span className="faint">
               {agents.done ? "✓ all agents updated"

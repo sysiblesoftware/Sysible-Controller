@@ -134,6 +134,17 @@ def _sanitize_custom(rules):
     return out
 
 
+def norm_custom_rules(rules):
+    """Order-independent normalized view of the custom-rule set, for change
+    detection (so the BFF can allow a sysadmin to re-save the form unchanged but
+    require a superuser to add/edit/enable/disable a command rule)."""
+    return sorted(
+        (r.get("command", ""), r.get("regex", ""),
+         "absent" if r.get("mode") == "absent" else "present",
+         (r.get("name") or "").strip(), bool(r.get("enabled", True)))
+        for r in (rules or []))
+
+
 def set_config(new):
     cfg = _load()
     e = new.get("channels", {}).get("email", {})
@@ -260,13 +271,46 @@ def _send_email(cfg, subject, body):
         return False, str(ex)
 
 
+def _webhook_url_safe(url):
+    """SSRF guard: allow only http(s) URLs whose host resolves entirely to
+    public addresses. Blocks loopback/private/link-local (incl. the
+    169.254.169.254 cloud-metadata address), reserved, multicast and
+    unspecified targets so an operator can't point the controller at internal
+    services. Returns (ok, reason).
+
+    Residual: this is a resolve-time check, so a hostile DNS answer could still
+    rebind between here and the request (DNS rebinding). Given the webhook is
+    superuser/sysadmin-configured, this proportionally raises the bar; pinning
+    the resolved IP for the connection would close the rebinding gap fully."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+    p = urlparse(url)
+    if p.scheme not in ("http", "https"):
+        return False, "webhook URL must be http(s)"
+    host = p.hostname
+    if not host:
+        return False, "invalid webhook URL"
+    try:
+        infos = socket.getaddrinfo(host, p.port or (443 if p.scheme == "https" else 80),
+                                   proto=socket.IPPROTO_TCP)
+    except socket.gaierror as ex:
+        return False, f"cannot resolve webhook host: {ex}"
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                or ip.is_multicast or ip.is_unspecified):
+            return False, "webhook host resolves to a non-public address (blocked)"
+    return True, "ok"
+
+
 def _send_webhook(cfg, subject, body):
     w = cfg["channels"]["webhook"]
     if not w.get("enabled") or not w.get("url"):
         return False, "webhook not configured"
-    from urllib.parse import urlparse
-    if urlparse(w["url"]).scheme not in ("http", "https"):
-        return False, "webhook URL must be http(s)"
+    ok, why = _webhook_url_safe(w["url"])
+    if not ok:
+        return False, why
     try:
         import urllib.request
         payload = json.dumps({"text": f"*{subject}*\n{body}"}).encode()

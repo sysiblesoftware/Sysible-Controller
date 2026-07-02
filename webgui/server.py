@@ -980,7 +980,10 @@ def _run_scheduled_job(job):
     ok = 0
     for e in entries:
         # Tokenless (unattended root) + needs_sudo=False: no operator/become needed.
-        r = _dispatch_one(e, cmd, "command", None, None, f"[scheduled] {schedules.ACTIONS.get(action, action)}",
+        # Name the creator in the description so the activity log still attributes
+        # the (root) run to whoever set the schedule up.
+        r = _dispatch_one(e, cmd, "command", None, None,
+                          f"[scheduled by {job.get('created_by') or '?'}] {schedules.ACTIONS.get(action, action)}",
                           needs_sudo=False)
         if r.get("ok") or r.get("code") == 0 or (action == "reboot" and not r.get("error")):
             ok += 1
@@ -1026,6 +1029,22 @@ class ScheduleRequest(BaseModel):
     enabled: bool = True
 
 
+# Free-form scheduled actions run an operator-supplied command / service name as
+# ROOT (tokenless) on every target, which sidesteps the per-user sudo policy that
+# constrains a sysadmin everywhere else. Restrict CREATING / EDITING / RUNNING
+# these to superusers; the canned maintenance actions stay open to sysadmins.
+_FREEFORM_SCHED_ACTIONS = {"run_command", "restart_service"}
+
+
+def _guard_freeform_schedule(request: Request, *actions_):
+    if any(a in _FREEFORM_SCHED_ACTIONS for a in actions_ if a):
+        if request.session.get("role") != "superuser":
+            raise HTTPException(
+                status_code=403,
+                detail="Only a superuser can schedule free-form commands "
+                       "(run a command / restart a service) — they run as root on every host.")
+
+
 @app.get("/api/schedules")
 def schedules_list(user: str = Depends(require_operator)):
     return {"schedules": schedules.list_jobs(), "actions": schedules.ACTIONS,
@@ -1033,7 +1052,8 @@ def schedules_list(user: str = Depends(require_operator)):
 
 
 @app.post("/api/schedules")
-def schedules_create(body: ScheduleRequest, user: str = Depends(require_operator)):
+def schedules_create(body: ScheduleRequest, request: Request, user: str = Depends(require_operator)):
+    _guard_freeform_schedule(request, body.action)
     try:
         job = schedules.create_job(body.name, body.action, body.targets, body.cadence,
                                    body.at, body.weekday, user, arg=body.arg)
@@ -1043,7 +1063,10 @@ def schedules_create(body: ScheduleRequest, user: str = Depends(require_operator
 
 
 @app.patch("/api/schedules/{job_id}")
-def schedules_update(job_id: str, body: ScheduleRequest, user: str = Depends(require_operator)):
+def schedules_update(job_id: str, body: ScheduleRequest, request: Request, user: str = Depends(require_operator)):
+    # Guard both the incoming action AND the existing one, so a sysadmin can't
+    # edit (or repoint) a superuser-owned free-form job either.
+    _guard_freeform_schedule(request, body.action, (schedules.get_job(job_id) or {}).get("action"))
     try:
         job = schedules.update_job(job_id, name=body.name, action=body.action, arg=body.arg,
                                    targets=body.targets, cadence=body.cadence, at=body.at,
@@ -1063,10 +1086,11 @@ def schedules_delete(job_id: str, user: str = Depends(require_operator)):
 
 
 @app.post("/api/schedules/{job_id}/run-now")
-def schedules_run_now(job_id: str, user: str = Depends(require_operator)):
+def schedules_run_now(job_id: str, request: Request, user: str = Depends(require_operator)):
     job = schedules.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Schedule not found")
+    _guard_freeform_schedule(request, job.get("action"))
     st, detail = _run_scheduled_job(job)
     schedules.record_run(job_id, st, detail)
     return {"status": st, "detail": detail}
@@ -1322,7 +1346,18 @@ def alerts_get(user: str = Depends(require_operator)):
 
 
 @app.post("/api/alerts")
-def alerts_set(body: dict, user: str = Depends(require_operator)):
+def alerts_set(body: dict, request: Request, user: str = Depends(require_operator)):
+    # Custom rules run an operator-supplied command as ROOT on every host each
+    # eval cycle. A sysadmin may configure channels + built-in thresholds and
+    # re-save custom rules UNCHANGED, but only a superuser may add / edit /
+    # enable / disable a custom command rule.
+    if request.session.get("role") != "superuser" and (body or {}).get("custom_rules") is not None:
+        incoming = alerts.norm_custom_rules(alerts._sanitize_custom((body or {}).get("custom_rules")))
+        current = alerts.norm_custom_rules(alerts.load().get("custom_rules", []))
+        if incoming != current:
+            raise HTTPException(
+                status_code=403,
+                detail="Only a superuser can define custom command rules — they run as root on every host.")
     return alerts.set_config(body or {})
 
 

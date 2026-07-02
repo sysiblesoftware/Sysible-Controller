@@ -340,7 +340,7 @@ export default function Dashboard({ role, edition, onOpen }) {
   const [fleetAt, setFleetAt] = useState(0);
   const [fleetLoading, setFleetLoading] = useState(false);
   const [fleetErr, setFleetErr] = useState("");
-  const [fleetAuto, setFleetAuto] = useState(false);
+  const [fleetAuto, setFleetAuto] = useState(true);   // on by default; refreshes every 10s
 
   const loadFleet = useCallback(() => {
     setFleetLoading(true); setFleetErr("");
@@ -355,7 +355,7 @@ export default function Dashboard({ role, edition, onOpen }) {
   useEffect(() => { loadFleet(); }, [loadFleet]);
   useEffect(() => {
     if (!fleetAuto) return undefined;
-    const t = setInterval(loadFleet, 30000);
+    const t = setInterval(loadFleet, 10000);
     return () => clearInterval(t);
   }, [fleetAuto, loadFleet]);
 
@@ -562,7 +562,7 @@ export default function Dashboard({ role, edition, onOpen }) {
             {postureAt > 0 && <span className="faint" style={{ fontSize: 12 }}>· scan {new Date(postureAt).toLocaleTimeString()}</span>}
             <label className="checkrow" style={{ margin: 0 }}>
               <input type="checkbox" checked={fleetAuto} onChange={(e) => setFleetAuto(e.target.checked)} />
-              <span className="faint">Auto (30s)</span>
+              <span className="faint">Auto (10s)</span>
             </label>
             <button className="btn ghost sm" onClick={() => loadPosture(true)} disabled={postureLoading}>
               {postureLoading ? <span className="spin" /> : "Run posture scan"}

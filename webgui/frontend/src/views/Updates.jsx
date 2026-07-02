@@ -144,9 +144,17 @@ export default function Updates({ role }) {
     <div>
       <div className="spread" style={{ marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
         <div className="row" style={{ gap: 16, flexWrap: "wrap", alignItems: "baseline" }}>
-          <span><b style={{ fontSize: 18 }}>{summary.withUpd}</b> <span className="faint">host{summary.withUpd === 1 ? "" : "s"} with updates</span></span>
-          <span><b style={{ fontSize: 18, color: summary.sec ? C.sec : undefined }}>{summary.sec}</b> <span className="faint">security</span></span>
-          <span><b style={{ fontSize: 18, color: summary.reboot ? C.reboot : undefined }}>{summary.reboot}</b> <span className="faint">need reboot</span></span>
+          {summary.total > 0 && summary.withUpd === 0 && summary.sec === 0 && summary.reboot === 0 ? (
+            <span style={{ color: C.ok, fontWeight: 600 }}>
+              ✓ All {summary.total - summary.offline} host{(summary.total - summary.offline) === 1 ? "" : "s"} up to date
+            </span>
+          ) : (
+            <>
+              <span><b style={{ fontSize: 18 }}>{summary.withUpd}</b> <span className="faint">host{summary.withUpd === 1 ? "" : "s"} with updates</span></span>
+              <span><b style={{ fontSize: 18, color: summary.sec ? C.sec : undefined }}>{summary.sec}</b> <span className="faint">security</span></span>
+              <span><b style={{ fontSize: 18, color: summary.reboot ? C.reboot : undefined }}>{summary.reboot}</b> <span className="faint">need reboot</span></span>
+            </>
+          )}
           {summary.offline > 0 && <span className="faint">{summary.offline} offline</span>}
         </div>
         <div className="row" style={{ gap: 10, alignItems: "center" }}>
@@ -184,7 +192,15 @@ export default function Updates({ role }) {
         </div>
       ) : (
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
+            <colgroup>
+              {canAct && <col style={{ width: 40 }} />}
+              <col />{/* Host — absorbs the remaining width */}
+              <col style={{ width: 96 }} />
+              <col style={{ width: 96 }} />
+              <col style={{ width: 84 }} />
+              <col style={{ width: 96 }} />
+            </colgroup>
             <thead>
               <tr style={{ textAlign: "left", color: "var(--text-faint)", fontSize: 11 }}>
                 {canAct && <th style={{ padding: "6px 8px", width: 28 }}></th>}

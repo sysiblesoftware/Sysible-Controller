@@ -837,14 +837,11 @@ case "$1" in
   update)  cmd_update ;;
   status)  cmd_status ;;
   logs)    cmd_logs ;;
-  gui)     cmd_gui ;;
   webgui)  cmd_webgui "$@" ;;
   reset-admin) cmd_reset_admin "$@" ;;
-  enable-remote-gui)  cmd_enable_remote_gui ;;
-  disable-remote-gui) cmd_disable_remote_gui ;;
   destroy) cmd_destroy ;;
   *)
-    echo "Usage: sysible_controller {start|stop|restart|update|status|logs|gui|webgui|reset-admin|enable-remote-gui|disable-remote-gui|destroy}"
+    echo "Usage: sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|destroy}"
     exit 1
     ;;
 esac

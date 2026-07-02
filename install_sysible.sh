@@ -192,24 +192,6 @@ source "$VENV/bin/activate"
 pip install --upgrade pip
 pip install -r "$BASE/requirements.txt"
 
-# Desktop GUI client deps (PySide6, ...) are OPTIONAL — the controller (backend +
-# web console) doesn't need them. Install best-effort and NEVER fail the install:
-# PySide6 has no wheels on some platforms (ARM / Raspberry Pi, very new Python),
-# where the GUI uses the distro's PySide6 package instead. A headless controller
-# doesn't run the desktop GUI at all.
-if [[ -f "$BASE/requirements-gui.txt" ]]; then
-  echo "Installing desktop GUI dependencies (optional)..."
-  if pip install -r "$BASE/requirements-gui.txt"; then
-    echo "Desktop GUI dependencies installed."
-  else
-    echo "NOTE: desktop GUI dependencies (e.g. PySide6) were not installed on this"
-    echo "      platform. This is expected on headless servers and ARM/Raspberry Pi,"
-    echo "      and does NOT affect the controller or the web console."
-    echo "      To use the desktop GUI here, install them from your distro, e.g.:"
-    echo "        sudo apt install python3-pyside6 python3-qtawesome python3-pyte"
-  fi
-fi
-
 # =========================================================
 # WEB CONSOLE (browser-based, headless-friendly GUI)
 # Extra Python deps the BFF needs, plus a production build of the React
@@ -458,37 +440,6 @@ chmod 1777 "$BASE/run"
 # itself. Only installed if pkexec and a system applications menu
 # actually exist, so this is a silent no-op on a minimal/headless box.
 # =========================================================
-DESKTOP_DIR="/usr/share/applications"
-
-if command -v pkexec >/dev/null 2>&1 && [[ -d "$DESKTOP_DIR" ]]; then
-  echo "Installing application menu launcher..."
-
-  DESKTOP_FILE="$DESKTOP_DIR/sysible-controller.desktop"
-
-  cat > "$DESKTOP_FILE" <<EOF
-[Desktop Entry]
-Type=Application
-Name=Sysible Controller
-Comment=Reopen the Sysible Controller dashboard
-Exec=/usr/local/bin/sysible_controller gui
-Icon=$BASE/sysible_logo.png
-Terminal=false
-StartupWMClass=sysible-controller
-Categories=System;Settings;
-EOF
-
-  chmod 644 "$DESKTOP_FILE"
-
-  # Best-effort menu refresh - not every desktop environment ships
-  # this command, and none of them require it to pick up a new
-  # .desktop file eventually, so a missing binary here is not an
-  # install failure.
-  command -v update-desktop-database >/dev/null 2>&1 && \
-    update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1
-else
-  echo "No desktop menu environment detected (pkexec or $DESKTOP_DIR missing) - skipping application menu launcher."
-fi
-
 echo ""
 echo "Installation complete"
 echo "Installed to: $BASE"
@@ -501,17 +452,10 @@ echo "  - every host you run host_agent/agent.py on"
 echo "and point them at it with the SYSIBLE_CA_CERT env var so they can"
 echo "verify this controller instead of trusting it blindly."
 echo ""
-if [[ -f "$DESKTOP_DIR/sysible-controller.desktop" ]]; then
-  echo "A 'Sysible Controller' icon has been added to this machine's application"
-  echo "menu - use it any time to reopen the dashboard if it's been closed,"
-  echo "without needing a terminal (it will prompt for the admin/root password)."
-  echo ""
-fi
 echo "==================================================================="
 echo " SERVICES (each started separately):"
 echo "   Controller backend : sudo sysible_controller start"
-echo "   Web console (GUI)  : sudo sysible_controller webgui start   ->  https://<this-host>:8800/"
-echo "   Desktop GUI client : sysible_controller gui   (needs a desktop session)"
+echo "   Web console        : sudo sysible_controller webgui start   ->  https://<this-host>:8800/"
 echo "==================================================================="
 if [[ "$SEEDED_ADMIN" == "created" ]]; then
   R='\033[1;91m'; Z='\033[0m'   # bold bright red / reset

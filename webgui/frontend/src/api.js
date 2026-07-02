@@ -132,6 +132,10 @@ export const api = {
   fleet: (action, targets, command, sudoPassword = "") =>
     req("/api/fleet", { method: "POST", body: { action, targets, command, sudo_password: sudoPassword } }),
   checkin: (targets = []) => req("/api/checkin", { method: "POST", body: { targets } }),
+  // Per-host operator metadata (tags / owner / notes / criticality).
+  hostMeta: () => req("/api/host-meta"),
+  setHostMeta: (name, meta) =>
+    req(`/api/host-meta/${encodeURIComponent(name)}`, { method: "POST", body: meta }),
   // Fleet Query — ask one read-only question across the fleet.
   fleetQueryTypes: () => req("/api/fleet-query/types"),
   fleetQuery: (qtype, arg, targets = []) =>

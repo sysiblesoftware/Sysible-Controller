@@ -6,6 +6,10 @@ const VERDICT_COLOR = { OK: "#4ec07a", WARNING: "#e0a83a", CRITICAL: "#e06c6c", 
 // Severity for the "Needs attention" list: 0 (offline) / 1 (critical) both red,
 // 2 (warning) amber. Lower = more urgent (sorted first).
 const SEV_COLOR = { 0: VERDICT_COLOR.CRITICAL, 1: VERDICT_COLOR.CRITICAL, 2: VERDICT_COLOR.WARNING };
+// Operator-set host criticality: pulls a flagged host up the triage list and
+// shows a badge, so a problem on a business-critical box stands out.
+const CRIT_RANK = { critical: 0, high: 1, normal: 2, low: 3 };
+const CRIT_COLOR = { critical: VERDICT_COLOR.CRITICAL, high: VERDICT_COLOR.WARNING };
 
 // Inline SVG donut (no chart-library dependency): one ring segment per value.
 function Donut({ segments, size = 88, stroke = 13 }) {
@@ -346,6 +350,8 @@ export default function Dashboard({ role, edition, onOpen }) {
   const [fleetAuto, setFleetAuto] = useState(true);   // on by default; refreshes every 10s
   const [updates, setUpdates] = useState([]);         // cached patch status for the summary tile
   useEffect(() => { api.fleetUpdates(0, 0).then((d) => setUpdates(d.hosts || [])).catch(() => {}); }, []);
+  const [hostMetaMap, setHostMetaMap] = useState({}); // name -> {criticality, owner, tags, ...}
+  useEffect(() => { api.hostMeta().then((d) => setHostMetaMap(d.meta || {})).catch(() => {}); }, []);
 
   const loadFleet = useCallback(() => {
     setFleetLoading(true); setFleetErr("");
@@ -474,11 +480,17 @@ export default function Dashboard({ role, edition, onOpen }) {
         const issues = p && p.flags ? Object.values(p.flags).filter((v) => v === true).length : 0;
         if (issues > 0) { reasons.push(`${issues} compliance`); sev = Math.min(sev, 2); }
       }
-      if (reasons.length) rows.push({ id: h.id, host: h.host, env: h.environment || "Unassigned", sev, reasons });
+      if (reasons.length) {
+        const crit = (hostMetaMap[h.host] || {}).criticality || "normal";
+        rows.push({ id: h.id, host: h.host, env: h.environment || "Unassigned", sev, reasons, crit });
+      }
     }
-    rows.sort((a, b) => a.sev - b.sev || b.reasons.length - a.reasons.length);
+    // Worst first; within a severity, business-critical hosts rank above others.
+    rows.sort((a, b) => a.sev - b.sev
+      || (CRIT_RANK[a.crit] ?? 2) - (CRIT_RANK[b.crit] ?? 2)
+      || b.reasons.length - a.reasons.length);
     return rows;
-  }, [fleet, posture]);
+  }, [fleet, posture, hostMetaMap]);
 
   // Single environment-grouped rollup joining the two lenses by host id: each
   // host carries its live health (verdict, disk/mem, problem signals) AND its
@@ -613,6 +625,11 @@ export default function Dashboard({ role, edition, onOpen }) {
                 <span className="dot" style={{ background: SEV_COLOR[r.sev] || VERDICT_COLOR.WARNING }} />
                 <strong style={{ whiteSpace: "nowrap" }}>{r.host}</strong>
                 <span className="faint" style={{ fontSize: 11 }}>{r.env}</span>
+                {CRIT_COLOR[r.crit] && (
+                  <span style={{ fontSize: 10, fontWeight: 700, color: CRIT_COLOR[r.crit],
+                                 border: `1px solid ${CRIT_COLOR[r.crit]}`, borderRadius: 10, padding: "0 6px" }}
+                        title="Operator-set criticality">{r.crit}</span>
+                )}
                 <span style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
                   {r.reasons.map((x, i) => (
                     <span key={i} style={{ fontSize: 11, color: SEV_COLOR[r.sev] || VERDICT_COLOR.WARNING,

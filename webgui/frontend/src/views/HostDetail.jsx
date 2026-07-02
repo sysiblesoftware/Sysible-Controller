@@ -245,6 +245,83 @@ function SectionCard({ section, posture, hostId, onOpen, canAct, onRefreshSoon }
   );
 }
 
+const CRIT_COLOR = { low: "#7a7a7a", normal: "#7a7a7a", high: "#e0a83a", critical: "#e06c6c" };
+
+// Operator metadata for one host: criticality / owner / tags / notes, keyed by
+// host name (applies to agent + SSH hosts alike). View + inline edit.
+function HostMetaPanel({ name, canAct }) {
+  const [meta, setMeta] = useState(null);
+  const [crits, setCrits] = useState(["low", "normal", "high", "critical"]);
+  const [edit, setEdit] = useState(false);
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!name) return;
+    const fallback = { tags: [], owner: "", notes: "", criticality: "normal" };
+    api.hostMeta()
+      .then((d) => { setCrits(d.criticality || crits); setMeta((d.meta || {})[name] || fallback); })
+      .catch(() => setMeta(fallback));
+  }, [name]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!meta) return null;
+  const crit = meta.criticality || "normal";
+  const startEdit = () => { setDraft({ ...meta, tagsText: (meta.tags || []).join(", ") }); setErr(""); setEdit(true); };
+  async function save() {
+    setBusy(true); setErr("");
+    const body = {
+      tags: draft.tagsText.split(",").map((t) => t.trim()).filter(Boolean),
+      owner: draft.owner, notes: draft.notes, criticality: draft.criticality,
+    };
+    try { setMeta(await api.setHostMeta(name, body)); setEdit(false); }
+    catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 12 }}>
+      <div className="spread" style={{ marginBottom: edit ? 8 : 0 }}>
+        <strong>Host info</strong>
+        {canAct && !edit && <button className="btn ghost sm" onClick={startEdit}>Edit</button>}
+      </div>
+      {!edit ? (
+        <div className="row" style={{ gap: 16, flexWrap: "wrap", fontSize: 13, alignItems: "center" }}>
+          <span><span className="dot" style={{ background: CRIT_COLOR[crit] }} /> {crit}</span>
+          <span className="faint">owner: {meta.owner || "—"}</span>
+          <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {(meta.tags || []).length
+              ? meta.tags.map((t) => <span key={t} className="badge" style={{ fontSize: 11 }}>{t}</span>)
+              : <span className="faint">no tags</span>}
+          </span>
+          {meta.notes && <span className="faint" style={{ fontSize: 12, flexBasis: "100%" }}>{meta.notes}</span>}
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 8, maxWidth: 520 }}>
+          <label className="field"><span>Criticality</span>
+            <select value={draft.criticality} onChange={(e) => setDraft({ ...draft, criticality: e.target.value })}>
+              {crits.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select></label>
+          <label className="field"><span>Owner</span>
+            <input value={draft.owner} onChange={(e) => setDraft({ ...draft, owner: e.target.value })}
+                   placeholder="e.g. platform-team or alice" /></label>
+          <label className="field"><span>Tags <span className="faint">(comma-separated)</span></span>
+            <input value={draft.tagsText} onChange={(e) => setDraft({ ...draft, tagsText: e.target.value })}
+                   placeholder="e.g. web, edge, pci" /></label>
+          <label className="field"><span>Notes</span>
+            <textarea value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
+                      rows={2} style={{ width: "100%" }} placeholder="Anything worth remembering about this host" /></label>
+          {err && <div className="error-box">{err}</div>}
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn sm" onClick={save} disabled={busy}>{busy ? <span className="spin" /> : "Save"}</button>
+            <button className="btn ghost sm" onClick={() => setEdit(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function HostDetail({ hostId, label, onBack, onOpen, canAct = true }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -313,6 +390,8 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
       </div>
 
       {err && <div className="error-box">{err}</div>}
+
+      {label && <HostMetaPanel name={label} canAct={canAct} />}
 
       {rebooting && (
         <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "9px 12px",

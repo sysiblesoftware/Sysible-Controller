@@ -2476,6 +2476,27 @@ def fleet_query(body: FleetQueryRequest, user: str = Depends(require_operator)):
             "count": len(rows), "matched": sum(1 for r in rows if r["present"])}
 
 
+# ----------------------------------------------------------------------
+# Per-host operator metadata (tags / owner / notes / criticality). Read is
+# require_login (dashboards/host detail show it, incl. auditors); write is
+# require_operator. See webgui/host_meta.py.
+# ----------------------------------------------------------------------
+@app.get("/api/host-meta")
+def host_meta_all(user: str = Depends(require_login)):
+    from webgui import host_meta
+    return {"meta": host_meta.all_meta(), "criticality": list(host_meta.CRITICALITY)}
+
+
+@app.post("/api/host-meta/{name}")
+def host_meta_set(name: str, body: dict, user: str = Depends(require_operator)):
+    from webgui import host_meta
+    try:
+        return host_meta.set_meta(name, tags=body.get("tags"), owner=body.get("owner"),
+                                  notes=body.get("notes"), criticality=body.get("criticality"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 def _parse_filehash(text):
     """Parse the `SYSFILEHASH|k=v|...` line from cmd_file_fingerprint, or None."""
     for line in (text or "").splitlines():

@@ -117,6 +117,24 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
+    # Migration: agent secret revocation. 0 = active; 1 = revoked, so every
+    # authenticated agent request (heartbeat/poll/result) is rejected until an
+    # admin re-enrolls the host (which mints a fresh secret and clears this).
+    # The hard "lock this host out" control — see revoke_agent / verify_agent.
+    try:
+        cur.execute("ALTER TABLE agents ADD COLUMN revoked INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+
+    # Migration: privilege-dispatcher capability. 1 = the agent reports it runs
+    # confined behind sysible-priv (SYSIBLE_PRIV set), so op-capable actions can
+    # dispatch kind="op" verbs to it; 0/absent = the shell path. Reported each
+    # heartbeat (like agent_version), so it tracks the agent's live state.
+    try:
+        cur.execute("ALTER TABLE agents ADD COLUMN dispatcher INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+
     # -----------------------------------------------------
     # Environments (dev/stage/prod, etc.)
     # An editable, admin-managed list rather than a fixed enum - used
@@ -613,7 +631,10 @@ def create_or_update_agent(
         status=excluded.status,
         last_seen=excluded.last_seen,
         agent_secret=excluded.agent_secret,
-        ip=excluded.ip
+        ip=excluded.ip,
+        -- A genuine re-enroll (valid single-use token, admin-authorized) clears
+        -- a prior revocation: the host is being deliberately let back in.
+        revoked=0
     """,
     (
         host_id,
@@ -630,7 +651,7 @@ def create_or_update_agent(
     conn.close()
 
 
-def update_agent_heartbeat(host_id, ip=None, hostname=None, agent_version=None):
+def update_agent_heartbeat(host_id, ip=None, hostname=None, agent_version=None, dispatcher=None):
     conn = _connect()
     cur = conn.cursor()
 
@@ -657,7 +678,8 @@ def update_agent_heartbeat(host_id, ip=None, hostname=None, agent_version=None):
         last_seen=?,
         ip=COALESCE(?, ip),
         hostname=COALESCE(?, hostname),
-        agent_version=COALESCE(?, agent_version)
+        agent_version=COALESCE(?, agent_version),
+        dispatcher=COALESCE(?, dispatcher)
     WHERE host_id=?
     """,
     (
@@ -666,6 +688,7 @@ def update_agent_heartbeat(host_id, ip=None, hostname=None, agent_version=None):
         ip,
         hostname,
         agent_version,
+        (1 if dispatcher else 0) if dispatcher is not None else None,
         host_id
     ))
 
@@ -680,7 +703,7 @@ def list_agents():
 
     cur.execute("""
     SELECT host_id, hostname, platform, kernel, status, last_seen, environment, ip,
-           requires_sudo_password, agent_version
+           requires_sudo_password, agent_version, revoked, dispatcher
     FROM agents
     ORDER BY hostname
     """)
@@ -853,6 +876,28 @@ def get_agent_secret(host_id):
     conn.close()
 
     return row[0] if row else None
+
+
+def revoke_agent(host_id):
+    """Revoke a host's agent secret — the hard lock-out. Every authenticated
+    request (verify_agent) then fails until the host is re-enrolled with a fresh
+    single-use token. Returns True if a row was affected."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("UPDATE agents SET revoked=1 WHERE host_id=?", (host_id,))
+    conn.commit()
+    changed = cur.rowcount
+    conn.close()
+    return changed > 0
+
+
+def is_agent_revoked(host_id):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT revoked FROM agents WHERE host_id=?", (host_id,))
+    row = cur.fetchone()
+    conn.close()
+    return bool(row and row[0])
 
 
 def agent_exists(host_id):

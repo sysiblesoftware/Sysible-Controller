@@ -41,6 +41,7 @@ Serve the built SPA (frontend/dist) from the same service, or put both
 behind a TLS-terminating reverse proxy. See README.md.
 """
 import asyncio
+import json
 import os
 import secrets
 import sys
@@ -922,6 +923,23 @@ def fleet_updates(refresh: int = 0, live: int = 0, user: str = Depends(require_l
 from webgui import schedules  # noqa: E402
 
 
+# Scheduled actions that map 1:1 to a bounded dispatcher verb. On a
+# dispatcher-capable agent these run as a vetted `op` (no arbitrary root shell);
+# on every other host they fall back to the shell builder below. security_updates
+# stays shell (the verb table has no security-only upgrade — pkg.update is a full
+# upgrade), so we don't silently widen it.
+_SCHED_OP = {
+    "all_updates":        ("pkg.update", lambda job: {}),
+    "clean_pkg_cache":    ("pkg.clean", lambda job: {}),
+    "vacuum_journal":     ("journal.vacuum", lambda job: {"days": 7}),
+    "fstrim":             ("fstrim", lambda job: {}),
+    "clear_failed_units": ("service.reset_failed", lambda job: {}),
+    "sync_time":          ("system.sync_time", lambda job: {}),
+    "restart_service":    ("service.restart", lambda job: {"unit": (job.get("arg") or "").strip()}),
+    "reboot":             ("power.reboot", lambda job: {}),
+}
+
+
 def _run_scheduled_job(job):
     """Execute one scheduled job across its targets. Returns (status, detail)."""
     import time as _t
@@ -977,14 +995,25 @@ def _run_scheduled_job(job):
     else:
         return "error", f"unknown action {action}"
 
+    # If this action maps to a bounded verb, precompute its op spec once; used
+    # only for dispatcher-capable agents (else the shell `cmd` below).
+    op_json = None
+    if action in _SCHED_OP:
+        verb, argf = _SCHED_OP[action]
+        op_json = json.dumps({"op": verb, "args": {k: str(v) for k, v in argf(job).items()}})
+
+    label = schedules.ACTIONS.get(action, action)
+    desc = f"[scheduled by {job.get('created_by') or '?'}] {label}"
     ok = 0
     for e in entries:
         # Tokenless (unattended root) + needs_sudo=False: no operator/become needed.
-        # Name the creator in the description so the activity log still attributes
-        # the (root) run to whoever set the schedule up.
-        r = _dispatch_one(e, cmd, "command", None, None,
-                          f"[scheduled by {job.get('created_by') or '?'}] {schedules.ACTIONS.get(action, action)}",
-                          needs_sudo=False)
+        # The creator is named in the description so the activity log still
+        # attributes the (root) run to whoever set the schedule up. On a
+        # dispatcher-capable agent, run the bounded verb instead of shell.
+        if op_json and e.get("kind") == "agent" and e.get("dispatcher"):
+            r = _dispatch_one(e, op_json, "op", None, None, desc, needs_sudo=False)
+        else:
+            r = _dispatch_one(e, cmd, "command", None, None, desc, needs_sudo=False)
         if r.get("ok") or r.get("code") == 0 or (action == "reboot" and not r.get("error")):
             ok += 1
     status = "ok" if ok == len(entries) else "error"
@@ -1569,6 +1598,22 @@ def set_host_environment(host_id: str, body: HostEnvRequest, request: Request,
                          user: str = Depends(require_login)):
     # Superuser-gated on the controller — pass the admin token via _as_admin.
     return _wrap(lambda: _as_admin(request, lambda: api.set_agent_environment(host_id, body.environment)))
+
+
+@app.post("/api/host/{host_id}/revoke")
+def revoke_host(host_id: str, request: Request, user: str = Depends(require_superuser_session)):
+    """Hard lock-out a (possibly compromised/tampered) agent host: revoke its
+    secret so it can't heartbeat/poll/report until re-enrolled. Superuser-only at
+    both layers (require_superuser_session here + require_superuser on the
+    controller, via the caller's token in _as_admin)."""
+    return _wrap(lambda: _as_admin(request, lambda: api.revoke_agent(host_id)))
+
+
+@app.post("/api/host/{host_id}/resume")
+def resume_host(host_id: str, request: Request, user: str = Depends(require_superuser_session)):
+    """Clear an integrity quarantine (soft lockout): rebaseline the host so it
+    re-seals and dispatch resumes. Superuser-only (see revoke_host)."""
+    return _wrap(lambda: _as_admin(request, lambda: api.resume_agent(host_id)))
 
 
 @app.delete("/api/host/{host_id}")
@@ -2257,6 +2302,18 @@ def run_tool(action_name: str, body: RunRequest, request: Request, user: str = D
             desc = f"{spec.label}: {v}"
             break
 
+    # If this action is op-capable, precompute its confined dispatcher spec once.
+    # It's used only for dispatcher-capable AGENT hosts; every other target
+    # (SSH, or an agent without the dispatcher) still gets the shell `command`,
+    # so op routing is always non-breaking.
+    op_json = None
+    if getattr(spec, "op_verb", "") and spec.op_args:
+        try:
+            _args = {k: str(v) for k, v in (spec.op_args(body.params) or {}).items()}
+            op_json = json.dumps({"op": spec.op_verb, "args": _args})
+        except Exception:
+            op_json = None
+
     token = _session_token(request)
     results = []
     ran_labels = []
@@ -2269,10 +2326,15 @@ def run_tool(action_name: str, body: RunRequest, request: Request, user: str = D
         # Resolve this admin's sudo password for the target (host scope wins
         # over fleet default); only used if the host is flagged sudo-required.
         become = sudo_store.resolve(user, entry.get("label", ""))
-        # Suppress the per-host activity entry — we log ONE grouped summary below
-        # ("List disks · dev1, prod1, prod2") instead of one near-identical row
-        # per host.
-        results.append(_dispatch_one(entry, command, spec.kind, become, token, desc, log=False))
+        # Per-host activity is suppressed (log=False) on BOTH paths — one grouped
+        # summary is logged after the loop ("List disks · dev1, prod1, ...").
+        if op_json and entry.get("kind") == "agent" and entry.get("dispatcher"):
+            # Confined path: the agent runs the vetted verb via sysible-priv.
+            results.append(_dispatch_one(entry, op_json, "op", become, token, desc,
+                                         needs_sudo=False, log=False))
+        else:
+            results.append(_dispatch_one(entry, command, spec.kind, become, token, desc,
+                                         log=False))
         ran_labels.append(entry.get("label") or target)
 
     # One attributed summary entry for the whole run, listing the hosts it ran on.

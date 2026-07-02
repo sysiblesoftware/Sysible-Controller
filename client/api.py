@@ -179,6 +179,19 @@ def disenroll_agent(host_id: str):
     return _request("DELETE", f"/agents/{host_id}")
 
 
+def revoke_agent(host_id: str):
+    """Hard lock-out: revoke the host's agent secret so it can't heartbeat,
+    poll, or report until an admin re-enrolls it. Superuser-only on the backend.
+    Used to cut off a host suspected of being compromised/tampered."""
+    return _request("POST", f"/agents/{host_id}/revoke")
+
+
+def resume_agent(host_id: str):
+    """Clear an integrity quarantine: re-seal the host's baseline to its current
+    measurements and resume dispatching tasks to it. Superuser-only."""
+    return _request("POST", f"/agents/{host_id}/resume")
+
+
 def set_agent_environment(host_id: str, environment: str):
     return _request("POST", f"/agents/{host_id}/environment", json={"environment": environment})
 

@@ -21,6 +21,10 @@ class HeartbeatRequest(BaseModel):
     # run the current agent (drives the web console's Update-agents progress).
     # Older agents omit it.
     agent_version: Optional[str] = None
+    # Privilege-dispatcher capability: True when the agent runs confined behind
+    # sysible-priv (SYSIBLE_PRIV set). Lets the controller route op-capable
+    # actions as confined kind="op" verbs to this host. Optional/non-breaking.
+    dispatcher: Optional[bool] = None
     # Optional performance sample (load/cpu/mem/swap/disk/net/io/procs). Sent by
     # newer agents at most once per SYSIBLE_METRICS_INTERVAL, not on every
     # heartbeat; older agents omit it (or send only load1/cores/mem/disk). See
@@ -30,6 +34,11 @@ class HeartbeatRequest(BaseModel):
     # network, per-mount disk, top processes) for the per-host drill-down. Latest
     # only - overwritten each interval. See host_agent/agent.py's _sample_snapshot().
     snapshot: Optional[Dict[str, Any]] = None
+    # Agent integrity (Tier 1): the agent's self-measurement manifest (sha256 of
+    # its own files + version). Optional so older agents that don't send it keep
+    # working; when present the controller compares it to the host's sealed
+    # baseline and quarantines on mismatch. See backend/agent_integrity.py.
+    measurements: Optional[dict] = None
 
 
 class SelfDisenrollRequest(BaseModel):

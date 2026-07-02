@@ -440,6 +440,9 @@ export default function Performance() {
 
   // Click a chart title to blow it up into a single large window for analysis.
   const [focus, setFocus] = useState(null); // metric key | null
+  const [focusIso, setFocusIso] = useState(null); // isolate one legend series in the modal
+  // Reset isolation whenever the expanded chart opens/closes/switches metric.
+  useEffect(() => { setFocusIso(null); }, [focus]);
 
   const envColor = useMemo(() => {
     const names = [...new Set(data.hosts.map((h) => h.environment || "Unassigned"))].sort();
@@ -645,6 +648,8 @@ export default function Performance() {
         const series = selectedHost ? hostSeriesFor(metric) : seriesFor(metric);
         const scopeLabel = selectedHost ? selectedHost.hostname : selectedEnv ? selectedEnv : "all environments";
         const legendItems = selectedHost ? null : (selectedEnv ? hostLegend : envLegend);
+        // Click a legend chip to isolate that series (click it again to show all).
+        const shownSeries = focusIso ? series.filter((s) => s.key === focusIso) : series;
         return (
           <div onClick={() => setFocus(null)}
                style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 50,
@@ -666,10 +671,16 @@ export default function Performance() {
                   <button className="btn ghost sm" onClick={() => setFocus(null)}>Close ✕</button>
                 </div>
               </div>
-              <LineChart series={series} t0={vt0} t1={vt1} kind={metric.kind} height={460}
+              <LineChart series={shownSeries} t0={vt0} t1={vt1} kind={metric.kind} height={460}
                          onZoom={(z0, z1) => setZoom([z0, z1])} />
               {legendItems && legendItems.length > 0 && (
-                <div style={{ marginTop: 10 }}><Legend items={legendItems} /></div>
+                <div style={{ marginTop: 10 }}>
+                  <Legend items={legendItems} selectedKey={focusIso}
+                          onClick={(k) => setFocusIso((cur) => (cur === k ? null : k))} />
+                  {focusIso && <div className="faint" style={{ fontSize: 11, marginTop: 2 }}>
+                    Showing only {(legendItems.find((it) => it.key === focusIso) || {}).label} — click it again to show all.
+                  </div>}
+                </div>
               )}
             </div>
           </div>

@@ -26,6 +26,9 @@ th{background:#f6f8fc;}
 .role{border-left:4px solid var(--green);} .warn{border-left:4px solid var(--amber);background:#fff9ec;}
 ol li,ul li{margin:4px 0;}
 .pill{display:inline-block;background:#eef2fb;color:var(--blue);border-radius:10px;padding:1px 9px;font-size:12px;font-weight:600;}
+.shot{margin:18px 0;text-align:center;}
+.shot img{max-width:100%;border:1px solid var(--hair);border-radius:8px;box-shadow:0 2px 14px rgba(0,0,0,.10);}
+.shot figcaption{color:var(--dim);font-size:13px;margin-top:6px;}
 footer{max-width:900px;margin:0 auto 40px;text-align:center;color:var(--dim);font-size:12px;padding:10px;}
 </style></head><body><div class="cover"><h1>Sysible Controller</h1><div class="sub">Administrator &amp; User Guide</div><div class="meta">Version 3.0.0 · 2026-07-02 · Web console edition</div></div><div class="page"><h2>Contents</h2><div class="toc"><a href="#overview">1. Overview</a><a href="#requirements">2. Requirements</a><a href="#install">3. Installation</a><a href="#first-login">4. First login &amp; accounts</a><a href="#roles">5. Roles &amp; identity</a><a href="#sudo">6. Sudo modes</a><a href="#dashboard">7. Dashboard</a><a href="#updates">8. Update Hosts (patching)</a><a href="#schedules">9. Scheduled jobs</a><a href="#alerts">10. Alerting</a><a href="#performance">11. Performance</a><a href="#enroll">12. Host enrollment</a><a href="#tools">13. System Administration Tools</a><a href="#qsa">14. Quick System Actions</a><a href="#connect">15. Sysible Connect</a><a href="#activity">16. Activity &amp; logs</a><a href="#settings">17. Settings</a><a href="#portal">18. Webserver Portal</a><a href="#cli">19. CLI reference</a><a href="#security">20. Security model</a></div></div><div class="page">
 <h2 id="overview">1. Overview</h2>
@@ -67,6 +70,7 @@ sudo sysible_controller webgui start   # web console (https://&lt;host&gt;:8800/
 change it under <b>Settings → My Account</b>. If administrators already existed, no default is seeded — use
 <code>sudo sysible_controller reset-admin</code> to set one.</p>
 
+
 <h2 id="roles">5. Roles &amp; identity</h2>
 <div class="card role"><h4>Superuser</h4><p>Full control, plus manages other administrators, TLS, the Webserver Portal, and controller/agent updates.</p></div>
 <div class="card role"><h4>Sysadmin</h4><p>Manages the fleet — every tool, Connect, enrollment, scheduling, alerting — but not administrators or the portal/TLS.</p></div>
@@ -84,6 +88,7 @@ compliance/posture strip. Click a count (online/offline/enrolled) or a complianc
 Click a host to open its <b>posture drill-down</b>, where every warn/bad finding is <b>actionable</b> — reboot right
 there, or jump straight to the tool that fixes it (SSH → Security Administration, cert → Certificate Management, etc.).</p>
 
+
 <h2 id="updates">8. Update Hosts (patching)</h2>
 <p>A fleet-wide patch view: pending updates, security updates, and reboot-required per host, grouped by environment.
 <b>Rescan</b> recounts from cached repo metadata (fast); <b>Refresh metadata &amp; rescan</b> forces a live repo refresh.
@@ -91,12 +96,14 @@ Select hosts and <b>Install security updates</b> or <b>Install all updates</b> �
 <b>live per-host progress bar and command output</b>, and the counts refresh as hosts finish. <b>Reboot</b> selected
 hosts from the same screen.</p>
 
+
 <h2 id="schedules">9. Scheduled jobs</h2>
 <p>Recurring, unattended maintenance you set once. Pick an action, targets (all or selected hosts), and a cadence
 (hourly/daily/weekly at a chosen time). Actions: rescan patch status, rescan posture, install security/all updates,
 clean package cache, vacuum journal logs, trim filesystems (fstrim), clear failed units, sync clock, restart a named
 service, run a shell command, or reboot. Jobs run on the controller and dispatch as root on agent hosts. Each job
 shows its next/last run; <b>Run now</b>, pause, and delete are one click.</p>
+
 
 <h2 id="alerts">10. Alerting</h2>
 <p>Notify on threshold crossings via <b>email (SMTP)</b> and/or a <b>Slack-compatible webhook</b>. Built-in rules
@@ -106,20 +113,24 @@ rules</b> run a command on each host and alert when its output matches (or fails
 evaluates rules every ~5 minutes, fires once per condition, and resolves when it clears. The SMTP password is encrypted
 at rest and never returned to the browser.</p>
 
+
 <h2 id="performance">11. Performance</h2>
 <p>Time-series graphs (CPU, memory, swap, disk, network, disk I/O, load, processes) per environment or drilled into a
 single host. Hover for a crosshair and per-series values; <b>drag to zoom</b> a time range (shared across all charts);
 click a chart title to <b>enlarge it</b> into its own window for analysis.</p>
+
 
 <h2 id="enroll">12. Host enrollment</h2>
 <p><b>Host Enrollment</b> (superuser) gives you the agent bundle to install on a host, and one-click <b>SSH enrollment</b>
 (password used once, then discarded for a generated key). Agent hosts are auto-enrolled for SSH so they also get a real
 terminal when an SSH server is present.</p>
 
+
 <h2 id="tools">13. System Administration Tools</h2>
 <p>Every tool follows the same pattern: <b>check the target hosts</b> on the left, fill any fields, and run an action —
 results come back per host, <b>grouped by environment</b>, each collapsible with a one-line summary, an "Only problems"
 filter, and a search.</p>
+
 <div class="card"><h4>User &amp; Group Administration</h4><p>Create, lock, and manage user accounts, passwords, sudo access, and groups across agent and SSH hosts.</p></div>
 <div class="card"><h4>System Health, Logs &amp; Recovery</h4><p>Disk usage, memory/CPU, failed services, logs, and process tools, plus boot/GRUB and kernel recovery — across agent and SSH hosts.</p></div>
 <div class="card"><h4>Service Management</h4><p>Start, stop, restart, enable/disable, and troubleshoot systemd services, or create and configure new ones.</p></div>
@@ -145,6 +156,7 @@ live service browser — list running services on a host and click to pick one),
 / Docker / the Sysible agent, flush DNS, sync the clock, free memory, clean package cache, vacuum journal logs, trim
 filesystems, clear failed units, reload systemd, and reboot / power off.</p>
 
+
 <h2 id="connect">15. Sysible Connect</h2>
 <p>A unified list of agent- and SSH-managed hosts. Double-click a host for a real PTY terminal (multiple sessions per
 host, opened as your administrator user, with file upload/download, find, save-output, and Send-sudo-password). The
@@ -153,9 +165,11 @@ file transfer, SSH-enroll, and <b>RDP to a Windows host</b>. <b>Check In / Ping<
 clicking its status dot) and shows the reachable/unreachable results in a popup. Right-click a host to assign an
 environment.</p>
 
+
 <h2 id="activity">16. Activity &amp; logs</h2>
 <p>The <b>Activity feed</b> attributes every action to the administrator who ran it, where, and when (visible to
 superusers and auditors). The <b>Controller log</b> tab (superuser only) tails the backend service journal.</p>
+
 
 <h2 id="settings">17. Settings</h2>
 <ul>
@@ -165,6 +179,7 @@ superusers and auditors). The <b>Controller log</b> tab (superuser only) tails t
 <li><b>Webserver Portal</b> (superuser) — run and credential the host-operator portal.</li>
 <li><b>Software updates</b> (superuser) — update the controller and agents together with live output, and download the update log.</li>
 </ul>
+
 
 <h2 id="portal">18. Webserver Portal</h2>
 <p>An optional, separate self-service site for <b>host operators</b> (not Sysible administrators) to download the agent

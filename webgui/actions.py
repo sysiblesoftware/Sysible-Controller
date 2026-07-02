@@ -232,7 +232,8 @@ _register(Action(
     label="Update / upgrade packages",
     params=[Param("names", "Package name(s)", required=False,
                   help="leave blank to update everything")],
-    build=lambda p: api.cmd_update_packages(_s(p, "names"))))
+    build=lambda p: api.cmd_update_packages(_s(p, "names")),
+    op_verb="pkg.update", op_args=lambda p: {"pkgs": ",".join(_s(p, "names").split())}))
 _register(Action(
     name="pkg_remove", tool="Host Software Management", label="Remove packages",
     danger=True, params=[Param("names", "Package name(s)")],
@@ -383,15 +384,20 @@ _register(Action(name="fw_open_port", tool="Firewall Administration", label="Ope
     params=[Param("port", "Port", help="e.g. 8080"),
             Param("protocol", "Protocol", type="select", options=["tcp", "udp"], default="tcp"),
             Param("zone", "Zone", required=False)],
-    build=lambda p: api.cmd_open_port(_s(p, "port"), _s(p, "protocol", "tcp"), _s(p, "zone"))))
+    build=lambda p: api.cmd_open_port(_s(p, "port"), _s(p, "protocol", "tcp"), _s(p, "zone")),
+    op_verb="firewall.allow_port",
+    op_args=lambda p: {"port": _s(p, "port"), "proto": _s(p, "protocol", "tcp"), "zone": _s(p, "zone")}))
 _register(Action(name="fw_close_port", tool="Firewall Administration", label="Close port",
     danger=True,
     params=[Param("port", "Port"),
             Param("protocol", "Protocol", type="select", options=["tcp", "udp"], default="tcp"),
             Param("zone", "Zone", required=False)],
-    build=lambda p: api.cmd_close_port(_s(p, "port"), _s(p, "protocol", "tcp"), _s(p, "zone"))))
+    build=lambda p: api.cmd_close_port(_s(p, "port"), _s(p, "protocol", "tcp"), _s(p, "zone")),
+    op_verb="firewall.close_port",
+    op_args=lambda p: {"port": _s(p, "port"), "proto": _s(p, "protocol", "tcp"), "zone": _s(p, "zone")}))
 _register(Action(name="fw_reload", tool="Firewall Administration", label="Reload firewalld",
-    params=[], build=lambda p: api.cmd_reload_firewalld()))
+    params=[], build=lambda p: api.cmd_reload_firewalld(),
+    op_verb="firewall.reload", op_args=lambda p: {}))
 _register(Action(name="fw_install_firewalld", tool="Firewall Administration",
     label="Install firewalld", params=[], build=lambda p: api.cmd_install_firewalld()))
 _register(Action(name="fw_install_ufw", tool="Firewall Administration",
@@ -960,7 +966,8 @@ _register(Action(name="fw_set_enabled", tool="Firewall Administration", label="E
     params=[Param("enabled", "Enabled", type="checkbox", default=True, required=False)],
     build=lambda p: api.cmd_set_firewalld_enabled(_b(p, "enabled", True))))
 _register(Action(name="fw_set_default_zone", tool="Firewall Administration", label="Set default zone",
-    params=[Param("zone", "Zone")], build=lambda p: api.cmd_set_default_zone(_s(p, "zone"))))
+    params=[Param("zone", "Zone")], build=lambda p: api.cmd_set_default_zone(_s(p, "zone")),
+    op_verb="firewall.set_default_zone", op_args=lambda p: {"zone": _s(p, "zone")}))
 _register(Action(name="fw_create_zone", tool="Firewall Administration", label="Create zone",
     params=[Param("zone_name", "Zone name")], build=lambda p: api.cmd_create_zone(_s(p, "zone_name"))))
 _register(Action(name="fw_delete_zone", tool="Firewall Administration", label="Delete zone",
@@ -1024,7 +1031,10 @@ _register(Action(name="sec_selinux_booleans", tool="Security Administration", la
 _register(Action(name="sec_selinux_set_bool", tool="Security Administration", label="Set SELinux boolean",
     params=[Param("name", "Boolean"), Param("enabled", "On", type="checkbox", default=True, required=False),
             Param("permanent", "Permanent", type="checkbox", default=True, required=False)],
-    build=lambda p: api.cmd_set_selinux_boolean(_s(p, "name"), _b(p, "enabled", True), _b(p, "permanent", True))))
+    build=lambda p: api.cmd_set_selinux_boolean(_s(p, "name"), _b(p, "enabled", True), _b(p, "permanent", True)),
+    op_verb="selinux.setbool",
+    op_args=lambda p: {"bool": _s(p, "name"), "value": ("on" if _b(p, "enabled", True) else "off"),
+                       "permanent": ("1" if _b(p, "permanent", True) else "0")}))
 _register(Action(name="sec_selinux_denials", tool="Security Administration", label="Recent SELinux denials",
     params=[Param("lines", "Lines", type="number", default="50", required=False)],
     build=lambda p: api.cmd_selinux_recent_denials(_i(p, "lines", 50))))

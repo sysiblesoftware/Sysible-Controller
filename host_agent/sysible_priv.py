@@ -63,6 +63,7 @@ _TZ_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_+/-]{0,63}$")
 _SYSCTL_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
 _SYSCTL_VAL_RE = re.compile(r"^[A-Za-z0-9 ._:/,-]{1,255}$")
 _SEBOOL_RE = re.compile(r"^[a-z0-9_]{1,64}$")
+_FW_ZONE_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 _ABS_PATH_RE = re.compile(r"^/[A-Za-z0-9 ._/@:+-]{0,255}$")
 _ALLOWED_SHELLS = ("/bin/bash", "/bin/sh", "/usr/sbin/nologin", "/sbin/nologin",
                    "/usr/bin/false", "/bin/false", "/usr/bin/zsh")
@@ -173,6 +174,12 @@ def v_fstype(s):
     return s
 
 
+def v_fw_zone(s):
+    if not s or not _FW_ZONE_RE.match(s):
+        raise Reject(f"invalid firewall zone: {s!r}")
+    return s
+
+
 def v_abs_path(s, what="path"):
     if not s or not _ABS_PATH_RE.match(s) or ".." in s:
         raise Reject(f"invalid {what}: {s!r}")
@@ -258,12 +265,16 @@ def _op_pkg(action, a):
         if mgr == "zypper":
             return [["zypper", "--non-interactive", action, *pkgs]]
         return [[mgr, "-y", action, *pkgs]]
-    if action == "update":  # upgrade everything
+    if action == "update":  # upgrade named packages, or everything if none given
+        raw = (a.get("pkgs", "") or "").strip()
+        pkgs = v_pkgs(raw.split(",")) if raw else []
         if mgr == "zypper":
-            return [["zypper", "--non-interactive", "update"]]
+            return [["zypper", "--non-interactive", "update", *pkgs]]
         if mgr == "apt-get":
+            if pkgs:
+                return [["apt-get", "-y", "install", "--only-upgrade", *pkgs]]
             return [["apt-get", "-y", "upgrade"]]
-        return [[mgr, "-y", "upgrade"]]
+        return [[mgr, "-y", "upgrade", *pkgs]]
     if action == "clean":
         if mgr == "zypper":
             return [["zypper", "clean"]]
@@ -371,17 +382,27 @@ def _op_sync_time(a):
 def _op_firewall_port(action, a):
     port = v_port(a.get("port"))
     proto = v_proto(a.get("proto", "tcp"))
+    zone = a.get("zone") or ""
+    if zone:
+        v_fw_zone(zone)  # only meaningful for firewalld; validated regardless
     b = _firewall_backend()
     if b == "firewall-cmd":
         flag = "--add-port" if action == "allow" else "--remove-port"
-        return [["firewall-cmd", "--permanent", f"{flag}={port}/{proto}"],
-                ["firewall-cmd", f"{flag}={port}/{proto}"]]
-    if b == "ufw":
+        zargs = [f"--zone={zone}"] if zone else []
+        return [["firewall-cmd", "--permanent", *zargs, f"{flag}={port}/{proto}"],
+                ["firewall-cmd", *zargs, f"{flag}={port}/{proto}"]]
+    if b == "ufw":  # ufw has no zones; the port rule stands on its own
         return [["ufw", ("allow" if action == "allow" else "deny"), f"{port}/{proto}"]]
     # iptables / nft(iptables-compat): append/delete an INPUT rule.
     chain = "-A" if action == "allow" else "-D"
     target = "ACCEPT" if action == "allow" else "DROP"
     return [["iptables", chain, "INPUT", "-p", proto, "--dport", str(port), "-j", target]]
+
+
+def _op_firewall_set_default_zone(a):
+    if not shutil.which("firewall-cmd"):
+        raise Reject("default zones require firewalld (firewall-cmd)")
+    return [["firewall-cmd", f"--set-default-zone={v_fw_zone(a.get('zone'))}"]]
 
 
 def _op_firewall_reload(a):
@@ -417,7 +438,12 @@ def _op_selinux_setbool(a):
     name = a.get("bool", "")
     if not _SEBOOL_RE.match(name):
         raise Reject(f"invalid selinux boolean: {name!r}")
-    return [["setsebool", "-P", name, v_bool_onoff(a.get("value"))]]
+    argv = ["setsebool"]
+    # Persist across reboots unless the caller explicitly asked for runtime-only.
+    if str(a.get("permanent", "1")).lower() in ("1", "true", "on", "yes"):
+        argv.append("-P")
+    argv += [name, v_bool_onoff(a.get("value"))]
+    return [argv]
 
 
 # --- filesystem: mount + path-allowlisted primitives ----------------------
@@ -553,6 +579,7 @@ OPS = {
     # firewall
     "firewall.allow_port": lambda a, s: _op_firewall_port("allow", a),
     "firewall.close_port": lambda a, s: _op_firewall_port("close", a),
+    "firewall.set_default_zone": lambda a, s: _op_firewall_set_default_zone(a),
     "firewall.reload":     lambda a, s: _op_firewall_reload(a),
     # kernel / selinux
     "sysctl.set":          lambda a, s: _op_sysctl_set(a),
@@ -710,6 +737,8 @@ def cmd_selftest():
     expect_reject("bad timezone charset", "system.set_timezone", {"timezone": "../etc"})
     expect_reject("unknown config source", "config.read", {"source": "shadow"})
     expect_reject("missing required arg", "service.restart", {})
+    expect_reject("bad firewall zone", "firewall.allow_port", {"port": "80", "zone": "pub;lic"})
+    expect_reject("bad selinux bool name", "selinux.setbool", {"bool": "httpd;x", "value": "on"})
 
     print("== argv construction (no shell) ==")
     expect_argv("service.restart", "service.restart", {"unit": "nginx.service"},

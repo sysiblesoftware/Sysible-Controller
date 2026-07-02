@@ -1060,26 +1060,117 @@ class InstallUpdatesRequest(BaseModel):
     kind: str = "security"        # "security" | "all"
 
 
+# In-memory registry of background install jobs -> per-host status + output, so
+# the UI can show live per-host progress and command output. Bounded (last N).
+_INSTALL_JOBS = {}
+_INSTALL_LOCK = _posture_threading.Lock()
+
+
+def _install_set(job_id, hid, status, code=None, output=None):
+    with _INSTALL_LOCK:
+        job = _INSTALL_JOBS.get(job_id)
+        if not job:
+            return
+        for h in job["hosts"]:
+            if h["id"] == hid:
+                h["status"] = status
+                if code is not None:
+                    h["code"] = code
+                if output is not None:
+                    h["output"] = output[:20000]
+                break
+
+
+def _install_one(entry, cmd):
+    """Run one host's install as root (tokenless), polling the agent task up to
+    ~15 min so the real command output is captured (a big upgrade outlasts the
+    normal 60s request cap). Returns {ok, code, output}."""
+    import time as _t
+    try:
+        out = _with_token(None, lambda: dispatch.run_on_entry(entry, cmd, needs_sudo=False))
+    except Exception as e:
+        return {"ok": False, "code": None, "output": str(e)}
+    if out.get("error"):
+        return {"ok": False, "code": None, "output": out["error"]}
+    if out.get("sync"):
+        text = (out.get("stdout") or "") + (("\n" + out["stderr"]) if out.get("stderr") else "")
+        return {"ok": out.get("code") == 0, "code": out.get("code"), "output": text.strip()}
+    tid = out.get("task_id")
+    if tid is None:
+        return {"ok": False, "code": None, "output": "failed to queue task"}
+    deadline = _t.time() + 900
+    while _t.time() < deadline:
+        r = dispatch.poll_entry_result(entry, tid)
+        if r is not None:
+            text = (r.get("stdout") or "") + (("\n" + r["stderr"]) if r.get("stderr") else "")
+            return {"ok": r.get("code") == 0, "code": r.get("code"), "output": text.strip()}
+        _t.sleep(2.0)
+    return {"ok": False, "code": None, "output": "timed out waiting for host to finish"}
+
+
 @app.post("/api/fleet-updates/install")
 def fleet_updates_install(body: InstallUpdatesRequest, user: str = Depends(require_operator)):
-    """Kick a fleet update install in the BACKGROUND and return immediately — a
-    package upgrade can run for minutes, so it must not block the request (that's
-    what made the Update-Hosts install 'spin forever'). Dispatched as root
-    (tokenless), so it needs no operator sudo password. The UI polls
-    /api/fleet-updates to watch the counts drop; the cache is invalidated when the
-    install finishes so the next scan re-sweeps."""
+    """Kick a fleet update install in the BACKGROUND (a package upgrade can run
+    for minutes — a synchronous call would just spin) and track per-host status +
+    output so the UI can show live progress. Dispatched as root (tokenless), so
+    no operator sudo password is needed. Poll /api/fleet-updates/install-status."""
+    import time as _t
+    import uuid
     action = "all_updates" if body.kind == "all" else "security_updates"
-    job = {"action": action, "targets": list(body.targets or [])}
+    cmd = (actions.get("pkg_update").build({"names": ""}) if action == "all_updates"
+           else actions.get("sec_install_updates").build({}))
+    try:
+        all_entries = dispatch.list_merged_hosts(agent_only=False)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+    tgt = set(body.targets or [])
+    entries = [e for e in all_entries if (not tgt or e.get("id") in tgt)]
+    if not entries:
+        raise HTTPException(status_code=400, detail="No matching target hosts.")
+
+    job_id = uuid.uuid4().hex[:12]
+    hosts = [{"id": e.get("id"), "host": e.get("label"), "environment": e.get("environment") or "Unassigned",
+              "status": "queued", "code": None, "output": ""} for e in entries]
+    entry_by_id = {e.get("id"): e for e in entries}
+    with _INSTALL_LOCK:
+        # Prune to the most recent ~20 jobs.
+        for old in sorted(_INSTALL_JOBS.values(), key=lambda j: j["started"])[:-19]:
+            _INSTALL_JOBS.pop(old["id"], None)
+        _INSTALL_JOBS[job_id] = {"id": job_id, "kind": body.kind, "started": _t.time(),
+                                 "done": False, "hosts": hosts}
 
     def work():
+        import concurrent.futures
+
+        def do(h):
+            _install_set(job_id, h["id"], "running")
+            res = _install_one(entry_by_id[h["id"]], cmd)
+            _install_set(job_id, h["id"], "done" if res["ok"] else "failed", res["code"], res["output"])
+
         try:
-            _run_scheduled_job(job)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(entries))) as ex:
+                list(ex.map(do, list(hosts)))
         finally:
-            _UPDATES_CACHE["ts"] = 0   # force a fresh sweep on the next poll
+            with _INSTALL_LOCK:
+                if job_id in _INSTALL_JOBS:
+                    _INSTALL_JOBS[job_id]["done"] = True
+            _UPDATES_CACHE["ts"] = 0   # force a fresh count sweep next poll
 
     import threading
     threading.Thread(target=work, name="sysible-fleet-install", daemon=True).start()
-    return {"started": True, "kind": body.kind, "hosts": len(body.targets or [])}
+    return {"job_id": job_id, "kind": body.kind,
+            "hosts": [{"id": h["id"], "host": h["host"], "environment": h["environment"],
+                       "status": "queued"} for h in hosts]}
+
+
+@app.get("/api/fleet-updates/install-status/{job_id}")
+def fleet_updates_install_status(job_id: str, user: str = Depends(require_operator)):
+    import copy
+    with _INSTALL_LOCK:
+        job = _INSTALL_JOBS.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Install job not found (it may have expired).")
+        return copy.deepcopy(job)
 
 
 # ----------------------------------------------------------------------

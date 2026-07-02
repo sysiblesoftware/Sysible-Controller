@@ -3,6 +3,61 @@ import { api } from "../api.js";
 import HostResults from "../components/HostResults.jsx";
 
 const C = { sec: "#e06c6c", upd: "#e0a83a", ok: "#4ec07a", reboot: "#e0a83a", faint: "#7a7a7a" };
+const ST = { queued: "#7a7a7a", running: "#e0a83a", done: "#4ec07a", failed: "#e06c6c" };
+
+// One host's install row: status dot + name + state, click to expand the
+// captured command output.
+function InstallHostRow({ h }) {
+  const [open, setOpen] = React.useState(false);
+  const hasOut = (h.output || "").trim().length > 0;
+  return (
+    <div style={{ borderTop: "1px solid var(--border)" }}>
+      <div className="spread" style={{ padding: "5px 8px", cursor: hasOut ? "pointer" : "default", gap: 8 }}
+           onClick={() => hasOut && setOpen((o) => !o)}>
+        <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span className="faint" style={{ width: 10 }}>{hasOut ? (open ? "▾" : "▸") : ""}</span>
+          <span className="dot" style={{ background: ST[h.status] || C.faint }} />
+          <span>{h.host}</span>
+        </span>
+        <span style={{ fontSize: 12, color: ST[h.status] || C.faint, display: "flex", alignItems: "center", gap: 6 }}>
+          {h.status === "running" && <span className="spin" />}
+          {h.status}{h.code != null ? ` · exit ${h.code}` : ""}
+        </span>
+      </div>
+      {open && hasOut && (
+        <pre style={{ margin: 0, maxHeight: 260, overflow: "auto", background: "#0d1117", color: "#c9d1d9",
+                      borderTop: "1px solid var(--border)", padding: "8px 10px",
+                      fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12, whiteSpace: "pre-wrap" }}>
+          {h.output}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function InstallProgress({ job }) {
+  const hosts = job.hosts || [];
+  const done = hosts.filter((h) => h.status === "done" || h.status === "failed").length;
+  const failed = hosts.filter((h) => h.status === "failed").length;
+  const kindLabel = job.kind === "all" ? "all updates" : "security updates";
+  return (
+    <div className="card" style={{ marginBottom: 12 }}>
+      <div className="spread" style={{ marginBottom: 6 }}>
+        <strong>Installing {kindLabel}</strong>
+        <span className="faint" style={{ fontSize: 12 }}>
+          {done} / {hosts.length} complete{failed ? ` · ${failed} failed` : ""}{job.done ? " · finished" : ""}
+        </span>
+      </div>
+      <div style={{ height: 8, borderRadius: 4, background: "var(--border)", overflow: "hidden", marginBottom: 6 }}>
+        <div style={{ width: (hosts.length ? (done / hosts.length) * 100 : 0) + "%", height: "100%",
+                      background: failed ? "#e0a83a" : "#4ec07a", transition: "width .3s" }} />
+      </div>
+      <div style={{ maxHeight: 320, overflow: "auto" }}>
+        {hosts.map((h) => <InstallHostRow key={h.id || h.host} h={h} />)}
+      </div>
+    </div>
+  );
+}
 
 // Fleet patch status: pending updates, security updates, and reboot-required per
 // host — with one-click "install security" / "install all" / "reboot" across the
@@ -47,7 +102,9 @@ export default function Updates({ role }) {
   const actionable = hosts.filter((h) => h.online !== false && (h.total || 0) > 0).map((h) => h.id);
   const toggle = (id) => setChecked((c) => c.includes(id) ? c.filter((x) => x !== id) : [...c, id]);
 
-  const [installing, setInstalling] = useState("");   // message while a background install runs
+  const [job, setJob] = useState(null);          // live install job {kind, done, hosts:[...]}
+  const jobPoll = React.useRef(null);
+  useEffect(() => () => { if (jobPoll.current) clearInterval(jobPoll.current); }, []);
 
   async function run(kind) {
     if (!checked.length) { setErr("Select one or more hosts first."); return; }
@@ -58,17 +115,23 @@ export default function Updates({ role }) {
       catch (e) { setErr(e.message); } finally { setBusy(""); }
       return;
     }
-    // Installs run in the BACKGROUND (a package upgrade can take minutes — a
-    // synchronous call would just spin). Kick it, then poll the counts.
+    // Installs run in the BACKGROUND (a package upgrade can take minutes) with
+    // per-host status + output; poll the job and refresh counts as hosts finish.
     const label = kind === "security" ? "security updates" : "all updates";
-    if (!window.confirm(`Install ${label} on ${checked.length} host(s)? This runs in the background; counts refresh as it completes.`)) return;
-    setBusy(kind); setErr(""); setResults(null); setInstalling("");
+    if (!window.confirm(`Install ${label} on ${checked.length} host(s)? Runs in the background — you'll see per-host progress below.`)) return;
+    setBusy(kind); setErr(""); setResults(null);
+    if (jobPoll.current) clearInterval(jobPoll.current);
     try {
       const r = await api.fleetInstall(checked, kind);
-      setInstalling(`Installing ${label} on ${r.hosts || checked.length} host(s) in the background… counts update as hosts finish.`);
-      // Poll for a few minutes so the table reflects the drop without a manual rescan.
-      let n = 0;
-      const t = setInterval(() => { n += 1; load(1); if (n >= 30) { clearInterval(t); setInstalling(""); } }, 15000);
+      setJob({ id: r.job_id, kind, done: false, hosts: r.hosts });
+      let counted = false;
+      jobPoll.current = setInterval(async () => {
+        try {
+          const s = await api.fleetInstallStatus(r.job_id);
+          setJob(s);
+          if (s.done) { clearInterval(jobPoll.current); if (!counted) { counted = true; load(1); } }
+        } catch { clearInterval(jobPoll.current); }
+      }, 3000);
     } catch (e) { setErr(e.message); }
     finally { setBusy(""); }
   }
@@ -98,7 +161,7 @@ export default function Updates({ role }) {
       </div>
 
       {err && <div className="error-box">{err}</div>}
-      {installing && <div className="ok-text" style={{ marginBottom: 10 }}>⏳ {installing}</div>}
+      {job && <InstallProgress job={job} />}
 
       {canAct && (
         <div className="row" style={{ gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>

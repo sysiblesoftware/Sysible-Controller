@@ -13,6 +13,7 @@ import Updates from "./views/Updates.jsx";
 import Schedules from "./views/Schedules.jsx";
 import Alerts from "./views/Alerts.jsx";
 import FleetQuery from "./views/FleetQuery.jsx";
+import UpdatesBadge from "./components/UpdatesBadge.jsx";
 import SudoModal from "./components/SudoModal.jsx";
 import StandaloneTerminal from "./components/StandaloneTerminal.jsx";
 
@@ -194,7 +195,10 @@ export default function App() {
             )}
             <h2 style={{ margin: 0 }}>{view === "host" ? (target?.label || "Host Posture") : (view ? SECTIONS[view] : "Dashboard")}</h2>
           </div>
-          <div className="main-top-sub">{view ? "" : `Signed in as ${user}${role ? ` · ${role}` : ""}`}</div>
+          <div className="row" style={{ alignItems: "center", gap: 12, minWidth: 0 }}>
+            {view === null && isSuper && <UpdatesBadge onOpen={() => go("settings", { tab: "controller" })} />}
+            <div className="main-top-sub">{view ? "" : `Signed in as ${user}${role ? ` · ${role}` : ""}`}</div>
+          </div>
         </div>
         <div className="main-scroll">
           {view === null && <Dashboard role={role} edition={edition}
@@ -207,7 +211,7 @@ export default function App() {
             onBack={() => (history.length > 0 ? goBack() : go(null))}
             onOpen={(section, opts) => go(section, opts || null)} />}
           {!isAuditor && view === "hosts" && <HostEnrollment />}
-          {!isAuditor && view === "settings" && <Settings />}
+          {!isAuditor && view === "settings" && <Settings initialTab={target?.tab} />}
           {!isAuditor && view === "quickactions" && <ToolRunner solo="Quick System Actions" />}
           {!isAuditor && view === "fleetquery" && <FleetQuery />}
           {!isAuditor && view === "sysadmin" && <ToolRunner openTool={target?.tool} openTab={target?.tab}

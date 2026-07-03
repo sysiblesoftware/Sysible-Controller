@@ -3,8 +3,8 @@ import { api } from "../api.js";
 
 // Sysible Controller Settings: administrators, password policy, controller
 // address/port, license, and the admin audit log.
-export default function Settings() {
-  const [tab, setTab] = useState("admins");
+export default function Settings({ initialTab }) {
+  const [tab, setTab] = useState(initialTab || "admins");
   return (
     <div>
       <div className="tabs" style={{ marginBottom: 16 }}>

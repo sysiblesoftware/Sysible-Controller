@@ -14,6 +14,19 @@ const CRIT_COLOR = { critical: VERDICT_COLOR.CRITICAL, high: VERDICT_COLOR.WARNI
 const CTRL_BADGE = { marginLeft: 6, fontSize: 10, fontWeight: 700, verticalAlign: "middle",
   color: "#fff", background: "var(--accent, #3d7dd8)", borderRadius: 10, padding: "0 6px" };
 
+// Effective host status = worst of live HEALTH (disk/mem/failed units) and the
+// POSTURE scan (compliance findings). Used everywhere a host is graded — the
+// donut, the environment dots, and the per-host cards — so they all agree with
+// the compliance strip and the "needs attention" list instead of the donut
+// showing green while findings sit amber elsewhere. A posture finding (or a
+// failed/blocked scan) on an otherwise-healthy host is a WARNING; offline or
+// critical health already outranks it.
+function effVerdict(healthVerdict, issues, postureError) {
+  const v = (healthVerdict || "OK").toUpperCase();
+  if (v === "OFFLINE" || v === "CRITICAL") return v;
+  return (v === "WARNING" || (issues || 0) > 0 || postureError) ? "WARNING" : "OK";
+}
+
 // Inline SVG donut (no chart-library dependency): one ring segment per value.
 function Donut({ segments, size = 88, stroke = 13 }) {
   const r = (size - stroke) / 2, C = 2 * Math.PI * r;
@@ -499,14 +512,30 @@ export default function Dashboard({ role, edition, onOpen }) {
 
   const issuesTotal = complianceSignals.reduce((n, s) => n + (s.hosts.length > 0 ? 1 : 0), 0);
 
+  // Posture findings per host id (issue count + scan error/limited), shared by
+  // the donut, the environment rollup, and the triage list so all three grade a
+  // host the same way.
+  const postById = useMemo(() => {
+    const m = {};
+    for (const p of posture) {
+      m[p.id] = {
+        issues: p.flags ? Object.values(p.flags).filter((v) => v === true).length : 0,
+        postureError: p.error || null,
+        limited: !!p.limited,
+      };
+    }
+    return m;
+  }, [posture]);
+
   const fleetSummary = useMemo(() => {
     const counts = { OK: 0, WARNING: 0, CRITICAL: 0, OFFLINE: 0 };
     for (const h of filteredFleet) {
-      const v = (h.verdict || "OK").toUpperCase();
+      const pe = postById[h.id] || {};
+      const v = effVerdict(h.verdict, pe.issues, pe.postureError);
       counts[v] = (counts[v] || 0) + 1;
     }
     return { counts };
-  }, [filteredFleet]);
+  }, [filteredFleet, postById]);
 
   const patch = useMemo(() => {
     let withUpd = 0, sec = 0;
@@ -518,8 +547,6 @@ export default function Dashboard({ role, edition, onOpen }) {
   // its specific reasons. Built from the health + posture data already loaded —
   // the "what do I look at first" view a per-environment grid doesn't give.
   const attention = useMemo(() => {
-    const postById = {};
-    for (const p of posture) postById[p.id] = p;
     const rows = [];
     for (const h of filteredFleet) {
       const reasons = [];
@@ -542,8 +569,7 @@ export default function Dashboard({ role, edition, onOpen }) {
         }
         if ((h.oom ?? 0) > 0) { reasons.push(`${h.oom} OOM`); sev = Math.min(sev, 1); }
         if (h.reboot) { reasons.push("reboot required"); sev = Math.min(sev, 2); }
-        const p = postById[h.id];
-        const issues = p && p.flags ? Object.values(p.flags).filter((v) => v === true).length : 0;
+        const issues = (postById[h.id] || {}).issues || 0;
         if (issues > 0) { reasons.push(`${issues} compliance`); sev = Math.min(sev, 2); }
       }
       if (reasons.length) {
@@ -556,7 +582,7 @@ export default function Dashboard({ role, edition, onOpen }) {
       || (CRIT_RANK[a.crit] ?? 2) - (CRIT_RANK[b.crit] ?? 2)
       || b.reasons.length - a.reasons.length);
     return rows;
-  }, [filteredFleet, posture, hostMetaMap]);
+  }, [filteredFleet, postById, hostMetaMap]);
 
   // Single environment-grouped rollup joining the two lenses by host id: each
   // host carries its live health (verdict, disk/mem, problem signals) AND its
@@ -564,27 +590,22 @@ export default function Dashboard({ role, edition, onOpen }) {
   // summed health signals, and how many hosts need attention. Health is the
   // base set (always present); posture issues are attached when scanned.
   const fleetEnvs = useMemo(() => {
-    const postById = {};
-    for (const p of posture) {
-      postById[p.id] = {
-        issues: p.flags ? Object.values(p.flags).filter((v) => v === true).length : 0,
-        postureError: p.error || null,
-        limited: !!p.limited,
-      };
-    }
     const g = {};
     let total = 0, clear = 0;
     for (const h of filteredFleet) {
       const env = h.environment || "Unassigned";
       const pe = postById[h.id] || {};
-      const host = { ...h, issues: pe.issues ?? null, postureError: pe.postureError || null, limited: !!pe.limited };
+      // Effective verdict = health folded with posture, so the env dot and the
+      // host card match the "needs attention" count and the compliance strip.
+      const ev = effVerdict(h.verdict, pe.issues, pe.postureError);
+      const host = { ...h, issues: pe.issues ?? null, postureError: pe.postureError || null,
+                     limited: !!pe.limited, verdict: ev };
       const e = g[env] || (g[env] = {
         env, hosts: [], counts: { OK: 0, WARNING: 0, CRITICAL: 0, OFFLINE: 0 },
         disk: null, mem: null, failed: 0, oom: 0, degraded: 0, problematic: 0, limited: 0,
       });
       e.hosts.push(host);
-      const v = (h.verdict || "OK").toUpperCase();
-      e.counts[v] = (e.counts[v] || 0) + 1;
+      e.counts[ev] = (e.counts[ev] || 0) + 1;
       if (h.disk != null) e.disk = Math.max(e.disk ?? 0, h.disk);
       if (h.mem != null) e.mem = Math.max(e.mem ?? 0, h.mem);
       e.failed += h.failed || 0;
@@ -596,7 +617,7 @@ export default function Dashboard({ role, edition, onOpen }) {
       total += 1;
       // A "limited" host (posture gathered without root) isn't counted clean -
       // its root-only checks couldn't be trusted.
-      if (v === "OK" && !trouble && !host.limited) clear += 1;
+      if (ev === "OK" && !trouble && !host.limited) clear += 1;
     }
     const envs = Object.values(g).map((e) => {
       // A down host makes the whole environment critical (red), not grey/amber —
@@ -612,7 +633,7 @@ export default function Dashboard({ role, edition, onOpen }) {
     envs.sort((a, b) => (order[a.verdict] ?? 9) - (order[b.verdict] ?? 9)
       || b.problematic - a.problematic || a.env.localeCompare(b.env));
     return { envs, total, clear };
-  }, [filteredFleet, posture]);
+  }, [filteredFleet, postById]);
 
   if (q.trim()) {
     return (

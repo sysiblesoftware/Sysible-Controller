@@ -13,12 +13,14 @@ import Updates from "./views/Updates.jsx";
 import Schedules from "./views/Schedules.jsx";
 import Alerts from "./views/Alerts.jsx";
 import FleetQuery from "./views/FleetQuery.jsx";
+import Topology from "./views/Topology.jsx";
 import UpdatesBadge from "./components/UpdatesBadge.jsx";
 import SudoModal from "./components/SudoModal.jsx";
 import StandaloneTerminal from "./components/StandaloneTerminal.jsx";
 
 const SECTIONS = {
   hosts: "Host Enrollment",
+  topology: "Network Topology",
   perf: "Fleet Performance",
   updates: "Update Hosts",
   schedules: "Scheduled Jobs",
@@ -36,6 +38,7 @@ const SECTIONS = {
 // Dashboard, Performance, and the Activity feed — nothing that can act.
 const NAV = [
   { key: null, label: "Dashboard", icon: "grid", su: false, aud: true },
+  { key: "topology", label: "Topology", icon: "share", su: false, aud: true },
   { key: "perf", label: "Performance", icon: "chart", su: false, aud: true },
   { key: "updates", label: "Update Hosts", icon: "download", su: false, aud: true },
   { key: "schedules", label: "Schedules", icon: "clock", su: false },
@@ -62,6 +65,7 @@ const ICONS = {
   clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
   bell: <><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 0 0 4 0"/></>,
   search: <><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.8-3.8"/></>,
+  share: <><circle cx="6" cy="12" r="2.4"/><circle cx="18" cy="5.5" r="2.4"/><circle cx="18" cy="18.5" r="2.4"/><path d="M8.2 10.9l7.6-4M8.2 13.1l7.6 4"/></>,
 };
 
 function NavIcon({ name }) {
@@ -203,6 +207,7 @@ export default function App() {
         <div className="main-scroll">
           {view === null && <Dashboard role={role} edition={edition}
             onOpen={(section, opts) => go(section, opts || null)} />}
+          {view === "topology" && <Topology onOpen={(section, opts) => go(section, opts || null)} />}
           {view === "perf" && <Performance />}
           {view === "updates" && <Updates role={role} />}
           {!isAuditor && view === "schedules" && <Schedules />}

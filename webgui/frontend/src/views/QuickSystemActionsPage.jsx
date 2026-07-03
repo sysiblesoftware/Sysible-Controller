@@ -96,19 +96,31 @@ export default function QuickSystemActionsPage({ hosts = [], onRefreshHosts, pre
             <button className="btn sm" disabled={busy === "installed"} onClick={() => listServices(false)}>
               {busy === "installed" ? <span className="spin" /> : "List Installed Services"}</button>
           </div>
-          <div className="section-title" style={{ marginTop: 10 }}>
-            Services {listHost ? `(on ${listHost})` : ""} — click to select
-          </div>
-          <div className="card" style={{ maxHeight: 200, overflowY: "auto", padding: 6 }}>
-            {filtered.length === 0
-              ? <div className="faint" style={{ padding: 8 }}>List a host's services to populate.</div>
-              : filtered.map((s) => (
-                  <div key={s} className={"host-row" + (s === name ? " active" : "")}
-                       style={{ cursor: "pointer", paddingLeft: 6,
-                                background: s === name ? "var(--panel-2)" : undefined }}
-                       onClick={() => setName(s)}>{s}</div>
-                ))}
-          </div>
+          {/* The service list is an OPTIONAL browser — you can act on a typed
+              name without it. Only show the (potentially empty) list once the
+              operator has actually listed a host's services, so an empty box
+              doesn't read like a required step. */}
+          {services.length === 0 ? (
+            <div className="faint" style={{ fontSize: 12, marginTop: 8 }}>
+              Type a service name above and act — or use “List … Services” to browse and pick one.
+            </div>
+          ) : (
+            <>
+              <div className="section-title" style={{ marginTop: 10 }}>
+                Services {listHost ? `(on ${listHost})` : ""} — click to select
+              </div>
+              <div className="card" style={{ maxHeight: 200, overflowY: "auto", padding: 6 }}>
+                {filtered.length === 0
+                  ? <div className="faint" style={{ padding: 8 }}>No services match “{name}”.</div>
+                  : filtered.map((s) => (
+                      <div key={s} className={"host-row" + (s === name ? " active" : "")}
+                           style={{ cursor: "pointer", paddingLeft: 6,
+                                    background: s === name ? "var(--panel-2)" : undefined }}
+                           onClick={() => setName(s)}>{s}</div>
+                    ))}
+              </div>
+            </>
+          )}
           <div className="group-buttons" style={{ marginTop: 10 }}>
             <button className="btn sm" disabled={busy || !name} onClick={() => svc("svc_restart", `Restart ${name}`)}>Restart</button>
             <button className="btn sm" disabled={busy || !name} onClick={() => svc("svc_start", `Start ${name}`)}>Start</button>

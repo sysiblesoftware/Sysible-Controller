@@ -170,6 +170,14 @@ function FleetHostCard({ h, onOpenHost }) {
 function EnvFleetCard({ group, postureLoaded, onOpenHost }) {
   const v = group.verdict;
   const [open, setOpen] = useState(v !== "OK" || group.problematic > 0);
+  const attn = group.hosts.filter((h) => h.needsAttention);
+  // Click "N needs attention": if it's one host, jump straight to it; if several,
+  // expand the environment so each flagged host card is visible.
+  const goAttention = (e) => {
+    e.stopPropagation();
+    if (attn.length === 1) onOpenHost(attn[0]);
+    else setOpen(true);
+  };
   return (
     <div style={{ border: "1px solid " + (v === "CRITICAL" ? VERDICT_COLOR.CRITICAL : "var(--border)"),
                   borderRadius: 8, overflow: "hidden" }}>
@@ -194,7 +202,11 @@ function EnvFleetCard({ group, postureLoaded, onOpenHost }) {
             </span>
           )}
           {postureLoaded && (group.problematic > 0
-            ? <span style={{ color: v === "CRITICAL" ? VERDICT_COLOR.CRITICAL : VERDICT_COLOR.WARNING }}>{group.problematic} need attention</span>
+            ? <span onClick={goAttention} role="button"
+                    title={attn.length ? `${attn.map((h) => h.host).join(", ")} — click to ${attn.length === 1 ? "open" : "view"}` : ""}
+                    style={{ color: v === "CRITICAL" ? VERDICT_COLOR.CRITICAL : VERDICT_COLOR.WARNING,
+                             cursor: "pointer", textDecoration: "underline dotted" }}>
+                {group.problematic} need{group.problematic === 1 ? "s" : ""} attention</span>
             : group.counts.OFFLINE === 0 && <span style={{ color: VERDICT_COLOR.OK }}>all clear</span>)}
           {group.limited > 0 && (
             <span className="faint">· {group.limited} limited</span>
@@ -745,8 +757,10 @@ export default function Dashboard({ role, edition, onOpen }) {
       // needs-attention list and the compliance strip AND honour suppressions.
       const ev = a.verdict;
       const activeIssues = a.active.filter((f) => f.key).length;   // suppressible findings still active
+      // Needs attention = has an ACTIVE finding, is offline, or its scan failed.
+      const needsAttention = a.active.length > 0 || ev === "OFFLINE" || !!pe.postureError;
       const host = { ...h, issues: activeIssues, postureError: pe.postureError || null,
-                     limited: !!pe.limited, verdict: ev };
+                     limited: !!pe.limited, verdict: ev, needsAttention };
       const e = g[env] || (g[env] = {
         env, hosts: [], counts: { OK: 0, WARNING: 0, CRITICAL: 0, SUPPRESSED: 0, OFFLINE: 0 },
         disk: null, mem: null, failed: 0, oom: 0, degraded: 0, problematic: 0, suppressed: 0, limited: 0,

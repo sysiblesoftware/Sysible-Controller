@@ -313,7 +313,9 @@ function SuppressedPanel({ items, canAct, onOpenHost, onRemove }) {
         <div style={{ borderTop: "1px solid var(--border)", padding: 6, display: "grid", gap: 3 }}>
           {items.map((it) => (
             <div key={it.supp.id} className="row" style={{ gap: 8, alignItems: "center", fontSize: 12, padding: "3px 6px" }}>
-              <button className="btn ghost sm" onClick={() => it.id && onOpenHost && onOpenHost(it)} title="View host">{it.host}</button>
+              {it.id
+                ? <button className="btn ghost sm" onClick={() => onOpenHost && onOpenHost(it)} title="View host">{it.host}</button>
+                : <span className="btn ghost sm" style={{ cursor: "default" }}>{it.host}</span>}
               <span style={{ minWidth: 0, flex: 1 }}>{it.label}
                 <span className="faint" style={{ marginLeft: 6 }}>· {describeSupp(it.supp)}{it.supp.reason ? ` — ${it.supp.reason}` : ""}</span>
               </span>
@@ -643,20 +645,29 @@ export default function Dashboard({ role, edition, onOpen }) {
 
   const issuesTotal = complianceSignals.reduce((n, s) => n + (s.hosts.length > 0 ? 1 : 0), 0);
 
-  // Flat list of every currently-suppressed finding, for the "Suppressed" panel,
-  // deduped across the strip's signals.
+  // Every active suppression that applies to a host/env currently in the fleet —
+  // the source for both the donut's "suppressed" metric and the Suppressed panel.
+  // Built from the raw suppression list (not just the compliance strip) so it
+  // also counts findings that aren't dashboard signals (e.g. password
+  // complexity suppressed from a host's detail page). Snoozes past their expiry
+  // are dropped. Each carries a friendly finding label + a host id when the
+  // scope is a single host (so the panel row can open it).
   const suppressedList = useMemo(() => {
-    const out = [], seen = new Set();
-    for (const s of complianceSignals) {
-      for (const h of s.suppressed) {
-        const k = `${h.id}|${s.key}`;
-        if (seen.has(k)) continue;
-        seen.add(k);
-        out.push({ id: h.id, host: h.host, key: s.key, label: s.label, supp: h.supp });
-      }
-    }
-    return out;
-  }, [complianceSignals]);
+    const now = Date.now();
+    const hostNames = new Set(filteredFleet.map((h) => h.host));
+    const idByName = {};
+    for (const h of filteredFleet) idByName[h.host] = h.id;
+    const envs = new Set(filteredFleet.map((h) => h.environment || "Unassigned"));
+    return supps
+      .filter((s) => (s.type !== "snooze" || !s.until || s.until * 1000 > now)
+                     && (s.scope === "host" ? hostNames.has(s.target) : envs.has(s.target)))
+      .map((s) => ({
+        supp: s, scope: s.scope, target: s.target, key: s.key,
+        id: s.scope === "host" ? idByName[s.target] : null,
+        host: s.scope === "host" ? s.target : `env: ${s.target}`,
+        label: SIGNAL_LABEL[s.key] || s.key.replace(/[._]/g, " "),
+      }));
+  }, [supps, filteredFleet]);
 
   async function unsuppress(id) {
     try { await api.removeSuppression(id); loadSupps(); } catch { /* ignore */ }
@@ -958,8 +969,9 @@ export default function Dashboard({ role, edition, onOpen }) {
                   <span><span className="dot" style={{ background: VERDICT_COLOR.OK }} /> {fleetSummary.counts.OK} OK</span>
                   <span><span className="dot" style={{ background: VERDICT_COLOR.WARNING }} /> {fleetSummary.counts.WARNING} warning</span>
                   <span><span className="dot" style={{ background: VERDICT_COLOR.CRITICAL }} /> {fleetSummary.counts.CRITICAL} critical</span>
-                  {fleetSummary.counts.SUPPRESSED > 0 && (
-                    <span><span className="dot" style={{ background: VERDICT_COLOR.SUPPRESSED }} /> {fleetSummary.counts.SUPPRESSED} suppressed</span>
+                  {suppressedList.length > 0 && (
+                    <span title={`${suppressedList.length} alert${suppressedList.length === 1 ? "" : "s"} suppressed across the fleet`}>
+                      <span className="dot" style={{ background: VERDICT_COLOR.SUPPRESSED }} /> {suppressedList.length} suppressed</span>
                   )}
                   <span><span className="dot" style={{ background: VERDICT_COLOR.OFFLINE }} /> {fleetSummary.counts.OFFLINE} offline</span>
                 </div>

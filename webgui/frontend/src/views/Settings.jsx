@@ -321,9 +321,20 @@ function SoftwareUpdate() {
   const pollRef = useRef(null);
   const agentPollRef = useRef(null);
   const logRef = useRef(null);
+  // Coordinate "Update controller + agents": the controller update confirms
+  // success while agents are still applying on their own poll. agentsDoneRef
+  // flips true when the agent rollout finishes (or times out); ctrlWaitingRef
+  // marks that the controller finished and is HOLDING the sign-out until then.
+  const agentsDoneRef = useRef(false);
+  const ctrlWaitingRef = useRef(false);
   useEffect(() => () => { [pollRef, agentPollRef].forEach((r) => r.current && clearInterval(r.current)); }, []);
   // Keep the console pinned to the newest output.
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [ctrlLog]);
+
+  const logoutReload = useCallback(async () => {
+    try { await api.logout(); } catch { /* ignore */ }
+    setTimeout(() => window.location.reload(), 900);
+  }, []);
 
   // Check whether the controller (git-behind) or any agent (build-hash mismatch)
   // has an update available. Does a live git fetch on the controller, so it's an
@@ -337,7 +348,8 @@ function SoftwareUpdate() {
 
   async function startController({ keepAgents = false } = {}) {
     setBusy(true); setErr(""); setMsg(""); setConfirm(null); setCtrlMsg(""); setCtrlLog("");
-    if (!keepAgents) { setAgents(null); setAgentRows(null); }
+    ctrlWaitingRef.current = false;
+    if (!keepAgents) { setAgents(null); setAgentRows(null); agentsDoneRef.current = true; }
     // Baseline: only a status record written at/after we kicked this off counts
     // as THIS run's outcome (the updater writes run/last_update.json). Small
     // margin for clock skew between browser and server.
@@ -352,10 +364,16 @@ function SoftwareUpdate() {
         setCtrl(state); setCtrlMsg(detail || "");
         if (state === "success") {
           // Real success: the update ran and the code changed. A controller
-          // update ends your session — the cookie survives the restart, so log
-          // out explicitly, then reload to the sign-in screen.
-          try { await api.logout(); } catch { /* ignore */ }
-          setTimeout(() => window.location.reload(), 900);
+          // update ends your session. In "controller + agents" mode, HOLD the
+          // sign-out until the agent rollout finishes (or times out), so the
+          // operator can watch it complete instead of being kicked to the login
+          // screen mid-rollout. Otherwise sign out now.
+          if (keepAgents && !agentsDoneRef.current) {
+            ctrlWaitingRef.current = true;
+            setCtrlMsg((detail ? detail + " " : "") + "Waiting for the agent rollout to finish before signing you out…");
+            return;
+          }
+          await logoutReload();
         }
         // On failure/unconfirmed we deliberately DO NOT sign out — keep the
         // session so the operator can read the reason and retry.
@@ -396,10 +414,16 @@ function SoftwareUpdate() {
   // Kick the agent update + N-of-M polling on its OWN interval (so it can run
   // alongside the controller update). Doesn't reset controller state.
   async function kickAgents() {
+    agentsDoneRef.current = false;
     const r = await api.updateAgents();
     const ver = r?.version, total = r?.queued || 0;
     setMsg(r?.message || `Agent update queued for ${total} host(s).`);
-    if (!ver || !total) return;
+    if (!ver || !total) {
+      // Nothing to roll out — don't make a pending controller sign-out wait.
+      agentsDoneRef.current = true;
+      if (ctrlWaitingRef.current) { ctrlWaitingRef.current = false; logoutReload(); }
+      return;
+    }
     setAgents({ total, updated: 0, ver, done: false, timedOut: false });
     const t0 = Date.now();
     if (agentPollRef.current) clearInterval(agentPollRef.current);
@@ -415,7 +439,13 @@ function SoftwareUpdate() {
         const done = updated >= total;
         const timedOut = !done && Date.now() - t0 > 240000;
         setAgents({ total, updated, ver, done, timedOut });
-        if (done || timedOut) clearInterval(agentPollRef.current);
+        if (done || timedOut) {
+          clearInterval(agentPollRef.current);
+          agentsDoneRef.current = true;
+          // If the controller update already finished and is holding the
+          // sign-out for us, release it now.
+          if (ctrlWaitingRef.current) { ctrlWaitingRef.current = false; logoutReload(); }
+        }
       } catch { /* transient — keep polling */ }
     };
     agentPollRef.current = setInterval(tick, 4000);
@@ -494,7 +524,8 @@ function SoftwareUpdate() {
       )}
       {ctrl === "success" && (
         <div style={{ marginTop: 8 }}>
-          <div className="ok-text" style={{ fontSize: 13 }}>✓ Controller updated{ctrlMsg ? ` — ${ctrlMsg}` : ""} Signing you out…</div>
+          <div className="ok-text" style={{ fontSize: 13 }}>✓ Controller updated{ctrlMsg ? ` — ${ctrlMsg}` : ""}
+            {!ctrlWaitingRef.current && " Signing you out…"}</div>
         </div>
       )}
       {ctrl === "failed" && (

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
 import HostTree from "../components/HostTree.jsx";
 import ResultsPane from "../components/ResultsPane.jsx";
@@ -7,9 +7,23 @@ import ResultsPane from "../components/ResultsPane.jsx";
 // service browser: list the running (or installed) services on a selected host,
 // click one to select it, then Restart / Start / Stop. Everything runs across
 // the checked target hosts.
-export default function QuickSystemActionsPage({ hosts = [], onRefreshHosts }) {
-  const [targets, setTargets] = useState([]);
-  const [name, setName] = useState("");
+//
+// `prefill` ({name?, host?}) lets a "Fix in Quick System Actions →" deep-link
+// (e.g. a failed unit on the host posture page) arrive with the Service field
+// and target host already filled in.
+export default function QuickSystemActionsPage({ hosts = [], onRefreshHosts, prefill }) {
+  const [targets, setTargets] = useState(prefill?.host ? [prefill.host] : []);
+  const [name, setName] = useState(prefill?.name || "");
+  // Re-apply if a fresh deep-link arrives while the page is already open.
+  const lastPrefill = useRef(null);
+  useEffect(() => {
+    if (!prefill) return;
+    const sig = `${prefill.host || ""}|${prefill.name || ""}`;
+    if (sig === lastPrefill.current) return;
+    lastPrefill.current = sig;
+    if (prefill.name) setName(prefill.name);
+    if (prefill.host) setTargets((t) => (t.includes(prefill.host) ? t : [...t, prefill.host]));
+  }, [prefill]);
   const [services, setServices] = useState([]);
   const [listHost, setListHost] = useState("");
   const [busy, setBusy] = useState("");

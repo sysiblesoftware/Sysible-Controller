@@ -211,7 +211,7 @@ export default function App() {
           {!isAuditor && view === "quickactions" && <ToolRunner solo="Quick System Actions" />}
           {!isAuditor && view === "fleetquery" && <FleetQuery />}
           {!isAuditor && view === "sysadmin" && <ToolRunner openTool={target?.tool} openTab={target?.tab}
-            onConsumed={() => setTarget(null)} />}
+            openPrefill={target?.prefill} onConsumed={() => setTarget(null)} />}
           {!isAuditor && view === "connect" && <Connect />}
           {view === "live" && <LiveActivity role={role} />}
         </div>

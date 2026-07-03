@@ -152,7 +152,13 @@ const ACTIONS = {
   "ssh.weak_macs": { kind: "tool", tool: "Security Administration" },
   "ssh.weak_kex": { kind: "tool", tool: "Security Administration" },
   "time.synced": { kind: "tool", tool: "Time Synchronization" },
-  "svc.failed_count": { kind: "tool", tool: "Quick System Actions" },
+  "svc.failed_count": { kind: "tool", tool: "Quick System Actions",
+    // Carry the failed unit's name + this host over to Quick System Actions so
+    // its "Service (by name)" field and target are already filled in.
+    prefill: (posture, hostId) => {
+      const names = String((posture.svc || {}).failed || "").split(/[\s,]+/).filter(Boolean);
+      return { name: names[0] || "", host: hostId };
+    } },
   "fs.disk_pct": { kind: "tool", tool: "Storage Administration" },
   "fs.inode_pct": { kind: "tool", tool: "Storage Administration" },
   "users.empty_pw_count": { kind: "tool", tool: "User & Group Administration" },
@@ -160,13 +166,15 @@ const ACTIONS = {
   "users.pw_complexity": { kind: "tool", tool: "Environmental Policies" },
 };
 
-function RowAction({ action, hostId, onOpen, onRefreshSoon }) {
+function RowAction({ action, hostId, posture, onOpen, onRefreshSoon }) {
   const [state, setState] = useState("idle"); // idle | busy | ok | err
   const [msg, setMsg] = useState("");
   if (action.kind === "tool") {
     return (
       <button className="btn ghost sm" style={{ whiteSpace: "nowrap" }}
-              onClick={() => onOpen && onOpen("sysadmin", { tool: action.tool })}
+              onClick={() => onOpen && onOpen("sysadmin", {
+                tool: action.tool, tab: action.tab,
+                prefill: action.prefill ? action.prefill(posture || {}, hostId) : undefined })}
               title={`Open ${action.tool}`}>
         Fix in {action.tool} →
       </button>
@@ -195,7 +203,7 @@ function RowAction({ action, hostId, onOpen, onRefreshSoon }) {
   );
 }
 
-function Row({ fullKey, label, value, hostId, onOpen, canAct, onRefreshSoon }) {
+function Row({ fullKey, label, value, hostId, posture, onOpen, canAct, onRefreshSoon }) {
   const st = evalStatus(fullKey, value);
   const action = (canAct && (st === "bad" || st === "warn")) ? ACTIONS[fullKey] : null;
   return (
@@ -212,7 +220,7 @@ function Row({ fullKey, label, value, hostId, onOpen, canAct, onRefreshSoon }) {
       </div>
       {action && (
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 5 }}>
-          <RowAction action={action} hostId={hostId} onOpen={onOpen} onRefreshSoon={onRefreshSoon} />
+          <RowAction action={action} hostId={hostId} posture={posture} onOpen={onOpen} onRefreshSoon={onRefreshSoon} />
         </div>
       )}
     </div>
@@ -240,7 +248,7 @@ function SectionCard({ section, posture, hostId, onOpen, canAct, onRefreshSoon }
     <div className="card" style={{ padding: "12px 14px" }}>
       <div className="section-title" style={{ marginBottom: 6 }}>{section.title}</div>
       {rows.map((r) => <Row key={r.fullKey} fullKey={r.fullKey} label={r.label} value={r.value}
-                            hostId={hostId} onOpen={onOpen} canAct={canAct} onRefreshSoon={onRefreshSoon} />)}
+                            hostId={hostId} posture={posture} onOpen={onOpen} canAct={canAct} onRefreshSoon={onRefreshSoon} />)}
     </div>
   );
 }
@@ -322,8 +330,15 @@ function HostMetaPanel({ name, canAct }) {
   );
 }
 
+// Module-level posture cache (survives unmount): navigating to a "Fix in…" tool
+// and back re-mounts this component, and a fresh gather is a live host round-trip.
+// We seed instantly from the last result for this host, then revalidate in the
+// background (stale-while-revalidate) so "back" is seamless, not a spinner.
+const _POSTURE_CACHE = new Map();   // hostId -> { data, ts }
+
 export default function HostDetail({ hostId, label, onBack, onOpen, canAct = true }) {
-  const [data, setData] = useState(null);
+  const cached = hostId ? _POSTURE_CACHE.get(hostId) : null;
+  const [data, setData] = useState(cached ? cached.data : null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
@@ -333,15 +348,27 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
   useEffect(() => { dataRef.current = data; }, [data]);
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
+  const store = useCallback((d) => {
+    if (hostId && d && d.posture) _POSTURE_CACHE.set(hostId, { data: d, ts: Date.now() });
+    setData(d);
+  }, [hostId]);
+
   const load = useCallback(() => {
     if (!hostId) { setErr("No host selected."); return; }
-    setLoading(true); setErr("");
+    // Only show the full-page spinner when we have nothing cached to show.
+    if (!_POSTURE_CACHE.get(hostId)) setLoading(true);
+    setErr("");
     api.hostPosture(hostId)
-      .then((d) => setData(d))
-      .catch((e) => setErr(e.message))
+      .then((d) => store(d))
+      .catch((e) => { if (!_POSTURE_CACHE.get(hostId)) setErr(e.message); })
       .finally(() => setLoading(false));
-  }, [hostId]);
-  useEffect(() => { load(); }, [load]);
+  }, [hostId, store]);
+  // Seed from cache immediately on host change, then revalidate.
+  useEffect(() => {
+    const c = hostId ? _POSTURE_CACHE.get(hostId) : null;
+    setData(c ? c.data : null);
+    load();
+  }, [hostId, load]);
 
   // After a reboot the host goes down and comes back. Poll posture and ALWAYS
   // swap in the latest successful gather (so the box never sits on stale uptime),

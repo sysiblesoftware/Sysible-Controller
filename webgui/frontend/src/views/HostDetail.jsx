@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import SuppressMenu from "../components/SuppressMenu.jsx";
+import { findSupp, describeSupp } from "../suppress.js";
 
 // Map a posture row key to the dashboard suppression signal key where one
 // exists, so suppressing a finding here stays consistent with the compliance
@@ -21,7 +22,7 @@ const SUPP_KEY = {
 // category breakdown from /api/host-posture/{id} (see cmd_posture_snapshot),
 // with pass/warn/fail coloring on the signals that have a clear good/bad state.
 
-const C = { good: "#4ec07a", warn: "#e0a83a", bad: "#e06c6c", none: "#7a7a7a" };
+const C = { good: "#4ec07a", warn: "#e0a83a", bad: "#e06c6c", none: "#7a7a7a", supp: "#6c7fa8" };
 
 // Display sections: each pulls one or more gather categories together under a
 // friendly title. `labels` renames known keys; anything else is humanized so
@@ -222,33 +223,48 @@ function RowAction({ action, hostId, posture, onOpen, onRefreshSoon }) {
   );
 }
 
-function Row({ fullKey, label, value, hostId, posture, host, env, boot, onOpen, canAct, onRefreshSoon, onSuppressed }) {
+function Row({ fullKey, label, value, hostId, posture, host, env, boot, supps, onOpen, canAct, onRefreshSoon, onSuppressed, onChanged }) {
   const st = evalStatus(fullKey, value);
-  const flagged = canAct && (st === "bad" || st === "warn");
-  const action = flagged ? ACTIONS[fullKey] : null;
+  const flagged = st === "bad" || st === "warn";
+  const suppKey = SUPP_KEY[fullKey] || fullKey;
+  // Is this (still-alerting) finding suppressed? Then show it muted/gray rather
+  // than amber/red — it's flagging but the operator has accepted/silenced it.
+  const supp = flagged ? findSupp(supps, { key: suppKey, host, env, bootEpoch: boot }) : null;
+  const action = (flagged && canAct && !supp) ? ACTIONS[fullKey] : null;
+  const dotColor = supp ? C.supp : C[st];
+  const valColor = supp ? C.supp : (st === "bad" ? C.bad : st === "warn" ? C.warn : "var(--text)");
   return (
     <div style={{ padding: "5px 0", borderBottom: "1px solid var(--border)" }}>
       <div className="spread" style={{ gap: 12, alignItems: "baseline" }}>
         <span className="faint" style={{ fontSize: 13, whiteSpace: "nowrap" }}>{label}</span>
         <span style={{ fontSize: 13, textAlign: "right", minWidth: 0, overflowWrap: "anywhere",
                        display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
-          {st !== "none" && <span className="dot" style={{ background: C[st], flex: "0 0 auto" }} />}
-          <span style={{ color: st === "bad" ? C.bad : st === "warn" ? C.warn : "var(--text)", fontWeight: st === "bad" ? 600 : 400 }}>
+          {st !== "none" && <span className="dot" style={{ background: dotColor, flex: "0 0 auto" }} />}
+          <span style={{ color: valColor, fontWeight: st === "bad" && !supp ? 600 : 400 }}>
             {fmtValue(fullKey, value)}
           </span>
         </span>
       </div>
-      {flagged && (
+      {flagged && supp && (
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8, marginTop: 5 }}>
+          <span style={{ fontSize: 11, color: C.supp, border: `1px solid ${C.supp}`, borderRadius: 10, padding: "0 8px" }}
+                title={describeSupp(supp)}>⊘ suppressed · {describeSupp(supp)}</span>
+          {canAct && <button className="btn ghost sm" title="Remove suppression"
+                  onClick={async () => { try { await api.removeSuppression(supp.id); onChanged && onChanged(); } catch { /* ignore */ } }}>
+            Un-suppress</button>}
+        </div>
+      )}
+      {flagged && canAct && !supp && (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 5 }}>
           {action && <RowAction action={action} hostId={hostId} posture={posture} onOpen={onOpen} onRefreshSoon={onRefreshSoon} />}
-          <SuppressMenu ctx={{ key: SUPP_KEY[fullKey] || fullKey, host, env, bootEpoch: boot }} onDone={onSuppressed} />
+          <SuppressMenu ctx={{ key: suppKey, host, env, bootEpoch: boot }} onDone={onSuppressed} />
         </div>
       )}
     </div>
   );
 }
 
-function SectionCard({ section, posture, hostId, host, env, boot, onOpen, canAct, onRefreshSoon, onSuppressed }) {
+function SectionCard({ section, posture, hostId, host, env, boot, supps, onOpen, canAct, onRefreshSoon, onSuppressed, onChanged }) {
   // Collect every present key within this section's categories: known keys keep
   // their friendly label and stated order; unknown ones are appended humanized.
   const rows = [];
@@ -269,8 +285,9 @@ function SectionCard({ section, posture, hostId, host, env, boot, onOpen, canAct
     <div className="card" style={{ padding: "12px 14px" }}>
       <div className="section-title" style={{ marginBottom: 6 }}>{section.title}</div>
       {rows.map((r) => <Row key={r.fullKey} fullKey={r.fullKey} label={r.label} value={r.value}
-                            hostId={hostId} posture={posture} host={host} env={env} boot={boot}
-                            onOpen={onOpen} canAct={canAct} onRefreshSoon={onRefreshSoon} onSuppressed={onSuppressed} />)}
+                            hostId={hostId} posture={posture} host={host} env={env} boot={boot} supps={supps}
+                            onOpen={onOpen} canAct={canAct} onRefreshSoon={onRefreshSoon}
+                            onSuppressed={onSuppressed} onChanged={onChanged} />)}
     </div>
   );
 }
@@ -364,6 +381,11 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [suppMsg, setSuppMsg] = useState(false);
+  const [supps, setSupps] = useState([]);
+  const loadSupps = useCallback(() => {
+    api.suppressions().then((d) => setSupps(d.suppressions || [])).catch(() => {});
+  }, []);
+  useEffect(() => { loadSupps(); }, [loadSupps]);
 
   const [rebooting, setRebooting] = useState(false);
   const pollRef = useRef(null);
@@ -477,9 +499,10 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
                       gap: 12, alignItems: "start" }}>
           {SECTIONS.map((s) => <SectionCard key={s.title} section={s} posture={posture}
                                             hostId={hostId} host={label} env={data && data.environment}
-                                            boot={(posture.os || {}).boot_epoch}
-                                            onOpen={onOpen} canAct={canAct}
-                                            onRefreshSoon={refreshAfterReboot} onSuppressed={() => setSuppMsg(true)} />)}
+                                            boot={(posture.os || {}).boot_epoch} supps={supps}
+                                            onOpen={onOpen} canAct={canAct} onRefreshSoon={refreshAfterReboot}
+                                            onSuppressed={() => { setSuppMsg(true); loadSupps(); }}
+                                            onChanged={loadSupps} />)}
         </div>
       )}
     </div>

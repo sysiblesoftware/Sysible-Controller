@@ -56,6 +56,7 @@ def merge_duplicate_host_entries(entries):
                 "type_text": "Agent + SSH",
                 "address": f"agent: {agent_entry['address']}   |   ssh: {ssh_entry['address']}",
                 "environment": agent_entry.get("environment") or ssh_entry.get("environment") or "",
+                "is_controller": bool(agent_entry.get("is_controller") or ssh_entry.get("is_controller")),
                 "agent_entry": agent_entry,
                 "ssh_entry": ssh_entry,
             })
@@ -131,6 +132,8 @@ def list_merged_hosts(agent_only=True):
             # op-capable actions dispatch confined kind="op" verbs to it instead
             # of a shell command. Absent/false => shell path (non-breaking).
             "dispatcher": bool(a.get("dispatcher")),
+            # This enrolled host IS the controller itself (self-managed).
+            "is_controller": bool(a.get("is_controller")),
         })
 
     try:

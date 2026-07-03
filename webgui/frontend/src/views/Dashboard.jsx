@@ -10,6 +10,9 @@ const SEV_COLOR = { 0: VERDICT_COLOR.CRITICAL, 1: VERDICT_COLOR.CRITICAL, 2: VER
 // shows a badge, so a problem on a business-critical box stands out.
 const CRIT_RANK = { critical: 0, high: 1, normal: 2, low: 3 };
 const CRIT_COLOR = { critical: VERDICT_COLOR.CRITICAL, high: VERDICT_COLOR.WARNING };
+// Badge marking the enrolled host that IS the controller itself.
+const CTRL_BADGE = { marginLeft: 6, fontSize: 10, fontWeight: 700, verticalAlign: "middle",
+  color: "#fff", background: "var(--accent, #3d7dd8)", borderRadius: 10, padding: "0 6px" };
 
 // Inline SVG donut (no chart-library dependency): one ring segment per value.
 function Donut({ segments, size = 88, stroke = 13 }) {
@@ -98,6 +101,7 @@ function FleetHostCard({ h, onOpenHost }) {
       <div className="spread" style={{ marginBottom: noData ? 0 : 6 }}>
         <span><span className="dot" style={{ background: VERDICT_COLOR[v] || VERDICT_COLOR.OFFLINE }} />{" "}
           <strong>{h.host}</strong>
+          {h.is_controller && <span style={CTRL_BADGE} title="This host is the Sysible controller">controller</span>}
           <span className="faint" style={{ marginLeft: 6, fontSize: 11 }}>{h.environment}</span></span>
         <span className="faint" style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
           {h.issues > 0 && <span style={{ color: VERDICT_COLOR.WARNING, fontWeight: 700 }}>⚠ {h.issues}</span>}
@@ -288,7 +292,7 @@ function MetricCard({ label, value, extra, hosts, onOpenHost, accent }) {
                     disabled={!h.id}
                     onClick={() => { if (h.id && onOpenHost) onOpenHost(h); setOpen(false); }}
                     title={h.id ? "View host detail" : ""}>
-              <span>{h.host}</span>
+              <span>{h.host}{h.ctrl && <span style={CTRL_BADGE} title="This host is the Sysible controller">controller</span>}</span>
               {h.env ? <span className="faint" style={{ fontSize: 11 }}>{h.env}</span> : null}
             </button>
           ))}
@@ -434,7 +438,7 @@ export default function Dashboard({ role, edition, onOpen }) {
   // Host lists behind the top-strip counts, so each count can drop down the
   // specific hosts (id → drill-down, hostname + environment shown).
   const hostLists = useMemo(() => {
-    const mk = (a) => ({ id: a.host_id, host: a.hostname || a.host_id, env: a.environment || "Unassigned" });
+    const mk = (a) => ({ id: a.host_id, host: a.hostname || a.host_id, env: a.environment || "Unassigned", ctrl: !!a.is_controller });
     const online = [], offline = [];
     for (const a of agents) (isAgentOnline(a) ? online : offline).push(mk(a));
     return { all: agents.map(mk), online, offline };
@@ -529,7 +533,7 @@ export default function Dashboard({ role, edition, onOpen }) {
       }
       if (reasons.length) {
         const crit = (hostMetaMap[h.host] || {}).criticality || "normal";
-        rows.push({ id: h.id, host: h.host, env: h.environment || "Unassigned", sev, reasons, crit });
+        rows.push({ id: h.id, host: h.host, env: h.environment || "Unassigned", sev, reasons, crit, ctrl: !!h.is_controller });
       }
     }
     // Worst first; within a severity, business-critical hosts rank above others.
@@ -698,6 +702,7 @@ export default function Dashboard({ role, edition, onOpen }) {
                             border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer" }}>
                 <span className="dot" style={{ background: SEV_COLOR[r.sev] || VERDICT_COLOR.WARNING }} />
                 <strong style={{ whiteSpace: "nowrap" }}>{r.host}</strong>
+                {r.ctrl && <span style={CTRL_BADGE} title="This host is the Sysible controller">controller</span>}
                 <span className="faint" style={{ fontSize: 11 }}>{r.env}</span>
                 {CRIT_COLOR[r.crit] && (
                   <span style={{ fontSize: 10, fontWeight: 700, color: CRIT_COLOR[r.crit],

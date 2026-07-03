@@ -557,7 +557,8 @@ def fleet_health(user: str = Depends(require_login)):
         return None
 
     def probe(e):
-        base = {"id": e.get("id"), "host": e.get("label"), "environment": e.get("environment") or "Unassigned"}
+        base = {"id": e.get("id"), "host": e.get("label"), "environment": e.get("environment") or "Unassigned",
+                "is_controller": bool(e.get("is_controller"))}
         aid = agent_id_of(e)
         # Carry the agent host_id alongside the entry id: for a MERGED host the
         # entry id is the label, so the dashboard needs the agent id to line this

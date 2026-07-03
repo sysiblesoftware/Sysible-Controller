@@ -848,11 +848,43 @@ def get_metrics_snapshot_route(host_id: str):
     return {"host_id": host_id, "ts": snap.get("ts"), "snapshot": data}
 
 
+def _controller_identity():
+    """This controller host's own names + IPs, so an enrolled host that IS the
+    controller can be labelled as such. Best-effort; empty sets never match."""
+    import socket as _s
+    names = set()
+    try:
+        hn = _s.gethostname() or ""
+        if hn:
+            names.add(hn.lower()); names.add(hn.split(".")[0].lower())
+        try:
+            names.add((_s.getfqdn() or "").lower())
+        except Exception:
+            pass
+    except Exception:
+        pass
+    names.discard("")
+    ips = {"127.0.0.1", "::1"}
+    try:
+        ips.update(detect_local_ips())
+    except Exception:
+        pass
+    return names, ips
+
+
+def _is_controller_host(hostname, ip, names, ips):
+    hn = (hostname or "").lower()
+    if hn and (hn in names or hn.split(".")[0] in names):
+        return True
+    return bool(ip) and ip in ips
+
+
 @app.get("/agents", dependencies=[Depends(require_api_key)])
 def get_agents():
 
     from backend import agent_integrity
     agents = list_agents()
+    ctrl_names, ctrl_ips = _controller_identity()
     for a in agents:
         st = get_agent_ssh_state(a.get("host_id"))
         # "enabled" | "pending" | "sshd_missing" | "error" | None
@@ -863,6 +895,10 @@ def get_agents():
         _ist = agent_integrity.status(a.get("host_id"))
         a["integrity_quarantined"] = _ist.get("status") == "quarantined"
         a["integrity_detail"] = _ist.get("mismatches", [])
+        # Is THIS enrolled host the controller itself (self-managed)? Lets the
+        # console label it so an operator never mistakes the control node for an
+        # ordinary managed host.
+        a["is_controller"] = _is_controller_host(a.get("hostname"), a.get("ip"), ctrl_names, ctrl_ips)
 
     return {
         "agents": agents

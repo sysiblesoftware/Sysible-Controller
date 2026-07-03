@@ -31,6 +31,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import uuid
@@ -969,6 +970,28 @@ def heartbeat(state):
         print("[agent] heartbeat failed:", e)
 
 
+def _heartbeat_loop(state):
+    """Send the heartbeat (and periodic metrics sample) on a DEDICATED thread, on
+    its own steady cadence, independent of task execution.
+
+    Previously heartbeat + task execution shared one thread: while the agent was
+    busy running a long command (applying updates, a slow posture gather), it
+    couldn't get back to the top of the loop to heartbeat — so `last_seen` went
+    stale and the console showed the host OFFLINE mid-operation (e.g. "patched a
+    VM and now it says it's offline"). Running heartbeats here means the host
+    keeps reporting in no matter how long a task takes.
+
+    Best-effort: any error is logged and retried on the next tick. The task loop
+    remains the single authority for enrollment/exit (UnknownHostError), so this
+    thread just swallows everything and keeps the pulse going."""
+    while True:
+        try:
+            heartbeat(state)
+        except Exception as e:               # incl. UnknownHostError — the task loop handles exit
+            print("[agent] heartbeat thread:", e)
+        time.sleep(POLL_INTERVAL)
+
+
 def loop(state):
     controller_desc = (
         CONTROLLER
@@ -977,12 +1000,15 @@ def loop(state):
     )
     print("[agent] running:", state["host_id"], "controller:", controller_desc)
 
+    # Pulse on its own thread so a long-running task never makes the host look
+    # offline. Daemon: it dies with the process when the task loop exits.
+    threading.Thread(target=_heartbeat_loop, args=(state,), daemon=True,
+                     name="sysible-heartbeat").start()
+
     while True:
         ran_task = False
 
         try:
-            heartbeat(state)
-
             tasks = fetch_tasks(state)
             ran_task = bool(tasks)
 

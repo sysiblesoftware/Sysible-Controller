@@ -800,9 +800,26 @@ for mp in / /tmp /var /home /dev/shm /boot; do
   key=$(printf '%s' "$mp" | sed 's#^/$#root#; s#^/##; s#/#_#g')
   [ -n "$opts" ] && p "mount.$key" "$opts"
 done
-sg2=$($TMO find / -xdev -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | wc -l 2>/dev/null | tr -d ' '); p fs.suid_sgid_count "${sg2:-na}"
-ww=$($TMO find / -xdev -type f -perm -0002 2>/dev/null | wc -l 2>/dev/null | tr -d ' '); p fs.world_writable_count "${ww:-na}"
-no=$($TMO find / -xdev \( -nouser -o -nogroup \) 2>/dev/null | wc -l 2>/dev/null | tr -d ' '); p fs.unowned_count "${no:-na}"
+# These three integrity checks are each a full-tree `find /` walk — by far the
+# slowest part of posture. Run them in PARALLEL (each into its own temp file),
+# so this section costs roughly ONE walk instead of three back-to-back. Falls
+# back to sequential if mktemp -d isn't available.
+FSD=$(mktemp -d 2>/dev/null)
+if [ -n "$FSD" ] && [ -d "$FSD" ]; then
+  ( $TMO find / -xdev -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | wc -l | tr -d ' ' > "$FSD/suid" ) &
+  ( $TMO find / -xdev -type f -perm -0002 2>/dev/null | wc -l | tr -d ' ' > "$FSD/ww" ) &
+  ( $TMO find / -xdev \( -nouser -o -nogroup \) 2>/dev/null | wc -l | tr -d ' ' > "$FSD/no" ) &
+  wait
+  sg2=$(cat "$FSD/suid" 2>/dev/null); ww=$(cat "$FSD/ww" 2>/dev/null); no=$(cat "$FSD/no" 2>/dev/null)
+  rm -rf "$FSD" 2>/dev/null
+else
+  sg2=$($TMO find / -xdev -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | wc -l | tr -d ' ')
+  ww=$($TMO find / -xdev -type f -perm -0002 2>/dev/null | wc -l | tr -d ' ')
+  no=$($TMO find / -xdev \( -nouser -o -nogroup \) 2>/dev/null | wc -l | tr -d ' ')
+fi
+p fs.suid_sgid_count "${sg2:-na}"
+p fs.world_writable_count "${ww:-na}"
+p fs.unowned_count "${no:-na}"
 
 # --- Time synchronization ---------------------------------------------------
 if command -v timedatectl >/dev/null 2>&1; then

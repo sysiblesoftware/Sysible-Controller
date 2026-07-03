@@ -614,35 +614,49 @@ export default function Dashboard({ role, edition, onOpen }) {
 
   const order = { CRITICAL: 0, WARNING: 1, SUPPRESSED: 2.5, OFFLINE: 2, OK: 3 };
 
-  // Build the dashboard compliance strip from the unified analysis: for each
-  // signal key, the hosts where it's an ACTIVE finding vs where it's SUPPRESSED
-  // (so a suppressed finding drops out of the count but stays reachable). Each
-  // host entry carries the context the Suppress menu needs (env + boot time).
+  // Build the dashboard compliance strip. Posture signals come straight from the
+  // POSTURE sweep (so they show even if the health sweep is empty/slow — the two
+  // are independent); the two health signals come from the fleet-health sweep.
+  // Each finding is split active vs SUPPRESSED via suppFor, and every host entry
+  // carries the context (env + boot time) the Suppress menu needs.
   const complianceSignals = useMemo(() => {
     const keys = [...POSTURE_SIGNAL_KEYS, "disk_critical", "failed_units"];
     const acc = Object.fromEntries(keys.map((k) => [k, { active: [], suppressed: [] }]));
+    const place = (key, id, host) => {
+      const c = hostCtx[id] || {};
+      const entry = { id, host, env: c.env || "Unassigned", boot: c.boot ?? null };
+      const s = suppFor(id, key);
+      if (s) acc[key].suppressed.push({ ...entry, supp: s });
+      else acc[key].active.push(entry);
+    };
+    for (const p of posture) {
+      if (!p.flags) continue;
+      for (const key of POSTURE_SIGNAL_KEYS) if (p.flags[key] === true) place(key, p.id, p.host);
+    }
     for (const h of filteredFleet) {
-      const a = analysis[h.id]; if (!a) continue;
-      const c = hostCtx[h.id] || {};
-      const entry = { id: h.id, host: h.host, env: c.env, boot: c.boot };
-      for (const f of a.active) if (f.key && acc[f.key]) acc[f.key].active.push(entry);
-      for (const f of a.suppressed) if (acc[f.key]) acc[f.key].suppressed.push({ ...entry, supp: f.supp });
+      if ((h.disk ?? 0) >= 90) place("disk_critical", h.id, h.host);
+      if ((h.failed ?? 0) > 0) place("failed_units", h.id, h.host);
     }
     return keys.map((k) => ({ key: k, label: SIGNAL_LABEL[k], hosts: acc[k].active, suppressed: acc[k].suppressed }))
       .sort((a, b) => b.hosts.length - a.hosts.length);
-  }, [filteredFleet, analysis, hostCtx]);
+  }, [posture, filteredFleet, suppFor, hostCtx]);
 
   const issuesTotal = complianceSignals.reduce((n, s) => n + (s.hosts.length > 0 ? 1 : 0), 0);
 
-  // Flat list of every currently-suppressed finding, for the "Suppressed" panel.
+  // Flat list of every currently-suppressed finding, for the "Suppressed" panel,
+  // deduped across the strip's signals.
   const suppressedList = useMemo(() => {
-    const out = [];
-    for (const h of filteredFleet) {
-      const a = analysis[h.id]; if (!a) continue;
-      for (const f of a.suppressed) out.push({ id: h.id, host: h.host, key: f.key, label: f.label, supp: f.supp });
+    const out = [], seen = new Set();
+    for (const s of complianceSignals) {
+      for (const h of s.suppressed) {
+        const k = `${h.id}|${s.key}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push({ id: h.id, host: h.host, key: s.key, label: s.label, supp: h.supp });
+      }
     }
     return out;
-  }, [filteredFleet, analysis]);
+  }, [complianceSignals]);
 
   async function unsuppress(id) {
     try { await api.removeSuppression(id); loadSupps(); } catch { /* ignore */ }

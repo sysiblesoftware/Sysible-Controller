@@ -1,5 +1,21 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
+import SuppressMenu from "../components/SuppressMenu.jsx";
+
+// Map a posture row key to the dashboard suppression signal key where one
+// exists, so suppressing a finding here stays consistent with the compliance
+// strip. Rows without a mapping suppress under their own posture key.
+const SUPP_KEY = {
+  "ssh.permit_root_login": "ssh_root_login",
+  "fw.active": "firewall_disabled",
+  "mac.selinux": "mac_not_enforcing", "mac.apparmor": "mac_not_enforcing",
+  "reboot.required": "reboot_required",
+  "time.synced": "time_unsynced",
+  "users.uid0_count": "risky_accounts", "users.empty_pw_count": "risky_accounts",
+  "cert.expiring_30d": "cert_expiring", "cert.nearest_days": "cert_expiring",
+  "svc.failed_count": "failed_units",
+  "fs.disk_pct": "disk_critical",
+};
 
 // Per-host posture / compliance drill-down. Read-only: renders the full
 // category breakdown from /api/host-posture/{id} (see cmd_posture_snapshot),
@@ -203,9 +219,10 @@ function RowAction({ action, hostId, posture, onOpen, onRefreshSoon }) {
   );
 }
 
-function Row({ fullKey, label, value, hostId, posture, onOpen, canAct, onRefreshSoon }) {
+function Row({ fullKey, label, value, hostId, posture, host, env, boot, onOpen, canAct, onRefreshSoon, onSuppressed }) {
   const st = evalStatus(fullKey, value);
-  const action = (canAct && (st === "bad" || st === "warn")) ? ACTIONS[fullKey] : null;
+  const flagged = canAct && (st === "bad" || st === "warn");
+  const action = flagged ? ACTIONS[fullKey] : null;
   return (
     <div style={{ padding: "5px 0", borderBottom: "1px solid var(--border)" }}>
       <div className="spread" style={{ gap: 12, alignItems: "baseline" }}>
@@ -218,16 +235,17 @@ function Row({ fullKey, label, value, hostId, posture, onOpen, canAct, onRefresh
           </span>
         </span>
       </div>
-      {action && (
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 5 }}>
-          <RowAction action={action} hostId={hostId} posture={posture} onOpen={onOpen} onRefreshSoon={onRefreshSoon} />
+      {flagged && (
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 5 }}>
+          {action && <RowAction action={action} hostId={hostId} posture={posture} onOpen={onOpen} onRefreshSoon={onRefreshSoon} />}
+          <SuppressMenu ctx={{ key: SUPP_KEY[fullKey] || fullKey, host, env, bootEpoch: boot }} onDone={onSuppressed} />
         </div>
       )}
     </div>
   );
 }
 
-function SectionCard({ section, posture, hostId, onOpen, canAct, onRefreshSoon }) {
+function SectionCard({ section, posture, hostId, host, env, boot, onOpen, canAct, onRefreshSoon, onSuppressed }) {
   // Collect every present key within this section's categories: known keys keep
   // their friendly label and stated order; unknown ones are appended humanized.
   const rows = [];
@@ -248,7 +266,8 @@ function SectionCard({ section, posture, hostId, onOpen, canAct, onRefreshSoon }
     <div className="card" style={{ padding: "12px 14px" }}>
       <div className="section-title" style={{ marginBottom: 6 }}>{section.title}</div>
       {rows.map((r) => <Row key={r.fullKey} fullKey={r.fullKey} label={r.label} value={r.value}
-                            hostId={hostId} posture={posture} onOpen={onOpen} canAct={canAct} onRefreshSoon={onRefreshSoon} />)}
+                            hostId={hostId} posture={posture} host={host} env={env} boot={boot}
+                            onOpen={onOpen} canAct={canAct} onRefreshSoon={onRefreshSoon} onSuppressed={onSuppressed} />)}
     </div>
   );
 }
@@ -341,6 +360,7 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
   const [data, setData] = useState(cached ? cached.data : null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [suppMsg, setSuppMsg] = useState(false);
 
   const [rebooting, setRebooting] = useState(false);
   const pollRef = useRef(null);
@@ -417,6 +437,12 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
       </div>
 
       {err && <div className="error-box">{err}</div>}
+      {suppMsg && (
+        <div className="ok-text" style={{ fontSize: 12.5, marginBottom: 10, display: "flex", gap: 8, alignItems: "center" }}>
+          ✓ Finding suppressed — it’ll drop from the dashboard donut and “needs attention”.
+          <button className="btn ghost sm" onClick={() => setSuppMsg(false)}>Dismiss</button>
+        </div>
+      )}
 
       {label && <HostMetaPanel name={label} canAct={canAct} />}
 
@@ -447,8 +473,10 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))",
                       gap: 12, alignItems: "start" }}>
           {SECTIONS.map((s) => <SectionCard key={s.title} section={s} posture={posture}
-                                            hostId={hostId} onOpen={onOpen} canAct={canAct}
-                                            onRefreshSoon={refreshAfterReboot} />)}
+                                            hostId={hostId} host={label} env={data && data.environment}
+                                            boot={(posture.os || {}).boot_epoch}
+                                            onOpen={onOpen} canAct={canAct}
+                                            onRefreshSoon={refreshAfterReboot} onSuppressed={() => setSuppMsg(true)} />)}
         </div>
       )}
     </div>

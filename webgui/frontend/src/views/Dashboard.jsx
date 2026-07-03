@@ -352,6 +352,19 @@ export default function Dashboard({ role, edition, onOpen }) {
   useEffect(() => { api.fleetUpdates(0, 0).then((d) => setUpdates(d.hosts || [])).catch(() => {}); }, []);
   const [hostMetaMap, setHostMetaMap] = useState({}); // name -> {criticality, owner, tags, ...}
   useEffect(() => { api.hostMeta().then((d) => setHostMetaMap(d.meta || {})).catch(() => {}); }, []);
+  const [tagFilter, setTagFilter] = useState(null);  // service-group (tag) focus for the fleet view
+
+  // All tags in use = the fleet's "service groups". Filtering the fleet-health
+  // views (donut/env cards/triage) to a tag lets you focus on one service.
+  const allTags = useMemo(() => {
+    const s = new Set();
+    for (const m of Object.values(hostMetaMap)) for (const t of (m.tags || [])) s.add(t);
+    return [...s].sort();
+  }, [hostMetaMap]);
+  const filteredFleet = useMemo(() => {
+    if (!tagFilter) return fleet;
+    return fleet.filter((h) => ((hostMetaMap[h.host] || {}).tags || []).includes(tagFilter));
+  }, [fleet, tagFilter, hostMetaMap]);
 
   const loadFleet = useCallback(() => {
     setFleetLoading(true); setFleetErr("");
@@ -445,12 +458,12 @@ export default function Dashboard({ role, edition, onOpen }) {
 
   const fleetSummary = useMemo(() => {
     const counts = { OK: 0, WARNING: 0, CRITICAL: 0, OFFLINE: 0 };
-    for (const h of fleet) {
+    for (const h of filteredFleet) {
       const v = (h.verdict || "OK").toUpperCase();
       counts[v] = (counts[v] || 0) + 1;
     }
     return { counts };
-  }, [fleet]);
+  }, [filteredFleet]);
 
   const patch = useMemo(() => {
     let withUpd = 0, sec = 0;
@@ -465,7 +478,7 @@ export default function Dashboard({ role, edition, onOpen }) {
     const postById = {};
     for (const p of posture) postById[p.id] = p;
     const rows = [];
-    for (const h of fleet) {
+    for (const h of filteredFleet) {
       const reasons = [];
       let sev = 3;
       if (h.online === false) { reasons.push("offline"); sev = 0; }
@@ -490,7 +503,7 @@ export default function Dashboard({ role, edition, onOpen }) {
       || (CRIT_RANK[a.crit] ?? 2) - (CRIT_RANK[b.crit] ?? 2)
       || b.reasons.length - a.reasons.length);
     return rows;
-  }, [fleet, posture, hostMetaMap]);
+  }, [filteredFleet, posture, hostMetaMap]);
 
   // Single environment-grouped rollup joining the two lenses by host id: each
   // host carries its live health (verdict, disk/mem, problem signals) AND its
@@ -508,7 +521,7 @@ export default function Dashboard({ role, edition, onOpen }) {
     }
     const g = {};
     let total = 0, clear = 0;
-    for (const h of fleet) {
+    for (const h of filteredFleet) {
       const env = h.environment || "Unassigned";
       const pe = postById[h.id] || {};
       const host = { ...h, issues: pe.issues ?? null, postureError: pe.postureError || null, limited: !!pe.limited };
@@ -546,7 +559,7 @@ export default function Dashboard({ role, edition, onOpen }) {
     envs.sort((a, b) => (order[a.verdict] ?? 9) - (order[b.verdict] ?? 9)
       || b.problematic - a.problematic || a.env.localeCompare(b.env));
     return { envs, total, clear };
-  }, [fleet, posture]);
+  }, [filteredFleet, posture]);
 
   if (q.trim()) {
     return (
@@ -668,6 +681,19 @@ export default function Dashboard({ role, edition, onOpen }) {
             </button>
           </div>
         </div>
+        {allTags.length > 0 && (
+          <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
+            <span className="faint" style={{ fontSize: 11 }}>Service group:</span>
+            <button className="btn ghost sm" style={{ borderColor: !tagFilter ? VERDICT_COLOR.OK : "var(--border)" }}
+                    onClick={() => setTagFilter(null)}>All</button>
+            {allTags.map((t) => (
+              <button key={t} className="btn ghost sm"
+                      style={{ borderColor: tagFilter === t ? VERDICT_COLOR.OK : "var(--border)" }}
+                      onClick={() => setTagFilter(tagFilter === t ? null : t)}>{t}</button>
+            ))}
+            {tagFilter && <span className="faint" style={{ fontSize: 11 }}>· showing hosts tagged “{tagFilter}”</span>}
+          </div>
+        )}
         {(fleetErr || postureErr) && <div className="error-box">{fleetErr || postureErr}</div>}
         {fleetEnvs.total === 0 && posture.length === 0 ? (
           <div className="empty" style={{ padding: 16 }}>

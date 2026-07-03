@@ -559,6 +559,10 @@ def fleet_health(user: str = Depends(require_login)):
     def probe(e):
         base = {"id": e.get("id"), "host": e.get("label"), "environment": e.get("environment") or "Unassigned"}
         aid = agent_id_of(e)
+        # Carry the agent host_id alongside the entry id: for a MERGED host the
+        # entry id is the label, so the dashboard needs the agent id to line this
+        # reading up with the agent inventory (agents are keyed by host_id).
+        base["agent_id"] = aid
         ls = last_seen.get(aid) if aid else None
         online = (bool(ls and (now - ls) <= 20)) if aid else None
         # Don't probe an agent host we already know is offline — avoids waiting
@@ -573,7 +577,12 @@ def fleet_health(user: str = Depends(require_login)):
         pe = {**e, "requires_sudo_password": False}
         if e.get("agent_entry"):
             pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
-        r = _dispatch_one(pe, cmd, "command", None, None, None)  # no token: read-only, unlogged
+        # Short poll cap: a health probe must never hold a worker for the full
+        # 60s action timeout. A host that's heartbeating but not answering tasks
+        # within ~8s is reported as an unreachable/timed-out probe, so the sweep
+        # can't stack up and starve the thread pool (which stalled everything).
+        r = _dispatch_one(pe, cmd, "command", None, None, None,  # no token: read-only, unlogged
+                          poll_timeout=float(os.getenv("SYSIBLE_HEALTH_PROBE_TIMEOUT", "8")))
         m = _parse_sysmetrics((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
         return {
             **base,
@@ -2580,10 +2589,15 @@ def files_compare(body: CompareRequest, request: Request, user: str = Depends(re
 
 
 def _dispatch_one(entry, command, kind, become_password=None, token=None, description=None,
-                  needs_sudo=True, log=True):
+                  needs_sudo=True, log=True, poll_timeout=None):
     """Run one command on one host and return a normalized result,
     polling agent tasks to completion (bounded) so the response is
     synchronous from the browser's point of view.
+
+    `poll_timeout` caps how long we wait for an agent to report a result
+    (seconds); default is SYSIBLE_WEBGUI_TASK_TIMEOUT (60). Read-only sweeps
+    like fleet-health pass a short one so a single unresponsive agent can't
+    stall the whole parallel sweep for a minute.
 
     The dispatch itself runs with the admin token set (token!=None) so the
     controller can derive the run-as user (runuser -u <admin>) and attribute
@@ -2610,12 +2624,13 @@ def _dispatch_one(entry, command, kind, become_password=None, token=None, descri
     # Agent task: poll until the agent reports back, or time out.
     import time
     task_id = outcome.get("task_id")
-    deadline = time.time() + float(os.getenv("SYSIBLE_WEBGUI_TASK_TIMEOUT", "60"))
+    tmo = poll_timeout if poll_timeout is not None else float(os.getenv("SYSIBLE_WEBGUI_TASK_TIMEOUT", "60"))
+    deadline = time.time() + tmo
     while time.time() < deadline:
         polled = dispatch.poll_entry_result(entry, task_id)
         if polled is not None:
             return _normalize(label, polled, env)
-        time.sleep(1.0)
+        time.sleep(0.5)
     return {"host": label, "environment": env, "ok": False, "error": "timed out waiting for agent",
             "stdout": "", "stderr": "", "code": None}
 

@@ -256,7 +256,7 @@ function SignalChip({ label, hosts, onOpenHost }) {
 // clickable and drops down links to those specific hosts (e.g. click
 // "Offline / stale 1" to see which host, "Online 3" for the three, etc.).
 // Each host link opens that host's detail page.
-function MetricCard({ label, value, extra, hosts, onOpenHost }) {
+function MetricCard({ label, value, extra, hosts, onOpenHost, accent }) {
   const [open, setOpen] = useState(false);
   const ref = React.useRef(null);
   const clickable = Array.isArray(hosts) && hosts.length > 0;
@@ -272,7 +272,7 @@ function MetricCard({ label, value, extra, hosts, onOpenHost }) {
          onClick={() => clickable && setOpen((o) => !o)}
          title={clickable ? "Click to see which host(s)" : undefined}>
       <div className="label">{label}</div>
-      <div className="value">{value}{extra}
+      <div className="value" style={accent ? { color: accent } : undefined}>{value}{extra}
         {clickable && <span className="faint" style={{ fontSize: 11, marginLeft: 6 }}>{open ? "▲" : "▾"}</span>}
       </div>
       {open && clickable && (
@@ -366,7 +366,13 @@ export default function Dashboard({ role, edition, onOpen }) {
     return fleet.filter((h) => ((hostMetaMap[h.host] || {}).tags || []).includes(tagFilter));
   }, [fleet, tagFilter, hostMetaMap]);
 
+  const fleetInFlight = React.useRef(false);
   const loadFleet = useCallback(() => {
+    // Don't stack sweeps: if one is still running (e.g. slow controller), let it
+    // finish rather than piling on another request every 10s and starving the
+    // BFF's worker pool — which is what made everything feel frozen.
+    if (fleetInFlight.current) return;
+    fleetInFlight.current = true;
     setFleetLoading(true); setFleetErr("");
     // Refresh the agent inventory alongside health so the top-strip counts
     // (total/envs) and last_seen stay current, not frozen at page load.
@@ -374,7 +380,7 @@ export default function Dashboard({ role, edition, onOpen }) {
     api.fleetHealth()
       .then((d) => { setFleet(d.hosts || []); setFleetAt(Date.now()); })
       .catch((e) => setFleetErr(e.message))
-      .finally(() => setFleetLoading(false));
+      .finally(() => { fleetInFlight.current = false; setFleetLoading(false); });
   }, []);
   useEffect(() => { loadFleet(); }, [loadFleet]);
   useEffect(() => {
@@ -388,14 +394,26 @@ export default function Dashboard({ role, edition, onOpen }) {
   // strip agrees with the fleet donut and updates live with it.
   const onlineById = useMemo(() => {
     const map = {};
-    for (const h of fleet) if (h && h.id != null) map[h.id] = h.online;
+    for (const h of fleet) {
+      if (!h) continue;
+      // Key by BOTH the entry id and the agent host_id: a merged host's entry id
+      // is its label, so agents (keyed by host_id) only match via agent_id.
+      if (h.id != null) map[h.id] = h.online;
+      if (h.agent_id != null) map[h.agent_id] = h.online;
+    }
     return map;
   }, [fleet]);
+  // Have we actually completed (or failed) a health sweep yet? Before the first
+  // sweep we trust the last_seen heartbeat window; once a sweep has run, we trust
+  // it — a host the sweep couldn't confirm online is treated as offline rather
+  // than left looking healthy on a stale heartbeat.
+  const healthAttempted = fleetAt > 0 || !!fleetErr;
   const isAgentOnline = (a) => {
     const f = onlineById[a.host_id];
     if (f === true) return true;
     if (f === false) return false;
-    return seenAgo(a.last_seen) <= ONLINE_WINDOW_S;  // fallback before health loads
+    if (healthAttempted) return false;               // sweep ran but couldn't reach it
+    return seenAgo(a.last_seen) <= ONLINE_WINDOW_S;   // pre-first-sweep fallback only
   };
 
   const m = useMemo(() => {
@@ -403,7 +421,15 @@ export default function Dashboard({ role, edition, onOpen }) {
     const online = agents.filter(isAgentOnline).length;
     const envs = new Set(agents.map((a) => a.environment || "Unassigned")).size;
     return { total, online, offline: total - online, envs };
-  }, [agents, onlineById]);
+  }, [agents, onlineById, healthAttempted]);
+
+  // Emergency state for the dashboard: either the controller isn't answering the
+  // health sweep at all, or a completed sweep shows nothing is checking in. Only
+  // raised AFTER a sweep has been attempted, so the first paint doesn't flash red
+  // while health is still gathering.
+  const healthDown = !!fleetErr;
+  const noCheckins = m.total > 0 && m.online === 0;
+  const emergency = healthAttempted && (healthDown || noCheckins);
 
   // Host lists behind the top-strip counts, so each count can drop down the
   // specific hosts (id → drill-down, hostname + environment shown).
@@ -412,7 +438,7 @@ export default function Dashboard({ role, edition, onOpen }) {
     const online = [], offline = [];
     for (const a of agents) (isAgentOnline(a) ? online : offline).push(mk(a));
     return { all: agents.map(mk), online, offline };
-  }, [agents, onlineById]);
+  }, [agents, onlineById, healthAttempted]);
 
   const openHost = useCallback((h) => onOpen("host", { id: h.id, label: h.host }), [onOpen]);
 
@@ -486,7 +512,15 @@ export default function Dashboard({ role, edition, onOpen }) {
         if ((h.disk ?? 0) >= 90) { reasons.push(`disk ${h.disk}%`); sev = Math.min(sev, 1); }
         else if ((h.disk ?? 0) >= 80) { reasons.push(`disk ${h.disk}%`); sev = Math.min(sev, 2); }
         if ((h.mem ?? 0) >= 90) { reasons.push(`mem ${h.mem}%`); sev = Math.min(sev, 1); }
-        if ((h.failed ?? 0) > 0) { reasons.push(`${h.failed} failed unit${h.failed > 1 ? "s" : ""}`); sev = Math.min(sev, 1); }
+        if ((h.failed ?? 0) > 0) {
+          // Name the actual unit(s) so the row is actionable — "nginx.service
+          // failed", not an opaque "1 failed unit" that leads nowhere.
+          const names = (h.units || []).filter(Boolean);
+          reasons.push(names.length
+            ? (names.length === 1 ? `${names[0]} failed` : `${names[0]} +${h.failed - 1} more failed`)
+            : `${h.failed} failed unit${h.failed > 1 ? "s" : ""}`);
+          sev = Math.min(sev, 1);
+        }
         if ((h.oom ?? 0) > 0) { reasons.push(`${h.oom} OOM`); sev = Math.min(sev, 1); }
         if (h.reboot) { reasons.push("reboot required"); sev = Math.min(sev, 2); }
         const p = postById[h.id];
@@ -586,6 +620,31 @@ export default function Dashboard({ role, edition, onOpen }) {
 
   return (
     <div>
+      {/* Emergency strip: the controller isn't answering, or nothing is checking
+          in. Deliberately loud — a calm green "Online" while the fleet is dark is
+          exactly what we don't want. */}
+      {emergency && (
+        <div className="alarm-strip" style={{ marginBottom: 14, borderRadius: 8, padding: "12px 16px",
+                      background: "rgba(224,108,108,0.14)", border: `2px solid ${VERDICT_COLOR.CRITICAL}`,
+                      display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 22, lineHeight: 1 }}>🚨</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, color: VERDICT_COLOR.CRITICAL, fontSize: 15 }}>
+              {healthDown ? "Fleet health unavailable — controller not responding"
+                          : `No hosts are checking in — 0 of ${m.total} online`}
+            </div>
+            <div className="faint" style={{ fontSize: 13, marginTop: 2 }}>
+              {healthDown
+                ? `The controller isn't answering the health sweep${fleetErr ? ` (${fleetErr})` : ""}. Queries and actions may be failing or delayed.`
+                : "Agents aren't reporting in. They may be down, or the controller can't reach them — commands you issue may not run."}
+            </div>
+          </div>
+          <button className="btn sm" onClick={() => { loadFleet(); loadPosture(false); }} disabled={fleetLoading}>
+            {fleetLoading ? <span className="spin" /> : "Re-check"}
+          </button>
+        </div>
+      )}
+
       {/* The task search routes into the tool pages, which auditors can't use,
           so it's hidden for the read-only role. */}
       {!isAuditor && (
@@ -601,7 +660,9 @@ export default function Dashboard({ role, edition, onOpen }) {
         <MetricCard label="Hosts enrolled" value={edition?.host_count ?? m.total}
           extra={edition?.host_limit ? <span className="faint" style={{ fontSize: 14, fontWeight: 400 }}> / {edition.host_limit}</span> : null}
           hosts={hostLists.all} onOpenHost={openHost} />
-        <MetricCard label="Online" value={m.online} extra={<span className="dot ok" />}
+        <MetricCard label="Online" value={m.online}
+          accent={m.total > 0 && m.online === 0 ? VERDICT_COLOR.CRITICAL : undefined}
+          extra={<span className={`dot ${m.total > 0 && m.online === 0 ? "bad" : "ok"}`} />}
           hosts={hostLists.online} onOpenHost={openHost} />
         <MetricCard label="Offline / stale" value={m.offline}
           extra={m.offline > 0 ? <span className="dot bad" /> : null}

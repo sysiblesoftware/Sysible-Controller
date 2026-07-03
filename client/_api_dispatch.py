@@ -648,9 +648,17 @@ def cmd_metrics_snapshot() -> str:
         "mem=$(awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{if(t>0)printf \"%d\",(t-a)*100/t; else print 0}' /proc/meminfo 2>/dev/null); "
         "load1=$(awk '{print $1}' /proc/loadavg 2>/dev/null); "
         "cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1); "
-        "failed=$(systemctl --failed --no-legend 2>/dev/null | wc -l | tr -d ' '); [ -z \"$failed\" ] && failed=0; "
+        # Derive the failed-unit COUNT from the actual unit NAMES (not a separate
+        # `wc -l`), so the two can never disagree and stray/blank/legend/bullet
+        # lines can't produce a phantom "1 failed" the operator can't find. We
+        # scan each line for the first token that looks like a real unit name,
+        # which is robust across systemd versions and the '●' bullet prefix
+        # (with or without --plain).
+        "flist=$(systemctl --failed --no-legend 2>/dev/null | awk "
+        "'{for(i=1;i<=NF;i++) if($i ~ /\\.(service|socket|mount|timer|target|path|scope|automount|swap|slice)$/){print $i; break}}'); "
+        "failed=$(printf '%s' \"$flist\" | grep -c .); [ -z \"$failed\" ] && failed=0; "
         # Names of the failed/crashed units (first few) so the card can say WHICH.
-        "units=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | head -4 | paste -sd, - 2>/dev/null); [ -z \"$units\" ] && units=-; "
+        "units=$(printf '%s\\n' \"$flist\" | grep . | head -4 | paste -sd, - 2>/dev/null); [ -z \"$units\" ] && units=-; "
         # Overall systemd state: 'degraded' means a unit failed (incl. at boot),
         # 'maintenance'/'starting' are also not-healthy. 'running' is good.
         "sysd=$(systemctl is-system-running 2>/dev/null); [ -z \"$sysd\" ] && sysd=unknown; "

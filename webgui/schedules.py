@@ -166,9 +166,14 @@ def record_run(job_id, status, detail):
     jobs = _load()
     for j in jobs:
         if j.get("id") == job_id:
-            j["last_run"] = _now()
+            now = _now()
+            j["last_run"] = now
             j["last_status"] = status
             j["last_detail"] = (detail or "")[:500]
+            # Rolling run history (most recent last), capped so the store stays small.
+            hist = j.get("history") or []
+            hist.append({"ts": now, "status": status, "detail": (detail or "")[:500]})
+            j["history"] = hist[-15:]
             j["next_run"] = compute_next_run(j)
             _save(jobs)
             return j

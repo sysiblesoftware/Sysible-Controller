@@ -14,6 +14,7 @@ export default function Schedules() {
   const [err, setErr] = useState(""); const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState("");
   const [showNew, setShowNew] = useState(false);
+  const [expanded, setExpanded] = useState(null);   // job id whose run history is open
 
   const load = useCallback(() => {
     api.schedules().then((d) => { setJobs(d.schedules || []); setMeta({ actions: d.actions || {}, cadences: d.cadences || [], arg_actions: d.arg_actions || {} }); })
@@ -66,8 +67,13 @@ export default function Schedules() {
                 <th key={h} style={{ padding: "7px 10px" }}>{h}</th>))}
             </tr></thead>
             <tbody>
-              {jobs.map((j) => (
-                <tr key={j.id} style={{ borderTop: "1px solid var(--border)", opacity: j.enabled ? 1 : 0.5 }}>
+              {jobs.map((j) => {
+                const hist = (j.history || []);
+                const canExpand = hist.length > 0;
+                const open = expanded === j.id;
+                return (
+                <React.Fragment key={j.id}>
+                <tr style={{ borderTop: "1px solid var(--border)", opacity: j.enabled ? 1 : 0.5 }}>
                   <td style={{ padding: "7px 10px", fontWeight: 600 }}>{j.name}</td>
                   <td style={{ padding: "7px 10px" }}>{meta.actions[j.action] || j.action}
                     {j.arg ? <span className="faint" style={{ fontSize: 12 }}> · {j.arg}</span> : null}</td>
@@ -75,9 +81,12 @@ export default function Schedules() {
                   <td style={{ padding: "7px 10px", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                       title={targetsText(j)}>{targetsText(j)}</td>
                   <td style={{ padding: "7px 10px" }} className="faint">{j.enabled ? fmt(j.next_run) : "paused"}</td>
-                  <td style={{ padding: "7px 10px" }}>
+                  <td style={{ padding: "7px 10px", cursor: canExpand ? "pointer" : "default" }}
+                      onClick={() => canExpand && setExpanded(open ? null : j.id)}
+                      title={canExpand ? "Show run history" : ""}>
                     {j.last_run ? <span style={{ color: j.last_status === "ok" ? "#4ec07a" : "#e06c6c" }}
-                                        title={j.last_detail}>{j.last_status} · {fmt(j.last_run)}</span>
+                                        title={j.last_detail}>{j.last_status} · {fmt(j.last_run)}
+                                    {canExpand && <span className="faint" style={{ marginLeft: 4 }}>{open ? "▾" : `▸ ${hist.length}`}</span>}</span>
                                : <span className="faint">never</span>}
                   </td>
                   <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>
@@ -87,7 +96,24 @@ export default function Schedules() {
                     <button className="btn ghost sm danger" onClick={() => del(j.id)}>Delete</button>
                   </td>
                 </tr>
-              ))}
+                {open && (
+                  <tr>
+                    <td colSpan={7} style={{ padding: "0 10px 8px 24px", background: "var(--panel-2, rgba(255,255,255,0.02))" }}>
+                      <div style={{ fontSize: 12, display: "grid", gap: 3, paddingTop: 6 }}>
+                        {[...hist].reverse().map((h, i) => (
+                          <div key={i} className="row" style={{ gap: 10, alignItems: "baseline" }}>
+                            <span className="faint" style={{ minWidth: 150 }}>{fmt(h.ts)}</span>
+                            <span style={{ color: h.status === "ok" ? "#4ec07a" : "#e06c6c", fontWeight: 600, minWidth: 44 }}>{h.status}</span>
+                            <span className="faint">{h.detail}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </React.Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>

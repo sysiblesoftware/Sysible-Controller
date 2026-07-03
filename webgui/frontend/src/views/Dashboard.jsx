@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { searchTasks } from "../featureSearch.js";
+import SuppressMenu from "../components/SuppressMenu.jsx";
+import { findSupp, describeSupp } from "../suppress.js";
 
-const VERDICT_COLOR = { OK: "#4ec07a", WARNING: "#e0a83a", CRITICAL: "#e06c6c", OFFLINE: "#7a7a7a" };
+const VERDICT_COLOR = { OK: "#4ec07a", WARNING: "#e0a83a", CRITICAL: "#e06c6c", OFFLINE: "#7a7a7a", SUPPRESSED: "#6c7fa8" };
 // Severity for the "Needs attention" list: 0 (offline) / 1 (critical) both red,
 // 2 (warning) amber. Lower = more urgent (sorted first).
 const SEV_COLOR = { 0: VERDICT_COLOR.CRITICAL, 1: VERDICT_COLOR.CRITICAL, 2: VERDICT_COLOR.WARNING };
@@ -13,19 +15,6 @@ const CRIT_COLOR = { critical: VERDICT_COLOR.CRITICAL, high: VERDICT_COLOR.WARNI
 // Badge marking the enrolled host that IS the controller itself.
 const CTRL_BADGE = { marginLeft: 6, fontSize: 10, fontWeight: 700, verticalAlign: "middle",
   color: "#fff", background: "var(--accent, #3d7dd8)", borderRadius: 10, padding: "0 6px" };
-
-// Effective host status = worst of live HEALTH (disk/mem/failed units) and the
-// POSTURE scan (compliance findings). Used everywhere a host is graded — the
-// donut, the environment dots, and the per-host cards — so they all agree with
-// the compliance strip and the "needs attention" list instead of the donut
-// showing green while findings sit amber elsewhere. A posture finding (or a
-// failed/blocked scan) on an otherwise-healthy host is a WARNING; offline or
-// critical health already outranks it.
-function effVerdict(healthVerdict, issues, postureError) {
-  const v = (healthVerdict || "OK").toUpperCase();
-  if (v === "OFFLINE" || v === "CRITICAL") return v;
-  return (v === "WARNING" || (issues || 0) > 0 || postureError) ? "WARNING" : "OK";
-}
 
 // Inline SVG donut (no chart-library dependency): one ring segment per value.
 function Donut({ segments, size = 88, stroke = 13 }) {
@@ -249,32 +238,87 @@ const POSTURE_SIGNALS = [
   { key: "cert_expiring", label: "TLS cert expiring < 30 days" },
   { key: "time_unsynced", label: "Time not synchronized" },
 ];
+const POSTURE_SIGNAL_KEYS = POSTURE_SIGNALS.map((s) => s.key);
+// Human labels + default severity (1 = critical/red, 2 = warning/amber) for the
+// suppressible dashboard findings — posture signals plus the two health signals.
+const SIGNAL_LABEL = {
+  ...Object.fromEntries(POSTURE_SIGNALS.map((s) => [s.key, s.label])),
+  disk_critical: "Disk usage critical (≥ 90%)",
+  failed_units: "Failed systemd units",
+};
+const SIGNAL_SEV = { risky_accounts: 1, disk_critical: 1 };   // rest default to 2 (warning)
 
-// One compliance signal: label + affected-host count, expands to the hosts
-// (each clickable into the drill-down). Green when zero, amber when >0.
-function SignalChip({ label, hosts, onOpenHost }) {
+// One compliance signal: label + affected-host count, expands to the hosts.
+// Each affected host opens the drill-down and carries a "Suppress ▾" so the
+// finding can be silenced (per host or per environment). A small muted count of
+// hosts where it's already suppressed hangs off the header.
+function SignalChip({ signal, canAct, onOpenHost, onDone }) {
   const [open, setOpen] = useState(false);
+  const { key, label, hosts, suppressed } = signal;
   const n = hosts.length;
+  const nsupp = suppressed.length;
   const color = n > 0 ? VERDICT_COLOR.WARNING : VERDICT_COLOR.OK;
+  const expandable = n > 0 || nsupp > 0;
   return (
     <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-      <button onClick={() => n > 0 && setOpen((o) => !o)}
+      <button onClick={() => expandable && setOpen((o) => !o)}
         style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
                  gap: 8, padding: "8px 10px", background: "none", border: "none",
-                 cursor: n > 0 ? "pointer" : "default", color: "var(--text)", textAlign: "left", font: "inherit" }}>
+                 cursor: expandable ? "pointer" : "default", color: "var(--text)", textAlign: "left", font: "inherit" }}>
         <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
           <span className="dot" style={{ background: color }} />
           <span style={{ fontSize: 13 }}>{label}</span>
         </span>
-        <span style={{ fontWeight: 700, color }}>{n}</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {nsupp > 0 && <span title={`${nsupp} suppressed`} style={{ fontSize: 11, color: VERDICT_COLOR.SUPPRESSED }}>⊘{nsupp}</span>}
+          <span style={{ fontWeight: 700, color }}>{n}</span>
+        </span>
       </button>
-      {open && n > 0 && (
-        <div style={{ padding: "0 10px 8px", display: "flex", flexWrap: "wrap", gap: 6,
-                      borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+      {open && expandable && (
+        <div style={{ padding: "8px 10px", display: "grid", gap: 6, borderTop: "1px solid var(--border)" }}>
           {hosts.map((h) => (
-            <button key={h.id ?? h.host} className="btn ghost sm"
-                    onClick={() => h.id && onOpenHost && onOpenHost(h)}
-                    title={h.id ? "View posture detail" : ""}>{h.host}</button>
+            <div key={h.id ?? h.host} style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "space-between" }}>
+              <button className="btn ghost sm" style={{ flex: 1, textAlign: "left" }}
+                      onClick={() => h.id && onOpenHost && onOpenHost(h)}
+                      title={h.id ? "View posture detail" : ""}>{h.host}</button>
+              {canAct && <SuppressMenu ctx={{ key, host: h.host, env: h.env, bootEpoch: h.boot }} onDone={onDone} />}
+            </div>
+          ))}
+          {nsupp > 0 && (
+            <div className="faint" style={{ fontSize: 11 }}>
+              Suppressed on: {suppressed.map((h) => h.host).join(", ")}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Collapsible list of every currently-suppressed finding, with who/why and a
+// one-click un-suppress. Nothing is hidden — suppressed items live here.
+function SuppressedPanel({ items, canAct, onOpenHost, onRemove }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="card" style={{ marginTop: 12, padding: 0, overflow: "hidden", borderColor: VERDICT_COLOR.SUPPRESSED }}>
+      <button onClick={() => setOpen((o) => !o)}
+        style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "8px 12px",
+                 background: "none", border: "none", color: "var(--text)", cursor: "pointer", font: "inherit" }}>
+        <span className="dot" style={{ background: VERDICT_COLOR.SUPPRESSED }} />
+        <strong style={{ fontSize: 13 }}>Suppressed</strong>
+        <span className="faint" style={{ fontSize: 12 }}>{items.length} finding{items.length === 1 ? "" : "s"}</span>
+        <span className="faint" style={{ marginLeft: "auto", fontSize: 11 }}>{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <div style={{ borderTop: "1px solid var(--border)", padding: 6, display: "grid", gap: 3 }}>
+          {items.map((it) => (
+            <div key={it.supp.id} className="row" style={{ gap: 8, alignItems: "center", fontSize: 12, padding: "3px 6px" }}>
+              <button className="btn ghost sm" onClick={() => it.id && onOpenHost && onOpenHost(it)} title="View host">{it.host}</button>
+              <span style={{ minWidth: 0, flex: 1 }}>{it.label}
+                <span className="faint" style={{ marginLeft: 6 }}>· {describeSupp(it.supp)}{it.supp.reason ? ` — ${it.supp.reason}` : ""}</span>
+              </span>
+              {canAct && <button className="btn ghost sm" onClick={() => onRemove(it.supp.id)} title="Remove suppression">Un-suppress</button>}
+            </div>
           ))}
         </div>
       )}
@@ -487,30 +531,122 @@ export default function Dashboard({ role, edition, onOpen }) {
   }, []);
   useEffect(() => { loadPosture(false); }, [loadPosture]);
 
-  const order = { CRITICAL: 0, WARNING: 1, OFFLINE: 2, OK: 3 };
+  // Finding suppressions (silence a signal on a host/env, with a reason/expiry).
+  const [supps, setSupps] = useState([]);
+  const loadSupps = useCallback(() => {
+    api.suppressions().then((d) => setSupps(d.suppressions || [])).catch(() => {});
+  }, []);
+  useEffect(() => { loadSupps(); }, [loadSupps]);
 
-  // Build the dashboard compliance strip: posture-derived signals (hosts whose
-  // flag is true) plus two reused from fleet-health (disk-critical, failed
-  // services). Each carries the affected hosts so the chip can expand to them.
+  // Per-host context needed to evaluate a suppression: its name (host scope), its
+  // environment (env scope), and its current boot time (baseline for the
+  // "remind after next reboot" type). Env comes from the fleet health record;
+  // boot time from the posture sweep.
+  const hostCtx = useMemo(() => {
+    const bootById = {};
+    for (const p of posture) {
+      const b = p.posture && p.posture.os ? p.posture.os.boot_epoch : undefined;
+      if (b != null) bootById[p.id] = Number(b);
+    }
+    const m2 = {};
+    for (const h of fleet) m2[h.id] = { host: h.host, env: h.environment || "Unassigned", boot: bootById[h.id] ?? null };
+    for (const p of posture) if (!m2[p.id]) m2[p.id] = { host: p.host, env: "Unassigned", boot: bootById[p.id] ?? null };
+    return m2;
+  }, [fleet, posture]);
+
+  // Active suppression for a (hostId, findingKey), or null.
+  const suppFor = useCallback((hostId, key) => {
+    const c = hostCtx[hostId];
+    if (!c) return null;
+    return findSupp(supps, { host: c.host, env: c.env, key, bootEpoch: c.boot });
+  }, [supps, hostCtx]);
+
+  // ONE per-host analysis that every grader reads, so the donut, env dots, host
+  // cards, compliance strip, and triage list all agree — AND all honour
+  // suppressions. For each host: the ACTIVE findings (worst-first severity), the
+  // SUPPRESSED findings (with their suppression), and the resulting verdict
+  // (OFFLINE / CRITICAL / WARNING / SUPPRESSED / OK). SUPPRESSED = a host whose
+  // only findings are suppressed (would otherwise flag).
+  const analysis = useMemo(() => {
+    const flagsById = {};
+    for (const p of posture) flagsById[p.id] = p.flags || {};
+    const per = {};
+    for (const h of filteredFleet) {
+      const active = [], suppressed = [];
+      let sev = 9;
+      // Add a finding. If it has a suppressible key and an active suppression,
+      // it goes to `suppressed` instead of counting.
+      const add = (text, s, key) => {
+        if (key) {
+          const sup = suppFor(h.id, key);
+          if (sup) { suppressed.push({ key, label: SIGNAL_LABEL[key] || text, text, supp: sup }); return; }
+        }
+        active.push({ text, sev: s, key: key || null });
+        sev = Math.min(sev, s);
+      };
+      let verdict;
+      if (h.online === false) {
+        verdict = "OFFLINE";
+      } else {
+        if ((h.disk ?? 0) >= 90) add(`disk ${h.disk}%`, 1, "disk_critical");
+        else if ((h.disk ?? 0) >= 80) add(`disk ${h.disk}%`, 2);            // warn, not a named signal
+        if ((h.mem ?? 0) >= 90) add(`mem ${h.mem}%`, 1);
+        if ((h.failed ?? 0) > 0) {
+          const names = (h.units || []).filter(Boolean);
+          const text = names.length
+            ? (names.length === 1 ? `${names[0]} failed` : `${names[0]} +${h.failed - 1} more failed`)
+            : `${h.failed} failed unit${h.failed > 1 ? "s" : ""}`;
+          add(text, h.failed >= 3 ? 1 : 2, "failed_units");
+        }
+        if ((h.oom ?? 0) > 0) add(`${h.oom} OOM`, 1);
+        const flags = flagsById[h.id] || {};
+        for (const key of POSTURE_SIGNAL_KEYS) {
+          if (flags[key] === true) add(SIGNAL_LABEL[key], SIGNAL_SEV[key] || 2, key);
+        }
+        verdict = active.length === 0
+          ? (suppressed.length ? "SUPPRESSED" : "OK")
+          : (sev === 1 ? "CRITICAL" : "WARNING");
+      }
+      per[h.id] = { active, suppressed, verdict, worstSev: sev };
+    }
+    return per;
+  }, [filteredFleet, posture, suppFor]);
+
+  const order = { CRITICAL: 0, WARNING: 1, SUPPRESSED: 2.5, OFFLINE: 2, OK: 3 };
+
+  // Build the dashboard compliance strip from the unified analysis: for each
+  // signal key, the hosts where it's an ACTIVE finding vs where it's SUPPRESSED
+  // (so a suppressed finding drops out of the count but stays reachable). Each
+  // host entry carries the context the Suppress menu needs (env + boot time).
   const complianceSignals = useMemo(() => {
-    const sig = POSTURE_SIGNALS.map((s) => ({
-      label: s.label,
-      hosts: posture.filter((h) => h.flags && h.flags[s.key] === true)
-        .map((h) => ({ id: h.id, host: h.host })),
-    }));
-    sig.push({
-      label: "Disk usage critical (≥ 90%)",
-      hosts: fleet.filter((h) => (h.disk ?? 0) >= 90).map((h) => ({ id: h.id, host: h.host })),
-    });
-    sig.push({
-      label: "Failed systemd units",
-      hosts: fleet.filter((h) => (h.failed ?? 0) > 0).map((h) => ({ id: h.id, host: h.host })),
-    });
-    // Surface the signals with findings first.
-    return sig.sort((a, b) => b.hosts.length - a.hosts.length);
-  }, [posture, fleet]);
+    const keys = [...POSTURE_SIGNAL_KEYS, "disk_critical", "failed_units"];
+    const acc = Object.fromEntries(keys.map((k) => [k, { active: [], suppressed: [] }]));
+    for (const h of filteredFleet) {
+      const a = analysis[h.id]; if (!a) continue;
+      const c = hostCtx[h.id] || {};
+      const entry = { id: h.id, host: h.host, env: c.env, boot: c.boot };
+      for (const f of a.active) if (f.key && acc[f.key]) acc[f.key].active.push(entry);
+      for (const f of a.suppressed) if (acc[f.key]) acc[f.key].suppressed.push({ ...entry, supp: f.supp });
+    }
+    return keys.map((k) => ({ key: k, label: SIGNAL_LABEL[k], hosts: acc[k].active, suppressed: acc[k].suppressed }))
+      .sort((a, b) => b.hosts.length - a.hosts.length);
+  }, [filteredFleet, analysis, hostCtx]);
 
   const issuesTotal = complianceSignals.reduce((n, s) => n + (s.hosts.length > 0 ? 1 : 0), 0);
+
+  // Flat list of every currently-suppressed finding, for the "Suppressed" panel.
+  const suppressedList = useMemo(() => {
+    const out = [];
+    for (const h of filteredFleet) {
+      const a = analysis[h.id]; if (!a) continue;
+      for (const f of a.suppressed) out.push({ id: h.id, host: h.host, key: f.key, label: f.label, supp: f.supp });
+    }
+    return out;
+  }, [filteredFleet, analysis]);
+
+  async function unsuppress(id) {
+    try { await api.removeSuppression(id); loadSupps(); } catch { /* ignore */ }
+  }
 
   // Posture findings per host id (issue count + scan error/limited), shared by
   // the donut, the environment rollup, and the triage list so all three grade a
@@ -528,14 +664,13 @@ export default function Dashboard({ role, edition, onOpen }) {
   }, [posture]);
 
   const fleetSummary = useMemo(() => {
-    const counts = { OK: 0, WARNING: 0, CRITICAL: 0, OFFLINE: 0 };
+    const counts = { OK: 0, WARNING: 0, CRITICAL: 0, SUPPRESSED: 0, OFFLINE: 0 };
     for (const h of filteredFleet) {
-      const pe = postById[h.id] || {};
-      const v = effVerdict(h.verdict, pe.issues, pe.postureError);
+      const v = (analysis[h.id] || {}).verdict || "OK";
       counts[v] = (counts[v] || 0) + 1;
     }
     return { counts };
-  }, [filteredFleet, postById]);
+  }, [filteredFleet, analysis]);
 
   const patch = useMemo(() => {
     let withUpd = 0, sec = 0;
@@ -549,40 +684,25 @@ export default function Dashboard({ role, edition, onOpen }) {
   const attention = useMemo(() => {
     const rows = [];
     for (const h of filteredFleet) {
-      const reasons = [];
-      let sev = 3;
-      if (h.online === false) { reasons.push("offline"); sev = 0; }
+      const a = analysis[h.id];
+      if (!a) continue;
+      // Only ACTIVE (non-suppressed) findings drive the triage list.
+      let reasons, sev;
+      if (a.verdict === "OFFLINE") { reasons = ["offline"]; sev = 0; }
       else {
-        if ((h.disk ?? 0) >= 90) { reasons.push(`disk ${h.disk}%`); sev = Math.min(sev, 1); }
-        else if ((h.disk ?? 0) >= 80) { reasons.push(`disk ${h.disk}%`); sev = Math.min(sev, 2); }
-        if ((h.mem ?? 0) >= 90) { reasons.push(`mem ${h.mem}%`); sev = Math.min(sev, 1); }
-        if ((h.failed ?? 0) > 0) {
-          // Name the actual unit(s) so the row is actionable — "nginx.service
-          // failed", not an opaque "1 failed unit" that leads nowhere.
-          const names = (h.units || []).filter(Boolean);
-          reasons.push(names.length
-            ? (names.length === 1 ? `${names[0]} failed` : `${names[0]} +${h.failed - 1} more failed`)
-            : `${h.failed} failed unit${h.failed > 1 ? "s" : ""}`);
-          // Match the fleet-health verdict + posture strip: a few failed units
-          // are a WARNING (amber), not CRITICAL. Only escalate to red at 3+.
-          sev = Math.min(sev, h.failed >= 3 ? 1 : 2);
-        }
-        if ((h.oom ?? 0) > 0) { reasons.push(`${h.oom} OOM`); sev = Math.min(sev, 1); }
-        if (h.reboot) { reasons.push("reboot required"); sev = Math.min(sev, 2); }
-        const issues = (postById[h.id] || {}).issues || 0;
-        if (issues > 0) { reasons.push(`${issues} compliance`); sev = Math.min(sev, 2); }
+        if (a.active.length === 0) continue;   // clean, or only suppressed
+        reasons = a.active.map((f) => f.text);
+        sev = a.active.reduce((mn, f) => Math.min(mn, f.sev), 3);
       }
-      if (reasons.length) {
-        const crit = (hostMetaMap[h.host] || {}).criticality || "normal";
-        rows.push({ id: h.id, host: h.host, env: h.environment || "Unassigned", sev, reasons, crit, ctrl: !!h.is_controller });
-      }
+      const crit = (hostMetaMap[h.host] || {}).criticality || "normal";
+      rows.push({ id: h.id, host: h.host, env: h.environment || "Unassigned", sev, reasons, crit, ctrl: !!h.is_controller });
     }
     // Worst first; within a severity, business-critical hosts rank above others.
     rows.sort((a, b) => a.sev - b.sev
       || (CRIT_RANK[a.crit] ?? 2) - (CRIT_RANK[b.crit] ?? 2)
       || b.reasons.length - a.reasons.length);
     return rows;
-  }, [filteredFleet, postById, hostMetaMap]);
+  }, [filteredFleet, analysis, hostMetaMap]);
 
   // Single environment-grouped rollup joining the two lenses by host id: each
   // host carries its live health (verdict, disk/mem, problem signals) AND its
@@ -595,14 +715,16 @@ export default function Dashboard({ role, edition, onOpen }) {
     for (const h of filteredFleet) {
       const env = h.environment || "Unassigned";
       const pe = postById[h.id] || {};
-      // Effective verdict = health folded with posture, so the env dot and the
-      // host card match the "needs attention" count and the compliance strip.
-      const ev = effVerdict(h.verdict, pe.issues, pe.postureError);
-      const host = { ...h, issues: pe.issues ?? null, postureError: pe.postureError || null,
+      const a = analysis[h.id] || { active: [], suppressed: [], verdict: "OK" };
+      // Verdict from the unified analysis, so the env dot + host card match the
+      // needs-attention list and the compliance strip AND honour suppressions.
+      const ev = a.verdict;
+      const activeIssues = a.active.filter((f) => f.key).length;   // suppressible findings still active
+      const host = { ...h, issues: activeIssues, postureError: pe.postureError || null,
                      limited: !!pe.limited, verdict: ev };
       const e = g[env] || (g[env] = {
-        env, hosts: [], counts: { OK: 0, WARNING: 0, CRITICAL: 0, OFFLINE: 0 },
-        disk: null, mem: null, failed: 0, oom: 0, degraded: 0, problematic: 0, limited: 0,
+        env, hosts: [], counts: { OK: 0, WARNING: 0, CRITICAL: 0, SUPPRESSED: 0, OFFLINE: 0 },
+        disk: null, mem: null, failed: 0, oom: 0, degraded: 0, problematic: 0, suppressed: 0, limited: 0,
       });
       e.hosts.push(host);
       e.counts[ev] = (e.counts[ev] || 0) + 1;
@@ -611,20 +733,23 @@ export default function Dashboard({ role, edition, onOpen }) {
       e.failed += h.failed || 0;
       e.oom += h.oom || 0;
       if (h.sysd && h.sysd !== "running" && h.sysd !== "unknown") e.degraded += 1;
-      const trouble = (host.issues || 0) > 0 || host.postureError;
+      // "Needs attention" = has an ACTIVE finding (suppressed ones don't count).
+      const trouble = a.active.length > 0 || host.postureError;
       if (trouble) e.problematic += 1;
+      if (a.suppressed.length > 0) e.suppressed += 1;
       if (host.limited) e.limited += 1;
       total += 1;
       // A "limited" host (posture gathered without root) isn't counted clean -
       // its root-only checks couldn't be trusted.
-      if (ev === "OK" && !trouble && !host.limited) clear += 1;
+      if ((ev === "OK" || ev === "SUPPRESSED") && !trouble && !host.limited) clear += 1;
     }
     const envs = Object.values(g).map((e) => {
       // A down host makes the whole environment critical (red), not grey/amber —
       // an unreachable host is the most urgent thing to see at a glance.
       e.verdict = (e.counts.CRITICAL > 0 || e.counts.OFFLINE > 0) ? "CRITICAL"
         : e.counts.WARNING > 0 ? "WARNING"
-        : e.counts.OK > 0 ? "OK" : "OFFLINE";
+        : e.counts.OK > 0 ? "OK"
+        : e.counts.SUPPRESSED > 0 ? "SUPPRESSED" : "OFFLINE";
       e.hosts.sort((a, b) =>
         (order[(a.verdict || "OK").toUpperCase()] ?? 9) - (order[(b.verdict || "OK").toUpperCase()] ?? 9)
         || (b.issues || 0) - (a.issues || 0) || (b.disk || 0) - (a.disk || 0));
@@ -633,7 +758,7 @@ export default function Dashboard({ role, edition, onOpen }) {
     envs.sort((a, b) => (order[a.verdict] ?? 9) - (order[b.verdict] ?? 9)
       || b.problematic - a.problematic || a.env.localeCompare(b.env));
     return { envs, total, clear };
-  }, [filteredFleet, postById]);
+  }, [filteredFleet, postById, analysis]);
 
   if (q.trim()) {
     return (
@@ -812,19 +937,23 @@ export default function Dashboard({ role, edition, onOpen }) {
                   { value: fleetSummary.counts.OK, color: VERDICT_COLOR.OK },
                   { value: fleetSummary.counts.WARNING, color: VERDICT_COLOR.WARNING },
                   { value: fleetSummary.counts.CRITICAL, color: VERDICT_COLOR.CRITICAL },
+                  { value: fleetSummary.counts.SUPPRESSED, color: VERDICT_COLOR.SUPPRESSED },
                   { value: fleetSummary.counts.OFFLINE, color: VERDICT_COLOR.OFFLINE },
                 ]} />
                 <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
                   <span><span className="dot" style={{ background: VERDICT_COLOR.OK }} /> {fleetSummary.counts.OK} OK</span>
                   <span><span className="dot" style={{ background: VERDICT_COLOR.WARNING }} /> {fleetSummary.counts.WARNING} warning</span>
                   <span><span className="dot" style={{ background: VERDICT_COLOR.CRITICAL }} /> {fleetSummary.counts.CRITICAL} critical</span>
+                  {fleetSummary.counts.SUPPRESSED > 0 && (
+                    <span><span className="dot" style={{ background: VERDICT_COLOR.SUPPRESSED }} /> {fleetSummary.counts.SUPPRESSED} suppressed</span>
+                  )}
                   <span><span className="dot" style={{ background: VERDICT_COLOR.OFFLINE }} /> {fleetSummary.counts.OFFLINE} offline</span>
                 </div>
               </div>
               {posture.length > 0 ? (
                 <div style={{ flex: 1, minWidth: 300, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 8 }}>
                   {complianceSignals.map((s) => (
-                    <SignalChip key={s.label} label={s.label} hosts={s.hosts} onOpenHost={openHost} />
+                    <SignalChip key={s.key} signal={s} canAct={!isAuditor} onOpenHost={openHost} onDone={loadSupps} />
                   ))}
                 </div>
               ) : (
@@ -845,8 +974,13 @@ export default function Dashboard({ role, edition, onOpen }) {
               ))}
             </div>
 
+            {suppressedList.length > 0 && (
+              <SuppressedPanel items={suppressedList} canAct={!isAuditor} onOpenHost={openHost} onRemove={unsuppress} />
+            )}
+
             <div className="faint" style={{ fontSize: 11, marginTop: 10 }}>
               Health is live; compliance is the last read-only posture scan. Open an environment for its hosts, then a host for the full per-category drill-down.
+              {suppressedList.length > 0 && " Suppressed findings don't count toward the donut or “needs attention”."}
             </div>
           </>
         )}

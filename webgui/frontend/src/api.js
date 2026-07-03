@@ -137,6 +137,10 @@ export const api = {
   hostMeta: () => req("/api/host-meta"),
   setHostMeta: (name, meta) =>
     req(`/api/host-meta/${encodeURIComponent(name)}`, { method: "POST", body: meta }),
+  // Finding suppressions — silence a dashboard finding on a host or environment.
+  suppressions: () => req("/api/suppressions"),
+  addSuppression: (body) => req("/api/suppressions", { method: "POST", body }),
+  removeSuppression: (id) => req(`/api/suppressions/${encodeURIComponent(id)}`, { method: "DELETE" }),
   // Fleet Query — ask one read-only question across the fleet.
   fleetQueryTypes: () => req("/api/fleet-query/types"),
   fleetQuery: (qtype, arg, targets = []) =>

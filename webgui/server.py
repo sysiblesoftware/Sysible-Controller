@@ -2524,6 +2524,39 @@ def host_meta_set(name: str, body: dict, user: str = Depends(require_operator)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ----------------------------------------------------------------------
+# Finding suppressions — silence a specific dashboard finding on a host or a
+# whole environment, with a reason + expiry policy. Viewable by any role
+# (require_login); creating/removing is a write (require_operator, so an auditor
+# can't). See webgui/suppressions.py. The finding<->suppression matching and the
+# reboot/expiry evaluation happen in the SPA where the live posture data lives.
+# ----------------------------------------------------------------------
+@app.get("/api/suppressions")
+def suppressions_list(user: str = Depends(require_login)):
+    from webgui import suppressions
+    return {"suppressions": suppressions.list_all(),
+            "types": list(suppressions.TYPES),
+            "snoozes": sorted(suppressions.SNOOZE_SECONDS)}
+
+
+@app.post("/api/suppressions")
+def suppressions_add(body: dict, user: str = Depends(require_operator)):
+    from webgui import suppressions
+    try:
+        return suppressions.add(
+            scope=body.get("scope"), target=body.get("target"), key=body.get("key"),
+            stype=body.get("type"), created_by=user, reason=body.get("reason", ""),
+            snooze=body.get("snooze"), boot_epoch=body.get("boot_epoch"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/suppressions/{supp_id}")
+def suppressions_remove(supp_id: str, user: str = Depends(require_operator)):
+    from webgui import suppressions
+    return {"removed": suppressions.remove(supp_id)}
+
+
 def _parse_filehash(text):
     """Parse the `SYSFILEHASH|k=v|...` line from cmd_file_fingerprint, or None."""
     for line in (text or "").splitlines():

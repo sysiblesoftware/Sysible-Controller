@@ -1523,16 +1523,18 @@ def fleet(body: FleetRequest, request: Request, user: str = Depends(require_oper
 class RestartUnitRequest(BaseModel):
     unit: str
     sudo_password: str = ""
+    mode: str = "restart"   # "restart" | "reset-failed"
 
 
 @app.post("/api/host/{host_id}/restart-unit")
 def restart_unit(host_id: str, body: RestartUnitRequest, request: Request,
                  user: str = Depends(require_operator)):
-    """Restart one systemd unit on one host — the one-click 'fix it' behind a
-    failed unit on the dashboard. The command is built server-side from the unit
-    name (shlex-quoted by cmd_service_restart), so the only input is the unit;
-    dispatched as the operator (attributed/logged), so it's an ordinary write an
-    auditor can't perform."""
+    """Act on one systemd unit on one host — the one-click 'fix it' behind a
+    failed unit on the dashboard. mode="restart" restarts it; mode="reset-failed"
+    just clears its failed marker (for a unit that can't be made to run, e.g. a
+    VMware vmblock .mount). The command is built server-side from the unit name
+    (shlex-quoted), so the only input is the unit; dispatched as the operator
+    (attributed/logged), so it's an ordinary write an auditor can't perform."""
     unit = (body.unit or "").strip()
     if not unit:
         raise HTTPException(status_code=400, detail="A unit name is required.")
@@ -1543,11 +1545,16 @@ def restart_unit(host_id: str, body: RestartUnitRequest, request: Request,
     entry = all_entries.get(host_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Host not found.")
-    command = api.cmd_service_restart(unit)
+    if body.mode == "reset-failed":
+        command = api.cmd_reset_failed_unit(unit)
+        desc = f"Clear failed state of {unit}"
+    else:
+        command = api.cmd_service_restart(unit)
+        desc = f"Restart unit {unit}"
     become = body.sudo_password or sudo_store.resolve(user, entry.get("label", ""))
     token = _session_token(request)
-    result = _dispatch_one(entry, command, "command", become, token, f"Restart unit {unit}")
-    return {"unit": unit, "host": entry.get("label"), "result": result}
+    result = _dispatch_one(entry, command, "command", become, token, desc)
+    return {"unit": unit, "host": entry.get("label"), "mode": body.mode, "result": result}
 
 
 class CheckinRequest(BaseModel):

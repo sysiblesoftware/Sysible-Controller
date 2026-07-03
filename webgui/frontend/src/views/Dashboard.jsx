@@ -58,34 +58,47 @@ function Meter({ label, pct }) {
 function UnitChip({ hostId, unit }) {
   const [state, setState] = useState("idle"); // idle | busy | ok | err
   const [msg, setMsg] = useState("");
-  const canRestart = !!(hostId && unit && unit !== "…");
-  const restart = (e) => {
+  const canAct = !!(hostId && unit && unit !== "…");
+  // Restart tries to bring the unit back; Clear (reset-failed) just wipes the
+  // failed marker — the right move for a unit that can't run (e.g. a VMware
+  // vmblock .mount), where restart only fails again.
+  const act = (mode, verb) => (e) => {
     e.stopPropagation();
     e.preventDefault();
-    if (!canRestart || state === "busy") return;
-    if (!window.confirm(`Restart ${unit} on this host?`)) return;
+    if (!canAct || state === "busy") return;
+    if (!window.confirm(`${verb} ${unit} on this host?`)) return;
     setState("busy"); setMsg("");
-    api.restartUnit(hostId, unit)
+    const call = mode === "reset-failed" ? api.resetUnit : api.restartUnit;
+    call(hostId, unit)
       .then((r) => {
         const res = r.result || {};
         const ok = res.ok || res.code === 0;
         setState(ok ? "ok" : "err");
-        setMsg(ok ? "restarted" : (res.error || res.stderr || `exit ${res.code}`));
+        setMsg(ok ? (mode === "reset-failed" ? "cleared" : "restarted")
+                  : (res.error || res.stderr || `exit ${res.code}`));
       })
       .catch((err) => { setState("err"); setMsg(String(err.message || err)); });
   };
   const color = state === "ok" ? VERDICT_COLOR.OK : state === "err" ? VERDICT_COLOR.CRITICAL : VERDICT_COLOR.WARNING;
   return (
-    <button onClick={restart} onContextMenu={restart} disabled={!canRestart || state === "busy"}
-      title={canRestart ? `Restart ${unit} on this host` : unit}
-      style={{ font: "inherit", fontSize: 11, cursor: canRestart ? "pointer" : "default",
-               border: `1px solid ${color}`, color, background: "transparent",
-               borderRadius: 10, padding: "0 7px", margin: "2px 4px 0 0", lineHeight: "17px",
-               whiteSpace: "nowrap" }}>
-      {state === "busy" ? "restarting…" : unit}
-      {state === "ok" && " ✓"}{state === "err" && " ✕"}
-      {msg && state === "err" ? <span className="faint" style={{ marginLeft: 4 }}>{msg}</span> : null}
-    </button>
+    <span style={{ display: "inline-flex", alignItems: "center", border: `1px solid ${color}`,
+                   borderRadius: 10, margin: "2px 4px 0 0", overflow: "hidden", whiteSpace: "nowrap" }}>
+      <button onClick={act("restart", "Restart")} disabled={!canAct || state === "busy"}
+        title={canAct ? `Restart ${unit}` : unit}
+        style={{ font: "inherit", fontSize: 11, cursor: canAct ? "pointer" : "default",
+                 border: "none", color, background: "transparent", padding: "0 7px", lineHeight: "17px" }}>
+        {state === "busy" ? "working…" : unit}
+        {state === "ok" && " ✓"}{state === "err" && " ✕"}
+        {msg && state === "err" ? <span className="faint" style={{ marginLeft: 4 }}>{msg}</span> : null}
+      </button>
+      {state !== "ok" && (
+        <button onClick={act("reset-failed", "Clear the failed state of")} disabled={!canAct || state === "busy"}
+          title={`Clear the failed marker for ${unit} (doesn't start it)`}
+          style={{ font: "inherit", fontSize: 11, cursor: canAct ? "pointer" : "default",
+                   border: "none", borderLeft: `1px solid ${color}`, color, background: "transparent",
+                   padding: "0 6px", lineHeight: "17px", opacity: 0.85 }}>clear</button>
+      )}
+    </span>
   );
 }
 
@@ -523,7 +536,9 @@ export default function Dashboard({ role, edition, onOpen }) {
           reasons.push(names.length
             ? (names.length === 1 ? `${names[0]} failed` : `${names[0]} +${h.failed - 1} more failed`)
             : `${h.failed} failed unit${h.failed > 1 ? "s" : ""}`);
-          sev = Math.min(sev, 1);
+          // Match the fleet-health verdict + posture strip: a few failed units
+          // are a WARNING (amber), not CRITICAL. Only escalate to red at 3+.
+          sev = Math.min(sev, h.failed >= 3 ? 1 : 2);
         }
         if ((h.oom ?? 0) > 0) { reasons.push(`${h.oom} OOM`); sev = Math.min(sev, 1); }
         if (h.reboot) { reasons.push("reboot required"); sev = Math.min(sev, 2); }

@@ -155,7 +155,10 @@ export const api = {
   alertsTest: () => req("/api/alerts/test", { method: "POST" }),
   restartUnit: (hostId, unit, sudoPassword = "") =>
     req(`/api/host/${encodeURIComponent(hostId)}/restart-unit`,
-        { method: "POST", body: { unit, sudo_password: sudoPassword } }),
+        { method: "POST", body: { unit, sudo_password: sudoPassword, mode: "restart" } }),
+  resetUnit: (hostId, unit, sudoPassword = "") =>
+    req(`/api/host/${encodeURIComponent(hostId)}/restart-unit`,
+        { method: "POST", body: { unit, sudo_password: sudoPassword, mode: "reset-failed" } }),
   controllerKey: () => req("/api/controller-key"),
   enrollSsh: (payload) => req("/api/enroll-ssh", { method: "POST", body: payload }),
   setHostEnvironment: (hostId, environment) =>

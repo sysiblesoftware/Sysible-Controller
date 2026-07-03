@@ -258,7 +258,18 @@ const SIGNAL_LABEL = {
   disk_critical: "Disk usage critical (≥ 90%)",
   failed_units: "Failed systemd units",
 };
-const SIGNAL_SEV = { risky_accounts: 1, disk_critical: 1 };   // rest default to 2 (warning)
+// Severity per signal: 1 = critical (red), 2 = warning (amber). The fleet
+// dashboard's compliance strip shows only the CRITICAL ones (the at-a-glance
+// "what's on fire" view); warnings still surface on each host's detail page.
+// Critical = active compromise vector or imminent outage.
+const SIGNAL_SEV = {
+  disk_critical: 1,      // ≥90% — imminent outage
+  risky_accounts: 1,     // UID-0 dupes / empty-password accounts
+  ssh_root_login: 1,     // root login exposed over SSH
+  firewall_disabled: 1,  // host has no active firewall
+  eol_os: 1,             // unsupported OS = unpatched CVEs
+};   // everything else defaults to 2 (warning)
+const isCriticalSignal = (key) => SIGNAL_SEV[key] === 1;
 
 // One compliance signal: label + affected-host count, expands to the hosts.
 // Each affected host opens the drill-down and carries a "Suppress ▾" so the
@@ -655,7 +666,12 @@ export default function Dashboard({ role, edition, onOpen }) {
       .sort((a, b) => b.hosts.length - a.hosts.length);
   }, [posture, filteredFleet, suppFor, hostCtx]);
 
-  const issuesTotal = complianceSignals.reduce((n, s) => n + (s.hosts.length > 0 ? 1 : 0), 0);
+  // The strip shows CRITICAL signals only — the login view is "what's on fire",
+  // not every hardening nit. (Warnings still show on each host's detail page.)
+  const criticalSignals = useMemo(
+    () => complianceSignals.filter((s) => isCriticalSignal(s.key)),
+    [complianceSignals]);
+  const issuesTotal = criticalSignals.reduce((n, s) => n + (s.hosts.length > 0 ? 1 : 0), 0);
 
   // Every active suppression that applies to a host/env currently in the fleet —
   // the source for both the donut's "suppressed" metric and the Suppressed panel.
@@ -928,7 +944,7 @@ export default function Dashboard({ role, edition, onOpen }) {
           <strong>Fleet
             {posture.length > 0 && (
               <span className="faint" style={{ fontSize: 12, marginLeft: 8 }}>
-                {issuesTotal === 0 ? "all clear" : `${issuesTotal} compliance signal${issuesTotal === 1 ? "" : "s"} with findings`}
+                {issuesTotal === 0 ? "no critical findings" : `${issuesTotal} critical signal${issuesTotal === 1 ? "" : "s"} with findings`}
               </span>
             )}
           </strong>
@@ -992,7 +1008,7 @@ export default function Dashboard({ role, edition, onOpen }) {
               </div>
               {posture.length > 0 ? (
                 <div style={{ flex: 1, minWidth: 300, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 8 }}>
-                  {complianceSignals.map((s) => (
+                  {criticalSignals.map((s) => (
                     <SignalChip key={s.key} signal={s} canAct={!isAuditor} onOpenHost={openHost} onDone={loadSupps} />
                   ))}
                 </div>

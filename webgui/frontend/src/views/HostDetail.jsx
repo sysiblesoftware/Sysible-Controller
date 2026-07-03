@@ -116,7 +116,7 @@ function evalStatus(fullKey, v) {
     case "sec.usb_storage": return s === "blocked" ? "good" : "none";
     case "ssh.permit_root_login": return s === "yes" ? "bad" : (s === "no" ? "good" : (s ? "warn" : "none"));
     case "ssh.password_auth": return s === "yes" ? "warn" : s === "no" ? "good" : "none";
-    case "ssh.weak_ciphers": case "ssh.weak_macs": case "ssh.weak_kex": return s ? "bad" : "good";
+    case "ssh.weak_ciphers": case "ssh.weak_macs": case "ssh.weak_kex": return s ? "warn" : "good";
     case "users.uid0_count": return parseInt(s, 10) > 1 ? "bad" : "good";
     case "users.empty_pw_count": return parseInt(s, 10) > 0 ? "bad" : "good";
     case "users.dup_uid": case "users.dup_gid": return s ? "bad" : "good";

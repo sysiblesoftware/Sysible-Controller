@@ -2244,13 +2244,16 @@ def enroll_token(request: Request, user: str = Depends(require_login)):
 
 
 @app.get("/api/agent-bundle")
-def agent_bundle(user: str = Depends(require_login)):
+def agent_bundle(request: Request, user: str = Depends(require_superuser_session)):
     """Download the ready-to-run agent bundle (tar.gz) the desktop's Host
-    Enrollment page hands out."""
+    Enrollment page hands out. Superuser-only: building a bundle mints a fresh
+    enrollment token (create_enroll_token), so it's a privileged host-onboarding
+    action, not a read. Forwarded with the caller's token so the controller's own
+    require_superuser gate on /controller-config/agent-bundle also holds."""
     tmpdir = Path(tempfile.mkdtemp(prefix="sysible-bundle-"))
     dest = tmpdir / "sysible-agent.tar.gz"
     try:
-        api.download_agent_bundle(str(dest))
+        _as_admin(request, lambda: api.download_agent_bundle(str(dest)))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Could not build bundle: {e}")
 

@@ -1170,7 +1170,7 @@ def get_local_ips_route():
     return {"ips": detect_local_ips()}
 
 
-@app.get("/controller-config/agent-bundle", dependencies=[Depends(require_api_key)])
+@app.get("/controller-config/agent-bundle", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def download_agent_bundle_route():
     """Build and hand back a ready-to-run agent bundle straight from the
     admin GUI - the same zip the Webserver Portal hands a remote host

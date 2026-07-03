@@ -179,7 +179,10 @@ const ACTIONS = {
   "fs.inode_pct": { kind: "tool", tool: "Storage Administration" },
   "users.empty_pw_count": { kind: "tool", tool: "User & Group Administration" },
   "users.uid0_count": { kind: "tool", tool: "User & Group Administration" },
-  "users.pw_complexity": { kind: "tool", tool: "Environmental Policies" },
+  "users.pw_complexity": { kind: "tool", tool: "Environmental Policies",
+    // Land on Environmental Policies with THIS host already checked as the push
+    // target, so the operator can adjust password quality and push in one go.
+    prefill: (posture, hostId) => ({ host: hostId }) },
 };
 
 function RowAction({ action, hostId, posture, onOpen, onRefreshSoon }) {

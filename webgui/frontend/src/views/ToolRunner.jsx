@@ -97,7 +97,7 @@ export default function ToolRunner({ openTool, openTab, openPrefill, onConsumed,
           <strong>{open.name}</strong>
         </div>
         {open.special === "env"
-          ? <EnvironmentalPolicies hosts={hosts} onRefreshHosts={loadHosts} />
+          ? <EnvironmentalPolicies prefill={open.prefill} hosts={hosts} onRefreshHosts={loadHosts} />
           : Custom
             ? <Custom initialTab={open.tab} prefill={open.prefill} hosts={hosts} onRefreshHosts={loadHosts} />
             : tool

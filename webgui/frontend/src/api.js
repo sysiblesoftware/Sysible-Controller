@@ -75,6 +75,7 @@ export const api = {
   controllerUpdateStatus: () => req("/api/controller-update-status"),
   controllerUpdateLog: (lines = 400) => req(`/api/controller-update-log?lines=${lines}`),
   updateAgents: () => req("/api/update-agents", { method: "POST" }),
+  updateStatus: () => req("/api/update-status"),
   auditLog: (limit = 200) => req(`/api/audit-log?limit=${limit}`),
   license: () => req("/api/license"),
   changeMyCredentials: (current_password, new_username, new_password) =>

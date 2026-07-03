@@ -621,6 +621,69 @@ def update_agents_route(request: Request):
                        "Each applies it on its next check-in and restarts."}
 
 
+def _current_agent_version():
+    """Short hash of the controller's CURRENT host_agent/agent.py — the build an
+    'update agents' push would deliver. Agents report theirs on heartbeat, so a
+    mismatch means the agent is out of date."""
+    import hashlib
+    from backend.agent_bundle import AGENT_SOURCE_FILE
+    try:
+        return hashlib.sha256(AGENT_SOURCE_FILE.read_text(encoding="utf-8").encode()).hexdigest()[:12]
+    except Exception:
+        return None
+
+
+def _controller_update_available():
+    """Best-effort: is the deployed controller behind its git remote? Reads the
+    install checkout path from <base>/.install_src (written at install time),
+    fetches, and counts commits behind. Never raises — returns a dict the UI can
+    render, with checked=False + a reason when it can't tell (no git, no network,
+    private-repo auth, etc.)."""
+    import os as _os
+    import subprocess as _sp
+    base = _os.getenv("SYSIBLE_HOME", "/opt/sysible")
+    try:
+        src = open(_os.path.join(base, ".install_src")).read().strip()
+    except Exception:
+        return {"checked": False, "reason": "install source unknown (.install_src missing)"}
+    if not src or not _os.path.isdir(_os.path.join(src, ".git")):
+        return {"checked": False, "reason": "install source is not a git checkout"}
+
+    def _git(*args, timeout=25):
+        return _sp.run(["git", "-C", src, "-c", f"safe.directory={src}", *args],
+                       capture_output=True, text=True, timeout=timeout)
+    try:
+        cur = _git("rev-parse", "--short", "HEAD").stdout.strip()
+        branch = _git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        if _git("fetch", "--quiet", timeout=35).returncode != 0:
+            return {"checked": False, "reason": "git fetch failed (network or auth)",
+                    "current": cur, "branch": branch}
+        n = int((_git("rev-list", "--count", "HEAD..@{u}").stdout.strip() or "0"))
+        return {"checked": True, "available": n > 0, "behind": n, "current": cur,
+                "latest": _git("rev-parse", "--short", "@{u}").stdout.strip(), "branch": branch}
+    except Exception as e:
+        return {"checked": False, "reason": str(e)[:120]}
+
+
+@app.get("/update-status", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def update_status_route():
+    """Whether the CONTROLLER (git-behind) and AGENTS (build-hash mismatch) have a
+    software update available. Superuser-only. The git check does a live fetch, so
+    call it on demand, not on a poll."""
+    cur_ver = _current_agent_version()
+    agents = list_agents()
+    outdated = [{"host_id": a.get("host_id"), "hostname": a.get("hostname"),
+                 "agent_version": a.get("agent_version")}
+                for a in agents if cur_ver and a.get("agent_version") and a.get("agent_version") != cur_ver]
+    unknown = sum(1 for a in agents if not a.get("agent_version"))
+    return {
+        "controller": _controller_update_available(),
+        "agents": {"current_version": cur_ver, "total": len(agents),
+                   "outdated": outdated, "outdated_count": len(outdated),
+                   "unknown_count": unknown},
+    }
+
+
 def _describe_command(command: str) -> str:
     """Fallback human description when a tool didn't supply one. Deliberately
     NEVER echoes raw code into the feed: multi-line / script / python

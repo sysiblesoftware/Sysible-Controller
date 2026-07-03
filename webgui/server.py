@@ -1864,6 +1864,13 @@ def update_agents(request: Request, user: str = Depends(require_superuser_sessio
     return _wrap(lambda: _as_admin(request, lambda: api.update_agents()))
 
 
+@app.get("/api/update-status")
+def update_status(request: Request, user: str = Depends(require_superuser_session)):
+    """Is a software update available for the controller (git-behind) or agents
+    (build-hash mismatch)? Superuser-only; does a live git fetch, so on demand."""
+    return _wrap(lambda: _as_admin(request, lambda: api.get_update_status()))
+
+
 @app.get("/api/audit-log")
 def audit_log(limit: int = 200, request: Request = None, user: str = Depends(require_login)):
     # Superuser-gated on the controller — login attempts + admin changes.

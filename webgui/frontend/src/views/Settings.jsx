@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 
 // Sysible Controller Settings: administrators, password policy, controller
@@ -316,12 +316,24 @@ function SoftwareUpdate() {
   const [agents, setAgents] = useState(null);   // null | {total, updated, ver, done, timedOut}
   const [ctrlLog, setCtrlLog] = useState("");   // live self-update output
   const [agentRows, setAgentRows] = useState(null); // per-host update status list
+  const [avail, setAvail] = useState(null);     // null | {controller, agents} from /update-status
+  const [checking, setChecking] = useState(false);
   const pollRef = useRef(null);
   const agentPollRef = useRef(null);
   const logRef = useRef(null);
   useEffect(() => () => { [pollRef, agentPollRef].forEach((r) => r.current && clearInterval(r.current)); }, []);
   // Keep the console pinned to the newest output.
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [ctrlLog]);
+
+  // Check whether the controller (git-behind) or any agent (build-hash mismatch)
+  // has an update available. Does a live git fetch on the controller, so it's an
+  // on-demand check (auto once on mount, then via the Re-check button).
+  const checkUpdates = useCallback(async () => {
+    setChecking(true);
+    try { setAvail(await api.updateStatus()); } catch { /* leave last */ }
+    finally { setChecking(false); }
+  }, []);
+  useEffect(() => { checkUpdates(); }, [checkUpdates]);
 
   async function startController({ keepAgents = false } = {}) {
     setBusy(true); setErr(""); setMsg(""); setConfirm(null); setCtrlMsg(""); setCtrlLog("");
@@ -467,6 +479,8 @@ function SoftwareUpdate() {
         briefly; agents keep applying in the background.
       </p>
 
+      <UpdatesAvailable avail={avail} checking={checking} onRecheck={checkUpdates} />
+
       <div className="row" style={{ gap: 8, marginTop: 6, flexWrap: "wrap" }}>
         <Button which="both" label="Update controller + agents" start={startBoth} />
         <Button which="controller" label="Update controller only" start={startController} />
@@ -553,6 +567,67 @@ function SoftwareUpdate() {
       </p>
       {msg && <div className="ok-text" style={{ marginTop: 10 }}>{msg}</div>}
       {err && <div className="error-box" style={{ marginTop: 10 }}>{err}</div>}
+    </div>
+  );
+}
+
+// "Updates available" banner at the top of Software updates: a compact read-out
+// of whether the controller is behind its git remote and how many agents are on
+// an older build than the controller ships. Purely informational — the action
+// buttons below actually apply the updates.
+function UpdatesAvailable({ avail, checking, onRecheck }) {
+  const c = avail?.controller || {};
+  const a = avail?.agents || {};
+  const ctrlBehind = c.checked && c.available;
+  const agentsBehind = (a.outdated_count || 0) > 0;
+  const anything = ctrlBehind || agentsBehind;
+  // Colour the strip: green when confirmed all-current, amber when something's
+  // behind, neutral while we couldn't fully check.
+  const known = avail && (c.checked || a.current_version);
+  const bg = anything ? "rgba(224,168,58,0.10)" : known ? "rgba(78,192,122,0.10)" : "var(--panel-2, rgba(255,255,255,0.02))";
+  const border = anything ? "#e0a83a" : known ? "#4ec07a" : "var(--border)";
+
+  return (
+    <div style={{ marginTop: 12, marginBottom: 4, background: bg, border: `1px solid ${border}`,
+                  borderRadius: 8, padding: "8px 12px" }}>
+      <div className="spread" style={{ alignItems: "center" }}>
+        <strong style={{ fontSize: 13 }}>
+          {avail == null ? "Checking for updates…"
+            : anything ? "Updates available"
+            : known ? "✓ Up to date" : "Update status"}
+        </strong>
+        <button className="btn ghost sm" onClick={onRecheck} disabled={checking}>
+          {checking ? <span className="spin" /> : "Re-check"}
+        </button>
+      </div>
+      {avail != null && (
+        <div style={{ fontSize: 12, marginTop: 6, display: "grid", gap: 3 }}>
+          {/* Controller */}
+          {c.checked ? (
+            c.available
+              ? <span><span className="dot" style={{ background: "#e0a83a", marginRight: 6 }} />
+                  Controller is <strong>{c.behind}</strong> commit{c.behind === 1 ? "" : "s"} behind
+                  {c.branch ? ` on ${c.branch}` : ""}
+                  {c.current && c.latest ? <span className="faint"> ({c.current} → {c.latest})</span> : null}</span>
+              : <span><span className="dot" style={{ background: "#4ec07a", marginRight: 6 }} />
+                  Controller is current{c.current ? <span className="faint"> ({c.current})</span> : null}</span>
+          ) : (
+            <span className="faint"><span className="dot" style={{ background: "var(--text-faint)", marginRight: 6 }} />
+              Controller: couldn't check{c.reason ? ` — ${c.reason}` : ""}
+              {c.current ? ` (at ${c.current})` : ""}</span>
+          )}
+          {/* Agents */}
+          {agentsBehind
+            ? <span><span className="dot" style={{ background: "#e0a83a", marginRight: 6 }} />
+                <strong>{a.outdated_count}</strong> of {a.total} agent{a.total === 1 ? "" : "s"} on an older build</span>
+            : <span><span className="dot" style={{ background: "#4ec07a", marginRight: 6 }} />
+                {a.total ? `All ${a.total} agent${a.total === 1 ? "" : "s"} on the current build` : "No agents enrolled"}</span>}
+          {a.unknown_count ? (
+            <span className="faint" style={{ marginLeft: 18 }}>
+              {a.unknown_count} host{a.unknown_count === 1 ? " hasn't" : "s haven't"} reported a version yet</span>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }

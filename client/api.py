@@ -289,6 +289,14 @@ def update_agents():
     return _request("POST", "/agents/update", timeout=30)
 
 
+def get_update_status():
+    """Whether a software update is available for the controller (git-behind its
+    remote) and/or agents (reported build hash != controller's current agent
+    build). Returns {"controller": {...}, "agents": {...}}. Does a live git
+    fetch on the controller, so call on demand, not on a poll."""
+    return _request("GET", "/update-status", timeout=45)
+
+
 def get_license_config():
     return _request("GET", "/license-config")
 

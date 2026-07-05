@@ -3,6 +3,10 @@ __pycache__/
 venv/
 .venv/
 *.db
+# SQLite write-ahead-log / shared-memory / rollback sidecars (regenerated at runtime)
+*.db-wal
+*.db-shm
+*.db-journal
 api_key.txt
 hosts.json
 agent_state.json

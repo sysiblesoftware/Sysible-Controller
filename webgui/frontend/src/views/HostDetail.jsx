@@ -233,8 +233,19 @@ function Row({ fullKey, label, value, hostId, posture, host, env, boot, supps, o
   const action = (flagged && canAct && !supp) ? ACTIONS[fullKey] : null;
   const dotColor = supp ? C.supp : C[st];
   const valColor = supp ? C.supp : (st === "bad" ? C.bad : st === "warn" ? C.warn : "var(--text)");
+  // An unsuppressed bad/warn finding gets a tinted band with a colored left
+  // accent so it's noticeable at a glance instead of blending into the list.
+  // Non-flagged rows keep a transparent accent of the same width to stay aligned.
+  const accent = (flagged && !supp) ? (st === "bad" ? C.bad : C.warn) : null;
+  const rowBg = st === "bad" ? "rgba(224,108,108,0.12)" : "rgba(224,168,58,0.10)";
   return (
-    <div style={{ padding: "5px 0", borderBottom: "1px solid var(--border)" }}>
+    <div style={{
+      padding: "5px 8px",
+      borderBottom: "1px solid var(--border)",
+      borderLeft: `3px solid ${accent || "transparent"}`,
+      background: accent ? rowBg : "transparent",
+      borderRadius: accent ? "0 4px 4px 0" : 0,
+    }}>
       <div className="spread" style={{ gap: 12, alignItems: "baseline" }}>
         <span className="faint" style={{ fontSize: 13, whiteSpace: "nowrap" }}>{label}</span>
         <span style={{ fontSize: 13, textAlign: "right", minWidth: 0, overflowWrap: "anywhere",

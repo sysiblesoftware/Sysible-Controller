@@ -473,6 +473,17 @@ def hosts(user: str = Depends(require_login)):
     except Exception:
         last_seen = {}
 
+    # Merge a read-only "critical" flag from the cached posture sweep so the host
+    # picker can flag hosts with an active sev-1 finding. Cache-only: we never
+    # force a sweep here, so a cold posture cache simply leaves `critical` null
+    # (no highlighting) until the dashboard or a posture_scan job warms it.
+    posture_by_id = {h.get("id"): h for h in (_POSTURE_CACHE["hosts"] or [])}
+    try:
+        from webgui import suppressions
+        supps = suppressions.list_all()
+    except Exception:
+        supps = []
+
     out = []
     for e in entries:
         agent_id = None
@@ -484,6 +495,10 @@ def hosts(user: str = Depends(require_login)):
         online = None
         if agent_id is not None:
             online = bool(ls and (now - ls) <= 20)
+        pc = posture_by_id.get(e["id"])
+        reasons = (_host_critical_reasons(pc.get("flags") or {}, e["label"],
+                                          e.get("environment") or "", supps)
+                   if pc else [])
         out.append({
             "id": e["id"],
             "label": e["label"],
@@ -494,6 +509,9 @@ def hosts(user: str = Depends(require_login)):
             "has_agent": e["kind"] in ("agent", "merged"),
             "last_seen": ls,
             "online": online,
+            # null when posture hasn't been gathered for this host yet.
+            "critical": (len(reasons) > 0) if pc else None,
+            "critical_reasons": reasons,
         })
     return {"hosts": out}
 
@@ -729,6 +747,36 @@ def _posture_flags(p):
         "cert_expiring": (cert30 > 0) if cert30 is not None else None,
         "time_unsynced": (sync in ("no", "false", "0")) if sync else None,
     }
+
+
+# Posture signals that mark a host "critical" (severity 1 on the dashboard —
+# an active compromise vector or imminent outage). Mirrors the sev-1 posture
+# keys in the SPA's SIGNAL_SEV; disk_critical is a health signal (not a posture
+# flag) so it isn't included here.
+_CRITICAL_POSTURE_LABELS = {
+    "firewall_disabled": "Firewall disabled",
+    "ssh_root_login": "SSH root login enabled",
+    "risky_accounts": "UID-0 / empty-password accounts",
+    "eol_os": "EOL / unsupported OS",
+}
+
+
+def _host_critical_reasons(flags, host_name, env, supps):
+    """Sev-1 posture signals that are firing on this host and not silenced by a
+    host- or env-scoped suppression. Returns the list of human labels; an empty
+    list means the host isn't currently critical."""
+    reasons = []
+    for key, label in _CRITICAL_POSTURE_LABELS.items():
+        if flags.get(key) is not True:
+            continue
+        suppressed = any(
+            s.get("key") == key
+            and ((s.get("scope") == "host" and s.get("target") == host_name)
+                 or (s.get("scope") == "env" and s.get("target") == env))
+            for s in supps)
+        if not suppressed:
+            reasons.append(label)
+    return reasons
 
 
 def _posture_command():

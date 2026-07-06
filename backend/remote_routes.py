@@ -887,7 +887,10 @@ def _ephemeral_grant_command(pub_line: str) -> str:
     """Root sh one-liner: prune expired sysible-ephemeral entries (comment ends
     in -<expiry-epoch>), then append this session's key. Self-cleaning, so a
     controller that died mid-session leaves nothing usable once its key expires."""
+    parts = pub_line.split()
+    b64 = parts[2] if len(parts) > 2 else pub_line
     q = shlex.quote(pub_line)
+    qb = shlex.quote(b64)
     awk = ("awk -v now=\"$now\" '/sysible-ephemeral-/"
            "{n=split($NF,a,\"-\");e=a[n];if(e ~ /^[0-9]+$/ && e+0<now)next}{print}'")
     return "\n".join([
@@ -898,7 +901,10 @@ def _ephemeral_grant_command(pub_line: str) -> str:
         f'{awk} "$K" > "$tmp"',
         'mv "$tmp" "$K"; chmod 600 "$K"',
         f'printf "%s\\n" {q} >> "$K"',
-        'echo SYSIBLE_GRANT_OK',
+        # Confirm the key actually landed, so a SYSIBLE_GRANT_OK is proof the key
+        # is installed — which turns a later SSH 401 into a definite host policy
+        # problem (root login denied) rather than an ambiguous install failure.
+        f'grep -qF {qb} "$K" && echo SYSIBLE_GRANT_OK || echo SYSIBLE_GRANT_FAIL',
     ])
 
 
@@ -1039,6 +1045,15 @@ def open_terminal(name: str, request: Request):
     except paramiko.AuthenticationException:
         client.close()
         _queue_ephemeral_revoke(revoke)
+        if revoke:
+            # Agent host: the per-session key was installed and verified, so the
+            # host is rejecting root SSH login itself (PermitRootLogin) — common
+            # on cloud/Ubuntu images. Point at the fix, which runs over the agent.
+            raise HTTPException(status_code=401, detail=(
+                "SSH authentication failed. The per-session key was installed on the host, "
+                "so its sshd is refusing ROOT login (PermitRootLogin). Enable it under "
+                "System Administration → Security → Auth Policy → 'Allow root login over SSH' "
+                "→ Apply, then Reload sshd (both run through the agent), and reopen the terminal."))
         raise HTTPException(status_code=401, detail="SSH authentication failed")
     except OSError as e:
         client.close()

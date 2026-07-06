@@ -96,13 +96,18 @@ def _distinct_hosts(agent_records, ssh_records):
         parent[find(a)] = find(b)
 
     # (key, name, ip, kind) — key uniquely identifies the record's own component.
+    # Names are compared RAW (no case/whitespace folding) so this matches the web
+    # console's merge exactly (client/_api_dispatch.merge_duplicate_host_entries
+    # groups by the raw label) and edition.current_host_names (also raw). If these
+    # three ever normalized differently, the licensed count could disagree with
+    # the displayed/probed host list again — the whole bug this function fixes.
     recs = []
     for host_id, hostname, ip in agent_records:
         recs.append((("agent", host_id),
-                     (hostname or host_id or "").strip().lower(),
+                     hostname or host_id or "",
                      (ip or "").strip(), "agent"))
     for name, ip in ssh_records:
-        nm = (name or "").strip().lower()
+        nm = name or ""
         recs.append((("ssh", nm), nm, (ip or "").strip(), "ssh"))
 
     recs = [r for r in recs if r[1] or r[2]]  # drop wholly-empty records

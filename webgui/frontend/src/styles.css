@@ -284,7 +284,12 @@ tr:hover td { background: var(--row-hover); }
 .host-tree { flex: 1; overflow-y: auto; margin-top: 8px; }
 .env-group > .env-head { font-weight: 700; color: var(--text); padding: 6px 4px; cursor: pointer; }
 .host-row { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 18px; font-size: 13px; }
-.host-row .meta { color: var(--text-faint); font-size: 12px; }
+/* The host name is the flexible part: it truncates with an ellipsis so the type
+   tag and the "critical" marker to its right are never clipped in the narrow
+   pane. */
+.host-row .host-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-row .meta { color: var(--text-faint); font-size: 12px; flex-shrink: 0; }
+.host-row .meta.crit { color: #e06c6c; font-weight: 600; margin-left: auto; }
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 14px; flex-wrap: wrap; }
 .tabs button { background: transparent; border: 1px solid transparent; border-bottom: none;
   color: var(--text-dim); padding: 7px 13px; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 13px; }

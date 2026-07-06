@@ -68,9 +68,9 @@ export default function HostTree({ hosts, value, onChange, onRefresh, footer }) 
                   <input type="checkbox" checked={value.includes(h.id)} onChange={() => toggleHost(h.id)} />
                   <span className={"dot " + (h.online === true ? "ok" : h.online === false ? "bad" : "")}
                         title={h.online === false ? "Offline" : h.online === true ? "Online" : ""} />
-                  <span style={crit ? { color: "#e06c6c", fontWeight: 600 } : undefined} title={critTitle}>{h.label}</span>
-                  <span className="meta">{h.has_agent ? "Agent+SSH" : "SSH"}{h.online === false ? " · offline" : ""}</span>
-                  {crit && <span className="meta" style={{ color: "#e06c6c", fontWeight: 600 }} title={critTitle}>· critical</span>}
+                  <span className="host-name" style={crit ? { color: "#e06c6c", fontWeight: 600 } : undefined} title={critTitle}>{h.label}</span>
+                  <span className="meta">{h.has_agent ? "Agent" : "SSH"}{h.online === false ? " · offline" : ""}</span>
+                  {crit && <span className="meta crit" title={critTitle}>critical</span>}
                 </label>
                 );
               })}

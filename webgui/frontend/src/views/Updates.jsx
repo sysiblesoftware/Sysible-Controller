@@ -106,6 +106,17 @@ export default function Updates({ role }) {
   const jobPoll = React.useRef(null);
   useEffect(() => () => { if (jobPoll.current) clearInterval(jobPoll.current); }, []);
 
+  // Rescan clears the finished-install panel of hosts that succeeded, so only
+  // the ones still needing attention (failed) remain — and if every host
+  // succeeded, the whole panel drops away. Only touches a FINISHED job: while an
+  // install is still running the polled status would just re-add them anyway.
+  const pruneFinishedJob = () => setJob((j) => {
+    if (!j || !j.done) return j;
+    const remaining = (j.hosts || []).filter((h) => h.status !== "done");
+    return remaining.length ? { ...j, hosts: remaining } : null;
+  });
+  const rescan = (live = 0) => { pruneFinishedJob(); load(1, live); };
+
   async function run(kind) {
     if (!checked.length) { setErr("Select one or more hosts first."); return; }
     if (kind === "reboot") {
@@ -159,10 +170,10 @@ export default function Updates({ role }) {
         </div>
         <div className="row" style={{ gap: 10, alignItems: "center" }}>
           {data.ts > 0 && <span className="faint" style={{ fontSize: 12 }}>scanned {new Date(data.ts).toLocaleTimeString()}</span>}
-          <button className="btn ghost sm" onClick={() => load(1)} disabled={loading || liveLoading}
+          <button className="btn ghost sm" onClick={() => rescan(0)} disabled={loading || liveLoading}
                   title="Recount using each host's cached repo metadata (fast)">
             {loading ? <span className="spin" /> : "Rescan"}</button>
-          <button className="btn ghost sm" onClick={() => load(1, 1)} disabled={loading || liveLoading}
+          <button className="btn ghost sm" onClick={() => rescan(1)} disabled={loading || liveLoading}
                   title="Refresh each host's repo metadata first, then count (live, slower)">
             {liveLoading ? <span className="spin" /> : "Refresh metadata & rescan"}</button>
         </div>

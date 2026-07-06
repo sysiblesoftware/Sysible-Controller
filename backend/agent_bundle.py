@@ -601,9 +601,21 @@ def mint_agent_bundle(controller_addresses, controller_port: int):
     browser download, and the portal's curl/CLI endpoint) goes through here
     so the "one bundle = one single-use token" invariant can't drift between
     them. Address resolution and HTTP error handling stay at the call sites,
-    since they differ per surface (API raises, portal redirects)."""
+    since they differ per surface (API raises, portal redirects).
+
+    Because every bundle mints a working single-use enrollment token, the host
+    cap is enforced HERE, at the single choke point, so no download surface can
+    hand out onboarding credentials once the fleet is at the limit. Raises HTTP
+    403 at/over the cap (a doomed onboarding is stopped up front instead of
+    failing only at the final /agents/enroll call)."""
     import secrets
     from backend.db import create_enroll_token
+    from backend.edition import enforce_host_limit
+
+    # Community host cap (no-op in an unlimited/Enterprise build). A bundle is a
+    # brand-new host's onboarding credentials, so this is always a "new host"
+    # check.
+    enforce_host_limit()
 
     token = secrets.token_hex(16)
     create_enroll_token(token)

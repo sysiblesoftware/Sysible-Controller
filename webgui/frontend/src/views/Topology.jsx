@@ -40,8 +40,10 @@ export default function Topology({ onOpen }) {
   const [collapsed, setCollapsed] = useState({});   // group key -> true
   const [hover, setHover] = useState(null);
   const [view, setView] = useState({ s: 1, tx: 0, ty: 0 });
+  const [positions, setPositions] = useState({});   // id / "__hub__"+key / "__ctrl__" -> {x,y} manual overrides
   const inFlight = useRef(false);
-  const drag = useRef(null);
+  const drag = useRef(null);        // background pan
+  const nodeDrag = useRef(null);    // dragging a single node / hub / controller
   const svgRef = useRef(null);
 
   const load = useCallback(() => {
@@ -115,18 +117,19 @@ export default function Topology({ onOpen }) {
     return list;
   }, [all, lens]);
 
-  // Lay out group hubs (radial) + host grids (outward from each hub).
+  // Base radial layout: group hubs around the controller + host grids outward
+  // from each hub. Edges are rebuilt in `laid` from the FINAL positions so
+  // manually-dragged nodes keep their connectors attached.
   const layout = useMemo(() => {
     const G = groups.length || 1;
     const Rhub = 200;
-    const hubs = [], nodes = [], edges = [];
+    const hubs = [], nodes = [];
     groups.forEach((grp, i) => {
       const th = -Math.PI / 2 + (2 * Math.PI) * (i + 0.5) / G;
       const rad = { x: Math.cos(th), y: Math.sin(th) }, tan = { x: -Math.sin(th), y: Math.cos(th) };
       const hx = cx + Rhub * rad.x, hy = cy + Rhub * rad.y;
       const isCollapsed = !!collapsed[grp.key];
       hubs.push({ ...grp, x: hx, y: hy, th, collapsed: isCollapsed });
-      edges.push({ x1: cx, y1: cy, x2: hx, y2: hy, kind: "hub", worst: grp.worst });
       if (isCollapsed) return;
       const n = grp.hosts.length;
       const cols = Math.max(1, Math.min(6, Math.ceil(Math.sqrt(n))));
@@ -137,19 +140,41 @@ export default function Topology({ onOpen }) {
         const dist = Rhub + 60 + r * sp;                       // extend outward, row by row
         const x = cx + rad.x * dist + tan.x * colOff;
         const y = cy + rad.y * dist + tan.y * colOff;
-        nodes.push({ ...hostn, x, y });
-        edges.push({ x1: hx, y1: hy, x2: x, y2: y, kind: "host", host: hostn });
+        nodes.push({ ...hostn, x, y, hub: grp.key });
       });
     });
-    return { hubs, nodes, edges };
+    return { hubs, nodes };
   }, [groups, collapsed]);
 
+  // Apply any manual position overrides, then rebuild edges from the final
+  // positions so a dragged node's connectors follow it.
+  const laid = useMemo(() => {
+    const pos = positions;
+    const ctrl = pos.__ctrl__ || { x: cx, y: cy };
+    const hubs = layout.hubs.map((h) => {
+      const o = pos["__hub__" + h.key];
+      return o ? { ...h, x: o.x, y: o.y } : h;
+    });
+    const hubByKey = {}; hubs.forEach((h) => { hubByKey[h.key] = h; });
+    const nodes = layout.nodes.map((n) => {
+      const o = pos[n.id];
+      return o ? { ...n, x: o.x, y: o.y } : n;
+    });
+    const edges = [];
+    hubs.forEach((h) => edges.push({ x1: ctrl.x, y1: ctrl.y, x2: h.x, y2: h.y, kind: "hub", worst: h.worst }));
+    nodes.forEach((n) => {
+      const h = hubByKey[n.hub];
+      if (h) edges.push({ x1: h.x, y1: h.y, x2: n.x, y2: n.y, kind: "host", host: n });
+    });
+    return { hubs, nodes, edges, ctrl };
+  }, [layout, positions]);
+
   const nodeById = useMemo(() => {
-    const m = {}; for (const n of layout.nodes) m[n.id] = n;
-    if (center) m.__ctrl__ = { ...center, x: cx, y: cy };
-    for (const h of layout.hubs) m["__hub__" + h.key] = h;
+    const m = {}; for (const n of laid.nodes) m[n.id] = n;
+    if (center) m.__ctrl__ = { ...center, x: laid.ctrl.x, y: laid.ctrl.y };
+    for (const h of laid.hubs) m["__hub__" + h.key] = h;
     return m;
-  }, [layout, center]);
+  }, [laid, center]);
   const hoverObj = hover ? nodeById[hover] : null;
 
   const counts = useMemo(() => {
@@ -165,15 +190,45 @@ export default function Topology({ onOpen }) {
     const s = Math.max(0.4, Math.min(3, v.s * f));
     return { s, tx: v.tx + (v.s - s) * cx, ty: v.ty + (v.s - s) * cy };
   });
-  const resetView = () => setView({ s: 1, tx: 0, ty: 0 });
+  // Reset view AND any manual node positions back to the computed layout.
+  const resetView = () => { setView({ s: 1, tx: 0, ty: 0 }); setPositions({}); };
   const onWheel = (e) => { zoom(e.deltaY < 0 ? 1.12 : 0.89); };
   const onDown = (e) => { drag.current = { x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty }; };
+
+  const svgUnitsPerPx = () => (svgRef.current ? W / svgRef.current.getBoundingClientRect().width : 1);
+
+  // Start dragging a single node/hub/controller. `action` is what a click (a
+  // press that doesn't move) should do — open the host, or toggle the cluster.
+  const startNodeDrag = (e, key, origX, origY, action) => {
+    e.stopPropagation();   // don't let the background pan kick in
+    nodeDrag.current = { key, cx0: e.clientX, cy0: e.clientY, origX, origY, action, moved: false };
+  };
+
   const onMove = (e) => {
+    if (nodeDrag.current) {
+      const nd = nodeDrag.current;
+      const k = svgUnitsPerPx() / view.s;   // px delta -> inner-group (data) units
+      if (!nd.moved && Math.hypot(e.clientX - nd.cx0, e.clientY - nd.cy0) > 3) nd.moved = true;
+      if (nd.moved) {
+        const nx = nd.origX + (e.clientX - nd.cx0) * k, ny = nd.origY + (e.clientY - nd.cy0) * k;
+        setPositions((p) => ({ ...p, [nd.key]: { x: nx, y: ny } }));
+      }
+      return;
+    }
     if (!drag.current || !svgRef.current) return;
-    const k = W / svgRef.current.getBoundingClientRect().width;
+    const k = svgUnitsPerPx();
     setView((v) => ({ ...v, tx: drag.current.tx + (e.clientX - drag.current.x) * k, ty: drag.current.ty + (e.clientY - drag.current.y) * k }));
   };
-  const endDrag = () => { drag.current = null; };
+
+  const onUp = () => {
+    if (nodeDrag.current) {
+      const nd = nodeDrag.current; nodeDrag.current = null;
+      if (!nd.moved && nd.action) nd.action();   // a press that didn't move is a click
+      return;
+    }
+    drag.current = null;
+  };
+  const onLeave = () => { nodeDrag.current = null; drag.current = null; };
   const trunc = (s, n = 15) => (s && s.length > n ? s.slice(0, n - 1) + "…" : s || "");
 
   const Btn = ({ active, ...p }) => <button className={"btn sm" + (active ? "" : " ghost")} {...p} />;
@@ -197,7 +252,7 @@ export default function Topology({ onOpen }) {
           <div className="row" style={{ gap: 2 }}>
             <button className="btn ghost sm" onClick={() => zoom(1.2)} title="Zoom in">＋</button>
             <button className="btn ghost sm" onClick={() => zoom(0.83)} title="Zoom out">－</button>
-            <button className="btn ghost sm" onClick={resetView} title="Reset view">⤢</button>
+            <button className="btn ghost sm" onClick={resetView} title="Reset view & node positions">⤢</button>
           </div>
           <label className="checkrow" style={{ margin: 0 }}>
             <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
@@ -212,10 +267,10 @@ export default function Topology({ onOpen }) {
       ) : (
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
           <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block", maxHeight: "74vh", cursor: drag.current ? "grabbing" : "grab", touchAction: "none" }}
-               onWheel={onWheel} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={endDrag} onMouseLeave={endDrag}>
+               onWheel={onWheel} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onLeave}>
             <g transform={`translate(${view.tx} ${view.ty}) scale(${view.s})`}>
               {/* Edges. */}
-              {layout.edges.map((e, i) => {
+              {laid.edges.map((e, i) => {
                 const isHub = e.kind === "hub";
                 const h = e.host;
                 const col = isHub ? (COLOR[e.worst] || COLOR.UNKNOWN)
@@ -227,11 +282,10 @@ export default function Topology({ onOpen }) {
               })}
 
               {/* Group hubs. */}
-              {layout.hubs.map((h) => (
-                <g key={"hub" + h.key} transform={`translate(${h.x} ${h.y})`} style={{ cursor: "pointer" }}
-                   onMouseDown={(e) => e.stopPropagation()}
-                   onMouseEnter={() => setHover("__hub__" + h.key)} onMouseLeave={() => setHover((x) => (x === "__hub__" + h.key ? null : x))}
-                   onClick={() => toggleGroup(h.key)}>
+              {laid.hubs.map((h) => (
+                <g key={"hub" + h.key} transform={`translate(${h.x} ${h.y})`} style={{ cursor: "grab" }}
+                   onMouseDown={(e) => startNodeDrag(e, "__hub__" + h.key, h.x, h.y, () => toggleGroup(h.key))}
+                   onMouseEnter={() => setHover("__hub__" + h.key)} onMouseLeave={() => setHover((x) => (x === "__hub__" + h.key ? null : x))}>
                   <circle r={h.collapsed ? 18 : 8} fill={h.collapsed ? (COLOR[h.worst] || COLOR.UNKNOWN) : "var(--panel-2, #1a2130)"}
                           stroke={COLOR[h.worst] || COLOR.UNKNOWN} strokeWidth={2} />
                   {h.collapsed && <text textAnchor="middle" dominantBaseline="central" style={{ fontSize: 12, fontWeight: 700, fill: "#0d1117" }}>{h.hosts.length}</text>}
@@ -242,14 +296,13 @@ export default function Topology({ onOpen }) {
               ))}
 
               {/* Host nodes. */}
-              {layout.nodes.map((n) => {
+              {laid.nodes.map((n) => {
                 const hovered = hover === n.id;
                 const ring = n.revoked ? COLOR.CRITICAL : n.quarantined ? COLOR.WARNING : (n.hasCrit && n.online !== false) ? COLOR.CRITICAL : null;
                 return (
-                  <g key={"n" + n.id} transform={`translate(${n.x} ${n.y})`} style={{ cursor: "pointer" }}
-                     onMouseDown={(e) => e.stopPropagation()}
-                     onMouseEnter={() => setHover(n.id)} onMouseLeave={() => setHover((h) => (h === n.id ? null : h))}
-                     onClick={() => n.id && onOpen && onOpen("host", { id: n.id, label: n.label })}>
+                  <g key={"n" + n.id} transform={`translate(${n.x} ${n.y})`} style={{ cursor: "grab" }}
+                     onMouseDown={(e) => startNodeDrag(e, n.id, n.x, n.y, () => n.id && onOpen && onOpen("host", { id: n.id, label: n.label }))}
+                     onMouseEnter={() => setHover(n.id)} onMouseLeave={() => setHover((h) => (h === n.id ? null : h))}>
                     {ring && <circle r={hovered ? 15 : 13.5} fill="none" stroke={ring} strokeWidth={2}
                                      strokeDasharray={n.revoked || n.quarantined ? "3 3" : undefined} />}
                     <circle r={hovered ? 11 : 9} fill={nodeColor(n)} stroke="var(--bg,#0d1117)" strokeWidth={2} />
@@ -260,10 +313,10 @@ export default function Topology({ onOpen }) {
               })}
 
               {/* Controller hub. */}
-              <g transform={`translate(${cx} ${cy})`} style={{ cursor: center && center.id ? "pointer" : "default" }}
-                 onMouseDown={(e) => e.stopPropagation()}
-                 onMouseEnter={() => center && setHover("__ctrl__")} onMouseLeave={() => setHover((h) => (h === "__ctrl__" ? null : h))}
-                 onClick={() => center && center.id && onOpen && onOpen("host", { id: center.id, label: center.label })}>
+              <g transform={`translate(${laid.ctrl.x} ${laid.ctrl.y})`} style={{ cursor: "grab" }}
+                 onMouseDown={(e) => startNodeDrag(e, "__ctrl__", laid.ctrl.x, laid.ctrl.y,
+                   () => center && center.id && onOpen && onOpen("host", { id: center.id, label: center.label }))}
+                 onMouseEnter={() => center && setHover("__ctrl__")} onMouseLeave={() => setHover((h) => (h === "__ctrl__" ? null : h))}>
                 <circle r={26} fill={ACCENT} stroke="var(--bg,#0d1117)" strokeWidth={3} />
                 <path d="M-8 -3 h16 M-8 3 h16 M-5 -6 v12 M5 -6 v12" stroke="#fff" strokeWidth={1.5} fill="none" opacity={0.9} />
                 <text y={43} textAnchor="middle" style={{ fontSize: 13, fontWeight: 700, fill: "var(--text,#e6e6e6)" }}>{center ? trunc(center.label, 22) : "Sysible Controller"}</text>
@@ -279,7 +332,7 @@ export default function Topology({ onOpen }) {
               <span key={k} className="faint"><span className="dot" style={{ background: COLOR[k] }} /> {l}</span>
             ))}
             <span className="faint"><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: "50%", border: `2px solid ${COLOR.CRITICAL}`, verticalAlign: "middle", marginRight: 4 }} /> critical finding / revoked</span>
-            <span className="faint" style={{ marginLeft: "auto" }}>solid = agent · dashed = SSH · drag to pan · scroll to zoom · click a cluster to collapse</span>
+            <span className="faint" style={{ marginLeft: "auto" }}>solid = agent · dashed = SSH · drag a node to move it · drag the background to pan · scroll to zoom · click a cluster to collapse · ⤢ resets</span>
           </div>
         </div>
       )}

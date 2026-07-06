@@ -15,11 +15,14 @@ import ssl
 from email.message import EmailMessage
 from pathlib import Path
 
+import threading as _threading
 from webgui import sudo_store  # reuse its Fernet key for the SMTP secret
+from webgui._jsonstore import atomic_write_json
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RUN_DIR = Path(os.getenv("SYSIBLE_RUN_DIR") or (_REPO_ROOT / "run"))
 _DATA_FILE = _RUN_DIR / "webgui_alerts.json"
+_LOCK = _threading.Lock()
 
 # rule key -> (label, has_threshold, default_threshold)
 RULES = {
@@ -61,6 +64,8 @@ def _load():
         cfg = json.loads(_DATA_FILE.read_text())
     except (OSError, json.JSONDecodeError):
         return _default_config()
+    if not isinstance(cfg, dict):
+        return _default_config()   # valid JSON but wrong shape -> don't AttributeError below
     base = _default_config()
     base["channels"]["email"].update(cfg.get("channels", {}).get("email", {}))
     base["channels"]["webhook"].update(cfg.get("channels", {}).get("webhook", {}))
@@ -73,12 +78,7 @@ def _load():
 
 
 def _save(cfg):
-    _RUN_DIR.mkdir(parents=True, exist_ok=True)
-    _DATA_FILE.write_text(json.dumps(cfg, indent=2))
-    try:
-        os.chmod(_DATA_FILE, 0o600)
-    except OSError:
-        pass
+    atomic_write_json(_DATA_FILE, cfg)
 
 
 def _encrypt(pw):
@@ -145,25 +145,35 @@ def norm_custom_rules(rules):
         for r in (rules or []))
 
 
+def _as_dict(v):
+    return v if isinstance(v, dict) else {}
+
+
 def set_config(new):
-    cfg = _load()
-    e = new.get("channels", {}).get("email", {})
-    cur = cfg["channels"]["email"]
-    for k in ("enabled", "smtp_host", "smtp_port", "use_tls", "username", "from_addr", "to_addrs"):
-        if k in e:
-            cur[k] = e[k]
-    # Only replace the stored password when a new non-empty one is supplied.
-    if e.get("password"):
-        cur["password_enc"] = _encrypt(e["password"])
-    w = new.get("channels", {}).get("webhook", {})
-    cfg["channels"]["webhook"].update({k: w[k] for k in ("enabled", "url") if k in w})
-    for k in RULES:
-        if k in new.get("rules", {}):
-            cfg["rules"][k].update({kk: new["rules"][k][kk]
-                                    for kk in ("enabled", "threshold") if kk in new["rules"][k]})
-    if "custom_rules" in new:
-        cfg["custom_rules"] = _sanitize_custom(new["custom_rules"])
-    _save(cfg)
+    # Harden against a hostile/malformed body: a non-dict channels/rules/email
+    # would otherwise AttributeError/TypeError below and 500 instead of being
+    # ignored. Each nested container is coerced to {} if it isn't a dict.
+    new = _as_dict(new)
+    channels = _as_dict(new.get("channels"))
+    e = _as_dict(channels.get("email"))
+    w = _as_dict(channels.get("webhook"))
+    rules_in = _as_dict(new.get("rules"))
+    with _LOCK:
+        cfg = _load()
+        cur = cfg["channels"]["email"]
+        for k in ("enabled", "smtp_host", "smtp_port", "use_tls", "username", "from_addr", "to_addrs"):
+            if k in e:
+                cur[k] = e[k]
+        # Only replace the stored password when a new non-empty one is supplied.
+        if e.get("password"):
+            cur["password_enc"] = _encrypt(e["password"])
+        cfg["channels"]["webhook"].update({k: w[k] for k in ("enabled", "url") if k in w})
+        for k in RULES:
+            r = _as_dict(rules_in.get(k))
+            cfg["rules"][k].update({kk: r[kk] for kk in ("enabled", "threshold") if kk in r})
+        if "custom_rules" in new:
+            cfg["custom_rules"] = _sanitize_custom(new["custom_rules"])
+        _save(cfg)
     return get_config_redacted()
 
 
@@ -243,8 +253,13 @@ def diff_state(cfg, firing):
     now_keys = set(now.keys())
     newly = [now[k] for k in (now_keys - prev)]
     resolved = [{"key": k, "message": k.split("|", 1)[-1]} for k in (prev - now_keys)]
-    cfg["state"] = {k: True for k in now_keys}
-    _save(cfg)
+    # Persist only the fire-once `state` onto a FRESH copy inside the lock, so the
+    # background alerts loop can't clobber a concurrent operator rule/SMTP edit
+    # (it used to save its whole stale cfg).
+    with _LOCK:
+        fresh = _load()
+        fresh["state"] = {k: True for k in now_keys}
+        _save(fresh)
     return newly, resolved
 
 

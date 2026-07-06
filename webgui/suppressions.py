@@ -28,8 +28,12 @@ import uuid
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+import threading
+from webgui._jsonstore import atomic_write_json
+
 _RUN_DIR = Path(os.getenv("SYSIBLE_RUN_DIR") or (_REPO_ROOT / "run"))
 _DATA_FILE = _RUN_DIR / "webgui_suppressions.json"
+_LOCK = threading.RLock()  # serialize load->mutate->save (list_all prunes on read)
 
 SCOPES = ("host", "env")
 TYPES = ("env_necessity", "acknowledged", "snooze", "reboot")
@@ -47,18 +51,14 @@ KNOWN_KEYS = {
 
 def _load():
     try:
-        return json.loads(_DATA_FILE.read_text())
+        rows = json.loads(_DATA_FILE.read_text())
+        return rows if isinstance(rows, list) else []
     except (OSError, json.JSONDecodeError):
         return []
 
 
 def _save(rows):
-    _RUN_DIR.mkdir(parents=True, exist_ok=True)
-    _DATA_FILE.write_text(json.dumps(rows, indent=2))
-    try:
-        os.chmod(_DATA_FILE, 0o600)
-    except OSError:
-        pass
+    atomic_write_json(_DATA_FILE, rows)
 
 
 def _clean_str(v, cap):
@@ -70,11 +70,12 @@ def list_all():
     are pruned here (they need no host data); reboot/indefinite ones are kept for
     the console to evaluate/remove."""
     now = time.time()
-    rows = _load()
-    kept = [r for r in rows if not (r.get("type") == "snooze"
-                                    and r.get("until") and r["until"] <= now)]
-    if len(kept) != len(rows):
-        _save(kept)
+    with _LOCK:
+        rows = _load()
+        kept = [r for r in rows if not (r.get("type") == "snooze"
+                                        and r.get("until") and r["until"] <= now)]
+        if len(kept) != len(rows):
+            _save(kept)
     return kept
 
 
@@ -126,15 +127,17 @@ def add(scope, target, key, stype, created_by, reason="", snooze=None, boot_epoc
 
     # Replace any existing suppression with the same scope/target/key so toggling
     # doesn't stack duplicates.
-    rows = [r for r in _load()
-            if not (r.get("scope") == scope and r.get("target") == target and r.get("key") == key)]
-    rows.append(rec)
-    _save(rows)
+    with _LOCK:
+        rows = [r for r in _load()
+                if not (r.get("scope") == scope and r.get("target") == target and r.get("key") == key)]
+        rows.append(rec)
+        _save(rows)
     return rec
 
 
 def remove(supp_id):
-    rows = _load()
-    new = [r for r in rows if r.get("id") != supp_id]
-    _save(new)
+    with _LOCK:
+        rows = _load()
+        new = [r for r in rows if r.get("id") != supp_id]
+        _save(new)
     return len(new) != len(rows)

@@ -15,8 +15,11 @@ A job:
 import datetime
 import json
 import os
+import threading
 import uuid
 from pathlib import Path
+
+from webgui._jsonstore import atomic_write_json
 
 # action -> human label; the executor in server.py maps these to real dispatch.
 ACTIONS = {
@@ -40,22 +43,19 @@ CADENCES = ("hourly", "daily", "weekly")
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RUN_DIR = Path(os.getenv("SYSIBLE_RUN_DIR") or (_REPO_ROOT / "run"))
 _DATA_FILE = _RUN_DIR / "webgui_schedules.json"
+_LOCK = threading.RLock()  # background scheduler thread + request handlers both write
 
 
 def _load():
     try:
-        return json.loads(_DATA_FILE.read_text())
+        jobs = json.loads(_DATA_FILE.read_text())
+        return jobs if isinstance(jobs, list) else []
     except (OSError, json.JSONDecodeError):
         return []
 
 
 def _save(jobs):
-    _RUN_DIR.mkdir(parents=True, exist_ok=True)
-    _DATA_FILE.write_text(json.dumps(jobs, indent=2))
-    try:
-        os.chmod(_DATA_FILE, 0o600)
-    except OSError:
-        pass
+    atomic_write_json(_DATA_FILE, jobs)
 
 
 def _parse_hhmm(at):
@@ -135,49 +135,68 @@ def create_job(name, action, targets, cadence, at, weekday, created_by, arg=""):
         "last_detail": "",
     }
     job["next_run"] = compute_next_run(job)
-    jobs = _load()
-    jobs.append(job)
-    _save(jobs)
+    with _LOCK:
+        jobs = _load()
+        jobs.append(job)
+        _save(jobs)
     return job
 
 
 def update_job(job_id, **fields):
-    jobs = _load()
-    for j in jobs:
-        if j.get("id") == job_id:
-            for k in ("name", "action", "arg", "targets", "cadence", "at", "weekday", "enabled"):
-                if k in fields and fields[k] is not None:
-                    j[k] = fields[k]
-            validate(j["action"], j["cadence"], j.get("arg", ""))
-            j["next_run"] = compute_next_run(j)
-            _save(jobs)
-            return j
+    with _LOCK:
+        jobs = _load()
+        for j in jobs:
+            if j.get("id") == job_id:
+                for k in ("name", "action", "arg", "targets", "cadence", "at", "weekday", "enabled"):
+                    if k in fields and fields[k] is not None:
+                        j[k] = fields[k]
+                validate(j["action"], j["cadence"], j.get("arg", ""))
+                j["next_run"] = compute_next_run(j)
+                _save(jobs)
+                return j
     return None
 
 
 def delete_job(job_id):
-    jobs = _load()
-    new = [j for j in jobs if j.get("id") != job_id]
-    _save(new)
+    with _LOCK:
+        jobs = _load()
+        new = [j for j in jobs if j.get("id") != job_id]
+        _save(new)
     return len(new) != len(jobs)
 
 
 def record_run(job_id, status, detail):
-    jobs = _load()
-    for j in jobs:
-        if j.get("id") == job_id:
-            now = _now()
-            j["last_run"] = now
-            j["last_status"] = status
-            j["last_detail"] = (detail or "")[:500]
-            # Rolling run history (most recent last), capped so the store stays small.
-            hist = j.get("history") or []
-            hist.append({"ts": now, "status": status, "detail": (detail or "")[:500]})
-            j["history"] = hist[-15:]
-            j["next_run"] = compute_next_run(j)
-            _save(jobs)
-            return j
+    with _LOCK:
+        jobs = _load()
+        for j in jobs:
+            if j.get("id") == job_id:
+                now = _now()
+                j["last_run"] = now
+                j["last_status"] = status
+                j["last_detail"] = (detail or "")[:500]
+                # Rolling run history (most recent last), capped so the store stays small.
+                hist = j.get("history") or []
+                hist.append({"ts": now, "status": status, "detail": (detail or "")[:500]})
+                j["history"] = hist[-15:]
+                j["next_run"] = compute_next_run(j)
+                _save(jobs)
+                return j
     return None
+
+
+def advance_next_run(job_id):
+    """Recompute and persist ONLY next_run for a job. The scheduler calls this
+    BEFORE running the job so that a persistent save failure (disk full /
+    read-only fs) makes the job skip rather than re-fire every tick with a stale
+    next_run. Returns True if the advance was persisted."""
+    with _LOCK:
+        jobs = _load()
+        for j in jobs:
+            if j.get("id") == job_id:
+                j["next_run"] = compute_next_run(j)
+                _save(jobs)
+                return True
+    return False
 
 
 def due_jobs(now_ts=None):

@@ -20,12 +20,16 @@ try:
 except Exception:  # pragma: no cover
     _HAVE_FERNET = False
 
+import threading
+from webgui._jsonstore import atomic_write_json
+
 ALL = "__all__"  # fleet-default scope sentinel
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RUN_DIR = Path(os.getenv("SYSIBLE_RUN_DIR") or (_REPO_ROOT / "run"))
 _KEY_FILE = _RUN_DIR / "webgui_sudo.key"
 _DATA_FILE = _RUN_DIR / "webgui_sudo.json"
+_LOCK = threading.Lock()  # serialize load->mutate->save (see webgui/_jsonstore.py)
 
 
 def encryption_available():
@@ -49,18 +53,14 @@ def _get_key():
 
 def _load():
     try:
-        return json.loads(_DATA_FILE.read_text())
+        data = json.loads(_DATA_FILE.read_text())
+        return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
 
 
 def _save(data):
-    _RUN_DIR.mkdir(parents=True, exist_ok=True)
-    _DATA_FILE.write_text(json.dumps(data))
-    try:
-        os.chmod(_DATA_FILE, 0o600)
-    except OSError:
-        pass
+    atomic_write_json(_DATA_FILE, data, indent=None)
 
 
 def set_password(user: str, scope: str, password: str) -> bool:
@@ -71,9 +71,10 @@ def set_password(user: str, scope: str, password: str) -> bool:
     key = _get_key()
     if not key:
         return False
-    data = _load()
-    data.setdefault(user, {})[scope] = Fernet(key).encrypt(password.encode()).decode()
-    _save(data)
+    with _LOCK:
+        data = _load()
+        data.setdefault(user, {})[scope] = Fernet(key).encrypt(password.encode()).decode()
+        _save(data)
     return True
 
 
@@ -105,13 +106,14 @@ def scopes_set(user: str):
 
 
 def clear(user: str, scope: str = None):
-    data = _load()
-    if user not in data:
-        return
-    if scope is None:
-        del data[user]
-    else:
-        data[user].pop(scope, None)
-        if not data[user]:
+    with _LOCK:
+        data = _load()
+        if user not in data:
+            return
+        if scope is None:
             del data[user]
-    _save(data)
+        else:
+            data[user].pop(scope, None)
+            if not data[user]:
+                del data[user]
+        _save(data)

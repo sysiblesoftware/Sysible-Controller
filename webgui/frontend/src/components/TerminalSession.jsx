@@ -97,9 +97,7 @@ const TerminalSession = forwardRef(function TerminalSession({ hostId, label, act
       else if (m.t === "error") {
         onStatus && onStatus("error:" + (m.d || ""));
         term.writeln("\r\n\x1b[31m" + (m.d || "terminal error") + "\x1b[0m");
-        if (/could not open terminal|host not found|no ssh|sshd|refused|unreachable|auth|permission|timed out/i.test(m.d || "")) {
-          dim("The controller opens this shell over SSH to the host as root, using its own key. If this host was just enrolled, its SSH terminal may not be ready yet — check its status in Host Enrollment (enabled / pending / sshd_missing).");
-        }
+        dim("The controller opens this shell over SSH after the agent installs a one-time key for the session. Check the host is online and its agent is checking in; the shell also needs sshd running with root key-login allowed on the host.");
       }
     };
     ws.onerror = () => onStatus && onStatus("error:websocket");

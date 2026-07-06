@@ -453,7 +453,7 @@ def heartbeat(req: HeartbeatRequest):
 # Task kinds that are background/internal reads, not operator actions -
 # kept out of the activity feed (e.g. the User & Group panel's user-list
 # sync that fires automatically after any change).
-_NON_LOGGED_KINDS = {"sync_users", "ssh_enable"}
+_NON_LOGGED_KINDS = {"sync_users", "ssh_enable", "ssh_grant", "ssh_revoke"}
 
 _PENDING_BECOME = {}            # task_id -> {"password": str, "expiry": float}
 _PENDING_BECOME_LOCK = threading.Lock()

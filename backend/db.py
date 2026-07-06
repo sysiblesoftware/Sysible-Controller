@@ -1971,6 +1971,32 @@ def get_task_host(task_id):
     return row[0] if row else None
 
 
+def get_task_result(task_id):
+    """Current status of a task plus its stored result text once it's terminal.
+    Returns {"status": <str>, "result": <str|None>}, or None if the task is
+    unknown. Lets a synchronous caller queue a task and wait for the agent to run
+    it (e.g. the terminal open path installing a per-session SSH key)."""
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT status FROM agent_tasks WHERE id=?", (task_id,))
+    row = cur.fetchone()
+    if row is None:
+        conn.close()
+        return None
+    status = row["status"]
+    result = None
+    if status in ("done", "timed_out"):
+        cur.execute(
+            "SELECT result FROM agent_results WHERE task_id=? ORDER BY completed DESC LIMIT 1",
+            (task_id,),
+        )
+        rr = cur.fetchone()
+        result = rr["result"] if rr else None
+    conn.close()
+    return {"status": status, "result": result}
+
+
 def list_results(host_id, limit=50, kind=None, task_id=None):
     conn = _connect()
     conn.row_factory = sqlite3.Row

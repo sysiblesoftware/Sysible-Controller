@@ -134,6 +134,8 @@ def _close_session(session):
         session["client"].close()
     except Exception:
         pass
+    # Revoke this session's per-session key on the host (agent hosts only).
+    _queue_ephemeral_revoke(session.get("revoke"))
 
 
 def _reaper_loop():
@@ -823,16 +825,132 @@ def _resolve_admin_username(request: Request):
     return admin["username"] if admin else None
 
 
+# =========================================================
+# EPHEMERAL, PER-SESSION SSH ACCESS (agent-provisioned terminals)
+#
+# For an AGENT host we don't rely on a standing controller key in the host's
+# authorized_keys. Instead, each terminal open asks the agent (already root,
+# already authenticated over its task channel) to install a throwaway key just
+# for this session, we connect with it, and we ask the agent to revoke it when
+# the session closes. This makes the terminal work as long as the agent is
+# online — no dependency on a persistent SSH enrollment — and leaves no standing
+# root credential on the host. A crash-safe backstop: each key line carries an
+# expiry in its comment, and every grant prunes ephemeral lines whose expiry has
+# passed, so a controller that dies mid-session can't leave a usable key behind.
+# =========================================================
+_EPHEMERAL_LINE_TTL = 6 * 3600     # seconds before an unrevoked key line is pruned
+_EPHEMERAL_GRANT_TIMEOUT = 15.0    # seconds to wait for the agent to install the key
+
+
+def _resolve_agent_target(name: str):
+    """If `name` is an enrolled agent host (matched by host_id, else hostname),
+    return (host_id, ip, hostname); else None. Agent hosts get just-in-time
+    terminal access through the agent rather than a standing SSH key."""
+    try:
+        from backend.db import list_agents
+        agents = list_agents()
+    except Exception:
+        return None
+    by_name = None
+    for a in agents:
+        if a.get("host_id") == name and a.get("ip"):
+            return a.get("host_id"), a.get("ip"), a.get("hostname")
+        if by_name is None and a.get("hostname") == name and a.get("ip"):
+            by_name = (a.get("host_id"), a.get("ip"), a.get("hostname"))
+    return by_name
+
+
+def _generate_ephemeral_keypair():
+    """Throwaway ed25519 keypair (the controller's own key type, which hosts
+    already accept). Returns (paramiko_pkey, pub_body) where pub_body is
+    'ssh-ed25519 AAAA…' with no comment. The private key is written to a 0700
+    temp dir only long enough for paramiko to load it, then removed — it never
+    persists and lives only in the session's memory afterwards."""
+    import paramiko
+    import tempfile
+    import shutil
+    d = tempfile.mkdtemp(prefix="sysible-eph-")
+    try:
+        os.chmod(d, 0o700)
+        kp = os.path.join(d, "k")
+        subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", kp],
+                       check=True, timeout=30, capture_output=True)
+        pkey = paramiko.Ed25519Key.from_private_key_file(kp)
+        with open(kp + ".pub") as f:
+            parts = f.read().split()
+        return pkey, parts[0] + " " + parts[1]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def _ephemeral_grant_command(pub_line: str) -> str:
+    """Root sh one-liner: prune expired sysible-ephemeral entries (comment ends
+    in -<expiry-epoch>), then append this session's key. Self-cleaning, so a
+    controller that died mid-session leaves nothing usable once its key expires."""
+    q = shlex.quote(pub_line)
+    awk = ("awk -v now=\"$now\" '/sysible-ephemeral-/"
+           "{n=split($NF,a,\"-\");e=a[n];if(e ~ /^[0-9]+$/ && e+0<now)next}{print}'")
+    return "\n".join([
+        'D=/root/.ssh; K="$D/authorized_keys"',
+        'mkdir -p "$D"; chmod 700 "$D"; touch "$K"; chmod 600 "$K"',
+        'now=$(date +%s)',
+        'tmp=$(mktemp "$D/.ak.XXXXXX") || exit 1',
+        f'{awk} "$K" > "$tmp"',
+        'mv "$tmp" "$K"; chmod 600 "$K"',
+        f'printf "%s\\n" {q} >> "$K"',
+        'echo SYSIBLE_GRANT_OK',
+    ])
+
+
+def _ephemeral_revoke_command(tag: str) -> str:
+    """Root sh one-liner: delete this session's key line (tag is hex-only, safe
+    in a sed address)."""
+    return f'K=/root/.ssh/authorized_keys; [ -f "$K" ] && sed -i "/{tag}/d" "$K"; echo SYSIBLE_REVOKE_OK'
+
+
+def _run_agent_task_sync(host_id, command, kind, timeout):
+    """Queue a root command on the agent and block (bounded) until it reports
+    back. Returns {"status", "stdout", "stderr"}; status is 'done' on success,
+    'timeout' if the agent didn't answer in time (offline / slow poll)."""
+    from backend.db import queue_task, get_task_result
+    tid = queue_task(host_id, command, kind=kind)   # run_as=None -> runs as the root agent
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        r = get_task_result(tid)
+        if r and r.get("status") in ("done", "timed_out"):
+            stdout = stderr = ""
+            raw = r.get("result")
+            if raw:
+                try:
+                    d = json.loads(raw)
+                    if isinstance(d, dict):
+                        stdout = d.get("stdout") or ""
+                        stderr = d.get("stderr") or ""
+                    else:
+                        stdout = str(raw)
+                except (ValueError, TypeError):
+                    stdout = raw
+            return {"status": r["status"], "stdout": stdout, "stderr": stderr}
+        time.sleep(0.25)
+    return {"status": "timeout", "stdout": "", "stderr": ""}
+
+
+def _queue_ephemeral_revoke(revoke):
+    """Best-effort: queue the revoke of a session's ephemeral key. If the agent
+    is offline the task waits; the key's embedded expiry is the backstop."""
+    if not revoke:
+        return
+    try:
+        from backend.db import queue_task
+        queue_task(revoke["host_id"], _ephemeral_revoke_command(revoke["tag"]), kind="ssh_revoke")
+    except Exception:
+        pass
+
+
 @router.post("/hosts/{name}/terminal/open")
 def open_terminal(name: str, request: Request):
-    hosts = load_hosts()
-
-    if name not in hosts:
-        raise HTTPException(status_code=404, detail="host not found")
-
-    # Each open mints a brand-new, independent session - never reuse an
-    # existing one - so a host can have several shells open at once.
-    # Opportunistically reap sessions abandoned by a dead GUI first.
+    # Each open mints a brand-new, independent session so a host can have
+    # several shells at once; reap sessions abandoned by a dead GUI first.
     _reap_idle_sessions()
 
     try:
@@ -843,9 +961,49 @@ def open_terminal(name: str, request: Request):
             detail="paramiko is not installed - interactive terminal is unavailable"
         )
 
-    host = hosts[name]
-    key_path = host.get("key_path") or str(CONTROLLER_KEY_PATH)
-    ssh_user = host.get("user", "root")
+    session_id = uuid.uuid4().hex
+    revoke = None
+    connect_kwargs = {}
+
+    # Prefer the agent path: an enrolled agent host gets a throwaway, per-session
+    # key installed through its agent right now (no standing SSH enrollment
+    # needed), so the terminal works whenever the agent is online and leaves no
+    # persistent root credential behind.
+    agent_target = _resolve_agent_target(name)
+    if agent_target:
+        host_id, ip, hostname = agent_target
+        who = hostname or host_id
+        ssh_user = "root"
+        tag = f"sysible-ephemeral-{session_id}"
+        expiry = int(time.time()) + _EPHEMERAL_LINE_TTL
+        try:
+            pkey, pub_body = _generate_ephemeral_keypair()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"could not generate a session key: {e}")
+        pub_line = (f"no-port-forwarding,no-agent-forwarding,no-X11-forwarding "
+                    f"{pub_body} {tag}-{expiry}")
+        res = _run_agent_task_sync(host_id, _ephemeral_grant_command(pub_line),
+                                   "ssh_grant", _EPHEMERAL_GRANT_TIMEOUT)
+        if res["status"] == "timeout":
+            raise HTTPException(status_code=504, detail=(
+                f"The agent on '{who}' didn't confirm terminal access in time — "
+                f"is it online and checking in?"))
+        if res["status"] != "done" or "SYSIBLE_GRANT_OK" not in (res["stdout"] or ""):
+            detail = (res["stderr"] or res["stdout"] or "").strip()
+            raise HTTPException(status_code=502, detail=(
+                f"Could not provision terminal access through the agent on '{who}'"
+                + (f": {detail}" if detail else "")))
+        connect_kwargs = {"pkey": pkey}
+        revoke = {"host_id": host_id, "tag": tag}
+    else:
+        # Non-agent (pure SSH / Connect) host: the standing controller-key path.
+        hosts = load_hosts()
+        if name not in hosts:
+            raise HTTPException(status_code=404, detail="host not found")
+        host = hosts[name]
+        ip = host["ip"]
+        ssh_user = host.get("user", "root")
+        connect_kwargs = {"key_filename": host.get("key_path") or str(CONTROLLER_KEY_PATH)}
 
     # Run the terminal as the controller admin (their token identifies them),
     # so it behaves like dispatched commands: as <admin> on the host, with
@@ -859,12 +1017,7 @@ def open_terminal(name: str, request: Request):
     client = _new_ssh_client()
 
     try:
-        client.connect(
-            host["ip"],
-            username=ssh_user,
-            key_filename=key_path,
-            timeout=10,
-        )
+        client.connect(ip, username=ssh_user, timeout=10, **connect_kwargs)
         if become:
             # Start the session as the admin user via an interactive PTY exec
             # rather than the SSH user's default shell.
@@ -876,23 +1029,26 @@ def open_terminal(name: str, request: Request):
         channel.settimeout(0.0)  # non-blocking - /terminal/read polls instead of blocking
     except paramiko.BadHostKeyException as e:
         client.close()
+        _queue_ephemeral_revoke(revoke)
         raise HTTPException(
             status_code=409,
-            detail=(f"Host key for {host['ip']} does not match the key pinned on first "
+            detail=(f"Host key for {ip} does not match the key pinned on first "
                     f"contact - possible man-in-the-middle, or the host was rebuilt. "
                     f"If you trust the change, remove its entry from {KNOWN_HOSTS_PATH} "
                     f"and reconnect. ({e})"))
     except paramiko.AuthenticationException:
         client.close()
+        _queue_ephemeral_revoke(revoke)
         raise HTTPException(status_code=401, detail="SSH authentication failed")
     except OSError as e:
         client.close()
+        _queue_ephemeral_revoke(revoke)
         raise HTTPException(status_code=400, detail=f"Could not reach host: {e}")
     except paramiko.SSHException as e:
         client.close()
+        _queue_ephemeral_revoke(revoke)
         raise HTTPException(status_code=400, detail=f"SSH error: {e}")
 
-    session_id = uuid.uuid4().hex
     with _TERMINAL_SESSIONS_LOCK:
         _TERMINAL_SESSIONS[session_id] = {
             "client": client,
@@ -900,6 +1056,7 @@ def open_terminal(name: str, request: Request):
             "lock": threading.Lock(),
             "name": name,
             "last_activity": time.time(),
+            "revoke": revoke,
         }
 
     return {"host": name, "session_id": session_id, "opened": True}

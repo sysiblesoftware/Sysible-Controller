@@ -982,9 +982,10 @@ def _start_pty_session(state, task):
     sid = cfg.get("session_id")
     if not sid:
         return
+    user = cfg.get("user") or None
     cols = int(cfg.get("cols") or 80)
     rows = int(cfg.get("rows") or 24)
-    threading.Thread(target=_pty_bridge, args=(state, sid, cols, rows),
+    threading.Thread(target=_pty_bridge, args=(state, sid, user, cols, rows),
                      name="sysible-pty", daemon=True).start()
 
 
@@ -1025,34 +1026,83 @@ def _pty_poll_io(state, sid):
         return [], False
 
 
-def _pty_bridge(state, sid, cols, rows):
+def _pty_child_exec(user, info, default_shell):
+    """In the pty.fork() child (which already has the slave as its controlling
+    terminal): drop to the operator's user if we resolved one and we're root,
+    set up their login environment, then exec an interactive shell. `info` is a
+    pre-resolved (uid, gid, home, shell) tuple — resolved in the PARENT so no
+    NSS lookup runs in the forked child."""
+    env = dict(os.environ)
+    env["TERM"] = "xterm"
+    sh = default_shell
+    if info and os.geteuid() == 0 and info[0] != 0:
+        uid, gid, home, ushell = info
+        try:
+            os.setgid(gid)
+            try:
+                os.initgroups(user, gid)   # supplementary groups (needs root)
+            except Exception:
+                pass
+            os.setuid(uid)                 # drop privileges LAST
+        except Exception:
+            pass
+        home = home if (home and os.path.isdir(home)) else "/tmp"
+        env["HOME"] = home
+        env["USER"] = user
+        env["LOGNAME"] = user
+        env["PWD"] = home
+        try:
+            os.chdir(home)
+        except Exception:
+            try:
+                os.chdir("/tmp")
+            except Exception:
+                pass
+        if ushell:
+            sh = ushell
+    if not sh or not os.path.exists(sh):
+        sh = "/bin/bash" if os.path.exists("/bin/bash") else "/bin/sh"
+    # argv[0] with a leading '-' makes it a login shell (sources profile);
+    # the controlling tty (from pty.fork) makes it interactive with job control.
+    argv0 = "-" + os.path.basename(sh)
+    try:
+        os.execve(sh, [argv0], env)
+    except Exception:
+        try:
+            os.execve("/bin/sh", ["-sh"], env)
+        except Exception:
+            pass
+    os._exit(1)
+
+
+def _pty_bridge(state, sid, user, cols, rows):
     import pty as _pty
     import select as _select
+    import signal as _signal
     shell = os.environ.get("SHELL") or "/bin/bash"
     if not os.path.exists(shell):
         shell = "/bin/sh"
+
+    # Resolve the operator's account in the PARENT (before fork) so the child
+    # does no NSS lookup. None => run as the agent (root).
+    info = None
+    if user:
+        try:
+            import pwd
+            pw = pwd.getpwnam(user)
+            info = (pw.pw_uid, pw.pw_gid, pw.pw_dir, pw.pw_shell)
+        except Exception:
+            info = None
+
     try:
-        master, slave = _pty.openpty()
+        pid, master = _pty.fork()   # child gets the slave as its controlling tty
     except Exception as e:
         _pty_post_output(state, sid, f"[sysible] could not allocate a terminal: {e}\r\n", ended=True)
         return
-    env = dict(os.environ)
-    env["TERM"] = "xterm"
-    try:
-        proc = subprocess.Popen([shell, "-i"], stdin=slave, stdout=slave, stderr=slave,
-                                start_new_session=True, env=env, close_fds=True)
-    except Exception as e:
-        for fd in (master, slave):
-            try:
-                os.close(fd)
-            except Exception:
-                pass
-        _pty_post_output(state, sid, f"[sysible] could not start a shell: {e}\r\n", ended=True)
-        return
-    try:
-        os.close(slave)
-    except Exception:
-        pass
+    if pid == 0:
+        _pty_child_exec(user, info, shell)   # never returns
+        os._exit(1)
+
     _pty_set_winsize(master, cols, rows)
     stop = {"v": False}
 
@@ -1066,19 +1116,28 @@ def _pty_bridge(state, sid, cols, rows):
                 try:
                     data = os.read(master, 65536)
                 except OSError:
-                    break
+                    break            # shell exited / tty closed
                 if not data:
                     break
                 if _pty_post_output(state, sid, data.decode(errors="replace")):
                     stop["v"] = True
                     break
         stop["v"] = True
+        _pty_post_output(state, sid, "", ended=True)   # tell the browser it ended
 
     ot = threading.Thread(target=out_loop, name="sysible-pty-out", daemon=True)
     ot.start()
 
     # Input loop: long-poll the controller for keystrokes / resize / close.
-    while not stop["v"] and proc.poll() is None:
+    while not stop["v"]:
+        try:
+            wpid, _ = os.waitpid(pid, os.WNOHANG)
+            if wpid == pid:
+                break
+        except ChildProcessError:
+            break
+        except Exception:
+            pass
         msgs, closed = _pty_poll_io(state, sid)
         if closed:
             break
@@ -1095,13 +1154,13 @@ def _pty_bridge(state, sid, cols, rows):
 
     stop["v"] = True
     try:
-        proc.terminate()
-        proc.wait(timeout=3)
+        os.kill(pid, _signal.SIGKILL)
     except Exception:
-        try:
-            proc.kill()
-        except Exception:
-            pass
+        pass
+    try:
+        os.waitpid(pid, 0)
+    except Exception:
+        pass
     try:
         os.close(master)
     except Exception:

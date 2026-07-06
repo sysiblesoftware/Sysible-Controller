@@ -33,7 +33,7 @@ export default function Connect() {
   // session cookie. A per-host window name means re-opening the same host focuses
   // its existing window instead of spawning duplicates.
   function openTerm(h) {
-    window.open(
+    return window.open(
       `/?term=${encodeURIComponent(h.id)}&label=${encodeURIComponent(h.label)}`,
       `sysible_term_${h.id}`, "width=960,height=640");
   }
@@ -41,11 +41,21 @@ export default function Connect() {
   // Open a terminal window for every CHECKED host (or the selected one if none
   // are checked) — no need to single-select first. Each host gets its own
   // window; a per-host window name means re-opening focuses the existing one.
+  // Browsers block all but the first pop-up from a single click by default, so
+  // detect that and tell the operator how to allow it.
   function openChecked() {
     const ids = checked.length ? checked : (sel ? [sel.id] : []);
     if (!ids.length) { setErr("Check one or more hosts (or select one) to open a terminal."); return; }
     const byId = Object.fromEntries(hosts.map((h) => [h.id, h]));
-    ids.forEach((id) => { const h = byId[id]; if (h) openTerm(h); });
+    let blocked = 0;
+    ids.forEach((id) => { const h = byId[id]; if (h && !openTerm(h)) blocked++; });
+    if (blocked > 0) {
+      setErr(`Your browser blocked ${blocked} of ${ids.length} terminal window(s). Allow pop-ups for this ` +
+        `site to open several at once (in Firefox, click “Preferences/Options” on the blocked-popup bar → ` +
+        `Allow), then click Open Terminal again.`);
+    } else {
+      setErr("");
+    }
   }
 
   const [checkinAt, setCheckinAt] = useState(0);

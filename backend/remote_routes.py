@@ -1096,8 +1096,11 @@ def open_terminal(name: str, request: Request):
         host_id = _resolve_agent_target(name)[0]
         from backend.db import queue_task
         session_id = pty_create(host_id)
-        queue_task(host_id, json.dumps({"session_id": session_id, "cols": 80, "rows": 24}),
-                   kind="pty_open")
+        # Run the shell as the operator (their token identifies them), not root;
+        # the agent falls back to a root shell only if that user doesn't exist.
+        who = _resolve_admin_username(request) or ""
+        queue_task(host_id, json.dumps({"session_id": session_id, "user": who,
+                                        "cols": 80, "rows": 24}), kind="pty_open")
         return {"host": name, "session_id": session_id, "opened": True, "via": "agent"}
 
     # Non-agent (pure SSH / Connect) host: the standing controller-key SSH path.

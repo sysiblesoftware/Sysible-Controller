@@ -1059,11 +1059,23 @@ def _scheduler_loop():
     while True:
         try:
             for job in schedules.due_jobs():
+                # Advance + persist next_run BEFORE running. If the advance can't
+                # be recorded, skip the run — otherwise a persistent save failure
+                # leaves next_run in the past and the job re-fires every 30s
+                # (a fleet-wide dispatch storm).
+                try:
+                    if not schedules.advance_next_run(job["id"]):
+                        continue
+                except Exception:
+                    continue
                 try:
                     st, detail = _run_scheduled_job(job)
                 except Exception as e:  # never let one job kill the loop
                     st, detail = "error", str(e)
-                schedules.record_run(job["id"], st, detail)
+                try:
+                    schedules.record_run(job["id"], st, detail)
+                except Exception:
+                    pass
         except Exception:
             pass
         _t.sleep(30)
@@ -2122,8 +2134,11 @@ def packages_list(body: PkgListRequest, request: Request, user: str = Depends(re
 async def packages_install_local(request: Request, file: UploadFile = File(...),
                                  targets: str = Form(""), user: str = Depends(require_operator)):
     import json as _json
-    tids = _json.loads(targets) if targets else []
-    if not tids:
+    try:
+        tids = _json.loads(targets) if targets else []
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Malformed target list.")
+    if not isinstance(tids, list) or not tids:
         raise HTTPException(status_code=400, detail="No target hosts selected.")
     tmp = Path(tempfile.mkdtemp(prefix="sysible-pkg-"))
     fname = _safe_upload_name(file.filename, "package.bin")

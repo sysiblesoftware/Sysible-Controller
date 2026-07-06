@@ -22,6 +22,7 @@ ip, user) is persisted to hosts.json.
 import io
 import json
 import os
+import tempfile
 import posixpath
 import re
 import select
@@ -135,22 +136,60 @@ def _close_session(session):
         pass
 
 
+def _reaper_loop():
+    import time as _t
+    while True:
+        _t.sleep(60)
+        try:
+            _reap_idle_sessions()
+        except Exception:
+            pass
+
+
+# Reap idle terminal sessions on a TIMER, not only when a new terminal opens.
+# Otherwise a browser that dies abruptly (and whose cleanup RPC is lost) leaves
+# an orphaned paramiko client + channel + transport thread alive for the whole
+# process lifetime if no further terminal is ever opened. daemon=True so it
+# never blocks shutdown; started once at import.
+_REAPER_THREAD = threading.Thread(target=_reaper_loop, name="sysible-term-reaper", daemon=True)
+_REAPER_THREAD.start()
+
+
 # =========================================================
 # PERSISTENT STORAGE
 # =========================================================
 def load_hosts():
     if HOST_FILE.exists():
         try:
-            return json.loads(HOST_FILE.read_text())
+            data = json.loads(HOST_FILE.read_text())
+            return data if isinstance(data, dict) else {}
         except (json.JSONDecodeError, OSError):
             return {}
     return {}
 
 
 def save_hosts(hosts):
+    """Atomic write (temp file + os.replace) so a crash / disk-full / concurrent
+    writer can't truncate hosts.json into invalid JSON — which load_hosts would
+    then read as {}, making the entire SSH-host inventory silently disappear.
+    (A residual lost-update race remains between concurrent load->mutate->save
+    mutators; it self-heals as the agent re-reports SSH state / the operator
+    re-runs, whereas the truncation this fixes was permanent.)"""
     HOST_FILE.parent.mkdir(parents=True, exist_ok=True)
-    HOST_FILE.write_text(json.dumps(hosts, indent=2))
-    os.chmod(HOST_FILE, 0o600)
+    fd, tmp = tempfile.mkstemp(dir=str(HOST_FILE.parent), prefix=".hosts-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(hosts, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, HOST_FILE)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # =========================================================
@@ -175,7 +214,8 @@ def _ensure_controller_key() -> str:
     proc = subprocess.run(
         ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(CONTROLLER_KEY_PATH)],
         capture_output=True,
-        text=True
+        text=True,
+        timeout=30,  # never let a stuck ssh-keygen (e.g. blocked entropy) hang the worker
     )
 
     if proc.returncode != 0:
@@ -423,7 +463,8 @@ def sync_agent_ssh_environment(name: str = None, ip: str = None, environment: st
 def _load_agent_ssh_state():
     if _AGENT_SSH_STATE_FILE.exists():
         try:
-            return json.loads(_AGENT_SSH_STATE_FILE.read_text())
+            data = json.loads(_AGENT_SSH_STATE_FILE.read_text())
+            return data if isinstance(data, dict) else {}
         except (json.JSONDecodeError, OSError):
             return {}
     return {}
@@ -431,11 +472,20 @@ def _load_agent_ssh_state():
 
 def _save_agent_ssh_state(state):
     _AGENT_SSH_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _AGENT_SSH_STATE_FILE.write_text(json.dumps(state, indent=2))
+    fd, tmp = tempfile.mkstemp(dir=str(_AGENT_SSH_STATE_FILE.parent), prefix=".sshstate-", suffix=".json")
     try:
-        os.chmod(_AGENT_SSH_STATE_FILE, 0o600)
-    except OSError:
-        pass
+        with os.fdopen(fd, "w") as f:
+            json.dump(state, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, _AGENT_SSH_STATE_FILE)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def get_agent_ssh_state(host_id: str):
@@ -574,7 +624,7 @@ def enroll_ssh(body: EnrollSSHRequest):
         exit_status = stdout.channel.recv_exit_status()
 
         if exit_status != 0:
-            raise HTTPException(status_code=400, detail=stderr.read().decode())
+            raise HTTPException(status_code=400, detail=stderr.read().decode(errors="replace"))
 
     except paramiko.BadHostKeyException as e:
         # This IP is already pinned in known_hosts with a DIFFERENT key than the
@@ -683,8 +733,13 @@ def exec_remote(name: str, body: ExecRequest, request: Request):
     _ensure_known_hosts_file()
 
     def _run(remote_cmd, stdin=None):
+        # errors="replace": an SSH host can emit non-UTF-8 bytes (a binary/log
+        # cat, a locale-encoded message). Strict decoding (the text=True default)
+        # would raise UnicodeDecodeError and 500 the whole dispatch; replace keeps
+        # it a normal result. Matches the other decode sites in this module.
         return subprocess.run(_ssh_argv(key_path, target, remote_cmd),
-                              capture_output=True, text=True, input=stdin, timeout=60)
+                              capture_output=True, text=True, errors="replace",
+                              input=stdin, timeout=60)
 
     try:
         if admin:

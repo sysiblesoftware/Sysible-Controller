@@ -748,17 +748,21 @@ def post_task_result(host_id: str, body: TaskResultRequest):
     if owner is None or owner != body.host_id:
         raise HTTPException(status_code=404, detail="Unknown task for this host")
 
-    submit_task_result(body.task_id, body.host_id, body.result)
+    applied = submit_task_result(body.task_id, body.host_id, body.result)
 
+    # Only act on the FIRST valid result for a dispatched task. A duplicate /
+    # retried result (task already 'done') or a result for a never-dispatched
+    # task is ignored, so side effects like the SSH-enable registration below
+    # can't run twice.
     # The controller's own SSH-terminal auto-enroll command reports back
     # through this same path - intercept its result to register the SSH
     # connection (or record sshd_missing) rather than showing it to the
     # operator as an ordinary command result.
-    if get_task_kind(body.task_id) == "ssh_enable":
+    if applied and get_task_kind(body.task_id) == "ssh_enable":
         _consume_ssh_enable_result(body.host_id, body.result)
 
     return {
-        "status": "recorded"
+        "status": "recorded" if applied else "ignored"
     }
 
 

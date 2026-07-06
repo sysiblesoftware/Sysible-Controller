@@ -1875,22 +1875,30 @@ def fetch_pending_tasks(host_id):
 
 
 def submit_task_result(task_id, host_id, result):
+    """Record a result and mark the task done — but ONLY if it is currently
+    'dispatched'. Returns True if it applied, False otherwise. Guarding on the
+    status makes result submission idempotent: a duplicate/retried result for an
+    already-'done' task is a no-op (no second agent_results row, no re-run of
+    side effects like ssh_enable), and an agent cannot mark its own still-
+    'pending' task done without it ever being delivered/run."""
     conn = _connect()
     cur = conn.cursor()
 
-    cur.execute("""
-    INSERT INTO agent_results (task_id, host_id, result, completed)
-    VALUES (?, ?, ?, ?)
-    """,
-    (task_id, host_id, result, time.time()))
-
     cur.execute(
-        "UPDATE agent_tasks SET status='done' WHERE id=?",
-        (task_id,)
+        "UPDATE agent_tasks SET status='done' WHERE id=? AND status='dispatched'",
+        (task_id,),
     )
+    applied = cur.rowcount == 1
+    if applied:
+        cur.execute("""
+        INSERT INTO agent_results (task_id, host_id, result, completed)
+        VALUES (?, ?, ?, ?)
+        """,
+        (task_id, host_id, result, time.time()))
 
     conn.commit()
     conn.close()
+    return applied
 
 
 def get_task_kind(task_id):

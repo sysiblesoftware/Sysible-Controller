@@ -1758,13 +1758,28 @@ def _as_admin(request: Request, fn):
 
 
 def _wrap(fn):
-    """Run a controller call, turning any non-HTTP error into a 502 so a
-    controller hiccup surfaces cleanly instead of as an opaque 500."""
+    """Run a controller call and surface the outcome with the RIGHT status code.
+
+    The client raises requests.HTTPError with the response attached, so when the
+    controller itself answered (403 not-a-superuser, 400 bad input, 404 not
+    found, ...) propagate THAT status/detail. Only a genuine transport failure —
+    unreachable/timeout, which has no response — becomes a 502. Previously every
+    controller error collapsed to 502, so a permission denial read to the
+    operator as 'controller unreachable / Bad Gateway'."""
     try:
         return fn()
     except HTTPException:
         raise
     except Exception as e:
+        resp = getattr(e, "response", None)
+        code = getattr(resp, "status_code", None)
+        if isinstance(code, int) and 400 <= code < 600:
+            detail = None
+            try:
+                detail = resp.json().get("detail")
+            except Exception:
+                pass
+            raise HTTPException(status_code=code, detail=detail or str(e))
         raise HTTPException(status_code=502, detail=str(e))
 
 

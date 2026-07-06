@@ -31,8 +31,9 @@ export default function HostSoftwarePage({ hosts = [], onRefreshHosts }) {
     finally { setBusy(""); }
   }
 
-  async function run(action, params, label) {
+  async function run(action, params, label, confirmMsg) {
     if (targets.length === 0) { setErr("Check one or more hosts first."); return; }
+    if (confirmMsg && !window.confirm(`${confirmMsg} on ${targets.length} host${targets.length === 1 ? "" : "s"}?`)) return;
     setBusy(action); setErr("");
     try { const r = await api.runTool(action, targets, params); setResults((p) => [{ label, ...r, at: Date.now() }, ...p]); }
     catch (e) { setErr(e.message); }
@@ -91,7 +92,7 @@ export default function HostSoftwarePage({ hosts = [], onRefreshHosts }) {
           <div className="group-buttons">
             <button className="btn sm" disabled={busy || !name} onClick={() => run("pkg_install", { names: name }, `Install ${name}`)}>Install</button>
             <button className="btn sm" disabled={busy} onClick={() => run("pkg_update", { names: name }, name ? `Update ${name}` : "Update / upgrade all")}>Update / Upgrade</button>
-            <button className="btn sm danger" disabled={busy || !name} onClick={() => run("pkg_remove", { names: name }, `Remove ${name}`)}>Remove</button>
+            <button className="btn sm danger" disabled={busy || !name} onClick={() => run("pkg_remove", { names: name }, `Remove ${name}`, `Remove the package "${name}"`)}>Remove</button>
           </div>
           <div className="row" style={{ marginTop: 10 }}>
             <label className="btn sm" style={{ cursor: targets.length ? "pointer" : "not-allowed", opacity: targets.length ? 1 : 0.5 }}>

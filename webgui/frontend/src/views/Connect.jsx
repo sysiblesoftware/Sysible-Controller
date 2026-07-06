@@ -310,7 +310,7 @@ function FleetActions({ hosts, checked, onErr }) {
       </label>
       <div className="row" style={{ marginTop: 8, flexWrap: "wrap" }}>
         <button className="btn sm" disabled={running || !script.trim()}
-                onClick={() => act("script", null, script)}>
+                onClick={() => act("script", "Run this script as root on", script)}>
           {running === "script" ? <span className="spin" /> : "Run Script on All Hosts"}
         </button>
         <button className="btn sm" disabled={running}

@@ -55,7 +55,8 @@ export default function ResultsPane({ results, setResults, expanded, onToggleExp
                    onClick={() => setActive(i)} title={new Date(res.at).toLocaleTimeString()}>
                 <span className={"dot " + (allOk(res) ? "ok" : "bad")} />
                 <span className="rt-label">{res.label}</span>
-                <span className="x" onClick={(e) => { e.stopPropagation(); closeTab(i); }}>✕</span>
+                <button type="button" className="x" aria-label={`Close result ${res.label}`}
+                        onClick={(e) => { e.stopPropagation(); closeTab(i); }}>✕</button>
               </div>
             ))}
           </div>

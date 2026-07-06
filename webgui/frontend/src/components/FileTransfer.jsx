@@ -121,12 +121,19 @@ function RemoteBrowse({ host, mode, onPick, onClose, onErr }) {
     finally { setBusy(false); }
   }
   useEffect(() => { list("."); /* eslint-disable-next-line */ }, []);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   const join = (name) => (dir.endsWith("/") ? dir + name : dir + "/" + name);
 
   return (
     <div className="modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal" style={{ maxWidth: 560, textAlign: "left" }}>
+      <div className="modal" role="dialog" aria-modal="true"
+           aria-label={mode === "upload" ? "Choose destination folder" : "Choose file to download"}
+           style={{ maxWidth: 560, textAlign: "left" }}>
         <h3 style={{ textAlign: "left", marginBottom: 4 }}>{mode === "upload" ? "Choose destination folder" : "Choose file to download"}</h3>
         <div className="faint mono" style={{ fontSize: 12, marginBottom: 8, wordBreak: "break-all" }}>{host.label}:{dir}</div>
         {err && <div className="error-box">{err}</div>}

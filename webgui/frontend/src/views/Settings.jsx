@@ -129,7 +129,7 @@ function Admins() {
                   <button className="btn ghost sm" style={{ marginRight: 6 }}
                           onClick={() => { setMsg(""); setErr(""); setModal({ mode: "reset", username: a.username }); }}>
                     Reset password…</button>
-                  <button className="btn ghost sm" onClick={() => remove(a.username)}>Remove</button>
+                  <button className="btn ghost sm danger" onClick={() => remove(a.username)}>Remove</button>
                 </td>
               </tr>
             ))}

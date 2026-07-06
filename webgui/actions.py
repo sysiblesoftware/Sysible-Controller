@@ -39,6 +39,10 @@ class Param:
     required: bool = True
     options: list = field(default_factory=list)   # for type == "select"
     help: str = ""
+    # Greyed-out example shown in an empty field (HTML placeholder). Always an
+    # EXAMPLE of what to type, e.g. "e.g. nginx" — never a value that gets
+    # submitted. The frontend falls back to `help` when this is empty.
+    placeholder: str = ""
 
 
 @dataclass
@@ -1049,24 +1053,45 @@ _register(Action(name="sec_sshd_get", tool="Security Administration", label="Get
     build=lambda p: api.cmd_sshd_get_effective_config(_s(p, "key"))))
 _register(Action(name="sec_sshd_reload", tool="Security Administration", label="Reload sshd",
     params=[], build=lambda p: api.cmd_sshd_reload()))
-_register(Action(name="sec_set_root_login", tool="Security Administration", label="Set root SSH login",
-    params=[Param("allow", "Allow root login", type="checkbox", default=False, required=False)],
+# SSH auth policy: each toggle edits one sshd_config directive, then reloads
+# sshd. Distinct param names (not a shared "enabled") so the three checkboxes
+# don't collapse into one in the grouped tool UI — each button reads its own box.
+_register(Action(name="sec_set_root_login", tool="Security Administration", label="Apply root login",
+    description="Set sshd's PermitRootLogin from the checkbox, then reload sshd. "
+                "Checked = root may log in over SSH; unchecked = root SSH login denied.",
+    params=[Param("allow", "Allow root login over SSH", type="checkbox", default=False, required=False,
+                  help="on = PermitRootLogin yes, off = no")],
     build=lambda p: api.cmd_set_root_login(_b(p, "allow"))))
-_register(Action(name="sec_set_pubkey_auth", tool="Security Administration", label="Set pubkey auth",
-    params=[Param("enabled", "Enabled", type="checkbox", default=True, required=False)],
-    build=lambda p: api.cmd_set_pubkey_auth(_b(p, "enabled", True))))
-_register(Action(name="sec_set_password_auth", tool="Security Administration", label="Set password auth",
-    params=[Param("enabled", "Enabled", type="checkbox", default=False, required=False)],
-    build=lambda p: api.cmd_set_password_auth(_b(p, "enabled"))))
+_register(Action(name="sec_set_pubkey_auth", tool="Security Administration", label="Apply public-key auth",
+    description="Set sshd's PubkeyAuthentication from the checkbox, then reload sshd. "
+                "Checked = allow key-based SSH login (recommended); unchecked = disable it.",
+    params=[Param("pubkey_enabled", "Enable public-key auth", type="checkbox", default=True, required=False,
+                  help="on = PubkeyAuthentication yes")],
+    build=lambda p: api.cmd_set_pubkey_auth(_b(p, "pubkey_enabled", True))))
+_register(Action(name="sec_set_password_auth", tool="Security Administration", label="Apply password auth",
+    description="Set sshd's PasswordAuthentication from the checkbox, then reload sshd. "
+                "Checked = allow password SSH login; unchecked = keys only (more secure).",
+    params=[Param("password_enabled", "Enable password auth", type="checkbox", default=False, required=False,
+                  help="on = PasswordAuthentication yes")],
+    build=lambda p: api.cmd_set_password_auth(_b(p, "password_enabled"))))
 _register(Action(name="sec_list_authkeys", tool="Security Administration", label="List authorized keys",
-    params=[Param("user", "User")], build=lambda p: api.cmd_list_authorized_keys(_s(p, "user"))))
+    description="Show the keys in ~USER/.ssh/authorized_keys on the selected hosts.",
+    params=[Param("user", "User", help="account whose authorized_keys to read, e.g. alice")],
+    build=lambda p: api.cmd_list_authorized_keys(_s(p, "user"))))
 _register(Action(name="sec_install_authkey", tool="Security Administration", label="Install authorized key",
-    params=[Param("user", "User"), Param("public_key", "Public key")],
+    description="Append the public key to USER's ~/.ssh/authorized_keys (created if missing).",
+    params=[Param("user", "User", help="account to add the key to, e.g. alice"),
+            Param("public_key", "Public key", help="paste the full one-line key, e.g. ssh-ed25519 AAAA… user@host")],
     build=lambda p: api.cmd_install_authorized_key(_s(p, "user"), _s(p, "public_key"))))
 _register(Action(name="sec_remove_authkey", tool="Security Administration", label="Remove authorized key",
-    danger=True, params=[Param("user", "User"), Param("match_text", "Match text")],
+    description="Remove any line in USER's authorized_keys that contains the match text.",
+    danger=True, params=[Param("user", "User", help="account whose key to remove, e.g. alice"),
+                         Param("match_text", "Match text",
+                               help="substring of the key line to remove, e.g. user@host or a key comment")],
     build=lambda p: api.cmd_remove_authorized_key(_s(p, "user"), _s(p, "match_text"))))
 _register(Action(name="sec_rotate_hostkeys", tool="Security Administration", label="Rotate SSH host keys",
+    description="Regenerate this host's SSH host keys and restart sshd. Clients will see a "
+                "changed-host-key warning on their next connection.",
     danger=True, params=[], build=lambda p: api.cmd_rotate_host_keys()))
 _register(Action(name="sec_auditd_status", tool="Security Administration", label="auditd status",
     params=[], build=lambda p: api.cmd_auditd_status()))
@@ -1610,6 +1635,62 @@ def get(name: str):
     return _ACTIONS.get(name)
 
 
+# Example text shown greyed-out in an empty field when a Param sets no explicit
+# placeholder/help. Keyed by the param's LABEL so one table gives every tool's
+# fields a worked example ("what do I type here?") without annotating all ~200
+# params individually. Always an EXAMPLE, never a value that gets submitted. A
+# Param's own placeholder=/help= still wins over this.
+_EXAMPLE_PLACEHOLDERS = {
+    "Command": "e.g. uname -a && uptime",
+    "Service name": "e.g. sshd", "Service": "e.g. sshd",
+    "Username": "e.g. alice", "User": "e.g. alice",
+    "Search term": "e.g. nginx",
+    "Package name": "e.g. nginx", "Package name(s)": "e.g. nginx curl",
+    "Alias": "e.g. epel", "Alias / id": "e.g. epel",
+    "Repo URL / file": "e.g. https://example.com/repo.repo",
+    "Base URL": "e.g. https://repo.example.com/8/os",
+    "Display name": "e.g. Example Repo", "GPG key URL": "e.g. https://repo.example.com/RPM-GPG-KEY",
+    "Distribution (deb)": "e.g. jammy", "Components (deb)": "e.g. main",
+    "Comment": "e.g. nightly cleanup", "Full name / comment": "e.g. Alice Smith",
+    "Timer name": "e.g. nightly-backup",
+    "Interface": "e.g. eth0", "Parent interface": "e.g. eth0",
+    "Target": "e.g. 8.8.8.8 or example.com", "Host": "e.g. example.com", "Name": "e.g. example.com",
+    "DNS server": "e.g. 8.8.8.8", "DNS servers": "e.g. 8.8.8.8 1.1.1.1", "DNS": "e.g. 8.8.8.8",
+    "Connection": "e.g. eth0", "Gateway": "e.g. 192.168.1.1", "Via gateway": "e.g. 192.168.1.1",
+    "Destination CIDR": "e.g. 10.0.0.0/24",
+    "Device": "e.g. /dev/sda", "Device / partition": "e.g. /dev/sda1", "Partition #": "e.g. 1",
+    "Volume group": "e.g. vg0", "LV name": "e.g. data",
+    "Zone": "e.g. public", "Port": "e.g. 8080",
+    "Option": "e.g. net.ipv4.ip_forward", "Value": "e.g. 1",
+    "Common name": "e.g. host.example.com", "Organization": "e.g. Example Corp",
+    "Certificate path": "e.g. /etc/pki/tls/certs/host.crt",
+    "Container": "e.g. web",
+    "Domain": "e.g. corp.example.com", "Admin user": "e.g. Administrator",
+    "Computer OU": "e.g. OU=Servers,DC=corp,DC=example,DC=com",
+    "Source": "e.g. /tmp/file.txt", "Source path": "e.g. /var/www",
+    "Destination": "e.g. /opt/file.txt", "Destination dir": "e.g. /opt",
+    "Archive": "e.g. /tmp/backup.tar.gz", "Archive path": "e.g. /tmp/backup.tar.gz",
+    "Group": "e.g. developers", "Group name": "e.g. developers",
+    "PID": "e.g. 1234",
+    "ExecStart": "e.g. /usr/local/bin/app --flag", "ExecStart command": "e.g. /usr/local/bin/backup.sh",
+    "Working dir": "e.g. /opt/app", "Unit name": "e.g. myapp", "Description": "e.g. My application service",
+    "Hostname": "e.g. web01",
+    "Bond name": "e.g. bond0", "Team name": "e.g. team0", "Bridge name": "e.g. br0",
+    "VLAN ID": "e.g. 100", "VLAN name": "e.g. eth0.100",
+    "Export path": "e.g. /exports/data", "Share": "e.g. shared",
+    "Query": "e.g. type=USER_LOGIN", "Module name": "e.g. mypolicy",
+    "Path regex": "e.g. /srv/web(/.*)?", "Type": "e.g. httpd_sys_content_t",
+    "Public key": "e.g. ssh-ed25519 AAAA… user@host",
+    "Activation key": "e.g. rhel-prod-key", "Email": "e.g. admin@example.com",
+}
+
+
+def _placeholder_for(pr):
+    """Effective example placeholder for a param: its own placeholder wins, then
+    its help, then a label-based example from the table above."""
+    return pr.placeholder or pr.help or _EXAMPLE_PLACEHOLDERS.get(pr.label, "")
+
+
 def catalog():
     """Group actions by tool for the SPA, serializing Param to plain
     dicts. The build= callable is intentionally not serialized."""
@@ -1627,6 +1708,7 @@ def catalog():
                     "name": pr.name, "label": pr.label, "type": pr.type,
                     "default": pr.default, "required": pr.required,
                     "options": pr.options, "help": pr.help,
+                    "placeholder": _placeholder_for(pr),
                 }
                 for pr in a.params
             ],

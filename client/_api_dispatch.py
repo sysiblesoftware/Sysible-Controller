@@ -838,6 +838,10 @@ if command -v ss >/dev/null 2>&1; then
   p net.listen_count "$(ss -tulnH 2>/dev/null | wc -l | tr -d ' ')"
   p net.listen_ports "$(ss -tulnH 2>/dev/null | awk '{print $5}' | sed 's/.*://' | grep -E '^[0-9]+$' | sort -un | paste -sd, - | cut -c1-300)"
 fi
+_sy_ips="$(ip -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1)"
+[ -n "$_sy_ips" ] || _sy_ips="$(hostname -I 2>/dev/null | tr ' ' '\n')"
+p net.ipv4 "$(printf '%s\n' "$_sy_ips" | grep -E '^[0-9]+\.' | paste -sd, - | cut -c1-300)"
+p net.ipv6 "$(printf '%s\n' "$_sy_ips" | grep ':' | grep -viE '^fe80' | paste -sd, - | cut -c1-300)"
 p net.dns "$(awk '/^nameserver/{print $2}' /etc/resolv.conf 2>/dev/null | paste -sd, -)"
 p net.gateway "$(ip route 2>/dev/null | awk '/^default/{print $3; exit}')"
 p net.ip_forward "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)"

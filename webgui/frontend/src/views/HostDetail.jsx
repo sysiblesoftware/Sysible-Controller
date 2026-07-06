@@ -63,6 +63,7 @@ const SECTIONS = [
     "log.rsyslog": "rsyslog", "log.journald": "journald", "log.remote_forward": "Remote forwarding",
     "log.logrotate": "logrotate", "log.var_log_mb": "/var/log size (MB)" } },
   { title: "Networking", cats: ["net"], labels: {
+    "net.ipv4": "IPv4 addresses", "net.ipv6": "IPv6 addresses",
     "net.listen_count": "Listening sockets", "net.listen_ports": "Listening ports",
     "net.dns": "DNS servers", "net.gateway": "Default gateway", "net.ip_forward": "IP forwarding",
     "net.ipv6_disabled": "IPv6 disabled", "net.hostname": "Hostname" } },

@@ -150,7 +150,7 @@ export default function HostEnrollment() {
 
   async function disenrollChecked() {
     if (checked.length === 0) { setErr("Check one or more hosts first."); return; }
-    if (!window.confirm(`Disenroll ${checked.length} host(s)? If a host is online its agent service is stopped and removed first; if it's offline the enrollment is dropped here and you'll need to run disenroll_agent.sh on it directly.`)) return;
+    if (!window.confirm(`Disenroll ${checked.length} host(s)? An online host's agent service is stopped and removed first; an offline or revoked host is dropped from the console immediately (run disenroll_agent.sh on it if it ever comes back).`)) return;
     await run(async () => {
       const warnings = [];
       for (const id of checked) {

@@ -1715,41 +1715,52 @@ def remove_host(host_id: str, request: Request, user: str = Depends(require_supe
     dropping the record and orphaning a still-running service."""
     token = _session_token(request)
 
-    # Find this host's agent dispatch entry so we can run the teardown on it.
-    # agent_only=True: the teardown is an agent-service action; an SSH-only
-    # "host" has no Sysible agent to uninstall.
+    # A REVOKED or OFFLINE agent can't run its own teardown: dispatching the
+    # uninstall to it would just hang out the full task timeout (the agent can't
+    # poll), which is exactly what leaves a revoked/dead host "stuck" in the
+    # list. For those, skip the teardown and remove the enrollment record
+    # directly — the record delete is what actually clears it from the console.
+    import time as _t
     try:
-        entry = next(
-            (e for e in dispatch.list_merged_hosts(agent_only=True)
-             if e.get("id") == host_id
-             or (e.get("agent_entry") or {}).get("id") == host_id),
-            None,
-        )
+        ag = next((a for a in api.get_agents() if a.get("host_id") == host_id), None)
     except Exception:
-        entry = None
+        ag = None
+    revoked = bool(ag and ag.get("revoked"))
+    ls = ag.get("last_seen") if ag else None
+    alive = bool(ls and (_t.time() - float(ls)) <= 30)
 
     teardown = None
-    if entry is not None:
-        agent_entry = entry.get("agent_entry") or entry
-        if agent_entry.get("requires_sudo_password") and not sudo_store.resolve(
-                user, entry.get("label", "")):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"'{entry.get('label', host_id)}' is set to require a sudo password, "
-                    "so tearing down its agent service needs your stored sudo password - "
-                    "but none is saved. Set it from the \"Sudo Password\" button in the "
-                    "header and disenroll again, or run disenroll_agent.sh on the host "
-                    "directly."
-                ),
+    if alive and not revoked:
+        # Online, un-revoked host: gracefully tear the agent service down first.
+        # agent_only=True: an SSH-only "host" has no Sysible agent to uninstall.
+        try:
+            entry = next(
+                (e for e in dispatch.list_merged_hosts(agent_only=True)
+                 if e.get("id") == host_id
+                 or (e.get("agent_entry") or {}).get("id") == host_id),
+                None,
             )
-        become = sudo_store.resolve(user, entry.get("label", ""))
-        # Best-effort: a failed/timed-out teardown (e.g. the host is offline)
-        # must not block removing the enrollment record - mirror the desktop's
-        # "removed regardless" behaviour. Surface the outcome to the caller.
-        teardown = _dispatch_one(
-            agent_entry, api.cmd_uninstall_agent_service(), "command",
-            become, token, "Uninstall agent service (disenroll)")
+        except Exception:
+            entry = None
+        if entry is not None:
+            agent_entry = entry.get("agent_entry") or entry
+            if agent_entry.get("requires_sudo_password") and not sudo_store.resolve(
+                    user, entry.get("label", "")):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"'{entry.get('label', host_id)}' is set to require a sudo password, "
+                        "so tearing down its agent service needs your stored sudo password - "
+                        "but none is saved. Set it from the \"Sudo Password\" button in the "
+                        "header and disenroll again, or run disenroll_agent.sh on the host "
+                        "directly."
+                    ),
+                )
+            become = sudo_store.resolve(user, entry.get("label", ""))
+            # Best-effort: a failed teardown must not block removing the record.
+            teardown = _dispatch_one(
+                agent_entry, api.cmd_uninstall_agent_service(), "command",
+                become, token, "Uninstall agent service (disenroll)")
 
     result = _wrap(lambda: _as_admin(
         request, lambda: api.disenroll_agent(host_id) or {"removed": True}))

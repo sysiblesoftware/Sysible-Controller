@@ -1,13 +1,9 @@
 """
 Encrypted-at-rest store for operators' sudo (become) passwords, kept on the
-controller for the web console.
-
-Why this lives here and not in client/become_credentials.py: the desktop
-client stores the become-password on the *operator's own workstation* and
-never sends it to the controller. The web console's BFF runs ON the
-controller, so that separation can't hold — by the operator's explicit
-choice (see the rework decision), the web console keeps the password
-encrypted at rest on the controller instead.
+controller for the web console. This is the single at-rest home for become
+passwords; the controller holds a copy in RAM only in transit to the agent
+(keyed per task, short TTL — see backend/app.py), and nothing persists them
+in clear text anywhere.
 
 Model: one Fernet key (run/webgui_sudo.key, mode 0600) encrypts every
 stored password. Entries are keyed by (admin username, scope), where scope

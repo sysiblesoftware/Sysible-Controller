@@ -241,27 +241,12 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
     """
     entry = _underlying_entry(entry)
 
-    # Resolve the sudo (become) password.
-    #
-    # If the caller already supplied one - e.g. the web console resolves it from
-    # its controller-side store and passes it in - ALWAYS honour it; never
-    # discard it. Only when none was supplied do we fall back to the desktop's
-    # workstation-local store, and only for a host flagged password-sudo.
-    #
-    # The previous code did `else: become_password = None`, which silently
-    # zeroed ANY caller-supplied password whenever this entry's flag was
-    # missing/stale - and SSH (and merged-resolved-to-SSH) entries never carried
-    # the flag. That's exactly what broke the web console: the password was
-    # resolved correctly upstream, then thrown away here. Passing a password to a
-    # host that doesn't need it is harmless - the agent's `sudo -S` just ignores
-    # it under NOPASSWD - so honouring an explicit password is always safe.
-    if not become_password and entry.get("requires_sudo_password"):
-        try:
-            from client import become_credentials
-            become_password = become_credentials.get_password(entry.get("label", ""))
-        except Exception:
-            become_password = None
-
+    # The sudo (become) password is resolved by the caller and passed in: the
+    # web console reads it from the controller-side store (webgui/sudo_store.py)
+    # for the logged-in admin and supplies it here. We only ever honour what we
+    # were given — passing a password to a host that doesn't need it is harmless
+    # (the agent's `sudo -S` just ignores it under NOPASSWD), so an explicit
+    # password is always safe to forward.
     if entry.get("requires_sudo_password") and needs_sudo:
         # Fail fast with a clear instruction instead of dispatching a command
         # that will just bounce off `sudo` for lack of a password. This host is

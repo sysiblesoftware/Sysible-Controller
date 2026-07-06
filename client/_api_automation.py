@@ -332,6 +332,35 @@ def cmd_update_packages(names: str = "") -> str:
     )
 
 
+def cmd_package_status(names: str) -> str:
+    """Read-only: for each named package, report whether it's installed on the
+    host and its version, one clean machine-parseable line per package:
+        SYSIBLE_PKG <name> installed <version>
+        SYSIBLE_PKG <name> absent
+    This is what makes the multi-host view meaningful — the console turns these
+    lines into a per-host installed/not-installed tally instead of a wall of
+    package-manager text."""
+    pkgs = _pkg_quote_list(names)
+    if not pkgs:
+        raise ValueError("Specify at least one package name.")
+    # Single quotes around the dpkg/rpm format specs so the shell leaves
+    # ${db:...}/%{...} for the tool to expand; double quotes on echo so $p/$v
+    # do expand.
+    apt = (
+        "for p in " + pkgs + "; do "
+        "st=$(dpkg-query -W -f='${db:Status-Status}' \"$p\" 2>/dev/null); "
+        "v=$(dpkg-query -W -f='${Version}' \"$p\" 2>/dev/null); "
+        "if [ \"$st\" = installed ] && [ -n \"$v\" ]; then echo \"SYSIBLE_PKG $p installed $v\"; "
+        "else echo \"SYSIBLE_PKG $p absent\"; fi; done"
+    )
+    rpm = (
+        "for p in " + pkgs + "; do "
+        "if v=$(rpm -q --qf '%{VERSION}-%{RELEASE}' \"$p\" 2>/dev/null); "
+        "then echo \"SYSIBLE_PKG $p installed $v\"; else echo \"SYSIBLE_PKG $p absent\"; fi; done"
+    )
+    return _pkgmgr_dispatch(rpm_cmd=rpm, zypper_cmd=rpm, apt_cmd=apt)
+
+
 def cmd_query_package(name: str) -> str:
     name = (name or "").strip()
     if not name:

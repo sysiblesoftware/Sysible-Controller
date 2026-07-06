@@ -8,7 +8,7 @@ import HostResults from "./HostResults.jsx";
 //
 // `expanded` is controlled by the parent so it can hide its other panes while
 // the results fill the page; width and the active tab are managed internally.
-export default function ResultsPane({ results, setResults, expanded, onToggleExpand, empty }) {
+export default function ResultsPane({ results, setResults, expanded, onToggleExpand, empty, renderRun }) {
   const [width, setWidth] = useState(420);
   const [active, setActive] = useState(0);
 
@@ -64,7 +64,7 @@ export default function ResultsPane({ results, setResults, expanded, onToggleExp
               <div className="result">
                 <div className="rh"><strong>{cur.label}</strong>
                   <span className="faint mono" style={{ fontSize: 11 }}>{new Date(cur.at).toLocaleTimeString()}</span></div>
-                <HostResults rows={cur.results} />
+                {renderRun ? renderRun(cur) : <HostResults rows={cur.results} />}
               </div>
             )}
           </div>

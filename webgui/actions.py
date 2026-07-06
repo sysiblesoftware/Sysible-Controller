@@ -201,6 +201,21 @@ _register(Action(
 
 
 # ---- Tool: Host Software Management ----------------------------------
+def _pkg_and_status(op_cmd: str, names: str) -> str:
+    """Run a package op, then append a clean per-package status readout so each
+    host's result shows the RESULTING state (installed <ver> / absent) — while
+    preserving the op's own exit code, so ok/failed still reflects the op itself
+    and not the trailing status query."""
+    ns = (names or "").strip()
+    if not ns:
+        return op_cmd
+    return "\n".join([op_cmd, "rc=$?", api.cmd_package_status(ns), "exit $rc"])
+
+
+_register(Action(
+    name="pkg_status", tool="Host Software Management", label="Check status",
+    params=[Param("names", "Package name(s)", help="space-separated")],
+    build=lambda p: api.cmd_package_status(_s(p, "names"))))
 _register(Action(
     name="pkg_list_installed", tool="Host Software Management",
     label="List installed packages", params=[],
@@ -216,19 +231,19 @@ _register(Action(
 _register(Action(
     name="pkg_install", tool="Host Software Management", label="Install packages",
     params=[Param("names", "Package name(s)", help="space-separated")],
-    build=lambda p: api.cmd_install_packages(_s(p, "names")),
+    build=lambda p: _pkg_and_status(api.cmd_install_packages(_s(p, "names")), _s(p, "names")),
 ))
 _register(Action(
     name="pkg_update", tool="Host Software Management",
     label="Update / upgrade packages",
     params=[Param("names", "Package name(s)", required=False,
                   help="leave blank to update everything")],
-    build=lambda p: api.cmd_update_packages(_s(p, "names")),
+    build=lambda p: _pkg_and_status(api.cmd_update_packages(_s(p, "names")), _s(p, "names")),
 ))
 _register(Action(
     name="pkg_remove", tool="Host Software Management", label="Remove packages",
     danger=True, params=[Param("names", "Package name(s)")],
-    build=lambda p: api.cmd_remove_packages(_s(p, "names")),
+    build=lambda p: _pkg_and_status(api.cmd_remove_packages(_s(p, "names")), _s(p, "names")),
 ))
 _register(Action(
     name="pkg_clean_cache", tool="Host Software Management",

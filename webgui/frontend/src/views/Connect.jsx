@@ -1,6 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
-import TerminalDock from "../components/TerminalDock.jsx";
 import HostResults from "../components/HostResults.jsx";
 
 // Sysible Connect — mirrors the desktop window: managed-hosts tree on the
@@ -14,7 +13,6 @@ export default function Connect() {
   const [collapsed, setCollapsed] = useState({});
   const [checkin, setCheckin] = useState(null);
   const [busy, setBusy] = useState("");
-  const dock = useRef(null);
 
   const toggleCheck = (id) =>
     setChecked((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]));
@@ -30,7 +28,15 @@ export default function Connect() {
     return Object.entries(m).sort(([a], [b]) => a.localeCompare(b));
   }, [hosts]);
 
-  function openTerm(h) { dock.current && dock.current.open(h.id, h.label); }
+  // Terminals pop out into their own external window (mirrors the desktop app),
+  // rather than docking inside this page. Same-origin, so the pop-out shares the
+  // session cookie. A per-host window name means re-opening the same host focuses
+  // its existing window instead of spawning duplicates.
+  function openTerm(h) {
+    window.open(
+      `/?term=${encodeURIComponent(h.id)}&label=${encodeURIComponent(h.label)}`,
+      `sysible_term_${h.id}`, "width=960,height=640");
+  }
 
   const [checkinAt, setCheckinAt] = useState(0);
   const [showCheckin, setShowCheckin] = useState(false);
@@ -115,7 +121,7 @@ export default function Connect() {
           })}
         </div>
         <div className="faint" style={{ fontSize: 12, marginTop: 8 }}>
-          Double-click a host to open its terminal.
+          Double-click a host to open its terminal in a new window.
         </div>
       </div>
 
@@ -136,10 +142,6 @@ export default function Connect() {
           {sel && <FileTransfer host={sel} onErr={setErr} />}
           <SshEnroll onDone={loadHosts} onErr={setErr} />
         </div>
-
-        <Section title="Terminals">
-          <TerminalDock ref={dock} />
-        </Section>
       </div>
 
       {showCheckin && checkin && (

@@ -111,6 +111,10 @@ export default function App() {
   // there (e.g. Performance → a tool → Back to Performance) without walking the
   // menus again. Used by both the sidebar and in-app "Fix in…"/drill links.
   const go = useCallback((v, t = null) => {
+    // Sysible Connect always opens in its own browser tab (a named window, so
+    // re-triggering focuses the existing one) — never inline. Centralised here
+    // so every entry point (nav, feature search, drill-ins) behaves the same.
+    if (v === "connect") { window.open("/?view=connect", "sysible_connect"); return; }
     if (v === view && JSON.stringify(t) === JSON.stringify(target)) return;
     setHistory((h) => [...h, { view, target }]);
     setView(v); setTarget(t);
@@ -136,6 +140,32 @@ export default function App() {
   const qs = new URLSearchParams(location.search);
   if (qs.get("term")) {
     return <StandaloneTerminal hostId={qs.get("term")} label={qs.get("label") || ""} />;
+  }
+  // Sysible Connect runs in its own browser tab (opened from the nav), as a
+  // focused window with just its own header — no left rail. Host terminals
+  // opened from here pop out into their own windows (see Connect.openTerm).
+  if (qs.get("view") === "connect") {
+    return (
+      <div className="shell connect-standalone">
+        <main className="main">
+          <div className="main-top">
+            <div className="row" style={{ alignItems: "center", gap: 10, minWidth: 0 }}>
+              <img className="rail-mark" src="/sysible_logo.png" alt="" style={{ width: 22, height: 22 }}
+                   onError={(e) => { e.target.style.display = "none"; }} />
+              <h2 style={{ margin: 0 }}>Sysible Connect</h2>
+            </div>
+            <div className="row" style={{ alignItems: "center", gap: 12 }}>
+              <button className="btn ghost sm" onClick={() => setSudoOpen(true)}>Sudo Password</button>
+              <button className="iconbtn" title="Toggle light/dark" onClick={toggleTheme}>
+                {theme === "dark" ? "☾" : "☀"}
+              </button>
+            </div>
+          </div>
+          <div className="main-scroll"><Connect /></div>
+        </main>
+        {sudoOpen && <SudoModal onClose={() => setSudoOpen(false)} />}
+      </div>
+    );
   }
 
   const isSuper = role === "superuser";
@@ -166,8 +196,10 @@ export default function App() {
           {nav.map((n) => (
             <button key={n.key ?? "dash"}
                     className={"rail-item" + (view === n.key ? " active" : "")}
+                    title={n.key === "connect" ? "Opens in a new tab" : undefined}
                     onClick={() => go(n.key, null)}>
               <NavIcon name={n.icon} /><span>{n.label}</span>
+              {n.key === "connect" && <span className="rail-ext" aria-hidden="true">↗</span>}
             </button>
           ))}
         </div>
@@ -221,7 +253,6 @@ export default function App() {
           {!isAuditor && view === "fleetquery" && <FleetQuery />}
           {!isAuditor && view === "sysadmin" && <ToolRunner openTool={target?.tool} openTab={target?.tab}
             openPrefill={target?.prefill} onConsumed={() => setTarget(null)} />}
-          {!isAuditor && view === "connect" && <Connect />}
           {view === "live" && <LiveActivity role={role} />}
         </div>
       </main>

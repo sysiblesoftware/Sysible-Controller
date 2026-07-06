@@ -171,6 +171,7 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
   border-left: 2px solid transparent;
 }
 .rail-item svg { flex-shrink: 0; opacity: 0.85; }
+.rail-item .rail-ext { margin-left: auto; font-size: 12px; opacity: 0.55; }
 .rail-item:hover { background: var(--row-hover); color: var(--text); }
 .rail-item.active {
   background: var(--accent-soft); color: var(--text);

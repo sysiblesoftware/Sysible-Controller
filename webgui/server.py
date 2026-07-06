@@ -2262,7 +2262,21 @@ def portal_download_delete(filename: str, user: str = Depends(require_superuser_
 # ----------------------------------------------------------------------
 @app.get("/api/agents")
 def agents(user: str = Depends(require_login)):
-    return _wrap(lambda: {"agents": api.get_agents()})
+    # Attach an aged `online` flag using the SAME 20s-stale rule the fleet-health
+    # sweep uses (fleet_health / _probe_*), so the Host Enrollment status dot —
+    # which reads a.online — actually lights up and agrees with the dashboard.
+    # The raw controller record only carries a never-aged status string.
+    import time as _t
+
+    def _with_online():
+        now = _t.time()
+        rows = api.get_agents() or []
+        for a in rows:
+            ls = a.get("last_seen")
+            a["online"] = bool(ls and (now - ls) <= 20)
+        return {"agents": rows}
+
+    return _wrap(_with_online)
 
 
 @app.post("/api/enroll-token")

@@ -228,9 +228,24 @@ export default function HostEnrollment() {
             {agents.length === 0 && <div className="faint" style={{ padding: 8 }}>No hosts enrolled yet — use the “Enroll a Host” tab.</div>}
             {groups.map(([env, list]) => {
               const open = !collapsed[env];
+              const groupIds = list.map((a) => idOf(a));
+              const allInGroup = groupIds.every((id) => checked.includes(id));
               return (
                 <div className="env-group" key={env}>
                   <div className="env-head" onClick={() => setCollapsed((c) => ({ ...c, [env]: open }))}>
+                    <input
+                      type="checkbox"
+                      className="env-check"
+                      title={`Select all in ${env}`}
+                      checked={allInGroup}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        setChecked((c) => allInGroup
+                          ? c.filter((id) => !groupIds.includes(id))
+                          : [...new Set([...c, ...groupIds])]);
+                      }}
+                    />
                     {open ? "▾" : "▸"} {env}
                   </div>
                   {open && list.map((a) => (

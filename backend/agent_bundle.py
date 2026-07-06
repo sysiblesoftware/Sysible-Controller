@@ -625,3 +625,21 @@ def build_agent_bundle(controller_addresses, controller_port: int, token: str):
         zf.writestr("README.txt", _readme(include_cert))
 
     return BUNDLE_FILENAME, buf.getvalue()
+
+
+def mint_agent_bundle(controller_addresses, controller_port: int):
+    """Mint a fresh single-use enrollment token and build the agent bundle
+    against it, returning (filename, zip_bytes).
+
+    This is the ONE place that couples token creation to the build. Every
+    download route (the admin API's /download-agent-bundle, the portal's
+    browser download, and the portal's curl/CLI endpoint) goes through here
+    so the "one bundle = one single-use token" invariant can't drift between
+    them. Address resolution and HTTP error handling stay at the call sites,
+    since they differ per surface (API raises, portal redirects)."""
+    import secrets
+    from backend.db import create_enroll_token
+
+    token = secrets.token_hex(16)
+    create_enroll_token(token)
+    return build_agent_bundle(controller_addresses, controller_port, token)

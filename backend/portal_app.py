@@ -23,8 +23,8 @@ from urllib.parse import quote
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 
-from backend.agent_bundle import build_agent_bundle, resolve_controller_addresses
-from backend.db import create_enroll_token, get_controller_config, get_portal_credentials, log_portal_event
+from backend.agent_bundle import mint_agent_bundle, resolve_controller_addresses
+from backend.db import get_controller_config, get_portal_credentials, log_portal_event
 from backend import portal_auth, portal_files
 
 # Interactive docs/schema disabled - this is a public, host-facing portal,
@@ -421,12 +421,7 @@ async def download_bundle(request: Request, cli: int = 0):
             )
         return RedirectResponse("/files", status_code=303)
 
-    enroll_token = secrets.token_hex(16)
-    create_enroll_token(enroll_token)
-
-    filename, zip_bytes = build_agent_bundle(
-        addresses, config["port"], enroll_token
-    )
+    filename, zip_bytes = mint_agent_bundle(addresses, config["port"])
 
     return Response(
         content=zip_bytes,
@@ -448,9 +443,7 @@ def _build_bundle_response():
             "desktop app, then retry.\n",
             status_code=409, media_type="text/plain",
         )
-    enroll_token = secrets.token_hex(16)
-    create_enroll_token(enroll_token)
-    filename, zip_bytes = build_agent_bundle(addresses, config["port"], enroll_token)
+    filename, zip_bytes = mint_agent_bundle(addresses, config["port"])
     return Response(
         content=zip_bytes,
         media_type="application/zip",

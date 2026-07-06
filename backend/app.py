@@ -7,7 +7,7 @@ import secrets
 import threading
 import time
 
-from backend.agent_bundle import build_agent_bundle, detect_local_ips, resolve_controller_addresses
+from backend.agent_bundle import mint_agent_bundle, detect_local_ips, resolve_controller_addresses
 from backend.auth import require_api_key, require_superuser, require_activity_viewer
 from backend.db import (
     create_enroll_token,
@@ -1189,12 +1189,7 @@ def download_agent_bundle_route():
         )
         raise HTTPException(status_code=400, detail=detail)
 
-    enroll_token = secrets.token_hex(16)
-    create_enroll_token(enroll_token)
-
-    filename, zip_bytes = build_agent_bundle(
-        addresses, config["port"], enroll_token
-    )
+    filename, zip_bytes = mint_agent_bundle(addresses, config["port"])
 
     return Response(
         content=zip_bytes,

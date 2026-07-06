@@ -3,11 +3,9 @@
 # by install_sysible.sh. The backend API runs as a real systemd service (sysible-backend) so
 # it survives reboots and isn't tied to a terminal session or a
 # script's own lifetime. This wraps `systemctl` for that service and
-# separately manages the desktop GUI client, which still has no
-# business being a systemd service - it's one human's desktop app,
-# not a daemon.
+# the web console service.
 #
-# Usage: sysible_controller {start|stop|restart|update|status|logs|gui|webgui|reset-admin|enable-remote-gui|disable-remote-gui|destroy}
+# Usage: sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|destroy}
 
 BASE="/opt/sysible"
 VENV="$BASE/venv"
@@ -260,10 +258,9 @@ cmd_start() {
   _wait_for_backend
 
   echo ""
-  echo "Controller backend is running. The web console and desktop GUI are"
-  echo "separate services, started on their own:"
+  echo "Controller backend is running. The web console is a separate service,"
+  echo "started on its own:"
   echo "   Web console : sudo sysible_controller webgui start"
-  echo "   Desktop GUI : sysible_controller gui"
   echo "'sysible_controller status' to check, 'sysible_controller logs' to tail the backend."
 }
 

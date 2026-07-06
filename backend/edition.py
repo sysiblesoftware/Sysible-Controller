@@ -1,7 +1,7 @@
 """Edition gating for the Community branch.
 
-The Community edition caps the number of *managed hosts* (agent + SSH,
-de-duplicated per physical host) at HOST_LIMIT. This is an honest-user limit: because
+The Community edition caps the number of *agent hosts* (deduped by IP) at
+HOST_LIMIT. SSH-only hosts are a Sysible Connect concept and don't count. This is an honest-user limit: because
 this branch is open source, the check below can be removed by anyone editing
 the source - genuine, tamper-resistant enforcement belongs in the Enterprise
 edition (a separate, license-gated build), not here. Set HOST_LIMIT to None
@@ -40,10 +40,11 @@ def enforce_role_limit(role, current_count):
 
 
 def current_host_names():
-    """The set of distinct managed-host names right now - agent hostnames
-    plus SSH host names, so a host enrolled both ways counts once. Imports
-    are lazy to avoid an import cycle (this module is imported by the routers
-    that own those stores)."""
+    """Distinct AGENT host names right now. Agents are what count toward the host
+    cap; the SSH transport (an agent's auto-created SSH mirror, and any
+    Connect-only SSH host) lives in Sysible Connect and does not count here. Lazy
+    import avoids a cycle (this module is imported by the routers that own the
+    stores)."""
     names = set()
     try:
         from backend.db import list_agents
@@ -51,111 +52,43 @@ def current_host_names():
             names.add(a.get("hostname") or a.get("host_id"))
     except Exception:
         pass
-    try:
-        from backend.remote_routes import load_hosts
-        names |= set((load_hosts() or {}).keys())
-    except Exception:
-        pass
     return {n for n in names if n}
 
 
-def _distinct_hosts(agent_records, ssh_records):
-    """Group agent + SSH records into distinct PHYSICAL hosts; return the set of
-    component roots (its length is the host count). Pure and side-effect free so
-    it can be unit-tested without a database.
-
-    `agent_records` is an iterable of (host_id, hostname, ip); `ssh_records` an
-    iterable of (name, ip). The merge rules are deliberately NOT a blanket union
-    over name-OR-ip (which over-merged — see below):
-
-      * Each agent enrollment is its own host, keyed by host_id. Two DISTINCT
-        agents are never merged just because they share a hostname: a default
-        name like 'localhost'/'ubuntu' is not evidence of the same machine.
-      * An agent and an SSH record that share a hostname are the same machine
-        reached two ways  ->  one host.
-      * Any records that share an IP are the same physical machine  ->  one host.
-
-    This mirrors how the web console collapses its host list
-    (client/_api_dispatch.list_merged_hosts: merge agent+SSH by name, then
-    dedupe by IP), so the licensed 'Hosts enrolled' count agrees with the
-    Online/health counts on the dashboard. The old code unioned any two records
-    sharing a hostname OR an IP, transitively, so two different machines that
-    happened to share a default hostname collapsed into one — which made 'Hosts
-    enrolled' read LOWER than 'Online' (impossible) on such a fleet.
-    """
-    parent = {}
-
-    def find(x):
-        parent.setdefault(x, x)
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(a, b):
-        parent[find(a)] = find(b)
-
-    # (key, name, ip, kind) — key uniquely identifies the record's own component.
-    # Names are compared RAW (no case/whitespace folding) so this matches the web
-    # console's merge exactly (client/_api_dispatch.merge_duplicate_host_entries
-    # groups by the raw label) and edition.current_host_names (also raw). If these
-    # three ever normalized differently, the licensed count could disagree with
-    # the displayed/probed host list again — the whole bug this function fixes.
-    recs = []
-    for host_id, hostname, ip in agent_records:
-        recs.append((("agent", host_id),
-                     hostname or host_id or "",
-                     (ip or "").strip(), "agent"))
-    for name, ip in ssh_records:
-        nm = name or ""
-        recs.append((("ssh", nm), nm, (ip or "").strip(), "ssh"))
-
-    recs = [r for r in recs if r[1] or r[2]]  # drop wholly-empty records
-    for key, *_ in recs:
-        find(key)
-
-    # An agent and an SSH record sharing a hostname are one host (same machine
-    # reached two ways). Note: only agent<->ssh, never agent<->agent.
-    agents_by_name, ssh_by_name = {}, {}
-    for key, name, ip, kind in recs:
-        if name:
-            (agents_by_name if kind == "agent" else ssh_by_name).setdefault(name, []).append(key)
-    for name, ssh_keys in ssh_by_name.items():
-        for a_key in agents_by_name.get(name, []):
-            for s_key in ssh_keys:
-                union(a_key, s_key)
-
-    # Any records sharing an IP are the same physical machine.
-    by_ip = {}
-    for key, name, ip, kind in recs:
-        if ip:
-            by_ip.setdefault(ip, []).append(key)
-    for ip, keys in by_ip.items():
-        for k in keys[1:]:
-            union(keys[0], k)
-
-    return {find(key) for key, *_ in recs}
+def _distinct_agent_hosts(agent_records):
+    """Pure/testable: distinct agent MACHINES from (host_id, ip) records. Deduped
+    by IP so a machine re-enrolled under a NEW host_id at the same address counts
+    once; an agent with no IP falls back to its host_id (so two IP-less agents
+    stay distinct). Returns the set of keys — its length is the host count. This
+    matches how the fleet/Connect host list dedupes agents by their IP, so the
+    'Hosts enrolled' count agrees with the fleet number."""
+    keys = set()
+    for host_id, ip in agent_records:
+        ip = (ip or "").strip()
+        keys.add(("ip", ip) if ip else ("id", host_id))
+    return keys
 
 
 def host_identities():
-    """Distinct PHYSICAL hosts under management (agent + SSH). Lazy imports
-    avoid an import cycle (this module is imported by the routers that own those
-    stores). See _distinct_hosts for the merge rules."""
+    """Distinct AGENT hosts under management — the enrolled-host total and the
+    license cap.
+
+    Everything Sysible manages runs the agent. The SSH transport (the auto-
+    created SSH mirror of an agent host, plus any Connect-only SSH host) is a
+    Sysible Connect concept and is deliberately NOT counted here. Besides
+    matching that model, counting agents only also removes an over-merge the old
+    agent+SSH union could produce: an SSH record that happened to share an IP
+    with a DIFFERENT agent chained two distinct agents into one component,
+    undercounting 'Hosts enrolled' (the 4-vs-5 the console showed). Lazy import
+    avoids a cycle."""
     agents = []
     try:
         from backend.db import list_agents
         for a in list_agents():
-            agents.append((a.get("host_id"), a.get("hostname"), a.get("ip")))
+            agents.append((a.get("host_id"), a.get("ip")))
     except Exception:
         pass
-    ssh = []
-    try:
-        from backend.remote_routes import load_hosts
-        for name, h in (load_hosts() or {}).items():
-            ssh.append((name, h.get("ip")))
-    except Exception:
-        pass
-    return _distinct_hosts(agents, ssh)
+    return _distinct_agent_hosts(agents)
 
 
 def host_count():
@@ -171,7 +104,7 @@ def enforce_host_limit(candidate_name):
     # Re-enrolling/updating an already-managed name isn't a new host.
     if candidate_name and candidate_name in current_host_names():
         return
-    count = host_count()  # distinct physical hosts (see _distinct_hosts)
+    count = host_count()  # distinct agent hosts (see host_identities)
     if count >= HOST_LIMIT:
         raise HTTPException(
             status_code=403,

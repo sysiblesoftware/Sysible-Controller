@@ -29,6 +29,7 @@ from backend.db import (
     queue_task,
     fetch_pending_tasks,
     submit_task_result,
+    reclaim_stale_tasks,
     get_task_kind,
     get_task_host,
     list_results,
@@ -455,6 +456,30 @@ _BECOME_TTL_S = 300
 # than one host and slip past the host cap. Enrollment is infrequent and the
 # controller is single-process, so a coarse lock here is cheap and correct.
 _ENROLL_LOCK = threading.Lock()
+
+# Reclaim tasks stuck in 'dispatched' (the host was handed the command but its
+# result never came back — lost in transit, or the agent died on receipt) so they
+# reach a terminal 'timed_out' state with a synthetic result instead of living
+# forever. Well beyond the agent's 300s command timeout + the 300s become TTL, so
+# a legitimately-long task is never reclaimed early. NOT re-queued (see
+# db.reclaim_stale_tasks): at-most-once, to avoid double-running a privileged
+# command whose result was merely lost.
+_TASK_RECLAIM_SECONDS = int(os.getenv("SYSIBLE_TASK_RECLAIM_SECONDS", "900"))
+
+
+def _task_reclaim_loop():
+    import time as _t
+    while True:
+        _t.sleep(60)
+        try:
+            n = reclaim_stale_tasks(_TASK_RECLAIM_SECONDS)
+            if n:
+                print(f"[controller] reclaimed {n} stale task(s) as timed_out")
+        except Exception:
+            pass
+
+
+threading.Thread(target=_task_reclaim_loop, name="sysible-task-reclaim", daemon=True).start()
 
 
 def _sweep_become(now=None):

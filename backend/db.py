@@ -1901,6 +1901,51 @@ def submit_task_result(task_id, host_id, result):
     return applied
 
 
+def reclaim_stale_tasks(timeout_seconds):
+    """Surface tasks stuck in 'dispatched' longer than `timeout_seconds`: move
+    them to the terminal 'timed_out' state and record a synthetic result, so a
+    lost delivery (the host was handed the command but its result never came
+    back) reaches closure and shows up as timed-out instead of silently living
+    forever and accumulating.
+
+    It does NOT re-queue the command: the host may have actually run it and only
+    the RESULT was lost, so silently re-delivering a privileged command could
+    double-execute it (at-most-once by design). An operator re-queues manually if
+    they want. Returns the number reclaimed. `dispatched` is stamped by
+    fetch_pending_tasks when a task is handed out."""
+    import json as _json
+    conn = _connect()
+    cur = conn.cursor()
+    cutoff = time.time() - float(timeout_seconds)
+    cur.execute(
+        "SELECT id, host_id FROM agent_tasks "
+        "WHERE status='dispatched' AND dispatched IS NOT NULL AND dispatched < ?",
+        (cutoff,),
+    )
+    stale = cur.fetchall()
+    msg = _json.dumps({
+        "stdout": "",
+        "stderr": ("[sysible] Task timed out: the host was handed this command but never "
+                   "reported a result. It may or may not have run — re-queue it if needed."),
+        "returncode": -1,
+    })
+    now = time.time()
+    reclaimed = 0
+    for tid, host_id in stale:
+        # Guard on status again: if a real result won the race between the SELECT
+        # and here, the row is already 'done' -> 0 rows -> don't add a synthetic one.
+        cur.execute("UPDATE agent_tasks SET status='timed_out' WHERE id=? AND status='dispatched'", (tid,))
+        if cur.rowcount == 1:
+            cur.execute(
+                "INSERT INTO agent_results (task_id, host_id, result, completed) VALUES (?, ?, ?, ?)",
+                (tid, host_id, msg, now),
+            )
+            reclaimed += 1
+    conn.commit()
+    conn.close()
+    return reclaimed
+
+
 def get_task_kind(task_id):
     """The 'kind' a task was queued with (e.g. 'command', 'ssh_enable'),
     or None if the task no longer exists. Lets the result handler tell

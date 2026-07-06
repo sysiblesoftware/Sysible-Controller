@@ -196,7 +196,12 @@ export default function HostEnrollment() {
     <div>
       {edition.host_limit != null && (
         <div className="muted" style={{ marginBottom: 12 }}>
-          {(edition.edition || "Community")} edition — {edition.host_count ?? agents.length}/{edition.host_limit} hosts used
+          {(edition.edition || "Community")} edition — {edition.host_count ?? agents.length}/{edition.host_limit} hosts used.
+          {(edition.host_count ?? agents.length) > agents.length && (
+            <> This page manages the {agents.length} host{agents.length === 1 ? "" : "s"} running the Sysible agent;
+            {" "}the {(edition.host_count ?? agents.length) - agents.length} other{((edition.host_count ?? agents.length) - agents.length) === 1 ? "" : "s"} {" "}
+            {(edition.host_count ?? agents.length) - agents.length === 1 ? "is" : "are"} SSH-only (they count toward the limit and are managed in Connect).</>
+          )}
         </div>
       )}
 

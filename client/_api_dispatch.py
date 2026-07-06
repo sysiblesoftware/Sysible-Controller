@@ -167,32 +167,44 @@ def _entry_ip(entry):
 
 
 def _dedupe_same_ip(entries):
-    """Collapse entries that resolve to the SAME physical machine (same IP)
-    into one, keeping the richest connection (merged > agent > ssh). Without
-    this, a box enrolled twice under different names - e.g. an agent host plus
-    a stray manual SSH record at the same IP - shows up as two separate hosts.
-    Entries with no usable IP pass through untouched (deduped by name already).
-    Order is preserved, with the surviving entry taking the first position its
-    IP appeared at."""
-    rank = {"merged": 3, "agent": 2, "ssh": 1}
-    best = {}
-    for e in entries:
-        ip = _entry_ip(e)
-        if not ip:
-            continue
-        cur = best.get(ip)
-        if cur is None or rank.get(e.get("kind"), 0) > rank.get(cur.get("kind"), 0):
-            best[ip] = e
+    """Fold a stray SSH-only record into the agent host at the same IP.
+
+    Two *agent* hosts are ALWAYS distinct machines even when they report the
+    same IP (bridge/VPN/NAT, or both default to a LAN address): each agent is a
+    separate enrollment (host_id) and must never be merged away — doing so hid a
+    genuinely-enrolled host. So agent/merged entries are always kept.
+
+    The only collapsing here is for a pure-SSH entry (kind 'ssh') that shares an
+    IP with an agent/merged entry: that's the agent host's own SSH transport
+    showing up a second time, so it folds into the agent. Two SSH-only entries
+    at the same IP dedupe to the first. Entries with no usable IP pass through
+    untouched (already deduped by name). Order is preserved."""
+    # IPs that have a real agent behind them (kind 'agent' or 'merged').
+    agent_ips = {
+        _entry_ip(e)
+        for e in entries
+        if e.get("kind") in ("agent", "merged") and _entry_ip(e)
+    }
 
     result = []
-    seen = set()
+    seen_ssh_ips = set()
     for e in entries:
+        kind = e.get("kind")
+        # Agent/merged hosts are always distinct — keep every one.
+        if kind in ("agent", "merged"):
+            result.append(e)
+            continue
+        # Pure-SSH entry.
         ip = _entry_ip(e)
         if not ip:
-            result.append(e)
-        elif ip not in seen:
-            seen.add(ip)
-            result.append(best[ip])
+            result.append(e)  # can't identify a machine; leave it alone
+            continue
+        if ip in agent_ips:
+            continue  # the agent host's own SSH transport — fold it away
+        if ip in seen_ssh_ips:
+            continue  # duplicate SSH-only record at the same IP
+        seen_ssh_ips.add(ip)
+        result.append(e)
     return result
 
 

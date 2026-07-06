@@ -1,7 +1,8 @@
 """Edition gating for the Community branch.
 
-The Community edition caps the number of *agent hosts* (deduped by IP) at
-HOST_LIMIT. SSH-only hosts are a Sysible Connect concept and don't count. This is an honest-user limit: because
+The Community edition caps the number of *agent hosts* (one per agent
+enrollment / host_id) at HOST_LIMIT. SSH-only hosts are a Sysible Connect
+concept and don't count. This is an honest-user limit: because
 this branch is open source, the check below can be removed by anyone editing
 the source - genuine, tamper-resistant enforcement belongs in the Enterprise
 edition (a separate, license-gated build), not here. Set HOST_LIMIT to None
@@ -56,31 +57,21 @@ def current_host_names():
 
 
 def _distinct_agent_hosts(agent_records):
-    """Pure/testable: distinct agent MACHINES from (host_id, ip) records. Deduped
-    by IP so a machine re-enrolled under a NEW host_id at the same address counts
-    once; an agent with no IP falls back to its host_id (so two IP-less agents
-    stay distinct). Returns the set of keys — its length is the host count. This
-    matches how the fleet/Connect host list dedupes agents by their IP, so the
-    'Hosts enrolled' count agrees with the fleet number."""
-    keys = set()
-    for host_id, ip in agent_records:
-        ip = (ip or "").strip()
-        keys.add(("ip", ip) if ip else ("id", host_id))
-    return keys
+    """Pure/testable: distinct agent hosts from (host_id, ip) records. An agent
+    host is identified by its host_id: two agents are ALWAYS distinct hosts, even
+    if they share an IP (e.g. both report a bridge/VPN/NAT address) or a default
+    hostname like 'localhost'. Returns the set of host_ids — its length is the
+    enrolled-host count. `ip` is accepted for signature stability but not used to
+    merge (merging two real agents by IP was hiding a genuinely-enrolled host)."""
+    return {host_id for host_id, _ip in agent_records if host_id}
 
 
 def host_identities():
     """Distinct AGENT hosts under management — the enrolled-host total and the
-    license cap.
-
-    Everything Sysible manages runs the agent. The SSH transport (the auto-
-    created SSH mirror of an agent host, plus any Connect-only SSH host) is a
-    Sysible Connect concept and is deliberately NOT counted here. Besides
-    matching that model, counting agents only also removes an over-merge the old
-    agent+SSH union could produce: an SSH record that happened to share an IP
-    with a DIFFERENT agent chained two distinct agents into one component,
-    undercounting 'Hosts enrolled' (the 4-vs-5 the console showed). Lazy import
-    avoids a cycle."""
+    license cap. Everything Sysible manages runs the agent; the SSH transport
+    (an agent host's auto-created SSH mirror, plus any Connect-only SSH host) is
+    a Sysible Connect concept and is NOT counted here. Each agent enrollment
+    (host_id) is one host. Lazy import avoids a cycle."""
     agents = []
     try:
         from backend.db import list_agents

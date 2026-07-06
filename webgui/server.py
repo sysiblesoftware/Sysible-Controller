@@ -556,7 +556,9 @@ def fleet_health(user: str = Depends(require_login)):
     import concurrent.futures
     import time as _t
     try:
-        entries = dispatch.list_merged_hosts(agent_only=False)
+        # Dashboard fleet health is agent-only: SSH-only hosts are a Sysible
+        # Connect concept and don't belong in the fleet donut/health rollup.
+        entries = dispatch.list_merged_hosts(agent_only=True)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
 
@@ -853,7 +855,9 @@ def fleet_posture(refresh: int = 0, user: str = Depends(require_login)):
         if _fresh():
             return {"hosts": _POSTURE_CACHE["hosts"], "cached": True, "ts": _POSTURE_CACHE["ts"]}
         try:
-            entries = dispatch.list_merged_hosts(agent_only=False)
+            # Dashboard Compliance strip is agent-only (SSH-only hosts live in
+            # Sysible Connect, not the fleet posture rollup).
+            entries = dispatch.list_merged_hosts(agent_only=True)
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
         try:
@@ -957,7 +961,9 @@ def fleet_updates(refresh: int = 0, live: int = 0, user: str = Depends(require_l
         if _fresh():
             return {"hosts": _UPDATES_CACHE["hosts"], "cached": True, "ts": _UPDATES_CACHE["ts"]}
         try:
-            entries = dispatch.list_merged_hosts(agent_only=False)
+            # Dashboard patch rollup is agent-only (SSH-only hosts live in
+            # Sysible Connect, not the fleet updates rollup).
+            entries = dispatch.list_merged_hosts(agent_only=True)
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
         try:

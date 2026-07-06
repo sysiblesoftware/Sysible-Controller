@@ -1180,6 +1180,9 @@ _start_scheduler()
 class InstallUpdatesRequest(BaseModel):
     targets: list[str] = []       # host ids; empty = all
     kind: str = "security"        # "security" | "all"
+    # Optional one-run sudo password for password-sudo hosts, for operators who
+    # don't keep one stored. Transient (RAM only), same handling as /api/fleet.
+    sudo_password: str = ""
 
 
 # In-memory registry of background install jobs -> per-host status + output, so
@@ -1203,13 +1206,19 @@ def _install_set(job_id, hid, status, code=None, output=None):
                 break
 
 
-def _install_one(entry, cmd):
-    """Run one host's install as root (tokenless), polling the agent task up to
-    ~15 min so the real command output is captured (a big upgrade outlasts the
-    normal 60s request cap). Returns {ok, code, output}."""
+def _install_one(entry, cmd, token=None, become_password=None, description=None):
+    """Run one host's install as the initiating operator (RBAC: runuser -u
+    <admin> under the host's sudo policy — same privilege path as every other
+    operator write action), polling the agent task up to ~15 min so the real
+    command output is captured (a big upgrade outlasts the normal 60s request
+    cap). `token` attributes/authorizes the run and derives the run-as user;
+    `become_password` is supplied to password-sudo hosts; `description` is the
+    activity-feed label. Returns {ok, code, output}."""
     import time as _t
     try:
-        out = _with_token(None, lambda: dispatch.run_on_entry(entry, cmd, needs_sudo=False))
+        out = _with_token(token, lambda: dispatch.run_on_entry(
+            entry, cmd, kind="command", become_password=become_password,
+            needs_sudo=True, description=description))
     except Exception as e:
         return {"ok": False, "code": None, "output": str(e)}
     if out.get("error"):
@@ -1231,16 +1240,19 @@ def _install_one(entry, cmd):
 
 
 @app.post("/api/fleet-updates/install")
-def fleet_updates_install(body: InstallUpdatesRequest, user: str = Depends(require_operator)):
+def fleet_updates_install(body: InstallUpdatesRequest, request: Request,
+                          user: str = Depends(require_operator)):
     """Kick a fleet update install in the BACKGROUND (a package upgrade can run
     for minutes — a synchronous call would just spin) and track per-host status +
-    output so the UI can show live progress. Dispatched as root (tokenless), so
-    no operator sudo password is needed. Poll /api/fleet-updates/install-status."""
+    output so the UI can show live progress. Runs as the initiating operator
+    (RBAC: runuser -u <admin> under the host's sudo policy), the same privilege
+    path as every other operator write action. Poll /api/fleet-updates/install-status."""
     import time as _t
     import uuid
     action = "all_updates" if body.kind == "all" else "security_updates"
     cmd = (actions.get("pkg_update").build({"names": ""}) if action == "all_updates"
            else actions.get("sec_install_updates").build({}))
+    install_desc = "Install all updates" if action == "all_updates" else "Install security updates"
     try:
         all_entries = dispatch.list_merged_hosts(agent_only=False)
     except Exception as e:
@@ -1249,6 +1261,14 @@ def fleet_updates_install(body: InstallUpdatesRequest, user: str = Depends(requi
     entries = [e for e in all_entries if (not tgt or e.get("id") in tgt)]
     if not entries:
         raise HTTPException(status_code=400, detail="No matching target hosts.")
+
+    # Capture the operator token + resolve each host's become-password NOW, at
+    # request time: the install runs later on a background thread, past the
+    # request's own token/scope. Become = this run's inline password (if any)
+    # over the operator's stored per-host/fleet default.
+    token = _session_token(request)
+    become_by_id = {e.get("id"): (body.sudo_password or sudo_store.resolve(user, e.get("label", "")))
+                    for e in entries}
 
     job_id = uuid.uuid4().hex[:12]
     hosts = [{"id": e.get("id"), "host": e.get("label"), "environment": e.get("environment") or "Unassigned",
@@ -1266,7 +1286,9 @@ def fleet_updates_install(body: InstallUpdatesRequest, user: str = Depends(requi
 
         def do(h):
             _install_set(job_id, h["id"], "running")
-            res = _install_one(entry_by_id[h["id"]], cmd)
+            res = _install_one(entry_by_id[h["id"]], cmd,
+                               token=token, become_password=become_by_id.get(h["id"]),
+                               description=install_desc)
             _install_set(job_id, h["id"], "done" if res["ok"] else "failed", res["code"], res["output"])
 
         try:

@@ -44,19 +44,20 @@ export default function HostTree({ hosts, value, onChange, onRefresh, footer }) 
             <div className="env-group" key={env}>
               <div className="env-head" onClick={() =>
                 setCollapsed((c) => ({ ...c, [env]: isOpen }))}>
-                {isOpen ? "▾" : "▸"} {env}
-                <span
-                  className="faint"
-                  style={{ float: "right", fontSize: 11 }}
-                  onClick={(e) => {
+                <input
+                  type="checkbox"
+                  className="env-check"
+                  title={`Select all in ${env}`}
+                  checked={allInGroup}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => {
                     e.stopPropagation();
                     onChange(allInGroup
                       ? value.filter((id) => !groupIds.includes(id))
                       : [...new Set([...value, ...groupIds])]);
                   }}
-                >
-                  {allInGroup ? "clear" : "all"}
-                </span>
+                />
+                {isOpen ? "▾" : "▸"} {env}
               </div>
               {isOpen && list.map((h) => {
                 // The dot stays reachability (online/offline); a critical posture

@@ -102,6 +102,21 @@ export default function Updates({ role }) {
   const actionable = hosts.filter((h) => h.online !== false && (h.total || 0) > 0).map((h) => h.id);
   const toggle = (id) => setChecked((c) => c.includes(id) ? c.filter((x) => x !== id) : [...c, id]);
 
+  // Any ONLINE host is selectable — not just ones with pending updates — because
+  // Reboot targets hosts regardless of update state (a host can be at 0 pending
+  // but still "need reboot"). Gating the checkbox on h.total>0 made every box
+  // unclickable after a rescan that found no updates.
+  const selectableIds = (list) => list.filter((h) => h.online !== false).map((h) => h.id);
+  const groupAllOn = (list) => {
+    const ids = selectableIds(list);
+    return ids.length > 0 && ids.every((id) => checked.includes(id));
+  };
+  const toggleGroup = (list) => {
+    const ids = selectableIds(list);
+    const allOn = ids.length > 0 && ids.every((id) => checked.includes(id));
+    setChecked((c) => allOn ? c.filter((id) => !ids.includes(id)) : [...new Set([...c, ...ids])]);
+  };
+
   const [job, setJob] = useState(null);          // live install job {kind, done, hosts:[...]}
   const jobPoll = React.useRef(null);
   useEffect(() => () => { if (jobPoll.current) clearInterval(jobPoll.current); }, []);
@@ -226,13 +241,17 @@ export default function Updates({ role }) {
               {groups.map(([env, list]) => (
                 <React.Fragment key={env}>
                   <tr><td colSpan={canAct ? 6 : 5} style={{ padding: "7px 8px", borderTop: "1px solid var(--border)",
-                      fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--text-faint)" }}>{env}</td></tr>
+                      fontWeight: 700, fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--text-faint)" }}>
+                    {canAct && <input type="checkbox" title={`Select all in ${env}`}
+                                      style={{ marginRight: 8, verticalAlign: "middle" }}
+                                      checked={groupAllOn(list)} onChange={() => toggleGroup(list)} />}
+                    {env}</td></tr>
                   {list.map((h) => {
                     const off = h.online === false;
                     return (
                       <tr key={h.id} style={{ borderTop: "1px solid var(--border)", opacity: off ? 0.55 : 1 }}>
                         {canAct && <td style={{ padding: "5px 8px" }}>
-                          <input type="checkbox" disabled={off || !(h.total > 0)} checked={checked.includes(h.id)}
+                          <input type="checkbox" disabled={off} checked={checked.includes(h.id)}
                                  onChange={() => toggle(h.id)} /></td>}
                         <td style={{ padding: "5px 8px" }}>{h.host}
                           {off && <span className="faint" style={{ marginLeft: 6, fontSize: 11 }}>offline</span>}

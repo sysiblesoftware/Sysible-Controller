@@ -282,7 +282,9 @@ tr:hover td { background: var(--row-hover); }
 .host-pane { border-right: 1px solid var(--border); padding-right: 14px; display: flex; flex-direction: column; }
 .host-pane .ctl-row { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
 .host-tree { flex: 1; overflow-y: auto; margin-top: 8px; }
-.env-group > .env-head { font-weight: 700; color: var(--text); padding: 6px 4px; cursor: pointer; }
+.env-group > .env-head { font-weight: 700; color: var(--text); padding: 6px 4px; cursor: pointer;
+  display: flex; align-items: center; gap: 6px; }
+.env-group > .env-head .env-check { cursor: pointer; flex-shrink: 0; }
 .host-row { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 18px; font-size: 13px; }
 /* The host name is the flexible part: it truncates with an ellipsis so the type
    tag and the "critical" marker to its right are never clipped in the narrow

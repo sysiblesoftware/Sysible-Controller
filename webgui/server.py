@@ -57,7 +57,7 @@ from fastapi import (
     FastAPI, HTTPException, Request, Depends, WebSocket, WebSocketDisconnect,
     UploadFile, File, Form,
 )
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
@@ -65,6 +65,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from client import api
 from client import _api_dispatch as dispatch
+from client import _api_users
 from webgui import actions
 
 
@@ -2793,20 +2794,64 @@ def _normalize(label, r, env="Unassigned"):
 # ----------------------------------------------------------------------
 # File transfer (Sysible Connect) - browser <-> host over SSH
 # ----------------------------------------------------------------------
-# Reuses the shared SSH transfer helpers. Upload: the browser's
-# multipart file is spooled to a temp file, pushed with upload_file_ssh,
-# then the temp file is removed. Download: download_file_ssh writes to a
-# temp file which is streamed back as an attachment and cleaned up after.
+# Two transports, chosen per host:
+#   * AGENT host (agent/merged entry) - the controller usually can't reach it
+#     over SSH (NAT / outbound-only agent), so transfer runs THROUGH the agent:
+#     a small base64 python snippet is dispatched as a normal task (same path
+#     the interactive terminal uses) and polled to completion. Bounded by
+#     AGENT_FILE_TRANSFER_LIMIT_BYTES since the payload rides inside a command.
+#   * pure SSH host - the standing controller-key SFTP path (no size limit).
+def _transfer_entry(host_id):
+    """Merged-host entry for `host_id`, or None if unknown. Used to pick the
+    agent-vs-SSH transfer transport (and, for merged hosts, to resolve the
+    real agent host_id, which differs from the entry id)."""
+    try:
+        for e in dispatch.list_merged_hosts(agent_only=False):
+            if e["id"] == host_id:
+                return e
+    except Exception:
+        return None
+    return None
+
+
 @app.post("/api/files/upload")
 async def files_upload(
     host: str = Form(...),
     remote_path: str = Form(...),
     file: UploadFile = File(...),
+    request: Request = None,
     user: str = Depends(require_operator),
 ):
+    entry = _transfer_entry(host)
+    data = await file.read()
+
+    if entry is not None and entry.get("kind") in ("agent", "merged"):
+        limit = _api_users.AGENT_FILE_TRANSFER_LIMIT_BYTES
+        if len(data) > limit:
+            raise HTTPException(
+                status_code=413,
+                detail=(f"This host is managed by its agent, so uploads ride inside a task "
+                        f"and are limited to {limit} bytes (this file is {len(data)})."))
+        safe = _safe_upload_name(file.filename, "upload.bin")
+        token = _session_token(request)
+        become = sudo_store.resolve(user, entry.get("label", ""))
+
+        def _do():
+            script = _api_users._build_agent_upload_script(remote_path, safe, data)
+            cmd = _api_users._wrap_python_script(script)
+            return _dispatch_one(entry, cmd, kind="upload_file", become_password=become,
+                                 token=token, description=f"Upload {safe} → {remote_path}")
+
+        res = await asyncio.to_thread(_do)
+        if not res.get("ok"):
+            raise HTTPException(status_code=502,
+                                detail=f"Upload failed: {res.get('error') or res.get('stderr') or 'unknown error'}")
+        return {"host": host, "remote_path": (res.get("stdout") or remote_path).strip(),
+                "filename": file.filename, "bytes": len(data)}
+
+    # Pure-SSH host: SFTP via the controller.
     tmp = Path(tempfile.mkdtemp(prefix="sysible-up-")) / _safe_upload_name(file.filename, "upload.bin")
     try:
-        data = await file.read()
         tmp.write_bytes(data)
         try:
             result = await asyncio.to_thread(api.upload_file_ssh, host, str(tmp), remote_path)
@@ -2823,9 +2868,37 @@ async def files_upload(
 
 
 @app.get("/api/files/download")
-async def files_download(host: str, path: str, user: str = Depends(require_operator)):
+async def files_download(host: str, path: str, request: Request,
+                         user: str = Depends(require_operator)):
+    entry = _transfer_entry(host)
+    filename = (os.path.basename(path.rstrip("/")) or "download.bin").replace('"', "").replace("\n", "")
+
+    if entry is not None and entry.get("kind") in ("agent", "merged"):
+        token = _session_token(request)
+        become = sudo_store.resolve(user, entry.get("label", ""))
+
+        def _do():
+            script = _api_users._build_agent_download_script(path)
+            cmd = _api_users._wrap_python_script(script)
+            return _dispatch_one(entry, cmd, kind="download_file", become_password=become,
+                                 token=token, description=f"Download {path}")
+
+        res = await asyncio.to_thread(_do)
+        if not res.get("ok"):
+            stderr = res.get("stderr") or ""
+            code = 404 if "not a file or not found" in stderr else 502
+            raise HTTPException(status_code=code,
+                                detail=f"Download failed: {stderr or res.get('error') or 'unknown error'}")
+        import base64 as _b64
+        try:
+            raw = _b64.b64decode((res.get("stdout") or "").strip())
+        except Exception:
+            raise HTTPException(status_code=502, detail="Download failed: could not decode file data from agent")
+        return Response(content=raw, media_type="application/octet-stream",
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+    # Pure-SSH host: SFTP via the controller.
     tmpdir = Path(tempfile.mkdtemp(prefix="sysible-dn-"))
-    filename = os.path.basename(path.rstrip("/")) or "download.bin"
     dest = tmpdir / filename
     try:
         await asyncio.to_thread(api.download_file_ssh, host, path, str(dest))

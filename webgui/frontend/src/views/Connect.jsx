@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import HostResults from "../components/HostResults.jsx";
+import FileTransfer from "../components/FileTransfer.jsx";
 
 // Sysible Connect — mirrors the desktop window: managed-hosts tree on the
 // left; selected-host panel, terminals, fleet actions, file transfer, and
@@ -164,7 +165,11 @@ export default function Connect() {
 
         <div className="connect-actions">
           <FleetActions hosts={hosts} checked={checked} onErr={setErr} />
-          {sel && <FileTransfer host={sel} onErr={setErr} />}
+          {sel && (
+            <Collapsible title={`File Transfer — ${sel.label}`}>
+              <FileTransfer host={sel} onErr={setErr} />
+            </Collapsible>
+          )}
           <SshEnroll onDone={loadHosts} onErr={setErr} />
         </div>
       </div>
@@ -321,118 +326,6 @@ function FleetActions({ hosts, checked, onErr }) {
         </div>
       )}
     </Collapsible>
-  );
-}
-
-function FileTransfer({ host, onErr }) {
-  const [remotePath, setRemotePath] = useState("");
-  const [file, setFile] = useState(null);
-  const [dnPath, setDnPath] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-
-  async function upload(e) {
-    e.preventDefault(); setBusy(true); setMsg(""); onErr("");
-    try {
-      const r = await api.uploadFile(host.id, remotePath.trim(), file);
-      setMsg(`Uploaded ${r.filename} (${r.bytes} bytes) → ${r.remote_path}`);
-      setFile(null); e.target.reset();
-    } catch (e2) { onErr(e2.message); }
-    finally { setBusy(false); }
-  }
-  function download(e) {
-    e.preventDefault();
-    window.location.href = api.downloadUrl(host.id, dnPath.trim());
-  }
-
-  const [browse, setBrowse] = useState(null); // "upload" | "download" target for the picker
-
-  return (
-    <Collapsible title={`File Transfer — ${host.label}`}>
-      <form onSubmit={upload} className="row" style={{ flexWrap: "wrap", gap: 8 }}>
-        <input style={{ flex: 2, minWidth: 160 }} placeholder="Remote destination path"
-               value={remotePath} onChange={(e) => setRemotePath(e.target.value)} />
-        <button type="button" className="btn sm ghost" onClick={() => setBrowse("upload")}>Browse…</button>
-        <input style={{ flex: 2, minWidth: 160 }} type="file"
-               onChange={(e) => setFile(e.target.files[0] || null)} />
-        <button className="btn sm" disabled={busy || !file || !remotePath.trim()}>Upload</button>
-      </form>
-      <form onSubmit={download} className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 8 }}>
-        <input style={{ flex: 3, minWidth: 200 }} placeholder="Remote file path to fetch"
-               value={dnPath} onChange={(e) => setDnPath(e.target.value)} />
-        <button type="button" className="btn sm ghost" onClick={() => setBrowse("download")}>Browse…</button>
-        <button className="btn sm" disabled={!dnPath.trim()}>Download</button>
-      </form>
-      {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
-      {browse && (
-        <RemoteBrowse host={host} mode={browse} onErr={onErr}
-          onClose={() => setBrowse(null)}
-          onPick={(path) => { (browse === "upload" ? setRemotePath : setDnPath)(path); setBrowse(null); }} />
-      )}
-    </Collapsible>
-  );
-}
-
-// Lightweight remote file/folder picker: lists a directory on the host (via a
-// one-off `ls` exec) and lets you click into folders or pick an entry, so you
-// don't have to remember and type the full remote path. In "upload" mode a
-// folder is the selection (destination dir); in "download" mode a file is.
-function RemoteBrowse({ host, mode, onPick, onClose, onErr }) {
-  const [dir, setDir] = useState(".");
-  const [entries, setEntries] = useState([]);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-
-  async function list(d) {
-    setBusy(true); setErr("");
-    const cmd = `cd '${d.replace(/'/g, "'\\''")}' 2>/dev/null && pwd && ls -1Ap`;
-    try {
-      const r = await api.fleet("script", [host.id], cmd);
-      const res = (r.results || [])[0] || {};
-      const out = (res.stdout || "");
-      const lines = out.split("\n").filter((l) => l !== "");
-      if (lines.length === 0) { setErr(res.stderr || "Could not read that directory."); return; }
-      const cwd = lines.shift();
-      setDir(cwd);
-      setEntries(lines);
-    } catch (e) { setErr(e.message); }
-    finally { setBusy(false); }
-  }
-  useEffect(() => { list("."); /* eslint-disable-next-line */ }, []);
-
-  const join = (name) => (dir.endsWith("/") ? dir + name : dir + "/" + name);
-
-  return (
-    <div className="modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal" style={{ maxWidth: 560, textAlign: "left" }}>
-        <h3 style={{ textAlign: "left", marginBottom: 4 }}>{mode === "upload" ? "Choose destination folder" : "Choose file to download"}</h3>
-        <div className="faint mono" style={{ fontSize: 12, marginBottom: 8, wordBreak: "break-all" }}>{host.label}:{dir}</div>
-        {err && <div className="error-box">{err}</div>}
-        <div style={{ maxHeight: "46vh", overflowY: "auto", border: "1px solid var(--border)", borderRadius: 6 }}>
-          {busy ? <div className="empty" style={{ padding: 20 }}><span className="spin" /></div>
-            : entries.map((name) => {
-                const isDir = name.endsWith("/");
-                const clean = isDir ? name.slice(0, -1) : name;
-                return (
-                  <div key={name} className="host-row" style={{ cursor: "pointer", justifyContent: "space-between" }}
-                       onClick={() => { if (isDir) list(name === "../" ? join("..") : join(clean)); else if (mode === "download") onPick(join(clean)); }}
-                       onDoubleClick={() => { if (isDir && mode === "upload") onPick(join(clean)); }}>
-                    <span>{isDir ? "📁 " : "📄 "}{clean}</span>
-                    {isDir && mode === "upload" &&
-                      <button type="button" className="btn ghost sm" onClick={(e) => { e.stopPropagation(); onPick(join(clean)); }}>Use this folder</button>}
-                  </div>
-                );
-              })}
-        </div>
-        <div className="row" style={{ justifyContent: "space-between", marginTop: 12 }}>
-          <span className="faint">{mode === "upload" ? "Click a folder to open it; use the button to pick it." : "Click a folder to open it; click a file to pick it."}</span>
-          <div className="row" style={{ gap: 8 }}>
-            {mode === "upload" && <button className="btn sm" onClick={() => onPick(dir)}>Use “{dir}”</button>}
-            <button className="btn ghost sm" onClick={onClose}>Cancel</button>
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
 

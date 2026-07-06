@@ -1,16 +1,19 @@
 import React, { useEffect, useRef, useState } from "react";
 import TerminalSession from "./TerminalSession.jsx";
+import FileTransfer from "./FileTransfer.jsx";
 import { api } from "../api.js";
 
 // Full-window single terminal, loaded when the SPA is opened with ?term=<hostId>
-// in a pop-out window — mirrors the desktop opening each terminal in its own
-// window. Relies on the same session cookie (same origin). Carries the same
-// toolbar the inline dock had (sudo, interrupt, find, zoom, save, clear) so a
-// popped-out terminal is a first-class shell, not a stripped-down one.
+// in a pop-out window — each terminal opens in its own window. Relies on the
+// same session cookie (same origin). Carries the same toolbar the inline dock
+// had (sudo, interrupt, find, zoom, save, clear), plus per-terminal file
+// transfer (upload/download to/from this host), so a popped-out terminal is a
+// first-class shell, not a stripped-down one.
 export default function StandaloneTerminal({ hostId, label }) {
   const handle = useRef(null);
   const [find, setFind] = useState("");
   const [status, setStatus] = useState("connecting");
+  const [showXfer, setShowXfer] = useState(false);
   // Per-account opt-in (granted by a superuser) for the Send Sudo Password
   // button. Off by default; the server also enforces this on the ws side.
   const [canSudo, setCanSudo] = useState(false);
@@ -30,6 +33,10 @@ export default function StandaloneTerminal({ hostId, label }) {
             : (status?.startsWith("error") || status === "closed") ? "bad" : "")} />
           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label || hostId}</span>
         </span>
+        <button className={"btn sm" + (showXfer ? "" : " ghost")} onClick={() => setShowXfer((v) => !v)}
+                title="Upload a file to / download a file from this host">
+          Files {showXfer ? "▴" : "▾"}
+        </button>
         <button className="btn sm" disabled={!canSudo} onClick={act((h) => h.sendSudo())}
                 title={canSudo
                   ? "Type your stored sudo password + Enter into this shell"
@@ -47,6 +54,12 @@ export default function StandaloneTerminal({ hostId, label }) {
         <button className="btn ghost sm" onClick={act((h) => h.zoom(1))} title="Larger font">A+</button>
         <button className="btn ghost sm" onClick={act((h) => h.clear())}>Clear</button>
       </div>
+      {showXfer && (
+        <div style={{ padding: "10px 12px", background: "var(--panel)",
+                      borderBottom: "1px solid var(--border)" }}>
+          <FileTransfer host={{ id: hostId, label: label || hostId }} />
+        </div>
+      )}
       <div style={{ flex: 1, minHeight: 0, padding: 6 }}>
         <TerminalSession ref={handle} hostId={hostId} label={label} active={true} onStatus={setStatus} />
       </div>

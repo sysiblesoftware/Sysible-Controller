@@ -2839,6 +2839,16 @@ async def files_upload(
 ):
     entry = _transfer_entry(host)
     is_agent = entry is not None and entry.get("kind") in ("agent", "merged")
+    # Authorize BEFORE buffering the body: the pure-SSH path is superuser-only
+    # (SFTP as the SSH login user). Checking here — not after read() — stops an
+    # unauthorized sysadmin from making us buffer up to _MAX_SSH_UPLOAD_BYTES per
+    # request just to be told 403.
+    if not is_agent and request.session.get("role") != "superuser":
+        raise HTTPException(
+            status_code=403,
+            detail=("File transfer to a pure-SSH host uses the shared controller SSH "
+                    "credential and is limited to superusers. Agent-managed hosts "
+                    "transfer as your own account."))
     # Cap how much we ever pull into memory. Agent hosts are hard-limited by the
     # in-task transfer size; SSH hosts get a large-but-bounded ceiling so a
     # single upload can't OOM this shared single-process BFF. Read only up to the
@@ -2880,16 +2890,8 @@ async def files_upload(
 
     # Pure-SSH host: SFTP runs as the host's SSH LOGIN user (often root) with the
     # shared controller key — it does NOT drop to the operator's own account the
-    # way agent transfers, SSH exec, and the terminal do. So a non-superuser
-    # could otherwise read/write files as root here, beyond their per-user rights.
-    # Restrict this path to superusers; every operator can still transfer to
-    # agent-managed hosts as their own account (the branch above).
-    if request.session.get("role") != "superuser":
-        raise HTTPException(
-            status_code=403,
-            detail=("File transfer to a pure-SSH host uses the shared controller SSH "
-                    "credential and is limited to superusers. Agent-managed hosts "
-                    "transfer as your own account."))
+    # way agent transfers, SSH exec, and the terminal do. The superuser gate for
+    # this path is enforced up top, before the body is buffered.
     tmp = Path(tempfile.mkdtemp(prefix="sysible-up-")) / _safe_upload_name(file.filename, "upload.bin")
     ssh_token = _session_token(request)
     try:

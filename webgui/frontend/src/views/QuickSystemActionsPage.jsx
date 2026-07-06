@@ -85,7 +85,16 @@ export default function QuickSystemActionsPage({ hosts = [], onRefreshHosts, pre
 
       {!expanded && (
       <div className="tool-actions-col"><div className="tool-actions-scroll">
-        <fieldset className="tool-group-box" style={{ marginTop: 0 }}><legend>Service (by name)</legend>
+        <fieldset className="tool-group-box" style={{ marginTop: 0 }}><legend>Reachability</legend>
+          <div className="faint" style={{ fontSize: 12, marginBottom: 8 }}>
+            Confirm the checked hosts are reachable and their agents are answering — a green OK per host means it responded.
+          </div>
+          <div className="group-buttons">
+            <button className="btn sm" disabled={busy} onClick={() => run("qsa_ping", {}, "Ping (reachability)")}>Ping</button>
+          </div>
+        </fieldset>
+
+        <fieldset className="tool-group-box"><legend>Service (by name)</legend>
           <label className="field" style={{ marginTop: 0 }}>
             <span>Service name (also filters the list below)</span>
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. nginx, docker, postgresql" />

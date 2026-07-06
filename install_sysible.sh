@@ -317,6 +317,19 @@ ExecStart=$VENV/bin/uvicorn backend.app:app --host 0.0.0.0 --port 9000 --ssl-key
 Restart=always
 RestartSec=5
 User=root
+# Baseline systemd hardening. These directives don't restrict the file
+# writes, process exec (systemctl/systemd-run), or networking this service
+# needs, so they're safe to ship on by default. Fuller confinement
+# (NoNewPrivileges, ProtectSystem=strict, SystemCallFilter, a locked-down
+# CapabilityBoundingSet) is recommended but must be validated per-site since
+# the controller execs privileged host tooling — see SECURITY.md.
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target
@@ -404,7 +417,13 @@ chmod +x /usr/local/bin/sysible_controller
 # is all that's needed.
 # =========================================================
 mkdir -p "$BASE/run"
-chmod 755 "$BASE/run"
+chmod 750 "$BASE/run"
+
+# Owner-only on the whole install tree. Everything under $BASE (the SQLite DB
+# with admin hashes/agent secrets/live tokens, the API key, TLS private key,
+# SSH keys, sudo-store key) is read only by the root-run services, so no other
+# local account should be able to traverse in and read them.
+chmod 700 "$BASE"
 
 echo ""
 echo "Installation complete"

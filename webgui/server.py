@@ -2871,7 +2871,7 @@ async def files_upload(
 async def files_download(host: str, path: str, request: Request,
                          user: str = Depends(require_operator)):
     entry = _transfer_entry(host)
-    filename = (os.path.basename(path.rstrip("/")) or "download.bin").replace('"', "").replace("\n", "")
+    filename = (os.path.basename(path.rstrip("/")) or "download.bin").replace('"', "").replace("\n", "").replace("\r", "")
 
     if entry is not None and entry.get("kind") in ("agent", "merged"):
         token = _session_token(request)

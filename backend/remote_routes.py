@@ -722,6 +722,13 @@ def exec_remote(name: str, body: ExecRequest, request: Request):
     if name not in hosts:
         raise HTTPException(status_code=404, detail="host not found")
 
+    # A logged exec is an operator action — read-only auditors may not run one.
+    # Unlogged (log=False) execs are the internal read-only sweeps (user-list
+    # sync, posture, fleet-health) that auditors are allowed to drive, so those
+    # pass through. Mirrors the agent dispatch path's auditor block in app.py.
+    if body.log:
+        _reject_auditor(request)
+
     # Activity feed: record admin-initiated SSH exec (identity from token),
     # unless this is a background/internal read (body.log=False, e.g. the
     # user-list sync) which isn't an operator action.
@@ -827,6 +834,21 @@ def _resolve_admin_username(request: Request):
     from backend.db import resolve_admin_token
     admin = resolve_admin_token(token)
     return admin["username"] if admin else None
+
+
+def _reject_auditor(request: Request):
+    """Read-only 'auditor' accounts must never run a command or open a shell on
+    an SSH host. The agent dispatch path already blocks this in backend/app.py;
+    the SSH exec/terminal path resolves identity but never checked the role, so
+    a token-bearing auditor could execute here. Enforce it controller-side too
+    (defence-in-depth alongside the BFF's require_operator gate)."""
+    token = request.headers.get("X-Sysible-Admin-Token")
+    if not token:
+        return
+    from backend.db import resolve_admin_token
+    admin = resolve_admin_token(token)
+    if admin and admin.get("role") == "auditor":
+        raise HTTPException(status_code=403, detail="Auditor accounts are read-only.")
 
 
 # =========================================================
@@ -1084,6 +1106,9 @@ def _queue_ephemeral_revoke(revoke):
 
 @router.post("/hosts/{name}/terminal/open")
 def open_terminal(name: str, request: Request):
+    # An interactive shell is never a read-only action — auditors are blocked
+    # controller-side (the BFF websocket also rejects them), defence-in-depth.
+    _reject_auditor(request)
     # Each open mints a brand-new, independent session so a host can have
     # several shells at once; reap sessions abandoned by a dead GUI first.
     _reap_idle_sessions()

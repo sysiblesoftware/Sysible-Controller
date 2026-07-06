@@ -105,6 +105,21 @@ def require_superuser(x_admin_token: str = Header(default=None, alias="X-Sysible
         raise HTTPException(status_code=403, detail="This action requires a superuser account.")
 
 
+def acting_admin_name(x_admin_token: str = Header(default=None, alias="X-Sysible-Admin-Token")):
+    """The username behind the presented admin token — for UNFORGEABLE audit
+    attribution of *who* performed a privileged account change. Resolve it from
+    the validated token here rather than trusting a client-supplied 'actor'
+    field (which the caller could set to any name). Returns 'system' during
+    first-run bootstrap (no token yet), 'unknown' for an unresolvable token
+    (the route's own require_superuser gate has already rejected an invalid one
+    on the paths that use this)."""
+    from backend.db import resolve_admin_token
+    if not x_admin_token:
+        return "system"
+    admin = resolve_admin_token(x_admin_token)
+    return (admin or {}).get("username") or "unknown"
+
+
 def require_activity_viewer(x_admin_token: str = Header(default=None, alias="X-Sysible-Admin-Token")):
     """RBAC gate for the activity feed: allowed for a superuser OR the read-only
     'auditor' role (oversight without any ability to act). Same token-resolution

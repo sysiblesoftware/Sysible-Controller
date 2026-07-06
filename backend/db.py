@@ -11,6 +11,14 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "sysible.db"
 
+# How many activity-log rows to retain (0 = never trim; let a SIEM own
+# retention). Default ~months of history rather than the old 5000-row cap that
+# silently dropped recent activity on a busy fleet.
+try:
+    _ACTIVITY_LOG_MAX_ROWS = int(os.getenv("SYSIBLE_ACTIVITY_LOG_MAX_ROWS", "500000"))
+except ValueError:
+    _ACTIVITY_LOG_MAX_ROWS = 500000
+
 
 def _connect():
     """Single choke point for every DB connection in this file (was
@@ -45,7 +53,30 @@ def _connect():
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
+    # The DB holds administrator password hashes, agent bearer secrets, and live
+    # admin tokens. SQLite creates the file under the process umask (0644 under
+    # systemd's default), leaving it world-readable so any local account could
+    # copy it and impersonate agents/admins. Force owner-only on the DB and its
+    # WAL/SHM sidecars. Once per process (not on the per-connection hot path that
+    # heartbeats hammer): the mode persists on disk, so a single pass suffices.
+    global _db_perms_done
+    if not _db_perms_done:
+        _restrict_db_permissions()
+        _db_perms_done = True
     return conn
+
+
+_db_perms_done = False
+
+
+def _restrict_db_permissions():
+    for suffix in ("", "-wal", "-shm"):
+        p = Path(str(DB_PATH) + suffix)
+        try:
+            if p.exists():
+                os.chmod(p, 0o600)
+        except OSError:
+            pass
 
 
 # =========================================================
@@ -1666,12 +1697,20 @@ def log_activity(username, host, description, command=""):
         (time.time(), username or "(unknown)", host or "", description or "", command or ""),
     )
     conn.commit()
-    # Keep the table from growing forever - trim to the most recent 5000 rows.
-    cur.execute(
-        "DELETE FROM activity_log WHERE id NOT IN "
-        "(SELECT id FROM activity_log ORDER BY id DESC LIMIT 5000)"
-    )
-    conn.commit()
+    # Cap the table so it can't grow unbounded, but keep enough history to be
+    # useful as an audit record. The old 5000-row cap silently discarded
+    # hours-to-days of activity on a busy fleet (a compliance red flag).
+    # SYSIBLE_ACTIVITY_LOG_MAX_ROWS (default 500000, ~months of history) tunes
+    # it; set 0 to disable trimming entirely when an external SIEM/export owns
+    # retention. Compliance note: this local log is NOT a system of record —
+    # forward it to a SIEM for durable, tamper-evident retention.
+    if _ACTIVITY_LOG_MAX_ROWS > 0:
+        cur.execute(
+            "DELETE FROM activity_log WHERE id NOT IN "
+            "(SELECT id FROM activity_log ORDER BY id DESC LIMIT ?)",
+            (_ACTIVITY_LOG_MAX_ROWS,),
+        )
+        conn.commit()
     conn.close()
 
 

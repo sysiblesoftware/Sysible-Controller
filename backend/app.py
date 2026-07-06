@@ -9,7 +9,7 @@ import threading
 import time
 
 from backend.agent_bundle import mint_agent_bundle, detect_local_ips, resolve_controller_addresses
-from backend.auth import require_api_key, require_superuser, require_activity_viewer
+from backend.auth import require_api_key, require_superuser, require_activity_viewer, acting_admin_name
 from backend.db import (
     create_enroll_token,
     validate_enroll_token,
@@ -1328,7 +1328,7 @@ def controller_restart_route():
 
 
 @app.post("/controller/update", dependencies=[Depends(require_api_key), Depends(require_superuser)])
-def controller_update_route():
+def controller_update_route(acting: str = Depends(acting_admin_name)):
     """Trigger an in-place controller self-update: the same work as the CLI
     `sysible_controller update` (git pull -> rsync into /opt/sysible -> rebuild
     the web console -> restart services). Superuser-only.
@@ -1373,6 +1373,14 @@ def controller_update_route():
     if r.returncode != 0:
         detail = (r.stderr or r.stdout or "").strip() or "failed to launch updater"
         raise HTTPException(status_code=500, detail=f"Could not start update: {detail}")
+
+    # Production code change — record it in the audit trail, attributed to the
+    # superuser who triggered it (the agent-fleet update is logged too).
+    try:
+        log_admin_audit("controller_update_started", acting,
+                        "in-place controller self-update triggered")
+    except Exception:
+        pass
 
     return {
         "status": "started",
@@ -1792,7 +1800,7 @@ def list_administrators_route():
 
 
 @app.post("/admin/administrators", dependencies=[Depends(require_api_key), Depends(require_superuser)])
-def add_administrator_route(body: AddAdministratorRequest):
+def add_administrator_route(body: AddAdministratorRequest, acting: str = Depends(acting_admin_name)):
     from backend.edition import enforce_role_limit
     from backend.db import count_administrators_by_role
 
@@ -1819,20 +1827,19 @@ def add_administrator_route(body: AddAdministratorRequest):
     salt, password_hash = portal_auth.hash_password(body.password)
     created = add_administrator(
         username, password_hash, salt, must_change_password=1,
-        created_by=body.actor or None, role=role,
+        created_by=acting, role=role,
     )
 
     if not created:
         raise HTTPException(status_code=409, detail="An administrator with that username already exists")
 
-    log_admin_audit("administrator_added", username,
-                    f"{role} added by {body.actor}" if body.actor else f"{role} added")
+    log_admin_audit("administrator_added", username, f"{role} added by {acting}")
 
     return {"username": username, "status": "added", "role": role}
 
 
 @app.delete("/admin/administrators/{username}", dependencies=[Depends(require_api_key), Depends(require_superuser)])
-def remove_administrator_route(username: str, actor: str = ""):
+def remove_administrator_route(username: str, acting: str = Depends(acting_admin_name)):
 
     if get_administrator(username) is None:
         raise HTTPException(status_code=404, detail="No such administrator")
@@ -1841,14 +1848,15 @@ def remove_administrator_route(username: str, actor: str = ""):
         raise HTTPException(status_code=400, detail="Cannot remove the last remaining administrator")
 
     remove_administrator(username)
-    log_admin_audit("administrator_removed", username, f"removed by {actor}" if actor else "")
+    log_admin_audit("administrator_removed", username, f"removed by {acting}")
 
     return {"username": username, "status": "removed"}
 
 
 @app.post("/admin/administrators/{username}/sudo-connect",
           dependencies=[Depends(require_api_key), Depends(require_superuser)])
-def set_administrator_sudo_connect_route(username: str, body: SetSudoConnectRequest):
+def set_administrator_sudo_connect_route(username: str, body: SetSudoConnectRequest,
+                                         acting: str = Depends(acting_admin_name)):
     """Superuser-gated: grant or revoke an administrator's access to the
     Sysible Connect terminal's "Send sudo password" button. Off by default;
     applies to every account (a superuser can grant their own)."""
@@ -1858,15 +1866,15 @@ def set_administrator_sudo_connect_route(username: str, body: SetSudoConnectRequ
     set_administrator_sudo_connect(username, body.allowed)
     log_admin_audit(
         "sudo_connect_set", username,
-        f"{'granted' if body.allowed else 'revoked'}"
-        + (f" by {body.actor}" if body.actor else ""))
+        f"{'granted' if body.allowed else 'revoked'} by {acting}")
 
     return {"username": username, "sudo_connect": bool(body.allowed)}
 
 
 @app.post("/admin/administrators/{username}/role",
           dependencies=[Depends(require_api_key), Depends(require_superuser)])
-def set_administrator_role_route(username: str, body: SetRoleRequest):
+def set_administrator_role_route(username: str, body: SetRoleRequest,
+                                 acting: str = Depends(acting_admin_name)):
     """Superuser-gated promote/demote of an administrator's role
     ('superuser' | 'sysadmin' | 'auditor'). Guards:
       - refuse to demote the LAST superuser (would lock everyone out of admin
@@ -1896,7 +1904,7 @@ def set_administrator_role_route(username: str, body: SetRoleRequest):
 
     set_administrator_role(username, new_role)
     log_admin_audit("administrator_role_changed", username,
-                    f"{current} -> {new_role}" + (f" by {body.actor}" if body.actor else ""))
+                    f"{current} -> {new_role} by {acting}")
     return {"username": username, "role": new_role, "status": "updated"}
 
 
@@ -1973,7 +1981,8 @@ def force_admin_password_change(body: ForcePasswordChangeRequest):
 
 @app.post("/admin/administrators/{username}/password",
           dependencies=[Depends(require_api_key), Depends(require_superuser)])
-def reset_administrator_password_route(username: str, body: ResetAdministratorPasswordRequest):
+def reset_administrator_password_route(username: str, body: ResetAdministratorPasswordRequest,
+                                       acting: str = Depends(acting_admin_name)):
     """Superuser resets ANOTHER administrator's password without knowing the
     target's current password. The target must change it on next login."""
 
@@ -1992,8 +2001,7 @@ def reset_administrator_password_route(username: str, body: ResetAdministratorPa
     salt, password_hash = portal_auth.hash_password(body.new_password)
     update_administrator_password(username, password_hash, salt, must_change_password=1)
 
-    log_admin_audit("password_reset", username,
-                    f"reset by {body.actor}" if body.actor else "reset by superuser")
+    log_admin_audit("password_reset", username, f"reset by {acting}")
 
     return {"username": username, "status": "reset"}
 

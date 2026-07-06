@@ -14,6 +14,7 @@ typing a username/password into a browser.
 
 import base64
 import html
+import os
 import secrets
 import threading
 import time
@@ -51,6 +52,14 @@ async def _security_headers(request, call_next):
     return response
 
 SESSION_COOKIE = "sysible_portal_session"
+
+# Ceiling on a single portal upload (provisioning artifacts are small). Prevents
+# a shared-credential user from OOM'ing the portal with a huge body. 64 MB
+# default; tune with SYSIBLE_PORTAL_MAX_UPLOAD_BYTES.
+try:
+    _PORTAL_MAX_UPLOAD_BYTES = int(os.getenv("SYSIBLE_PORTAL_MAX_UPLOAD_BYTES", str(64 * 1024 * 1024)))
+except ValueError:
+    _PORTAL_MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 
 # The Sysible logo, served on the portal's own pages. Read from the
 # repo-root PNG rather than bundled elsewhere so this process stays free
@@ -460,6 +469,17 @@ async def cli_bundle(request: Request):
     ip = request.client.host if request.client else ""
     auth = request.headers.get("Authorization", "")
 
+    # This Basic-auth path checks the SAME portal password as /login, so it must
+    # share the brute-force lockout — otherwise it's an unthrottled guessing
+    # oracle against the one network-reachable credential.
+    locked = _login_locked_for(ip)
+    if locked:
+        return Response(
+            f"Too many failed attempts. Try again in {locked} seconds.\n",
+            status_code=429, media_type="text/plain",
+            headers={"Retry-After": str(locked)},
+        )
+
     if not auth.startswith("Basic "):
         return Response(
             "Provide the portal username and password with curl -u "
@@ -486,12 +506,14 @@ async def cli_bundle(request: Request):
         pw, creds.get("password_salt"), creds.get("password_hash")
     )
     if not valid:
+        _record_login_failure(ip)
         log_portal_event("login_failed", user, ip)
         return Response(
             "Login failed: wrong username or password.\n",
             status_code=401, media_type="text/plain",
         )
 
+    _clear_login_failures(ip)
     log_portal_event("login_success", user, ip)
     return _build_bundle_response()
 
@@ -518,7 +540,22 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     if not portal_auth.validate_session(token_cookie):
         return RedirectResponse("/?error=expired", status_code=303)
 
-    data = await file.read()
+    # Bound how much we buffer: the portal is for small provisioning artifacts,
+    # and this endpoint is reachable by the shared portal credential (the most
+    # exposed login), so an unbounded read() would let one request OOM the
+    # portal process. Reject an oversized Content-Length up front, and read only
+    # up to the cap+1 so a spoofed/absent length still can't over-buffer.
+    try:
+        clen = int(request.headers.get("content-length") or 0)
+    except (ValueError, TypeError):
+        clen = 0
+    if clen and clen > _PORTAL_MAX_UPLOAD_BYTES + 4096:
+        return Response(f"File exceeds the {_PORTAL_MAX_UPLOAD_BYTES}-byte upload limit.\n",
+                        status_code=413, media_type="text/plain")
+    data = await file.read(_PORTAL_MAX_UPLOAD_BYTES + 1)
+    if len(data) > _PORTAL_MAX_UPLOAD_BYTES:
+        return Response(f"File exceeds the {_PORTAL_MAX_UPLOAD_BYTES}-byte upload limit.\n",
+                        status_code=413, media_type="text/plain")
     portal_files.save_upload(file.filename, data)
 
     return RedirectResponse("/files", status_code=303)

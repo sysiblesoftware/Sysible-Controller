@@ -75,6 +75,7 @@ from backend.db import (
     create_admin_token,
     resolve_admin_token,
     delete_admin_token,
+    delete_admin_tokens_for_user,
     log_activity,
     get_activity_log,
     get_agent_hostname,
@@ -1903,6 +1904,9 @@ def set_administrator_role_route(username: str, body: SetRoleRequest,
     enforce_role_limit(new_role, count_administrators_by_role(new_role))
 
     set_administrator_role(username, new_role)
+    # Revoke the target's live sessions so the new role takes effect immediately
+    # (a demoted superuser must not keep superuser powers on their old token).
+    delete_admin_tokens_for_user(username)
     log_admin_audit("administrator_role_changed", username,
                     f"{current} -> {new_role} by {acting}")
     return {"username": username, "role": new_role, "status": "updated"}
@@ -2000,6 +2004,10 @@ def reset_administrator_password_route(username: str, body: ResetAdministratorPa
 
     salt, password_hash = portal_auth.hash_password(body.new_password)
     update_administrator_password(username, password_hash, salt, must_change_password=1)
+    # Kill the target's existing sessions — a password reset on a suspected-
+    # compromised account must invalidate any token the attacker already holds
+    # (username/role are unchanged, so resolve_admin_token can't catch this).
+    delete_admin_tokens_for_user(username)
 
     log_admin_audit("password_reset", username, f"reset by {acting}")
 

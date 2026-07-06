@@ -408,13 +408,18 @@ def cmd_set_sudo(username: str, enable: bool) -> str:
             f"{detect}; "
             f'if ! getent group "$grp" >/dev/null 2>&1; then '
             f'echo "sudo group \'$grp\' does not exist on this host." >&2; exit 1; fi; '
-            f'usermod -aG "$grp" {u} && echo "Granted sudo to {username} (added to group $grp)."'
+            # The username appears ONLY in the shlex-quoted usermod arg ({u}).
+            # It must not be interpolated into the confirmation echo — neither
+            # raw nor shlex-quoted is safe inside a double-quoted string, since a
+            # value like `$(id)` still command-substitutes there. Keep the echo
+            # value-free; the caller already knows which user it acted on.
+            f'usermod -aG "$grp" {u} && echo "Granted sudo (added to group $grp)."'
         )
     return (
         f"{detect}; "
         # No 2>&1 here: a privilege failure must stay on stderr so the agent's
         # run-as-user path recognizes it and retries under the host's sudo.
-        f'gpasswd -d {u} "$grp" && echo "Revoked sudo from {username} (removed from group $grp)."'
+        f'gpasswd -d {u} "$grp" && echo "Revoked sudo (removed from group $grp)."'
     )
 
 

@@ -82,7 +82,7 @@ export default function FileTransfer({ host, onErr }) {
         </button>
       </form>
       <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>
-        Agent-managed hosts transfer through the agent (limit 140&nbsp;KB per file); SSH hosts have no size limit.
+        Agent-managed hosts transfer as your own account through the agent (limit 140&nbsp;KB per file). Pure-SSH hosts use the shared controller key and are superuser-only.
       </div>
       {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
       {err && <div className="error-box" style={{ marginTop: 8 }}>{err}</div>}

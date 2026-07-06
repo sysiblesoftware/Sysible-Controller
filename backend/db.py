@@ -1658,7 +1658,15 @@ def create_admin_token(token, username, role, expiry):
 
 def resolve_admin_token(token):
     """Return {'username','role'} for a valid, unexpired token, else None.
-    Expired tokens are deleted as a side effect."""
+    Invalid/expired/stale tokens are deleted as a side effect.
+
+    Beyond the 12h expiry, the token is cross-checked against the LIVE account:
+    it's rejected (and deleted) if the administrator no longer exists or no
+    longer holds the role the token was minted with. Without this a removed
+    admin keeps full API access, and a demoted superuser keeps superuser
+    powers, until their token happens to expire — a revocation control silently
+    deferred up to 12h. (Password resets can't be caught this way since the
+    username/role are unchanged, so those call delete_admin_tokens_for_user.)"""
     if not token:
         return None
     conn = _connect()
@@ -1668,11 +1676,18 @@ def resolve_admin_token(token):
     row = cur.fetchone()
     result = None
     if row:
-        if (row["expiry"] or 0) >= time.time():
-            result = {"username": row["username"], "role": row["role"]}
-        else:
+        stale = (row["expiry"] or 0) < time.time()
+        if not stale:
+            cur.execute("SELECT role FROM administrators WHERE username=?", (row["username"],))
+            acct = cur.fetchone()
+            # Account gone, or role changed since the token was minted → stale.
+            if acct is None or (acct["role"] or "superuser") != (row["role"] or "superuser"):
+                stale = True
+        if stale:
             cur.execute("DELETE FROM admin_tokens WHERE token=?", (token,))
             conn.commit()
+        else:
+            result = {"username": row["username"], "role": row["role"]}
     conn.close()
     return result
 
@@ -1683,6 +1698,19 @@ def delete_admin_token(token):
     conn = _connect()
     cur = conn.cursor()
     cur.execute("DELETE FROM admin_tokens WHERE token=?", (token,))
+    conn.commit()
+    conn.close()
+
+
+def delete_admin_tokens_for_user(username):
+    """Revoke ALL live login tokens for one administrator — used when their
+    account is removed, their role changes, or their password is reset, so an
+    existing session can't outlive the change (up to the 12h token TTL)."""
+    if not username:
+        return
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM admin_tokens WHERE username=?", (username,))
     conn.commit()
     conn.close()
 
@@ -1777,6 +1805,9 @@ def remove_administrator(username):
     cur = conn.cursor()
 
     cur.execute("DELETE FROM administrators WHERE username=?", (username,))
+    # Kill any live sessions for the removed account in the same breath, so its
+    # token stops resolving immediately (resolve_admin_token also cross-checks).
+    cur.execute("DELETE FROM admin_tokens WHERE username=?", (username,))
     conn.commit()
     conn.close()
 

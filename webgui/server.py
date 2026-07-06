@@ -2872,7 +2872,18 @@ async def files_upload(
         return {"host": host, "remote_path": (res.get("stdout") or remote_path).strip(),
                 "filename": file.filename, "bytes": len(data)}
 
-    # Pure-SSH host: SFTP via the controller.
+    # Pure-SSH host: SFTP runs as the host's SSH LOGIN user (often root) with the
+    # shared controller key — it does NOT drop to the operator's own account the
+    # way agent transfers, SSH exec, and the terminal do. So a non-superuser
+    # could otherwise read/write files as root here, beyond their per-user rights.
+    # Restrict this path to superusers; every operator can still transfer to
+    # agent-managed hosts as their own account (the branch above).
+    if request.session.get("role") != "superuser":
+        raise HTTPException(
+            status_code=403,
+            detail=("File transfer to a pure-SSH host uses the shared controller SSH "
+                    "credential and is limited to superusers. Agent-managed hosts "
+                    "transfer as your own account."))
     tmp = Path(tempfile.mkdtemp(prefix="sysible-up-")) / _safe_upload_name(file.filename, "upload.bin")
     try:
         tmp.write_bytes(data)
@@ -2920,7 +2931,15 @@ async def files_download(host: str, path: str, request: Request,
         return Response(content=raw, media_type="application/octet-stream",
                         headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
-    # Pure-SSH host: SFTP via the controller.
+    # Pure-SSH host: SFTP reads as the host's SSH login user (often root) with the
+    # shared controller key, not the operator's own account — superuser-only, so a
+    # sysadmin can't read root-owned files here beyond their per-user rights.
+    if request.session.get("role") != "superuser":
+        raise HTTPException(
+            status_code=403,
+            detail=("File transfer to a pure-SSH host uses the shared controller SSH "
+                    "credential and is limited to superusers. Agent-managed hosts "
+                    "transfer as your own account."))
     tmpdir = Path(tempfile.mkdtemp(prefix="sysible-dn-"))
     dest = tmpdir / filename
     try:

@@ -89,6 +89,15 @@ try:
 except ValueError:
     _SESSION_MAX_AGE = 43200
 
+# Hard ceiling on how much of a file upload this BFF will buffer for a pure-SSH
+# host (agent hosts are separately capped far lower by the in-task transfer
+# limit). Prevents a single upload from OOM'ing the shared single-process BFF.
+# Default 100 MB; tune with SYSIBLE_MAX_SSH_UPLOAD_BYTES.
+try:
+    _MAX_SSH_UPLOAD_BYTES = int(os.getenv("SYSIBLE_MAX_SSH_UPLOAD_BYTES", str(100 * 1024 * 1024)))
+except ValueError:
+    _MAX_SSH_UPLOAD_BYTES = 100 * 1024 * 1024
+
 # Mark the cookie Secure when we're behind TLS (set by webgui_manager when the
 # controller has certs). same_site="strict" is right for an admin console:
 # the cookie is never attached to cross-site requests, which closes CSRF on
@@ -2823,15 +2832,29 @@ async def files_upload(
     user: str = Depends(require_operator),
 ):
     entry = _transfer_entry(host)
-    data = await file.read()
+    is_agent = entry is not None and entry.get("kind") in ("agent", "merged")
+    # Cap how much we ever pull into memory. Agent hosts are hard-limited by the
+    # in-task transfer size; SSH hosts get a large-but-bounded ceiling so a
+    # single upload can't OOM this shared single-process BFF. Read only up to the
+    # cap+1 (UploadFile is spooled, so read(n) never buffers the whole body) and
+    # reject anything larger — and fail fast on an oversized Content-Length
+    # before touching the body at all.
+    limit = _api_users.AGENT_FILE_TRANSFER_LIMIT_BYTES if is_agent else _MAX_SSH_UPLOAD_BYTES
+    try:
+        clen = int(request.headers.get("content-length") or 0)
+    except (ValueError, TypeError):
+        clen = 0
+    if clen and clen > limit + 4096:  # + small multipart framing allowance
+        raise HTTPException(status_code=413, detail=f"Upload exceeds the {limit}-byte limit for this host.")
+    data = await file.read(limit + 1)
+    if len(data) > limit:
+        raise HTTPException(
+            status_code=413,
+            detail=(f"This host is managed by its agent, so uploads ride inside a task "
+                    f"and are limited to {limit} bytes." if is_agent
+                    else f"Upload exceeds the {limit}-byte limit."))
 
-    if entry is not None and entry.get("kind") in ("agent", "merged"):
-        limit = _api_users.AGENT_FILE_TRANSFER_LIMIT_BYTES
-        if len(data) > limit:
-            raise HTTPException(
-                status_code=413,
-                detail=(f"This host is managed by its agent, so uploads ride inside a task "
-                        f"and are limited to {limit} bytes (this file is {len(data)})."))
+    if is_agent:
         safe = _safe_upload_name(file.filename, "upload.bin")
         token = _session_token(request)
         become = sudo_store.resolve(user, entry.get("label", ""))

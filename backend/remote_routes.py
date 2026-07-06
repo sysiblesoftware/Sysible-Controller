@@ -1419,6 +1419,7 @@ def _resolve_remote_upload_path(sftp, remote_path: str, filename: str) -> str:
 @router.post("/hosts/{name}/files/upload")
 async def upload_file(
     name: str,
+    request: Request,
     remote_path: str = Form(...),
     file: UploadFile = File(...),
 ):
@@ -1442,11 +1443,18 @@ async def upload_file(
         sftp.close()
         client.close()
 
+    # Attribute the transfer in the activity feed (identity from the token) — an
+    # SFTP write as the SSH login user is a privileged, superuser-only action.
+    admin = _resolve_admin_username(request)
+    if admin:
+        from backend.db import log_activity
+        log_activity(admin, name, f"Uploaded file to {full_path} (SFTP)")
+
     return {"host": name, "uploaded": True, "remote_path": full_path, "size": len(data)}
 
 
 @router.get("/hosts/{name}/files/download")
-def download_file(name: str, path: str):
+def download_file(name: str, path: str, request: Request):
     """Download one file from an SSH-enrolled host over SFTP. Returns
     the raw bytes with a Content-Disposition header, same convention
     as the agent-bundle and portal-file-pool downloads in backend/app.py."""
@@ -1471,6 +1479,12 @@ def download_file(name: str, path: str):
     finally:
         sftp.close()
         client.close()
+
+    # Attribute the read in the activity feed (superuser-only SFTP as root).
+    admin = _resolve_admin_username(request)
+    if admin:
+        from backend.db import log_activity
+        log_activity(admin, name, f"Downloaded file {path} (SFTP)")
 
     filename = posixpath.basename(path.rstrip("/")) or "download"
 

@@ -2811,15 +2811,21 @@ def _normalize(label, r, env="Unassigned"):
 #     AGENT_FILE_TRANSFER_LIMIT_BYTES since the payload rides inside a command.
 #   * pure SSH host - the standing controller-key SFTP path (no size limit).
 def _transfer_entry(host_id):
-    """Merged-host entry for `host_id`, or None if unknown. Used to pick the
-    agent-vs-SSH transfer transport (and, for merged hosts, to resolve the
-    real agent host_id, which differs from the entry id)."""
+    """Merged-host entry for `host_id`, or None if genuinely unknown. Used to
+    pick the agent-vs-SSH transfer transport (and, for merged hosts, to resolve
+    the real agent host_id, which differs from the entry id).
+
+    A lookup FAILURE (controller unreachable) raises 503 rather than returning
+    None: silently returning None would misclassify an agent host as pure-SSH,
+    flipping both the transport and the superuser-only authorization gate on a
+    transient hiccup."""
     try:
-        for e in dispatch.list_merged_hosts(agent_only=False):
-            if e["id"] == host_id:
-                return e
-    except Exception:
-        return None
+        entries = dispatch.list_merged_hosts(agent_only=False)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Controller unreachable: {e}")
+    for e in entries:
+        if e["id"] == host_id:
+            return e
     return None
 
 
@@ -2885,10 +2891,15 @@ async def files_upload(
                     "credential and is limited to superusers. Agent-managed hosts "
                     "transfer as your own account."))
     tmp = Path(tempfile.mkdtemp(prefix="sysible-up-")) / _safe_upload_name(file.filename, "upload.bin")
+    ssh_token = _session_token(request)
     try:
         tmp.write_bytes(data)
         try:
-            result = await asyncio.to_thread(api.upload_file_ssh, host, str(tmp), remote_path)
+            # Pass the admin token so the controller attributes the SFTP transfer
+            # to this superuser in the activity feed (the agent path is logged via
+            # _dispatch_one; this path must be too — it's the more privileged one).
+            result = await asyncio.to_thread(
+                lambda: _with_token(ssh_token, lambda: api.upload_file_ssh(host, str(tmp), remote_path)))
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Upload failed: {e}")
         return {"host": host, "remote_path": remote_path,
@@ -2920,7 +2931,19 @@ async def files_download(host: str, path: str, request: Request,
         res = await asyncio.to_thread(_do)
         if not res.get("ok"):
             stderr = res.get("stderr") or ""
-            code = 404 if "not a file or not found" in stderr else 502
+            # Map the agent script's known outcomes to accurate HTTP status:
+            # missing file → 404, over the transfer limit → 413, timeout → 504,
+            # anything else → 502. (The markers come from _build_agent_download_script
+            # / _dispatch_one; a wording change there falls back to 502, never a
+            # wrong 404/200.)
+            if "not a file or not found" in stderr:
+                code = 404
+            elif "too large for agent transfer" in stderr:
+                code = 413
+            elif "timed out" in (res.get("error") or ""):
+                code = 504
+            else:
+                code = 502
             raise HTTPException(status_code=code,
                                 detail=f"Download failed: {stderr or res.get('error') or 'unknown error'}")
         import base64 as _b64
@@ -2942,8 +2965,11 @@ async def files_download(host: str, path: str, request: Request,
                     "transfer as your own account."))
     tmpdir = Path(tempfile.mkdtemp(prefix="sysible-dn-"))
     dest = tmpdir / filename
+    ssh_token = _session_token(request)
     try:
-        await asyncio.to_thread(api.download_file_ssh, host, path, str(dest))
+        # Attribute the SFTP read to this superuser in the activity feed.
+        await asyncio.to_thread(
+            lambda: _with_token(ssh_token, lambda: api.download_file_ssh(host, path, str(dest))))
     except Exception as e:
         try:
             dest.unlink(missing_ok=True)

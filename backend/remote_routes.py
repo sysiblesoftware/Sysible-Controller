@@ -146,6 +146,10 @@ def _reaper_loop():
             _reap_idle_sessions()
         except Exception:
             pass
+        try:
+            _reap_pty_sessions()
+        except Exception:
+            pass
 
 
 # Reap idle terminal sessions on a TIMER, not only when a new terminal opens.
@@ -826,6 +830,108 @@ def _resolve_admin_username(request: Request):
 
 
 # =========================================================
+# AGENT-HOSTED PTY BRIDGE (terminals with NO inbound SSH)
+#
+# The agent only ever connects OUTBOUND to the controller, so on a fleet where
+# the controller can't reach the host (NAT / firewall / non-routable IP) an SSH
+# terminal — which needs controller→host connectivity — can't work at all.
+# Instead the agent, already running on the host, opens the shell LOCALLY on a
+# PTY and streams it to the controller over its existing outbound channel:
+#   - the agent POSTs shell output up to  /agents/{id}/pty/{sid}/output
+#   - the agent long-polls input/resize/close from /agents/{id}/pty/{sid}/io
+# The controller buffers both directions here so the browser terminal endpoints
+# (read/write/resize/close) drive it exactly like an SSH session.
+# =========================================================
+_PTY_LOCK = threading.Lock()
+_PTY = {}   # session_id -> {host_id, out[], inq[], cols, rows, closed, ended, last}
+
+
+def pty_create(host_id, cols=80, rows=24):
+    sid = uuid.uuid4().hex
+    with _PTY_LOCK:
+        _PTY[sid] = {"host_id": host_id, "out": [], "inq": [], "cols": cols, "rows": rows,
+                     "closed": False, "ended": False, "last": time.time()}
+    return sid
+
+
+def pty_is_session(session_id):
+    with _PTY_LOCK:
+        return session_id in _PTY
+
+
+def pty_push_output(session_id, host_id, data, ended=False):
+    """Agent -> controller: append shell output. Returns True if the browser has
+    closed the session, which tells the agent to stop and kill the shell."""
+    with _PTY_LOCK:
+        s = _PTY.get(session_id)
+        if not s or s["host_id"] != host_id:
+            return True
+        s["last"] = time.time()
+        if data:
+            s["out"].append(data)
+        if ended:
+            s["ended"] = True
+        return s["closed"]
+
+
+def pty_read_output(session_id):
+    """Browser read: drain buffered output; closed once the shell ended or the
+    session was closed. Returns None if this isn't a PTY session."""
+    with _PTY_LOCK:
+        s = _PTY.get(session_id)
+        if not s:
+            return None
+        s["last"] = time.time()
+        data = "".join(s["out"])
+        s["out"] = []
+        return {"data": data, "closed": s["closed"] or s["ended"]}
+
+
+def pty_queue_input(session_id, msg):
+    """Browser -> controller: queue a keystroke/resize/close for the agent."""
+    with _PTY_LOCK:
+        s = _PTY.get(session_id)
+        if not s:
+            return False
+        s["last"] = time.time()
+        if msg.get("t") == "close":
+            s["closed"] = True
+        else:
+            s["inq"].append(msg)
+        return True
+
+
+def pty_take_input(session_id, host_id, wait=25.0):
+    """Agent long-poll: return queued input/resize msgs (and the closed flag),
+    waiting briefly for something to arrive so typing stays responsive."""
+    import time as _t
+    deadline = _t.time() + wait
+    while True:
+        with _PTY_LOCK:
+            s = _PTY.get(session_id)
+            if not s or s["host_id"] != host_id:
+                return [], True
+            if s["inq"] or s["closed"]:
+                msgs = s["inq"]
+                s["inq"] = []
+                return msgs, s["closed"]
+        if _t.time() >= deadline:
+            return [], False
+        _t.sleep(0.08)
+
+
+def _reap_pty_sessions():
+    now = time.time()
+    with _PTY_LOCK:
+        for sid in list(_PTY):
+            s = _PTY[sid]
+            if s["ended"] or (now - s["last"]) > TERMINAL_IDLE_TIMEOUT_S:
+                s["closed"] = True   # signal the agent to stop
+                if s["ended"] and (now - s["last"]) > 30:
+                    _PTY.pop(sid, None)
+
+
+# =========================================================
 # EPHEMERAL, PER-SESSION SSH ACCESS (agent-provisioned terminals)
 #
 # For an AGENT host we don't rely on a standing controller key in the host's
@@ -982,6 +1088,19 @@ def open_terminal(name: str, request: Request):
     # several shells at once; reap sessions abandoned by a dead GUI first.
     _reap_idle_sessions()
 
+    # AGENT host → the agent hosts the shell locally and streams it over its own
+    # outbound channel (no inbound SSH to the host at all). Create the bridge
+    # session, ask the agent to attach, and return immediately — output starts
+    # flowing as soon as the agent's next poll picks up the pty_open task.
+    if _resolve_agent_target(name):
+        host_id = _resolve_agent_target(name)[0]
+        from backend.db import queue_task
+        session_id = pty_create(host_id)
+        queue_task(host_id, json.dumps({"session_id": session_id, "cols": 80, "rows": 24}),
+                   kind="pty_open")
+        return {"host": name, "session_id": session_id, "opened": True, "via": "agent"}
+
+    # Non-agent (pure SSH / Connect) host: the standing controller-key SSH path.
     try:
         import paramiko
     except ImportError:
@@ -989,76 +1108,28 @@ def open_terminal(name: str, request: Request):
             status_code=501,
             detail="paramiko is not installed - interactive terminal is unavailable"
         )
+    hosts = load_hosts()
+    if name not in hosts:
+        raise HTTPException(status_code=404, detail="host not found")
+    host = hosts[name]
+    ip = host["ip"]
+    ssh_user = host.get("user", "root")
+    connect_kwargs = {"key_filename": host.get("key_path") or str(CONTROLLER_KEY_PATH)}
 
-    session_id = uuid.uuid4().hex
-    revoke = None
-    connect_kwargs = {}
-    # The logged-in operator (from their token). Agent terminals log in AS this
-    # user; dispatched-command RBAC uses it too.
+    # Run the terminal as the controller admin (their token identifies them), so
+    # it behaves like dispatched commands: as <admin> on the host with that
+    # user's own sudo. Falls back to the SSH login shell when no admin identity
+    # is presented or the admin is already the SSH user.
     admin_user = _resolve_admin_username(request)
-
-    # Prefer the agent path: an enrolled agent host gets a throwaway, per-session
-    # key installed through its agent right now (no standing SSH enrollment
-    # needed), so the terminal works whenever the agent is online.
-    agent_target = _resolve_agent_target(name)
-    if agent_target:
-        host_id, ip, hostname = agent_target
-        who = hostname or host_id
-        # Log in AS the operator, not root: the agent installs the session key
-        # into THEIR ~/.ssh, so a host with root SSH disabled (PermitRootLogin
-        # no) is never in the way. Falls back to root only when there's no
-        # operator identity on the request.
-        ssh_user = admin_user or "root"
-        tag = f"sysible-ephemeral-{session_id}"
-        expiry = int(time.time()) + _EPHEMERAL_LINE_TTL
-        try:
-            pkey, pub_body = _generate_ephemeral_keypair()
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"could not generate a session key: {e}")
-        pub_line = (f"no-port-forwarding,no-agent-forwarding,no-X11-forwarding "
-                    f"{pub_body} {tag}-{expiry}")
-        res = _run_agent_task_sync(host_id, _ephemeral_grant_command(ssh_user, pub_line),
-                                   "ssh_grant", _EPHEMERAL_GRANT_TIMEOUT)
-        out = res["stdout"] or ""
-        if res["status"] == "timeout":
-            raise HTTPException(status_code=504, detail=(
-                f"The agent on '{who}' didn't confirm terminal access in time — "
-                f"is it online and checking in?"))
-        if "SYSIBLE_GRANT_NOUSER" in out:
-            raise HTTPException(status_code=400, detail=(
-                f"The Linux user '{ssh_user}' doesn't exist on '{who}', so the terminal "
-                f"can't log in as them. Create that account on the host (per-user RBAC)."))
-        if res["status"] != "done" or "SYSIBLE_GRANT_OK" not in out:
-            detail = (res["stderr"] or out or "").strip()
-            raise HTTPException(status_code=502, detail=(
-                f"Could not provision terminal access through the agent on '{who}'"
-                + (f": {detail}" if detail else "")))
-        connect_kwargs = {"pkey": pkey}
-        revoke = {"host_id": host_id, "user": ssh_user, "tag": tag}
-    else:
-        # Non-agent (pure SSH / Connect) host: the standing controller-key path.
-        hosts = load_hosts()
-        if name not in hosts:
-            raise HTTPException(status_code=404, detail="host not found")
-        host = hosts[name]
-        ip = host["ip"]
-        ssh_user = host.get("user", "root")
-        connect_kwargs = {"key_filename": host.get("key_path") or str(CONTROLLER_KEY_PATH)}
-
-    # An agent terminal already logs in AS the operator, so no become is needed.
-    # An SSH/Connect host that logs in as a different user drops to the operator
-    # via runuser/sudo (matches dispatched-command RBAC).
     become = None
     if admin_user and admin_user != ssh_user:
         become = _become_user_command(ssh_user, admin_user)
 
     client = _new_ssh_client()
-
+    session_id = uuid.uuid4().hex
     try:
         client.connect(ip, username=ssh_user, timeout=10, **connect_kwargs)
         if become:
-            # Start the session as the admin user via an interactive PTY exec
-            # rather than the SSH user's default shell.
             channel = client.get_transport().open_session()
             channel.get_pty(term="xterm", width=120, height=32)
             channel.exec_command(become)
@@ -1067,7 +1138,6 @@ def open_terminal(name: str, request: Request):
         channel.settimeout(0.0)  # non-blocking - /terminal/read polls instead of blocking
     except paramiko.BadHostKeyException as e:
         client.close()
-        _queue_ephemeral_revoke(revoke)
         raise HTTPException(
             status_code=409,
             detail=(f"Host key for {ip} does not match the key pinned on first "
@@ -1076,29 +1146,12 @@ def open_terminal(name: str, request: Request):
                     f"and reconnect. ({e})"))
     except paramiko.AuthenticationException:
         client.close()
-        _queue_ephemeral_revoke(revoke)
-        if revoke:
-            # Agent host: the per-session key was installed and verified into the
-            # user's authorized_keys, so if login still fails it's the host's own
-            # SSH policy for that user (sshd AllowUsers/Match, a nologin shell,
-            # or root login disabled when falling back to root).
-            u = revoke.get("user", "root")
-            hint = (" Its sshd is refusing ROOT login (PermitRootLogin) — enable it under "
-                    "Security → Auth Policy → 'Allow root login over SSH' → Apply + Reload sshd."
-                    if u == "root" else
-                    f" The host's sshd is refusing an SSH login for '{u}' (e.g. AllowUsers/"
-                    f"Match, or a nologin shell). Check that '{u}' may log in over SSH.")
-            raise HTTPException(status_code=401, detail=(
-                f"SSH authentication failed. The per-session key was installed for '{u}', "
-                f"so the host is rejecting the login itself.{hint}"))
         raise HTTPException(status_code=401, detail="SSH authentication failed")
     except OSError as e:
         client.close()
-        _queue_ephemeral_revoke(revoke)
         raise HTTPException(status_code=400, detail=f"Could not reach host: {e}")
     except paramiko.SSHException as e:
         client.close()
-        _queue_ephemeral_revoke(revoke)
         raise HTTPException(status_code=400, detail=f"SSH error: {e}")
 
     with _TERMINAL_SESSIONS_LOCK:
@@ -1108,7 +1161,6 @@ def open_terminal(name: str, request: Request):
             "lock": threading.Lock(),
             "name": name,
             "last_activity": time.time(),
-            "revoke": revoke,
         }
 
     return {"host": name, "session_id": session_id, "opened": True}
@@ -1116,6 +1168,9 @@ def open_terminal(name: str, request: Request):
 
 @router.post("/terminal/{session_id}/write")
 def write_terminal(session_id: str, body: TerminalWriteRequest):
+    if pty_is_session(session_id):
+        pty_queue_input(session_id, {"t": "i", "d": body.data})
+        return {"session_id": session_id, "written": len(body.data)}
     session = _get_terminal_session(session_id)
 
     if session is None:
@@ -1136,6 +1191,19 @@ def write_terminal(session_id: str, body: TerminalWriteRequest):
 
 @router.get("/terminal/{session_id}/read")
 def read_terminal(session_id: str):
+    if pty_is_session(session_id):
+        # Agent-hosted PTY: drain the controller-side output buffer, with a short
+        # long-poll so an idle shell doesn't spin the browser's read loop.
+        import time as _t
+        deadline = _t.time() + TERMINAL_LONG_POLL_S
+        while True:
+            r = pty_read_output(session_id)
+            if r is None:
+                return {"session_id": session_id, "data": "", "closed": True}
+            if r["data"] or r["closed"] or _t.time() >= deadline:
+                return {"session_id": session_id, "data": r["data"], "closed": r["closed"]}
+            _t.sleep(0.08)
+
     session = _get_terminal_session(session_id)
 
     if session is None:
@@ -1201,6 +1269,10 @@ def read_terminal(session_id: str):
 
 @router.post("/terminal/{session_id}/close")
 def close_terminal(session_id: str):
+    if pty_is_session(session_id):
+        pty_queue_input(session_id, {"t": "close"})   # agent kills the shell on its next poll
+        return {"session_id": session_id, "closed": True}
+
     with _TERMINAL_SESSIONS_LOCK:
         session = _TERMINAL_SESSIONS.pop(session_id, None)
 
@@ -1212,6 +1284,12 @@ def close_terminal(session_id: str):
 
 @router.post("/terminal/{session_id}/resize")
 def resize_terminal(session_id: str, body: TerminalResizeRequest):
+    cols = max(8, min(500, body.cols))
+    rows = max(4, min(300, body.rows))
+    if pty_is_session(session_id):
+        pty_queue_input(session_id, {"t": "r", "cols": cols, "rows": rows})
+        return {"session_id": session_id, "cols": cols, "rows": rows}
+
     session = _get_terminal_session(session_id)
 
     if session is None:
@@ -1221,8 +1299,6 @@ def resize_terminal(session_id: str, body: TerminalResizeRequest):
         )
 
     _touch_session(session)
-    cols = max(8, min(500, body.cols))
-    rows = max(4, min(300, body.rows))
     with session["lock"]:
         try:
             session["channel"].resize_pty(width=cols, height=rows)

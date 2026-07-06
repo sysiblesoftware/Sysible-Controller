@@ -70,3 +70,11 @@ class TaskResultRequest(BaseModel):
     agent_secret: str
     task_id: int
     result: str
+
+
+class PtyOutputRequest(BaseModel):
+    """Agent -> controller: a chunk of shell output for an agent-hosted terminal
+    (Option B). `ended` marks the shell exiting."""
+    agent_secret: str
+    data: str = ""
+    ended: bool = False

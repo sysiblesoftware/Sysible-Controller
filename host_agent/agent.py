@@ -966,6 +966,149 @@ def _heartbeat_loop(state):
         time.sleep(POLL_INTERVAL)
 
 
+# =========================================================
+# AGENT-HOSTED PTY (Option B): run the interactive shell locally and stream it
+# to the controller over the agent's own outbound HTTP channel, so terminals
+# work on hosts the controller can't reach inbound (NAT/firewall, no SSH).
+# =========================================================
+def _start_pty_session(state, task):
+    """Spawn a shell on a local PTY and bridge it to the controller on its own
+    threads (so the main task loop keeps polling)."""
+    import json as _json
+    try:
+        cfg = _json.loads(task.get("command") or "{}")
+    except Exception:
+        cfg = {}
+    sid = cfg.get("session_id")
+    if not sid:
+        return
+    cols = int(cfg.get("cols") or 80)
+    rows = int(cfg.get("rows") or 24)
+    threading.Thread(target=_pty_bridge, args=(state, sid, cols, rows),
+                     name="sysible-pty", daemon=True).start()
+
+
+def _pty_set_winsize(fd, cols, rows):
+    import fcntl
+    import struct
+    import termios
+    try:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    except Exception:
+        pass
+
+
+def _pty_post_output(state, sid, data, ended=False):
+    """POST a chunk of shell output up to the controller. Returns True if the
+    browser has closed the session (tells us to stop and kill the shell)."""
+    try:
+        r = _request("POST", f"/agents/{state['host_id']}/pty/{sid}/output",
+                     json={"agent_secret": state["agent_secret"], "data": data, "ended": ended},
+                     timeout=20)
+        try:
+            return bool(r.json().get("closed"))
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
+def _pty_poll_io(state, sid):
+    """Long-poll the controller for queued input/resize/close. Returns
+    (messages, closed)."""
+    try:
+        r = _request("GET", f"/agents/{state['host_id']}/pty/{sid}/io",
+                     params={"agent_secret": state["agent_secret"]}, timeout=35)
+        d = r.json()
+        return d.get("msgs", []), bool(d.get("closed"))
+    except Exception:
+        return [], False
+
+
+def _pty_bridge(state, sid, cols, rows):
+    import pty as _pty
+    import select as _select
+    shell = os.environ.get("SHELL") or "/bin/bash"
+    if not os.path.exists(shell):
+        shell = "/bin/sh"
+    try:
+        master, slave = _pty.openpty()
+    except Exception as e:
+        _pty_post_output(state, sid, f"[sysible] could not allocate a terminal: {e}\r\n", ended=True)
+        return
+    env = dict(os.environ)
+    env["TERM"] = "xterm"
+    try:
+        proc = subprocess.Popen([shell, "-i"], stdin=slave, stdout=slave, stderr=slave,
+                                start_new_session=True, env=env, close_fds=True)
+    except Exception as e:
+        for fd in (master, slave):
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        _pty_post_output(state, sid, f"[sysible] could not start a shell: {e}\r\n", ended=True)
+        return
+    try:
+        os.close(slave)
+    except Exception:
+        pass
+    _pty_set_winsize(master, cols, rows)
+    stop = {"v": False}
+
+    def out_loop():
+        while not stop["v"]:
+            try:
+                r, _, _ = _select.select([master], [], [], 0.2)
+            except Exception:
+                break
+            if master in r:
+                try:
+                    data = os.read(master, 65536)
+                except OSError:
+                    break
+                if not data:
+                    break
+                if _pty_post_output(state, sid, data.decode(errors="replace")):
+                    stop["v"] = True
+                    break
+        stop["v"] = True
+
+    ot = threading.Thread(target=out_loop, name="sysible-pty-out", daemon=True)
+    ot.start()
+
+    # Input loop: long-poll the controller for keystrokes / resize / close.
+    while not stop["v"] and proc.poll() is None:
+        msgs, closed = _pty_poll_io(state, sid)
+        if closed:
+            break
+        for m in msgs:
+            t = m.get("t")
+            if t == "i":
+                try:
+                    os.write(master, (m.get("d") or "").encode())
+                except OSError:
+                    stop["v"] = True
+                    break
+            elif t == "r":
+                _pty_set_winsize(master, int(m.get("cols") or cols), int(m.get("rows") or rows))
+
+    stop["v"] = True
+    try:
+        proc.terminate()
+        proc.wait(timeout=3)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    try:
+        os.close(master)
+    except Exception:
+        pass
+    _pty_post_output(state, sid, "", ended=True)
+
+
 def loop(state):
     controller_desc = (
         CONTROLLER
@@ -1005,6 +1148,14 @@ def loop(state):
                 print("[agent] running task", task_id)
 
                 try:
+                    # Agent-hosted terminal: spawn a local shell on a PTY and
+                    # stream it to the controller (no inbound SSH). It runs on
+                    # its own threads; mark the task done so it isn't reclaimed.
+                    if task.get("kind") == "pty_open":
+                        _start_pty_session(state, task)
+                        send_result(state, task_id,
+                                    {"stdout": "pty session started", "stderr": "", "returncode": 0})
+                        continue
                     result = run_command(task["command"], task.get("run_as"),
                                          task.get("become_password"))
                     send_result(state, task_id, result)

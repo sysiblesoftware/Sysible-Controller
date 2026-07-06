@@ -38,6 +38,16 @@ export default function Connect() {
       `sysible_term_${h.id}`, "width=960,height=640");
   }
 
+  // Open a terminal window for every CHECKED host (or the selected one if none
+  // are checked) — no need to single-select first. Each host gets its own
+  // window; a per-host window name means re-opening focuses the existing one.
+  function openChecked() {
+    const ids = checked.length ? checked : (sel ? [sel.id] : []);
+    if (!ids.length) { setErr("Check one or more hosts (or select one) to open a terminal."); return; }
+    const byId = Object.fromEntries(hosts.map((h) => [h.id, h]));
+    ids.forEach((id) => { const h = byId[id]; if (h) openTerm(h); });
+  }
+
   const [checkinAt, setCheckinAt] = useState(0);
   const [showCheckin, setShowCheckin] = useState(false);
   async function runCheckin(targets) {
@@ -53,6 +63,11 @@ export default function Connect() {
       <div className="host-pane">
         <strong style={{ fontSize: 13 }}>Managed Hosts (agent + SSH)</strong>
         <div className="ctl-row" style={{ marginTop: 8 }}>
+          <button className="btn sm" disabled={!checked.length && !sel}
+                  title="Open a terminal window for each checked host"
+                  onClick={openChecked}>
+            {checked.length > 1 ? `Open ${checked.length} Terminals` : "Open Terminal"}
+          </button>
           <button className="btn ghost sm" onClick={loadHosts}>Refresh</button>
           <button className="btn ghost sm" disabled={busy === "checkin"}
                   title={checked.length ? "Ping the checked hosts" : "Ping all hosts (check some to ping just those)"}
@@ -121,7 +136,7 @@ export default function Connect() {
           })}
         </div>
         <div className="faint" style={{ fontSize: 12, marginTop: 8 }}>
-          Double-click a host to open its terminal in a new window.
+          Check hosts and click “Open Terminal”, or double-click a single host — each opens in its own window.
         </div>
       </div>
 

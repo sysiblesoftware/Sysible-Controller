@@ -1526,6 +1526,14 @@ def _apply_layout():
 # command for the everyday "just reboot it / restart NetworkManager / clear the
 # failed units" tasks. Every build= delegates to an existing cmd_* builder.
 _register(Action(
+    name="qsa_ping", tool="Quick System Actions", group="Reachability",
+    label="Ping (reachability)",
+    description="Confirm each checked host is reachable and its agent is answering — "
+                "runs a trivial command; a green OK means the host responded.",
+    params=[],
+    build=lambda p: 'echo pong; hostname 2>/dev/null; uptime 2>/dev/null || true',
+))
+_register(Action(
     name="qsa_restart_service", tool="Quick System Actions", group="Service (by name)",
     label="Restart a service",
     description="Restart any systemd service by name on the selected hosts.",

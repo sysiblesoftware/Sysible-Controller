@@ -1041,6 +1041,10 @@ def delete_environment(name):
 # 7 days - matches the user-facing "...unless it's been 7 days or
 # more" requirement for re-using a token tied to the same host.
 ENROLL_TOKEN_REUSE_WINDOW = 7 * 24 * 60 * 60
+try:
+    ENROLL_TOKEN_VALID_DAYS = int(os.getenv("SYSIBLE_ENROLL_TOKEN_VALID_DAYS", "30"))
+except ValueError:
+    ENROLL_TOKEN_VALID_DAYS = 30
 
 
 def create_enroll_token(token):
@@ -1049,8 +1053,11 @@ def create_enroll_token(token):
 
     created = time.time()
 
-    # One year - hard ceiling, not affected by reuse.
-    expires = created + (365 * 24 * 60 * 60)
+    # Validity ceiling for an UNUSED bundle token (once claimed, the bound-host
+    # reuse window in ENROLL_TOKEN_REUSE_WINDOW governs). Shortened from a year
+    # to 30 days by default: a leaked-but-unused agent bundle shouldn't be able
+    # to enroll a rogue host for that long. Tune with SYSIBLE_ENROLL_TOKEN_VALID_DAYS.
+    expires = created + (ENROLL_TOKEN_VALID_DAYS * 24 * 60 * 60)
 
     cur.execute("""
     INSERT INTO enroll_tokens (

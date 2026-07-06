@@ -51,7 +51,7 @@ export default function Login({ onLoggedIn }) {
           />
         </label>
 
-        {err && <div className="error-box">{err}</div>}
+        {err && <div className="error-box" role="alert">{err}</div>}
 
         <button
           className="btn full"

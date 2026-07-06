@@ -30,7 +30,8 @@ export default function StandaloneTerminal({ hostId, label }) {
         <span style={{ color: "var(--text)", fontSize: 13, marginRight: "auto",
                        display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
           <span className={"dot " + (status === "connected" ? "ok"
-            : (status?.startsWith("error") || status === "closed") ? "bad" : "")} />
+            : (status?.startsWith("error") || status === "closed") ? "bad" : "")}
+            role="img" title={`Connection: ${status}`} aria-label={`Connection: ${status}`} />
           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label || hostId}</span>
         </span>
         <button className={"btn sm" + (showXfer ? "" : " ghost")} onClick={() => setShowXfer((v) => !v)}

@@ -441,7 +441,7 @@ export default function HostEnrollment() {
                     <td className="faint mono">{fmtTime(s.created_at ?? s.logged_in ?? s.started_at)}</td>
                     <td className="faint">{s.ip || s.ip_address || ""}</td>
                     <td style={{ textAlign: "right" }}>
-                      <button className="btn ghost sm" onClick={() => revoke(s)}>Revoke</button>
+                      <button className="btn ghost sm danger" onClick={() => revoke(s)}>Revoke</button>
                     </td>
                   </tr>
                 ))}
@@ -480,7 +480,7 @@ export default function HostEnrollment() {
                     <td>{n}</td>
                     <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                       <a className="btn ghost sm" href={api.portalUploadUrl(n)}>Save</a>{" "}
-                      <button className="btn ghost sm" onClick={async () => { await api.portalUploadDelete(n); loadUploads(); }}>Delete</button>
+                      <button className="btn ghost sm danger" onClick={async () => { if (!window.confirm(`Delete the uploaded file "${n}"?`)) return; await api.portalUploadDelete(n); loadUploads(); }}>Delete</button>
                     </td>
                   </tr>
                 ); })}
@@ -502,7 +502,7 @@ export default function HostEnrollment() {
                   <tr key={n || i}>
                     <td>{n}</td>
                     <td style={{ textAlign: "right" }}>
-                      <button className="btn ghost sm" onClick={async () => { await api.portalDownloadDelete(n); loadDownloads(); }}>Delete</button>
+                      <button className="btn ghost sm danger" onClick={async () => { if (!window.confirm(`Delete the staged file "${n}"?`)) return; await api.portalDownloadDelete(n); loadDownloads(); }}>Delete</button>
                     </td>
                   </tr>
                 ); })}

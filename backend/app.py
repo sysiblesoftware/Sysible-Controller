@@ -204,9 +204,10 @@ async def generate_token(request: Request):
 
     create_enroll_token(token)
 
+    from backend.db import ENROLL_TOKEN_VALID_DAYS
     return {
         "token": token,
-        "valid_days": 365
+        "valid_days": ENROLL_TOKEN_VALID_DAYS
     }
 
 

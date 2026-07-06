@@ -230,7 +230,7 @@ function AdminModal({ mode, username: fixedUser, onClose, onDone }) {
 
 function PasswordPolicy() {
   const [pol, setPol] = useState(null);
-  const [err, setErr] = useErr(); const [msg, setMsg] = useState("");
+  const [err, setErr] = useErr(); const [msg, setMsg] = useState(""); const [busy, setBusy] = useState(false);
   useEffect(() => { api.passwordPolicy().then(setPol).catch((e) => setErr(e.message)); }, []);
   if (!pol) return <div className="empty"><span className="spin" /></div>;
   // The backend policy is pam_pwquality-shaped: { minlen, dcredit, ucredit,
@@ -240,7 +240,7 @@ function PasswordPolicy() {
   // dropped every save. This mirrors generatePassword() and backend/policy.py.)
   const CREDS = [["ucredit", "Require uppercase"], ["lcredit", "Require lowercase"],
                  ["dcredit", "Require digit"], ["ocredit", "Require symbol"]];
-  async function save() { setErr(""); setMsg(""); try { await api.setPasswordPolicy(pol); setMsg("Saved."); } catch (e) { setErr(e.message); } }
+  async function save() { setErr(""); setMsg(""); setBusy(true); try { await api.setPasswordPolicy(pol); setMsg("Saved."); } catch (e) { setErr(e.message); } finally { setBusy(false); } }
   return (
     <div className="card" style={{ maxWidth: 460 }}>
       <label className="field"><span>Minimum length</span>
@@ -253,26 +253,27 @@ function PasswordPolicy() {
           <label htmlFor={k}>{label}</label>
         </div>
       ))}
-      <button className="btn" style={{ marginTop: 14 }} onClick={save}>Save policy</button>
+      <button className="btn" style={{ marginTop: 14 }} disabled={busy} onClick={save}>{busy ? <span className="spin" /> : "Save policy"}</button>
       {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
-      {err && <div className="error-box">{err}</div>}
+      {err && <div className="error-box" role="alert">{err}</div>}
     </div>
   );
 }
 
 function ControllerCfg() {
   const [cfg, setCfg] = useState(null);
-  const [err, setErr] = useErr(); const [msg, setMsg] = useState("");
+  const [err, setErr] = useErr(); const [msg, setMsg] = useState(""); const [busy, setBusy] = useState(false);
   useEffect(() => { api.controllerConfig().then(setCfg).catch((e) => setErr(e.message)); }, []);
   if (!cfg) return <div className="empty"><span className="spin" /></div>;
   const set = (k) => (e) => setCfg({ ...cfg, [k]: e.target.value });
   async function save() {
-    setErr(""); setMsg("");
+    setErr(""); setMsg(""); setBusy(true);
     try {
       await api.setControllerConfig({ hostname: cfg.hostname || "", ip: cfg.ip || "",
         address_mode: cfg.address_mode || "hostname", port: Number(cfg.port) || 9000 });
       setMsg("Saved. Existing agents keep their current address until updated.");
     } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
   }
   return (
     <div className="card" style={{ maxWidth: 460 }}>
@@ -288,9 +289,9 @@ function ControllerCfg() {
               if (ip) setCfg((c) => ({ ...c, ip })); } catch (e) { setErr(e.message); } }}>Detect Local IPs</button></div>
       </label>
       <label className="field"><span>Port</span><input type="number" value={cfg.port || 9000} onChange={set("port")} /></label>
-      <button className="btn" style={{ marginTop: 14 }} onClick={save}>Save</button>
+      <button className="btn" style={{ marginTop: 14 }} disabled={busy} onClick={save}>{busy ? <span className="spin" /> : "Save"}</button>
       {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
-      {err && <div className="error-box">{err}</div>}
+      {err && <div className="error-box" role="alert">{err}</div>}
     </div>
   );
 }

@@ -53,7 +53,9 @@ export default function ResultsPane({ results, setResults, expanded, onToggleExp
               <div key={res.at + "-" + i}
                    className={"result-tab" + (i === idx ? " active" : "")}
                    onClick={() => setActive(i)} title={new Date(res.at).toLocaleTimeString()}>
-                <span className={"dot " + (allOk(res) ? "ok" : "bad")} />
+                <span className={"dot " + (allOk(res) ? "ok" : "bad")}
+                      role="img" aria-label={allOk(res) ? "All hosts succeeded" : "Some hosts failed"}
+                      title={allOk(res) ? "All hosts succeeded" : "Some hosts failed"} />
                 <span className="rt-label">{res.label}</span>
                 <button type="button" className="x" aria-label={`Close result ${res.label}`}
                         onClick={(e) => { e.stopPropagation(); closeTab(i); }}>✕</button>

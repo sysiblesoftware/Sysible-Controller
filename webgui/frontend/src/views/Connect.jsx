@@ -61,6 +61,12 @@ export default function Connect() {
 
   const [checkinAt, setCheckinAt] = useState(0);
   const [showCheckin, setShowCheckin] = useState(false);
+  useEffect(() => {
+    if (!showCheckin) return;
+    const onKey = (e) => { if (e.key === "Escape") setShowCheckin(false); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [showCheckin]);
   async function runCheckin(targets) {
     setBusy("checkin"); setErr("");
     try { setCheckin((await api.checkin(targets || [])).results); setCheckinAt(Date.now()); setShowCheckin(true); }
@@ -153,7 +159,7 @@ export default function Connect() {
 
       {/* RIGHT: selected host + collapsible actions on top, terminals below */}
       <div style={{ overflowY: "auto", paddingRight: 4 }}>
-        {err && <div className="error-box">{err}</div>}
+        {err && <div className="error-box" role="alert">{err}</div>}
 
         {sel && (
           <Section title="Selected Host">
@@ -179,6 +185,7 @@ export default function Connect() {
              style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 50,
                       display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
           <div onClick={(e) => e.stopPropagation()} className="card"
+               role="dialog" aria-modal="true" aria-label="Check-in / ping results"
                style={{ width: "min(420px, 92vw)", maxHeight: "80vh", overflow: "auto" }}>
             <div className="spread" style={{ marginBottom: 8, alignItems: "center" }}>
               <strong>Check-In / Ping</strong>
@@ -286,7 +293,20 @@ function FleetActions({ hosts, checked, onErr }) {
   const scopeLabel = checked.length ? `${checked.length} checked` : `all ${hosts.length}`;
 
   async function act(action, confirmMsg, command) {
-    if (confirmMsg && !window.confirm(`${confirmMsg} (${scopeLabel} host${scopeN === 1 ? "" : "s"})`)) return;
+    // Rebooting or powering off the ENTIRE fleet is the highest-blast-radius
+    // action here — a plain OK is too easy to hit by accident. Require typing
+    // the word, matching the strong guard used for system-critical paths.
+    const critical = action === "reboot" || action === "poweroff";
+    if (critical && checked.length === 0) {
+      const word = action === "poweroff" ? "POWER OFF" : "REBOOT";
+      const typed = window.prompt(
+        `You are about to ${word} ALL ${hosts.length} hosts in the fleet. ` +
+        `Powered-off hosts will NOT come back until powered on out-of-band.\n\n` +
+        `Type "${word}" to confirm:`);
+      if ((typed || "").trim().toUpperCase() !== word) return;
+    } else if (confirmMsg && !window.confirm(`${confirmMsg} (${scopeLabel} host${scopeN === 1 ? "" : "s"})`)) {
+      return;
+    }
     setRunning(action); setResults(null); onErr("");
     // The inline sudo password only makes sense for the script action (the
     // others run as root via the agent); send it only there.
@@ -358,11 +378,11 @@ function SshEnroll({ onDone, onErr }) {
         Only needed once per host. The password installs the controller key, then is discarded.
       </p>
       <form onSubmit={connect} className="row" style={{ flexWrap: "wrap", gap: 8 }}>
-        <input style={{ flex: 1, minWidth: 120 }} placeholder="Host name" value={f.name} onChange={set("name")} />
-        <input style={{ flex: 1, minWidth: 120 }} placeholder="IP address" value={f.ip} onChange={set("ip")} />
-        <input style={{ flex: 1, minWidth: 120 }} placeholder="Username" value={f.username} onChange={set("username")} />
-        <input style={{ flex: 1, minWidth: 120 }} type="password" placeholder="SSH password" value={f.password} onChange={set("password")} />
-        <input style={{ flex: 1, minWidth: 100 }} placeholder="Environment" value={f.environment} onChange={set("environment")} />
+        <input style={{ flex: 1, minWidth: 120 }} aria-label="Host name" placeholder="Host name" value={f.name} onChange={set("name")} />
+        <input style={{ flex: 1, minWidth: 120 }} aria-label="IP address" placeholder="IP address" value={f.ip} onChange={set("ip")} />
+        <input style={{ flex: 1, minWidth: 120 }} aria-label="Username" placeholder="Username" value={f.username} onChange={set("username")} />
+        <input style={{ flex: 1, minWidth: 120 }} type="password" aria-label="SSH password" placeholder="SSH password" value={f.password} onChange={set("password")} />
+        <input style={{ flex: 1, minWidth: 100 }} aria-label="Environment" placeholder="Environment" value={f.environment} onChange={set("environment")} />
         <button className="btn sm" disabled={busy || !f.ip || !f.username}>
           {busy ? <span className="spin" /> : "Connect Host"}
         </button>

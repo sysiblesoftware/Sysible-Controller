@@ -44,7 +44,11 @@ export default function EnvironmentalPolicies({ hosts = [], onRefreshHosts, pref
       minlen: pol.minlen, retry: pol.retry, dcredit: pol.require_digit ? -1 : 0,
       ucredit: pol.require_upper ? -1 : 0, lcredit: pol.require_lower ? -1 : 0, ocredit: pol.require_symbol ? -1 : 0 }, "Password quality"]);
     if (push.lockout) jobs.push(["policy_lockout", { deny: pol.deny, unlock_time: pol.unlock_time }, "Account lockout"]);
-    if (push.sudo) jobs.push(["policy_sudo", { timestamp_timeout: pol.sudo_timeout, require_password: pol.sudo_require_password, group: "" }, "Sudo policy"]);
+    // policy_sudo's builder expects the select-string "require"/"nopasswd"/"unchanged"
+    // (not a boolean); pushing this form is an explicit choice, so map the checkbox
+    // to require|nopasswd. Sending the raw boolean stringified to "True"/"False",
+    // which matched neither and always configured NOPASSWD — the opposite of checked.
+    if (push.sudo) jobs.push(["policy_sudo", { timestamp_timeout: pol.sudo_timeout, require_password: pol.sudo_require_password ? "require" : "nopasswd", group: "" }, "Sudo policy"]);
     if (push.umask) jobs.push(["policy_umask", { value: pol.umask }, "Umask"]);
     try {
       for (const [action, params, label] of jobs) {

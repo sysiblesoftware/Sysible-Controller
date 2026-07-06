@@ -233,16 +233,24 @@ function PasswordPolicy() {
   const [err, setErr] = useErr(); const [msg, setMsg] = useState("");
   useEffect(() => { api.passwordPolicy().then(setPol).catch((e) => setErr(e.message)); }, []);
   if (!pol) return <div className="empty"><span className="spin" /></div>;
-  const set = (k) => (e) => setPol({ ...pol, [k]: e.target.type === "checkbox" ? e.target.checked : Number(e.target.value) });
+  // The backend policy is pam_pwquality-shaped: { minlen, dcredit, ucredit,
+  // lcredit, ocredit }. A NEGATIVE credit means "require at least one of that
+  // class"; 0 means no requirement. (The old form bound to min_length/require_*,
+  // keys the backend model doesn't have — so it loaded defaults and silently
+  // dropped every save. This mirrors generatePassword() and backend/policy.py.)
+  const CREDS = [["ucredit", "Require uppercase"], ["lcredit", "Require lowercase"],
+                 ["dcredit", "Require digit"], ["ocredit", "Require symbol"]];
   async function save() { setErr(""); setMsg(""); try { await api.setPasswordPolicy(pol); setMsg("Saved."); } catch (e) { setErr(e.message); } }
   return (
     <div className="card" style={{ maxWidth: 460 }}>
       <label className="field"><span>Minimum length</span>
-        <input type="number" value={pol.min_length ?? 12} onChange={set("min_length")} /></label>
-      {["require_upper", "require_lower", "require_digit", "require_symbol"].map((k) => (
+        <input type="number" value={pol.minlen ?? 12}
+               onChange={(e) => setPol({ ...pol, minlen: Number(e.target.value) })} /></label>
+      {CREDS.map(([k, label]) => (
         <div className="checkrow" key={k}>
-          <input id={k} type="checkbox" checked={Boolean(pol[k])} onChange={set(k)} />
-          <label htmlFor={k}>{k.replace("require_", "Require ")}</label>
+          <input id={k} type="checkbox" checked={(pol[k] ?? 0) < 0}
+                 onChange={(e) => setPol({ ...pol, [k]: e.target.checked ? -1 : 0 })} />
+          <label htmlFor={k}>{label}</label>
         </div>
       ))}
       <button className="btn" style={{ marginTop: 14 }} onClick={save}>Save policy</button>

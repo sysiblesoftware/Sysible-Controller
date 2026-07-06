@@ -113,6 +113,10 @@ export default function ServiceManagementPage({ hosts = [], onRefreshHosts }) {
               <label className="field" key={k}><span>{l}</span>
                 <input value={cs[k]} onChange={(e) => setCs({ ...cs, [k]: e.target.value })} /></label>
             ))}
+            <label className="field"><span>Restart policy</span>
+              <select value={cs.restart_policy} onChange={(e) => setCs({ ...cs, restart_policy: e.target.value })}>
+                {["on-failure", "always", "no", "on-abnormal"].map((o) => <option key={o} value={o}>{o}</option>)}
+              </select></label>
             <div className="checkrow"><input id="en" type="checkbox" checked={cs.enable_now}
               onChange={(e) => setCs({ ...cs, enable_now: e.target.checked })} /><label htmlFor="en">Enable now</label></div>
             <button className="btn" style={{ marginTop: 12 }} disabled={busy || !cs.name || !cs.exec_start}

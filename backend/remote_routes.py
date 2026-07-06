@@ -883,35 +883,56 @@ def _generate_ephemeral_keypair():
         shutil.rmtree(d, ignore_errors=True)
 
 
-def _ephemeral_grant_command(pub_line: str) -> str:
-    """Root sh one-liner: prune expired sysible-ephemeral entries (comment ends
-    in -<expiry-epoch>), then append this session's key. Self-cleaning, so a
-    controller that died mid-session leaves nothing usable once its key expires."""
+def _ephemeral_grant_command(user: str, pub_line: str) -> str:
+    """Root sh one-liner that installs this session's key into <user>'s
+    authorized_keys — so the controller logs in AS that operator (not root), and
+    a host with root SSH disabled is never in the way. The agent runs as root, so
+    it can write into any user's ~/.ssh; it fixes ownership, perms, and (on
+    SELinux hosts) the file context so sshd's StrictModes accepts the file.
+
+    Prunes expired sysible-ephemeral entries first (comment ends -<expiry-epoch>),
+    so a controller that died mid-session leaves nothing usable. Reports
+    SYSIBLE_GRANT_NOUSER if the account doesn't exist on the host, or
+    SYSIBLE_GRANT_OK once the key is verified present."""
     parts = pub_line.split()
     b64 = parts[2] if len(parts) > 2 else pub_line
+    qu = shlex.quote(user)
     q = shlex.quote(pub_line)
     qb = shlex.quote(b64)
     awk = ("awk -v now=\"$now\" '/sysible-ephemeral-/"
            "{n=split($NF,a,\"-\");e=a[n];if(e ~ /^[0-9]+$/ && e+0<now)next}{print}'")
     return "\n".join([
-        'D=/root/.ssh; K="$D/authorized_keys"',
-        'mkdir -p "$D"; chmod 700 "$D"; touch "$K"; chmod 600 "$K"',
+        f'U={qu}',
+        'h=$(getent passwd "$U" | cut -d: -f6)',
+        '[ -n "$h" ] || { echo SYSIBLE_GRANT_NOUSER; exit 0; }',
+        'D="$h/.ssh"; K="$D/authorized_keys"',
+        'mkdir -p "$D"; touch "$K"',
         'now=$(date +%s)',
         'tmp=$(mktemp "$D/.ak.XXXXXX") || exit 1',
         f'{awk} "$K" > "$tmp"',
-        'mv "$tmp" "$K"; chmod 600 "$K"',
+        'mv "$tmp" "$K"',
         f'printf "%s\\n" {q} >> "$K"',
-        # Confirm the key actually landed, so a SYSIBLE_GRANT_OK is proof the key
-        # is installed — which turns a later SSH 401 into a definite host policy
-        # problem (root login denied) rather than an ambiguous install failure.
+        # Own it by the user (the agent is root, so fresh files are root-owned;
+        # sshd StrictModes would then reject them) and restore the SELinux label.
+        'g=$(id -gn "$U" 2>/dev/null || echo "$U")',
+        'chown "$U":"$g" "$D" "$K" 2>/dev/null || chown "$U" "$D" "$K" 2>/dev/null || true',
+        'chmod 700 "$D"; chmod 600 "$K"',
+        'command -v restorecon >/dev/null 2>&1 && restorecon -R "$D" 2>/dev/null || true',
+        # Confirm the key actually landed, so SYSIBLE_GRANT_OK is proof it's there.
         f'grep -qF {qb} "$K" && echo SYSIBLE_GRANT_OK || echo SYSIBLE_GRANT_FAIL',
     ])
 
 
-def _ephemeral_revoke_command(tag: str) -> str:
-    """Root sh one-liner: delete this session's key line (tag is hex-only, safe
-    in a sed address)."""
-    return f'K=/root/.ssh/authorized_keys; [ -f "$K" ] && sed -i "/{tag}/d" "$K"; echo SYSIBLE_REVOKE_OK'
+def _ephemeral_revoke_command(user: str, tag: str) -> str:
+    """Root sh one-liner: delete this session's key line from <user>'s
+    authorized_keys (tag is hex-only, safe in a sed address)."""
+    qu = shlex.quote(user)
+    return ("\n".join([
+        f'U={qu}',
+        'h=$(getent passwd "$U" | cut -d: -f6)',
+        f'[ -n "$h" ] && K="$h/.ssh/authorized_keys" && [ -f "$K" ] && sed -i "/{tag}/d" "$K"',
+        'echo SYSIBLE_REVOKE_OK',
+    ]))
 
 
 def _run_agent_task_sync(host_id, command, kind, timeout):
@@ -948,7 +969,9 @@ def _queue_ephemeral_revoke(revoke):
         return
     try:
         from backend.db import queue_task
-        queue_task(revoke["host_id"], _ephemeral_revoke_command(revoke["tag"]), kind="ssh_revoke")
+        queue_task(revoke["host_id"],
+                   _ephemeral_revoke_command(revoke.get("user", "root"), revoke["tag"]),
+                   kind="ssh_revoke")
     except Exception:
         pass
 
@@ -970,16 +993,22 @@ def open_terminal(name: str, request: Request):
     session_id = uuid.uuid4().hex
     revoke = None
     connect_kwargs = {}
+    # The logged-in operator (from their token). Agent terminals log in AS this
+    # user; dispatched-command RBAC uses it too.
+    admin_user = _resolve_admin_username(request)
 
     # Prefer the agent path: an enrolled agent host gets a throwaway, per-session
     # key installed through its agent right now (no standing SSH enrollment
-    # needed), so the terminal works whenever the agent is online and leaves no
-    # persistent root credential behind.
+    # needed), so the terminal works whenever the agent is online.
     agent_target = _resolve_agent_target(name)
     if agent_target:
         host_id, ip, hostname = agent_target
         who = hostname or host_id
-        ssh_user = "root"
+        # Log in AS the operator, not root: the agent installs the session key
+        # into THEIR ~/.ssh, so a host with root SSH disabled (PermitRootLogin
+        # no) is never in the way. Falls back to root only when there's no
+        # operator identity on the request.
+        ssh_user = admin_user or "root"
         tag = f"sysible-ephemeral-{session_id}"
         expiry = int(time.time()) + _EPHEMERAL_LINE_TTL
         try:
@@ -988,19 +1017,24 @@ def open_terminal(name: str, request: Request):
             raise HTTPException(status_code=500, detail=f"could not generate a session key: {e}")
         pub_line = (f"no-port-forwarding,no-agent-forwarding,no-X11-forwarding "
                     f"{pub_body} {tag}-{expiry}")
-        res = _run_agent_task_sync(host_id, _ephemeral_grant_command(pub_line),
+        res = _run_agent_task_sync(host_id, _ephemeral_grant_command(ssh_user, pub_line),
                                    "ssh_grant", _EPHEMERAL_GRANT_TIMEOUT)
+        out = res["stdout"] or ""
         if res["status"] == "timeout":
             raise HTTPException(status_code=504, detail=(
                 f"The agent on '{who}' didn't confirm terminal access in time — "
                 f"is it online and checking in?"))
-        if res["status"] != "done" or "SYSIBLE_GRANT_OK" not in (res["stdout"] or ""):
-            detail = (res["stderr"] or res["stdout"] or "").strip()
+        if "SYSIBLE_GRANT_NOUSER" in out:
+            raise HTTPException(status_code=400, detail=(
+                f"The Linux user '{ssh_user}' doesn't exist on '{who}', so the terminal "
+                f"can't log in as them. Create that account on the host (per-user RBAC)."))
+        if res["status"] != "done" or "SYSIBLE_GRANT_OK" not in out:
+            detail = (res["stderr"] or out or "").strip()
             raise HTTPException(status_code=502, detail=(
                 f"Could not provision terminal access through the agent on '{who}'"
                 + (f": {detail}" if detail else "")))
         connect_kwargs = {"pkey": pkey}
-        revoke = {"host_id": host_id, "tag": tag}
+        revoke = {"host_id": host_id, "user": ssh_user, "tag": tag}
     else:
         # Non-agent (pure SSH / Connect) host: the standing controller-key path.
         hosts = load_hosts()
@@ -1011,11 +1045,9 @@ def open_terminal(name: str, request: Request):
         ssh_user = host.get("user", "root")
         connect_kwargs = {"key_filename": host.get("key_path") or str(CONTROLLER_KEY_PATH)}
 
-    # Run the terminal as the controller admin (their token identifies them),
-    # so it behaves like dispatched commands: as <admin> on the host, with
-    # that user's own sudo. Falls back to the SSH login shell when no admin
-    # identity is presented or the admin is already the SSH user.
-    admin_user = _resolve_admin_username(request)
+    # An agent terminal already logs in AS the operator, so no become is needed.
+    # An SSH/Connect host that logs in as a different user drops to the operator
+    # via runuser/sudo (matches dispatched-command RBAC).
     become = None
     if admin_user and admin_user != ssh_user:
         become = _become_user_command(ssh_user, admin_user)
@@ -1046,14 +1078,19 @@ def open_terminal(name: str, request: Request):
         client.close()
         _queue_ephemeral_revoke(revoke)
         if revoke:
-            # Agent host: the per-session key was installed and verified, so the
-            # host is rejecting root SSH login itself (PermitRootLogin) — common
-            # on cloud/Ubuntu images. Point at the fix, which runs over the agent.
+            # Agent host: the per-session key was installed and verified into the
+            # user's authorized_keys, so if login still fails it's the host's own
+            # SSH policy for that user (sshd AllowUsers/Match, a nologin shell,
+            # or root login disabled when falling back to root).
+            u = revoke.get("user", "root")
+            hint = (" Its sshd is refusing ROOT login (PermitRootLogin) — enable it under "
+                    "Security → Auth Policy → 'Allow root login over SSH' → Apply + Reload sshd."
+                    if u == "root" else
+                    f" The host's sshd is refusing an SSH login for '{u}' (e.g. AllowUsers/"
+                    f"Match, or a nologin shell). Check that '{u}' may log in over SSH.")
             raise HTTPException(status_code=401, detail=(
-                "SSH authentication failed. The per-session key was installed on the host, "
-                "so its sshd is refusing ROOT login (PermitRootLogin). Enable it under "
-                "System Administration → Security → Auth Policy → 'Allow root login over SSH' "
-                "→ Apply, then Reload sshd (both run through the agent), and reopen the terminal."))
+                f"SSH authentication failed. The per-session key was installed for '{u}', "
+                f"so the host is rejecting the login itself.{hint}"))
         raise HTTPException(status_code=401, detail="SSH authentication failed")
     except OSError as e:
         client.close()

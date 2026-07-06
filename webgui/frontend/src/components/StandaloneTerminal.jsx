@@ -20,9 +20,11 @@ export default function StandaloneTerminal({ hostId, label }) {
   const act = (fn) => () => { if (handle.current) fn(handle.current); };
 
   return (
-    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#000" }}>
-      <div className="term-toolbar">
-        <span style={{ color: "#e6edf3", fontSize: 13, marginRight: "auto",
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column",
+                  background: "var(--bg)", color: "var(--text)" }}>
+      <div className="term-toolbar" style={{ margin: 0, padding: "8px 12px",
+             background: "var(--panel)", borderBottom: "1px solid var(--border)" }}>
+        <span style={{ color: "var(--text)", fontSize: 13, marginRight: "auto",
                        display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
           <span className={"dot " + (status === "connected" ? "ok"
             : (status?.startsWith("error") || status === "closed") ? "bad" : "")} />

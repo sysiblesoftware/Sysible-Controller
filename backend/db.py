@@ -1732,13 +1732,18 @@ def log_activity(username, host, description, command=""):
     # it; set 0 to disable trimming entirely when an external SIEM/export owns
     # retention. Compliance note: this local log is NOT a system of record —
     # forward it to a SIEM for durable, tamper-evident retention.
+    #
+    # Trim by id window off the just-inserted rowid: an indexed range delete of
+    # only the rows that fell out of the window (usually one), NOT a full
+    # `NOT IN (SELECT ... LIMIT cap)` anti-join that would rescan up to `cap`
+    # rows on every insert — at cap=500k that ran a 500k-row scan per log write,
+    # holding the single WAL writer each time. ids are monotonic (INTEGER PRIMARY
+    # KEY), so `id <= lastrowid - cap` keeps the most recent ~cap rows.
     if _ACTIVITY_LOG_MAX_ROWS > 0:
-        cur.execute(
-            "DELETE FROM activity_log WHERE id NOT IN "
-            "(SELECT id FROM activity_log ORDER BY id DESC LIMIT ?)",
-            (_ACTIVITY_LOG_MAX_ROWS,),
-        )
-        conn.commit()
+        cutoff = cur.lastrowid - _ACTIVITY_LOG_MAX_ROWS
+        if cutoff > 0:
+            cur.execute("DELETE FROM activity_log WHERE id <= ?", (cutoff,))
+            conn.commit()
     conn.close()
 
 

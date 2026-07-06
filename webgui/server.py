@@ -1655,8 +1655,14 @@ def resume_host(host_id: str, request: Request, user: str = Depends(require_supe
 
 
 @app.delete("/api/host/{host_id}")
-def remove_host(host_id: str, request: Request, user: str = Depends(require_login)):
-    """Disenroll an agent host. Matches the desktop Host Enrollment "Remove"
+def remove_host(host_id: str, request: Request, user: str = Depends(require_superuser_session)):
+    """Disenroll an agent host. Superuser-only: besides the controller-side
+    disenroll (itself superuser-gated), this route FIRST dispatches an agent
+    teardown (cmd_uninstall_agent_service) to the host. Gating the whole route on
+    superuser keeps a sysadmin/auditor from triggering that teardown dispatch
+    before the controller's own superuser check would reject the disenroll.
+
+    Matches the desktop Host Enrollment "Remove"
     flow (client/host_enrollment_page.py): first ask the host's agent to tear
     down its own systemd service + files (cmd_uninstall_agent_service), then
     drop the enrollment on the controller *regardless* of whether that teardown

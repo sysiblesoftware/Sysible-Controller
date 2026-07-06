@@ -1493,18 +1493,6 @@ _register(Action(
     build=lambda p: api.cmd_service_restart(_s(p, "service")),
 ))
 _register(Action(
-    name="qsa_start_service", tool="Quick System Actions", group="Service (by name)",
-    label="Start", params=[],
-    description="Start the service named above on the selected hosts.",
-    build=lambda p: api.cmd_service_start(_s(p, "service")),
-))
-_register(Action(
-    name="qsa_stop_service", tool="Quick System Actions", group="Service (by name)",
-    label="Stop", params=[],
-    description="Stop the service named above on the selected hosts.",
-    build=lambda p: api.cmd_service_stop(_s(p, "service")),
-))
-_register(Action(
     name="qsa_restart_networkmanager", tool="Quick System Actions", group="Common services",
     label="Restart NetworkManager",
     description="Restart NetworkManager (re-applies connection profiles).",

@@ -340,7 +340,7 @@ def cmd_query_package(name: str) -> str:
     return _pkgmgr_dispatch(
         rpm_cmd=f'"$PKGMGR" info {pkg} 2>/dev/null || rpm -qi {pkg}',
         zypper_cmd=f'zypper info {pkg}',
-        apt_cmd=f'apt-cache show {pkg} 2>/dev/null || dpkg -s {pkg} 2>/dev/null || echo "Package not found: {name}"',
+        apt_cmd=f'apt-cache show {pkg} 2>/dev/null || dpkg -s {pkg} 2>/dev/null || echo "Package not found:" {pkg}',
     )
 
 
@@ -355,7 +355,7 @@ def cmd_verify_package(name: str) -> str:
 
     rpm_verify = (
         f'out=$(rpm -V {pkg} 2>&1); '
-        f'if [ -z "$out" ]; then echo "OK - {name}: no discrepancies found."; '
+        f'if [ -z "$out" ]; then echo "OK -" {pkg} "- no discrepancies found."; '
         f'else echo "$out"; fi'
     )
 
@@ -367,7 +367,7 @@ def cmd_verify_package(name: str) -> str:
             'echo "debsums is not installed on this host - install it first '
             '(Install Packages: debsums), then re-run Verify Package Integrity."; '
             f'else out=$(debsums {pkg} 2>&1 | grep -v "OK$"); '
-            f'if [ -z "$out" ]; then echo "OK - {name}: no discrepancies found."; '
+            f'if [ -z "$out" ]; then echo "OK -" {pkg} "- no discrepancies found."; '
             'else echo "$out"; fi; fi'
         ),
     )

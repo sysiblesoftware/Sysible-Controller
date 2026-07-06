@@ -321,6 +321,7 @@ function SoftwareUpdate() {
   // ctrl: null | "restarting" | "success" | "failed" | "unconfirmed"
   const [ctrl, setCtrl] = useState(null);
   const [ctrlMsg, setCtrlMsg] = useState("");
+  const [restart, setRestart] = useState(null);  // null | "restarting" | "back" | "failed"
   const [agents, setAgents] = useState(null);   // null | {total, updated, ver, done, timedOut}
   const [ctrlLog, setCtrlLog] = useState("");   // live self-update output
   const [agentRows, setAgentRows] = useState(null); // per-host update status list
@@ -478,6 +479,31 @@ function SoftwareUpdate() {
     finally { setBusy(false); }
   }
 
+  // Restart the controller backend only (no update). The backend bounces while
+  // this web console stays up, so the session survives — we just poll a
+  // backend-backed endpoint until it answers again, then report "back".
+  async function restartController() {
+    setConfirm(null); setErr(""); setMsg(""); setRestart("restarting");
+    try {
+      await api.controllerRestart();
+    } catch {
+      // The restart tears down the in-flight request path, so a network error
+      // here is expected, not a failure — fall through to polling.
+    }
+    const deadline = Date.now() + 60000;
+    const poll = async () => {
+      try {
+        await api.controllerUpdateStatus();   // proxied to the backend: resolves once it's up
+        setRestart("back");
+        setTimeout(() => setRestart((r) => (r === "back" ? null : r)), 6000);
+      } catch {
+        if (Date.now() < deadline) setTimeout(poll, 2000);
+        else setRestart("failed");
+      }
+    };
+    setTimeout(poll, 3000);   // give systemd a moment to bounce it before polling
+  }
+
   async function downloadLog() {
     try {
       const d = await api.controllerUpdateLog(0);   // 0 = full log
@@ -604,6 +630,37 @@ function SoftwareUpdate() {
       <p className="faint" style={{ marginTop: 10, marginBottom: 0 }}>
         Tip: update the controller first, then update agents so hosts report the latest metrics.
       </p>
+
+      <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+        <div className="spread" style={{ alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ minWidth: 0 }}>
+            <strong style={{ fontSize: 13 }}>Restart controller</strong>
+            <div className="faint" style={{ fontSize: 12 }}>
+              Bounce the backend service without updating — no shell needed. The console stays up;
+              actions blip for a few seconds while it comes back.
+            </div>
+          </div>
+          {restart !== "restarting" && (
+            <div className="row" style={{ gap: 8 }}>
+              <Button which="restart" label="Restart controller" start={restartController} />
+            </div>
+          )}
+        </div>
+        {restart === "restarting" && (
+          <div style={{ marginTop: 8 }}>
+            <div className="faint" style={{ fontSize: 12 }}>Restarting the controller… reconnecting.</div>
+            <ProgressBar indeterminate />
+          </div>
+        )}
+        {restart === "back" && <div className="ok-text" style={{ marginTop: 8, fontSize: 13 }}>✓ Controller is back.</div>}
+        {restart === "failed" && (
+          <div className="error-box" style={{ marginTop: 8, fontSize: 13 }}>
+            The controller didn't answer within 60&nbsp;s. Check it on the host:
+            <span className="mono"> systemctl status sysible-backend</span>.
+          </div>
+        )}
+      </div>
+
       {msg && <div className="ok-text" style={{ marginTop: 10 }}>{msg}</div>}
       {err && <div className="error-box" style={{ marginTop: 10 }}>{err}</div>}
     </div>

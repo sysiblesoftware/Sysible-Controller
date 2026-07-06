@@ -1287,6 +1287,22 @@ async def install_tls_certificate_route(
     }
 
 
+@app.post("/controller/restart", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def controller_restart_route():
+    """Restart the controller backend service (systemctl restart sysible-backend)
+    from the web console, so an admin can bounce it without shell access.
+    Superuser-only.
+
+    Unlike a self-update this touches only the backend service, not the web
+    console (a separate service), so the operator's session survives — API calls
+    just blip for a few seconds while it comes back (systemd Restart=always). The
+    restart is fired ~1.5s later on a background thread (see tls_manager) so this
+    response flushes to the caller before uvicorn is killed."""
+    from backend import tls_manager
+    tls_manager.restart_backend()
+    return {"restarting": True, "service": "sysible-backend"}
+
+
 @app.post("/controller/update", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def controller_update_route():
     """Trigger an in-place controller self-update: the same work as the CLI

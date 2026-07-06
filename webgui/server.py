@@ -1930,6 +1930,14 @@ def set_cfg(body: ControllerCfg, request: Request, user: str = Depends(require_l
         body.hostname, body.ip, body.address_mode, body.port)))
 
 
+@app.post("/api/controller-restart")
+def controller_restart(request: Request, user: str = Depends(require_superuser_session)):
+    """Restart the controller backend service (no update). Superuser-only. Only
+    the backend bounces — this web console stays up, so the session survives and
+    API calls just blip for a few seconds until the backend is back."""
+    return _wrap(lambda: _as_admin(request, lambda: api.controller_restart()))
+
+
 @app.post("/api/controller-update")
 def controller_update(request: Request, user: str = Depends(require_superuser_session)):
     """Trigger an in-place controller self-update (git pull + redeploy + restart).

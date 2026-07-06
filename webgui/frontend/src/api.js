@@ -71,6 +71,7 @@ export const api = {
   controllerConfig: () => req("/api/controller-config"),
   setControllerConfig: (cfg) =>
     req("/api/controller-config", { method: "POST", body: cfg }),
+  controllerRestart: () => req("/api/controller-restart", { method: "POST" }),
   controllerUpdate: () => req("/api/controller-update", { method: "POST" }),
   controllerUpdateStatus: () => req("/api/controller-update-status"),
   controllerUpdateLog: (lines = 400) => req(`/api/controller-update-log?lines=${lines}`),

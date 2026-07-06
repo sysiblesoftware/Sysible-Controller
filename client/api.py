@@ -261,6 +261,13 @@ def set_controller_config(hostname: str, ip: str, address_mode: str, port: int):
     )
 
 
+def controller_restart():
+    """Restart the controller backend service (no update). Returns immediately;
+    systemd bounces sysible-backend and it comes back on its own. The web console
+    is a separate service and stays up, so the operator's session survives."""
+    return _request("POST", "/controller/restart", timeout=30)
+
+
 def controller_update():
     """Trigger an in-place controller self-update (git pull + redeploy + restart)
     on the controller host. The controller launches it as a detached transient

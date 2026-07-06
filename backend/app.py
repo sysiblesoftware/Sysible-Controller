@@ -3,6 +3,7 @@ from typing import Optional
 from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 import json
+import os
 import secrets
 import threading
 import time
@@ -190,6 +191,13 @@ async def generate_token(request: Request):
             detail="Forbidden"
         )
 
+    # Early guardrail: a freshly-minted token always binds to a NEW host, so if
+    # we're already at the community host cap, refuse here instead of letting the
+    # operator set up an agent that would only be rejected at the final enroll
+    # step. (Re-enrolling a wiped host reuses its original token, not this one.)
+    from backend.edition import enforce_host_limit
+    enforce_host_limit()
+
     token = secrets.token_hex(16)
 
     create_enroll_token(token)
@@ -313,8 +321,10 @@ def enroll(req: EnrollRequest):
         host_id = resolve_enroll_token_host(req.token, req.host_id)
 
         # Community-edition host cap (no-op in an unlimited/Enterprise build).
+        # Keyed on host_id: a new agent host_id always counts against the cap,
+        # even if its hostname collides with an already-enrolled host.
         from backend.edition import enforce_host_limit
-        enforce_host_limit(req.hostname or host_id)
+        enforce_host_limit(req.hostname or host_id, candidate_host_id=host_id)
 
         agent_secret = secrets.token_hex(24)
 

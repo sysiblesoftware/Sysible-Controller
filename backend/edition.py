@@ -86,14 +86,25 @@ def host_count():
     return len(host_identities())
 
 
-def enforce_host_limit(candidate_name):
-    """Raise HTTP 403 if enrolling `candidate_name` would push the managed-host
-    count past HOST_LIMIT. Re-enrolling / updating an already-managed host is
-    always allowed (it isn't a new host)."""
+def enforce_host_limit(candidate_name=None, candidate_host_id=None):
+    """Raise HTTP 403 if enrolling a NEW agent host would push the managed-host
+    count past HOST_LIMIT. Re-enrolling / updating a host already under
+    management is always allowed (it isn't a new host).
+
+    Identity is the agent host_id, NOT the hostname: pass `candidate_host_id`
+    from the agent enroll path so re-enrolling the same box is treated as
+    not-new even when its hostname collides with another host's (two cloud VMs
+    both named 'localhost' must still count as two hosts — keying the exemption
+    on the name let the second one slip past the cap). The name-only form
+    (candidate_host_id=None) is kept for the SSH/Connect enroll endpoints, which
+    are keyed by record name."""
     if HOST_LIMIT is None:
         return
-    # Re-enrolling/updating an already-managed name isn't a new host.
-    if candidate_name and candidate_name in current_host_names():
+    # Re-enrolling/updating a host already under management isn't a new host.
+    if candidate_host_id is not None:
+        if candidate_host_id in host_identities():
+            return
+    elif candidate_name and candidate_name in current_host_names():
         return
     count = host_count()  # distinct agent hosts (see host_identities)
     if count >= HOST_LIMIT:

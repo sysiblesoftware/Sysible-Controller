@@ -864,13 +864,40 @@ def _sample_metrics():
     return c["metrics"] if c else None
 
 
-# Timestamp of the last metrics report, so heartbeat() can rate-limit to
-# METRICS_INTERVAL instead of attaching a sample to every 1.5s heartbeat.
-_last_metrics_at = 0.0
+# Latest performance sample, produced by the dedicated metrics thread
+# (_metrics_loop) and attached to the next heartbeat by the heartbeat thread.
+# Collection is heavy (a full /proc walk for top processes, plus statvfs on
+# every real mount, which can be slow or momentarily stall on a sluggish/stale
+# filesystem) and used to run INLINE on the heartbeat thread, so a slow gather
+# delayed the 1.5s pulse and could make the host lag/flicker offline. Publishing
+# from a separate thread takes it off the heartbeat critical path entirely.
+_metrics_lock = threading.Lock()
+_pending_metrics = None   # {"metrics": {...}, "snapshot": {...}} awaiting send, or None
+
+
+def _metrics_loop(state):
+    """Collect performance metrics on a dedicated thread, on their own cadence,
+    fully off the heartbeat critical path. Publishes the newest sample for the
+    heartbeat thread to attach on its next tick; however long a collection takes
+    (big /proc scan, a slow statvfs), it can never stall the heartbeat pulse that
+    keeps last_seen fresh. The delta metrics (CPU%, net, I/O rates) keep their
+    previous-sample state in-process here, so they're computed over a clean
+    METRICS_INTERVAL window. Best-effort: any error is logged and retried."""
+    global _pending_metrics
+    if METRICS_INTERVAL <= 0:
+        return
+    while True:
+        try:
+            collected = _collect_metrics()
+            if collected is not None:
+                with _metrics_lock:
+                    _pending_metrics = collected
+        except Exception as e:
+            print("[agent] metrics thread:", e)
+        time.sleep(METRICS_INTERVAL)
 
 
 def heartbeat(state):
-    global _last_metrics_at
     body = {
         "host_id": state["host_id"],
         "agent_secret": state["agent_secret"],
@@ -896,16 +923,19 @@ def heartbeat(state):
         except Exception:
             pass
 
-    # Attach a performance sample at most once per METRICS_INTERVAL. Most
-    # heartbeats carry none, so the controller's time-series table grows at
-    # roughly one row per host per interval rather than per heartbeat.
-    now = time.time()
-    if METRICS_INTERVAL > 0 and (now - _last_metrics_at) >= METRICS_INTERVAL:
-        collected = _collect_metrics()
-        if collected is not None:
-            body["metrics"] = collected["metrics"]
-            body["snapshot"] = collected["snapshot"]
-            _last_metrics_at = now
+    # Attach the newest sample the metrics thread has published, if any. This is
+    # non-blocking (no collection here) — the gather happens on _metrics_loop, so
+    # a slow sample never delays this heartbeat. Draining it (set back to None)
+    # means each collected sample lands on exactly one heartbeat, so the
+    # controller's time-series table still grows at ~one row per host per
+    # METRICS_INTERVAL rather than per 1.5s heartbeat.
+    global _pending_metrics
+    with _metrics_lock:
+        pending = _pending_metrics
+        _pending_metrics = None
+    if pending is not None:
+        body["metrics"] = pending["metrics"]
+        body["snapshot"] = pending["snapshot"]
 
     try:
         r = _request("POST", "/agents/heartbeat", json=body, timeout=10)
@@ -948,6 +978,13 @@ def loop(state):
     # offline. Daemon: it dies with the process when the task loop exits.
     threading.Thread(target=_heartbeat_loop, args=(state,), daemon=True,
                      name="sysible-heartbeat").start()
+
+    # Gather performance metrics on their own thread too, so a heavy/slow
+    # collection is off the heartbeat critical path (see _metrics_loop). Daemon
+    # for the same reason. No-op when METRICS_INTERVAL <= 0.
+    if METRICS_INTERVAL > 0:
+        threading.Thread(target=_metrics_loop, args=(state,), daemon=True,
+                         name="sysible-metrics").start()
 
     while True:
         ran_task = False

@@ -126,15 +126,6 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
-    # Migration: privilege-dispatcher capability. 1 = the agent reports it runs
-    # confined behind sysible-priv (SYSIBLE_PRIV set), so op-capable actions can
-    # dispatch kind="op" verbs to it; 0/absent = the shell path. Reported each
-    # heartbeat (like agent_version), so it tracks the agent's live state.
-    try:
-        cur.execute("ALTER TABLE agents ADD COLUMN dispatcher INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
-
     # -----------------------------------------------------
     # Environments (dev/stage/prod, etc.)
     # An editable, admin-managed list rather than a fixed enum - used
@@ -651,7 +642,7 @@ def create_or_update_agent(
     conn.close()
 
 
-def update_agent_heartbeat(host_id, ip=None, hostname=None, agent_version=None, dispatcher=None):
+def update_agent_heartbeat(host_id, ip=None, hostname=None, agent_version=None):
     conn = _connect()
     cur = conn.cursor()
 
@@ -678,8 +669,7 @@ def update_agent_heartbeat(host_id, ip=None, hostname=None, agent_version=None, 
         last_seen=?,
         ip=COALESCE(?, ip),
         hostname=COALESCE(?, hostname),
-        agent_version=COALESCE(?, agent_version),
-        dispatcher=COALESCE(?, dispatcher)
+        agent_version=COALESCE(?, agent_version)
     WHERE host_id=?
     """,
     (
@@ -688,7 +678,6 @@ def update_agent_heartbeat(host_id, ip=None, hostname=None, agent_version=None, 
         ip,
         hostname,
         agent_version,
-        (1 if dispatcher else 0) if dispatcher is not None else None,
         host_id
     ))
 
@@ -703,7 +692,7 @@ def list_agents():
 
     cur.execute("""
     SELECT host_id, hostname, platform, kernel, status, last_seen, environment, ip,
-           requires_sudo_password, agent_version, revoked, dispatcher
+           requires_sudo_password, agent_version, revoked
     FROM agents
     ORDER BY hostname
     """)

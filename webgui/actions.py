@@ -53,13 +53,6 @@ class Action:
     danger: bool = False        # UI confirms before running (delete, etc.)
     tab: str = ""               # desktop tab this action lives under
     group: str = ""             # titled section (QGroupBox) within the tab
-    # Privilege dispatcher (hybrid): when set, this action can run as a confined
-    # `op` verb on dispatcher-capable agent hosts. `op_verb` is the sysible-priv
-    # verb; `op_args(params) -> dict` maps the form params to its arguments. The
-    # shell `build` above stays the fallback for SSH hosts and non-dispatcher
-    # agents, so op wiring is always non-breaking.
-    op_verb: str = ""
-    op_args: Callable[[dict], dict] = None
 
 
 # ----------------------------------------------------------------------
@@ -135,7 +128,6 @@ _register(Action(
     label="Start service",
     params=[Param("name", "Service name")],
     build=lambda p: api.cmd_service_start(_s(p, "name")),
-    op_verb="service.start", op_args=lambda p: {"unit": _s(p, "name")},
 ))
 _register(Action(
     name="svc_stop",
@@ -144,7 +136,6 @@ _register(Action(
     danger=True,
     params=[Param("name", "Service name")],
     build=lambda p: api.cmd_service_stop(_s(p, "name")),
-    op_verb="service.stop", op_args=lambda p: {"unit": _s(p, "name")},
 ))
 _register(Action(
     name="svc_restart",
@@ -152,7 +143,6 @@ _register(Action(
     label="Restart service",
     params=[Param("name", "Service name")],
     build=lambda p: api.cmd_service_restart(_s(p, "name")),
-    op_verb="service.restart", op_args=lambda p: {"unit": _s(p, "name")},
 ))
 
 # ---- Tool: User & Group Administration -------------------------------
@@ -175,7 +165,6 @@ _register(Action(
     danger=True,
     params=[Param("username", "Username")],
     build=lambda p: api.cmd_delete_user(_s(p, "username")),
-    op_verb="user.delete", op_args=lambda p: {"user": _s(p, "username")},
 ))
 _register(Action(
     name="user_lock",
@@ -183,7 +172,6 @@ _register(Action(
     label="Lock user",
     params=[Param("username", "Username")],
     build=lambda p: api.cmd_lock_user(_s(p, "username")),
-    op_verb="user.lock", op_args=lambda p: {"user": _s(p, "username")},
 ))
 _register(Action(
     name="user_unlock",
@@ -191,7 +179,6 @@ _register(Action(
     label="Unlock user",
     params=[Param("username", "Username")],
     build=lambda p: api.cmd_unlock_user(_s(p, "username")),
-    op_verb="user.unlock", op_args=lambda p: {"user": _s(p, "username")},
 ))
 _register(Action(
     name="user_set_shell",
@@ -226,19 +213,19 @@ _register(Action(
     name="pkg_install", tool="Host Software Management", label="Install packages",
     params=[Param("names", "Package name(s)", help="space-separated")],
     build=lambda p: api.cmd_install_packages(_s(p, "names")),
-    op_verb="pkg.install", op_args=lambda p: {"pkgs": ",".join(_s(p, "names").split())}))
+))
 _register(Action(
     name="pkg_update", tool="Host Software Management",
     label="Update / upgrade packages",
     params=[Param("names", "Package name(s)", required=False,
                   help="leave blank to update everything")],
     build=lambda p: api.cmd_update_packages(_s(p, "names")),
-    op_verb="pkg.update", op_args=lambda p: {"pkgs": ",".join(_s(p, "names").split())}))
+))
 _register(Action(
     name="pkg_remove", tool="Host Software Management", label="Remove packages",
     danger=True, params=[Param("names", "Package name(s)")],
     build=lambda p: api.cmd_remove_packages(_s(p, "names")),
-    op_verb="pkg.remove", op_args=lambda p: {"pkgs": ",".join(_s(p, "names").split())}))
+))
 _register(Action(
     name="pkg_clean_cache", tool="Host Software Management",
     label="Clean package cache", params=[],
@@ -385,19 +372,17 @@ _register(Action(name="fw_open_port", tool="Firewall Administration", label="Ope
             Param("protocol", "Protocol", type="select", options=["tcp", "udp"], default="tcp"),
             Param("zone", "Zone", required=False)],
     build=lambda p: api.cmd_open_port(_s(p, "port"), _s(p, "protocol", "tcp"), _s(p, "zone")),
-    op_verb="firewall.allow_port",
-    op_args=lambda p: {"port": _s(p, "port"), "proto": _s(p, "protocol", "tcp"), "zone": _s(p, "zone")}))
+))
 _register(Action(name="fw_close_port", tool="Firewall Administration", label="Close port",
     danger=True,
     params=[Param("port", "Port"),
             Param("protocol", "Protocol", type="select", options=["tcp", "udp"], default="tcp"),
             Param("zone", "Zone", required=False)],
     build=lambda p: api.cmd_close_port(_s(p, "port"), _s(p, "protocol", "tcp"), _s(p, "zone")),
-    op_verb="firewall.close_port",
-    op_args=lambda p: {"port": _s(p, "port"), "proto": _s(p, "protocol", "tcp"), "zone": _s(p, "zone")}))
+))
 _register(Action(name="fw_reload", tool="Firewall Administration", label="Reload firewalld",
     params=[], build=lambda p: api.cmd_reload_firewalld(),
-    op_verb="firewall.reload", op_args=lambda p: {}))
+))
 _register(Action(name="fw_install_firewalld", tool="Firewall Administration",
     label="Install firewalld", params=[], build=lambda p: api.cmd_install_firewalld()))
 _register(Action(name="fw_install_ufw", tool="Firewall Administration",
@@ -417,7 +402,7 @@ _register(Action(name="sec_set_selinux_mode", tool="Security Administration",
     label="Set SELinux mode",
     params=[Param("mode", "Mode", type="select", options=["enforcing", "permissive"], default="enforcing")],
     build=lambda p: api.cmd_set_selinux_mode(_s(p, "mode", "enforcing")),
-    op_verb="selinux.setenforce", op_args=lambda p: {"mode": _s(p, "mode", "enforcing")}))
+))
 _register(Action(name="sec_sshd_status", tool="Security Administration",
     label="SSH daemon status", params=[], build=lambda p: api.cmd_sshd_status()))
 _register(Action(name="sec_sshd_set", tool="Security Administration", label="Set sshd option",
@@ -547,7 +532,7 @@ _register(Action(name="time_set_ntp", tool="Time Synchronization", label="Set NT
 _register(Action(name="time_set_tz", tool="Time Synchronization", label="Set timezone",
     params=[Param("tz", "Timezone", help="e.g. America/New_York")],
     build=lambda p: api.cmd_set_timezone(_s(p, "tz")),
-    op_verb="system.set_timezone", op_args=lambda p: {"timezone": _s(p, "tz")}))
+))
 _register(Action(name="time_list_tz", tool="Time Synchronization", label="List timezones",
     params=[Param("filter_text", "Filter", required=False)],
     build=lambda p: api.cmd_list_timezones(_s(p, "filter_text"))))
@@ -708,11 +693,11 @@ _register(Action(name="user_set_aging", tool="User & Group Administration",
 _register(Action(name="group_create", tool="User & Group Administration",
     label="Create group", params=[Param("name", "Group name")],
     build=lambda p: api.cmd_create_group(_s(p, "name")),
-    op_verb="group.create", op_args=lambda p: {"group": _s(p, "name")}))
+))
 _register(Action(name="group_delete", tool="User & Group Administration",
     label="Delete group", danger=True, params=[Param("name", "Group name")],
     build=lambda p: api.cmd_delete_group(_s(p, "name")),
-    op_verb="group.delete", op_args=lambda p: {"group": _s(p, "name")}))
+))
 _register(Action(name="group_add_user", tool="User & Group Administration",
     label="Add user to group", params=[Param("group", "Group"), Param("username", "Username")],
     build=lambda p: api.cmd_add_user_to_group(_s(p, "group"), _s(p, "username"))))
@@ -842,7 +827,7 @@ _register(Action(name="timer_delete", tool="Cron & Systemd Timers", label="Delet
 _register(Action(name="net_set_hostname", tool="Network Management", label="Set hostname",
     params=[Param("new_hostname", "Hostname")],
     build=lambda p: api.cmd_set_hostname(_s(p, "new_hostname")),
-    op_verb="system.set_hostname", op_args=lambda p: {"hostname": _s(p, "new_hostname")}))
+))
 _register(Action(name="net_set_gateway", tool="Network Management", label="Set gateway",
     params=[Param("connection", "Connection"), Param("gateway", "Gateway")],
     build=lambda p: api.cmd_set_gateway(_s(p, "connection"), _s(p, "gateway"))))
@@ -967,7 +952,7 @@ _register(Action(name="fw_set_enabled", tool="Firewall Administration", label="E
     build=lambda p: api.cmd_set_firewalld_enabled(_b(p, "enabled", True))))
 _register(Action(name="fw_set_default_zone", tool="Firewall Administration", label="Set default zone",
     params=[Param("zone", "Zone")], build=lambda p: api.cmd_set_default_zone(_s(p, "zone")),
-    op_verb="firewall.set_default_zone", op_args=lambda p: {"zone": _s(p, "zone")}))
+))
 _register(Action(name="fw_create_zone", tool="Firewall Administration", label="Create zone",
     params=[Param("zone_name", "Zone name")], build=lambda p: api.cmd_create_zone(_s(p, "zone_name"))))
 _register(Action(name="fw_delete_zone", tool="Firewall Administration", label="Delete zone",
@@ -1032,9 +1017,7 @@ _register(Action(name="sec_selinux_set_bool", tool="Security Administration", la
     params=[Param("name", "Boolean"), Param("enabled", "On", type="checkbox", default=True, required=False),
             Param("permanent", "Permanent", type="checkbox", default=True, required=False)],
     build=lambda p: api.cmd_set_selinux_boolean(_s(p, "name"), _b(p, "enabled", True), _b(p, "permanent", True)),
-    op_verb="selinux.setbool",
-    op_args=lambda p: {"bool": _s(p, "name"), "value": ("on" if _b(p, "enabled", True) else "off"),
-                       "permanent": ("1" if _b(p, "permanent", True) else "0")}))
+))
 _register(Action(name="sec_selinux_denials", tool="Security Administration", label="Recent SELinux denials",
     params=[Param("lines", "Lines", type="number", default="50", required=False)],
     build=lambda p: api.cmd_selinux_recent_denials(_i(p, "lines", 50))))
@@ -1607,7 +1590,6 @@ _register(Action(
                 "(does not start anything).",
     params=[],
     build=lambda p: api.cmd_reset_failed_units(),
-    op_verb="service.reset_failed", op_args=lambda p: {},
 ))
 _register(Action(
     name="qsa_daemon_reload", tool="Quick System Actions", group="Systemd housekeeping",
@@ -1615,7 +1597,6 @@ _register(Action(
     description="Reload the systemd manager so edited unit files take effect.",
     params=[],
     build=lambda p: api.cmd_daemon_reload(),
-    op_verb="service.daemon_reload", op_args=lambda p: {},
 ))
 _register(Action(
     name="qsa_reboot", tool="Quick System Actions", group="Power (careful)",
@@ -1623,7 +1604,6 @@ _register(Action(
     description="Reboot the selected hosts now.",
     params=[],
     build=lambda p: api.cmd_reboot_host(),
-    op_verb="power.reboot", op_args=lambda p: {},
 ))
 _register(Action(
     name="qsa_poweroff", tool="Quick System Actions", group="Power (careful)",
@@ -1632,7 +1612,6 @@ _register(Action(
                 "powered on out-of-band).",
     params=[],
     build=lambda p: api.cmd_poweroff_host(),
-    op_verb="power.poweroff", op_args=lambda p: {},
 ))
 
 

@@ -11,10 +11,7 @@ drift, version skew, swapped files, and tampering by a NON-root actor. An
 attacker with root on the host can edit the agent AND this measurer to report a
 clean hash - so this is a speed bump, not a guarantee. The robust defence
 against host-root tampering is TPM remote attestation (Tier 2), out of scope
-here. Crucially this is only meaningful ON TOP OF the privilege dispatcher: once
-the agent runs as the locked 'sysible' user and cannot escalate except through
-vetted verbs, it can no longer rewrite its own code, so a mismatch means
-something with real root touched the files.
+here.
 """
 import hashlib
 import os
@@ -42,21 +39,12 @@ def _sha256(path):
 
 
 def default_files():
-    """The agent's own trust-relevant files. The dispatcher path comes from
-    SYSIBLE_PRIV when set; otherwise we look beside this module."""
+    """The agent's own trust-relevant files, measured beside this module."""
     here = os.path.dirname(os.path.abspath(__file__))
-    files = [
+    return [
         os.path.join(here, "agent.py"),
         os.path.join(here, "agent_integrity.py"),
     ]
-    disp = os.environ.get("SYSIBLE_PRIV")
-    if disp:
-        files.append(disp)
-    else:
-        local = os.path.join(here, "sysible_priv.py")
-        if os.path.exists(local):
-            files.append(local)
-    return files
 
 
 def measure(files=None, version=None):

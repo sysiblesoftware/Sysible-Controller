@@ -26,11 +26,8 @@ AGENT_SOURCE_FILE = PROJECT_ROOT / "host_agent" / "agent.py"
 # so adding a dependency to the agent only ever means updating this one
 # file instead of also hand-editing the install scripts below.
 AGENT_REQUIREMENTS_FILE = PROJECT_ROOT / "host_agent" / "requirements.txt"
-# Privilege-dispatcher + integrity modules, bundled alongside agent.py.
-# agent_integrity.py is always installed (guarded import; enables integrity
-# reporting). sysible_priv.py is installed root-owned and made the agent's only
-# sudo target in --dispatcher mode (see _run_script).
-SYSIBLE_PRIV_SOURCE_FILE = PROJECT_ROOT / "host_agent" / "sysible_priv.py"
+# Integrity module, bundled alongside agent.py. Always installed (guarded
+# import in agent.py; enables integrity self-measurement/reporting).
 AGENT_INTEGRITY_SOURCE_FILE = PROJECT_ROOT / "host_agent" / "agent_integrity.py"
 CERT_FILE = Path(os.getenv("SYSIBLE_CERT_FILE", str(PROJECT_ROOT / "certs" / "server.crt")))
 # What new agent bundles should pin as their trust anchor - see
@@ -218,21 +215,12 @@ fi
 # root-level command builders keep working; the agent escalates each
 # command via `sudo -n`. The installer itself still runs as root.
 AGENT_USER="${{SYSIBLE_AGENT_USER:-root}}"
-# --dispatcher: run confined behind sysible-priv. Implies the locked 'sysible'
-# account, installs the dispatcher root-owned, and shrinks the agent's sudoers
-# from NOPASSWD: ALL to just the one dispatcher binary. See sysible_priv.py.
-DISPATCHER=0
 for arg in "$@"; do
   case "$arg" in
-    --dispatcher) AGENT_USER="sysible"; DISPATCHER=1 ;;
     --unprivileged) AGENT_USER="sysible" ;;
     --user=*) AGENT_USER="${{arg#--user=}}" ;;
   esac
 done
-if [[ "$DISPATCHER" == "1" && "$AGENT_USER" == "root" ]]; then
-  echo "--dispatcher requires a non-root agent account (it confines root); drop --user=root." >&2
-  exit 1
-fi
 
 {cert_steps}echo "Installing agent to {_AGENT_INSTALL_DIR}..."
 mkdir -p {_AGENT_INSTALL_DIR}
@@ -265,13 +253,7 @@ if [[ "$AGENT_USER" != "root" ]]; then
   # Passwordless sudo for the agent account, validated before it goes live
   # so a malformed drop-in can never break sudo on the host.
   SUDOERS_FILE=/etc/sudoers.d/sysible-agent
-  if [[ "$DISPATCHER" == "1" ]]; then
-    # Confined: the agent may sudo EXACTLY ONE program — the dispatcher — which
-    # only runs vetted, argument-validated verbs. This is the whole point.
-    echo "$AGENT_USER ALL=(ALL) NOPASSWD: {_AGENT_INSTALL_DIR}/priv/sysible-priv" > "$SUDOERS_FILE.tmp"
-  else
-    echo "$AGENT_USER ALL=(ALL) NOPASSWD: ALL" > "$SUDOERS_FILE.tmp"
-  fi
+  echo "$AGENT_USER ALL=(ALL) NOPASSWD: ALL" > "$SUDOERS_FILE.tmp"
   chmod 440 "$SUDOERS_FILE.tmp"
   if visudo -cf "$SUDOERS_FILE.tmp" >/dev/null 2>&1; then
     mv -f "$SUDOERS_FILE.tmp" "$SUDOERS_FILE"
@@ -285,21 +267,6 @@ if [[ "$AGENT_USER" != "root" ]]; then
   chown -R "$AGENT_USER" {_AGENT_INSTALL_DIR} /var/lib/sysible
   # Point the unit at the chosen account instead of root.
   sed -i "s/^User=root$/User=$AGENT_USER/" ./{_SERVICE_NAME}.service
-
-  if [[ "$DISPATCHER" == "1" ]]; then
-    echo "Installing the privilege dispatcher (root-owned) to {_AGENT_INSTALL_DIR}/priv/sysible-priv..."
-    mkdir -p {_AGENT_INSTALL_DIR}/priv
-    cp -f ./sysible_priv.py {_AGENT_INSTALL_DIR}/priv/sysible-priv
-    # Root-owned and not group/other-writable: the confined '$AGENT_USER'
-    # account must NOT be able to modify the one program it may sudo, or it
-    # would escape the allowlist. Re-assert ownership AFTER the chown -R above.
-    chown root:root {_AGENT_INSTALL_DIR}/priv {_AGENT_INSTALL_DIR}/priv/sysible-priv
-    chmod 0755 {_AGENT_INSTALL_DIR}/priv/sysible-priv
-    # Turn on the dispatcher path for the agent (read via EnvironmentFile).
-    grep -q '^SYSIBLE_PRIV=' {_AGENT_INSTALL_DIR}/sysible_agent.env \
-      || echo "SYSIBLE_PRIV={_AGENT_INSTALL_DIR}/priv/sysible-priv" >> {_AGENT_INSTALL_DIR}/sysible_agent.env
-    echo "  agent confined: sudoers grants only the dispatcher; SYSIBLE_PRIV set."
-  fi
 fi
 
 echo "Installing systemd service ({_SERVICE_NAME})..."
@@ -592,10 +559,8 @@ def build_agent_bundle(controller_addresses, controller_port: int, token: str):
 
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("agent.py", agent_source)
-        # Integrity module (always installed) + the privilege dispatcher
-        # (installed root-owned in --dispatcher mode). Shipped verbatim.
+        # Integrity module (always installed). Shipped verbatim.
         zf.writestr("agent_integrity.py", AGENT_INTEGRITY_SOURCE_FILE.read_text())
-        zf.writestr("sysible_priv.py", SYSIBLE_PRIV_SOURCE_FILE.read_text())
         zf.writestr("requirements.txt", requirements_text)
         zf.writestr("sysible_agent.env", _env_file(controller_url, token, include_cert))
 

@@ -386,30 +386,6 @@ def _exec(argv, shell=False, input_data=None):
         return {"stdout": "", "stderr": str(e), "returncode": -1}
 
 
-# Privilege-dispatcher (hybrid model): when set, this points at the single
-# sudo-allowlisted helper (sysible-priv). With it configured on an unprivileged
-# ('sysible') agent, the agent reaches privileged work ONLY through
-# `sudo -n <dispatcher> ...` instead of `sudo bash`/`sudo runuser` — so its
-# sudoers can shrink from `NOPASSWD: ALL` to a single dispatcher line. Unset =
-# today's behaviour, unchanged.
-_PRIV_DISPATCHER = os.environ.get("SYSIBLE_PRIV")
-
-
-def _run_via_dispatcher(user, cmd, become_password=None):
-    """Run `cmd` as `user` through the privileged dispatcher's `runas` path.
-    Mirrors _run_as_user's try-unprivileged-then-escalate, but the ONLY thing the
-    agent sudo's is the dispatcher. Per-user attribution is preserved (the
-    dispatcher runs `runuser -u <user>`). Root-only primitives go through the
-    dispatcher's vetted `op` verbs instead (see run_op / sysible_priv.py)."""
-    base = ["sudo", "-n", _PRIV_DISPATCHER, "runas", "--user", user]
-    first = _exec(base + ["--mode", "plain", "--", cmd])
-    combined = (first["stderr"] or "") + "\n" + (first["stdout"] or "")
-    if first["returncode"] == 0 or not _looks_like_privilege_error(combined):
-        return first
-    stdin = (become_password + "\n") if become_password else None
-    return _exec(base + ["--mode", "elevate", "--", cmd], input_data=stdin)
-
-
 def _run_as_user(user, cmd, become_password=None):
     """RBAC: run `cmd` as local user `user`. Tried as that user first, so
     read-only commands work even for a user with no sudo; on a privilege
@@ -426,11 +402,6 @@ def _run_as_user(user, cmd, become_password=None):
                        f"sudo policy you want) on this host."),
             "returncode": 126,
         }
-
-    # When a dispatcher is configured and the agent is non-root (the
-    # --unprivileged 'sysible' deployment), route through the single sudo entry.
-    if _PRIV_DISPATCHER and os.geteuid() != 0:
-        return _run_via_dispatcher(user, cmd, become_password)
 
     root = os.geteuid() == 0
     plain = (["runuser", "-u", user, "--", "bash", "-c", cmd] if root
@@ -483,30 +454,6 @@ def run_command(cmd, run_as=None, become_password=None):
     if os.geteuid() != 0:
         cmd = "sudo -n bash -c " + shlex.quote(cmd)
     return _exec(cmd, shell=True)
-
-
-def run_op(spec, become_password=None):
-    """Run a vetted privileged OPERATION through the dispatcher's `op` path
-    instead of arbitrary shell. `spec` is
-    {"op": "service.restart", "args": {"unit": "nginx.service"}} (+ optional
-    "stdin" for a secret / file content). The agent sudo's ONLY the dispatcher;
-    the dispatcher validates the verb + args and runs the primitive as root.
-    There is no run_as here — an op IS the privileged action, not user shell."""
-    if not _PRIV_DISPATCHER:
-        return {"stdout": "", "returncode": 2,
-                "stderr": "[sysible] privileged dispatcher not configured (SYSIBLE_PRIV unset)"}
-    op = (spec or {}).get("op")
-    if not op:
-        return {"stdout": "", "returncode": 2, "stderr": "[sysible] op task missing 'op'"}
-    argv = ["sudo", "-n", _PRIV_DISPATCHER, "op", "--op", op]
-    for k, v in ((spec.get("args") or {}).items()):
-        argv += ["--arg", f"{k}={v}"]
-    # A secret (become password, file content) goes on the dispatcher's stdin,
-    # never argv. Prefer an explicit spec stdin, else the become password.
-    secret = spec.get("stdin")
-    if secret is None and become_password:
-        secret = become_password
-    return _exec(argv, input_data=(secret + "\n" if secret else None))
 
 
 def send_result(state, task_id, result):
@@ -938,9 +885,6 @@ def heartbeat(state):
         "hostname": socket.gethostname(),
         # Lets the controller track which hosts run the current agent build.
         "agent_version": AGENT_VERSION,
-        # Privilege-dispatcher capability: True when this agent runs confined
-        # behind sysible-priv, so the controller can route op verbs to it.
-        "dispatcher": bool(_PRIV_DISPATCHER),
     }
 
     # Agent integrity (Tier 1): self-measurement manifest the controller compares
@@ -1024,15 +968,8 @@ def loop(state):
                 print("[agent] running task", task_id)
 
                 try:
-                    # A kind="op" task carries a JSON verb spec ({"op","args"})
-                    # run through the vetted dispatcher path; everything else is
-                    # the existing per-user shell path.
-                    if task.get("kind") == "op":
-                        result = run_op(json.loads(task["command"]),
-                                        task.get("become_password"))
-                    else:
-                        result = run_command(task["command"], task.get("run_as"),
-                                             task.get("become_password"))
+                    result = run_command(task["command"], task.get("run_as"),
+                                         task.get("become_password"))
                     send_result(state, task_id, result)
                 except UnknownHostError:
                     raise

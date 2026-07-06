@@ -364,8 +364,7 @@ def heartbeat(req: HeartbeatRequest):
 
     verify_agent(req.host_id, req.agent_secret)
 
-    update_agent_heartbeat(req.host_id, req.ip, req.hostname, agent_version=req.agent_version,
-                           dispatcher=req.dispatcher)
+    update_agent_heartbeat(req.host_id, req.ip, req.hostname, agent_version=req.agent_version)
 
     # Agent integrity (Tier 1): when the agent reports a self-measurement,
     # compare it against this host's sealed baseline (trust-on-first-use) and

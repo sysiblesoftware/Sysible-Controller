@@ -400,14 +400,6 @@ function MetricCard({ label, value, extra, hosts, onOpenHost, accent }) {
 // Fleet overview: at-a-glance metrics + recent activity. Navigation lives in
 // the sidebar, so this is a real home screen rather than a duplicate tile grid.
 
-function seenAgo(v) {
-  if (v === null || v === undefined || v === "") return Infinity;
-  let n = Number(v);
-  if (!isFinite(n)) { const d = new Date(v); n = isNaN(d) ? NaN : d.getTime() / 1000; }
-  if (!isFinite(n)) return Infinity;
-  if (n > 1e12) n /= 1000; // ms → s
-  return Date.now() / 1000 - n;
-}
 function fmtWhen(v) {
   if (v === null || v === undefined || v === "") return "—";
   let n = Number(v); let d;
@@ -415,17 +407,13 @@ function fmtWhen(v) {
   return isNaN(d.getTime()) ? String(v) : d.toLocaleString();
 }
 
-const ONLINE_WINDOW_S = 150;
-
 export default function Dashboard({ role, edition, onOpen }) {
   const [q, setQ] = useState("");
-  const [agents, setAgents] = useState([]);
   const [activity, setActivity] = useState([]);
   const isSuper = role === "superuser";
   const isAuditor = role === "auditor";
 
   useEffect(() => {
-    api.agents().then((d) => setAgents(d.agents || [])).catch(() => {});
     if (isSuper) api.activity(12).then((d) => setActivity(d.activity || [])).catch(() => {});
   }, [isSuper]);
 
@@ -473,9 +461,6 @@ export default function Dashboard({ role, edition, onOpen }) {
     if (fleetInFlight.current) return;
     fleetInFlight.current = true;
     setFleetLoading(true); setFleetErr("");
-    // Refresh the agent inventory alongside health so the top-strip counts
-    // (total/envs) and last_seen stay current, not frozen at page load.
-    api.agents().then((d) => setAgents(d.agents || [])).catch(() => {});
     api.fleetHealth()
       .then((d) => { setFleet(d.hosts || []); setFleetAt(Date.now()); })
       .catch((e) => setFleetErr(e.message))
@@ -488,56 +473,48 @@ export default function Dashboard({ role, edition, onOpen }) {
     return () => clearInterval(t);
   }, [fleetAuto, loadFleet]);
 
-  // Authoritative per-host reachability from the fleet-health sweep (server-side
-  // 20s-stale check). Preferred over a client-side last_seen window so the top
-  // strip agrees with the fleet donut and updates live with it.
-  const onlineById = useMemo(() => {
-    const map = {};
-    for (const h of fleet) {
-      if (!h) continue;
-      // Key by BOTH the entry id and the agent host_id: a merged host's entry id
-      // is its label, so agents (keyed by host_id) only match via agent_id.
-      if (h.id != null) map[h.id] = h.online;
-      if (h.agent_id != null) map[h.agent_id] = h.online;
-    }
-    return map;
-  }, [fleet]);
-  // Have we actually completed (or failed) a health sweep yet? Before the first
-  // sweep we trust the last_seen heartbeat window; once a sweep has run, we trust
-  // it — a host the sweep couldn't confirm online is treated as offline rather
-  // than left looking healthy on a stale heartbeat.
+  // Have we completed (or failed) a health sweep yet? Gates the "nothing is
+  // checking in" alarm so it can't flash before the first sweep runs.
   const healthAttempted = fleetAt > 0 || !!fleetErr;
-  const isAgentOnline = (a) => {
-    const f = onlineById[a.host_id];
-    if (f === true) return true;
-    if (f === false) return false;
-    if (healthAttempted) return false;               // sweep ran but couldn't reach it
-    return seenAgo(a.last_seen) <= ONLINE_WINDOW_S;   // pre-first-sweep fallback only
-  };
 
+  // Top-strip counts come from the SAME deduped host set as the fleet donut and
+  // the licensed "Hosts enrolled" count (list_merged_hosts: agents + SSH, with
+  // duplicates merged). Deriving Online/Offline from this deduped set — rather
+  // than the raw agent inventory — guarantees Online can never exceed Enrolled
+  // and that the tiles agree with the donut. SSH-only hosts report online===null
+  // (they can't be passively judged): they count toward the total but as neither
+  // online nor offline.
   const m = useMemo(() => {
-    const total = agents.length;
-    const online = agents.filter(isAgentOnline).length;
-    const envs = new Set(agents.map((a) => a.environment || "Unassigned")).size;
-    return { total, online, offline: total - online, envs };
-  }, [agents, onlineById, healthAttempted]);
+    const hosts = fleet.filter(Boolean);
+    const total = hosts.length;
+    const online = hosts.filter((h) => h.online === true).length;
+    const offline = hosts.filter((h) => h.online === false).length;
+    const envs = new Set(hosts.map((h) => h.environment || "Unassigned")).size;
+    // Only agent hosts that actually answered (online true/false) count toward
+    // the "nothing is checking in" alarm — an all-SSH fleet (online unknown)
+    // must not trip it.
+    return { total, online, offline, envs, judgeable: online + offline };
+  }, [fleet]);
 
   // Emergency state for the dashboard: either the controller isn't answering the
   // health sweep at all, or a completed sweep shows nothing is checking in. Only
   // raised AFTER a sweep has been attempted, so the first paint doesn't flash red
   // while health is still gathering.
   const healthDown = !!fleetErr;
-  const noCheckins = m.total > 0 && m.online === 0;
+  const noCheckins = m.judgeable > 0 && m.online === 0;
   const emergency = healthAttempted && (healthDown || noCheckins);
 
   // Host lists behind the top-strip counts, so each count can drop down the
   // specific hosts (id → drill-down, hostname + environment shown).
   const hostLists = useMemo(() => {
-    const mk = (a) => ({ id: a.host_id, host: a.hostname || a.host_id, env: a.environment || "Unassigned", ctrl: !!a.is_controller });
+    // Drill-downs open by agent host_id when present (merged/agent hosts), else
+    // the entry id (SSH-only). Same deduped set as the counts above.
+    const mk = (h) => ({ id: h.agent_id || h.id, host: h.host, env: h.environment || "Unassigned", ctrl: !!h.is_controller });
+    const hosts = fleet.filter(Boolean);
     const online = [], offline = [];
-    for (const a of agents) (isAgentOnline(a) ? online : offline).push(mk(a));
-    return { all: agents.map(mk), online, offline };
-  }, [agents, onlineById, healthAttempted]);
+    for (const h of hosts) { if (h.online === true) online.push(mk(h)); else if (h.online === false) offline.push(mk(h)); }
+    return { all: hosts.map(mk), online, offline };
+  }, [fleet]);
 
   const openHost = useCallback((h) => onOpen("host", { id: h.id, label: h.host }), [onOpen]);
 
@@ -575,7 +552,7 @@ export default function Dashboard({ role, edition, onOpen }) {
     }
     const m2 = {};
     for (const h of fleet) m2[h.id] = { host: h.host, env: h.environment || "Unassigned", boot: bootById[h.id] ?? null };
-    for (const p of posture) if (!m2[p.id]) m2[p.id] = { host: p.host, env: "Unassigned", boot: bootById[p.id] ?? null };
+    for (const p of posture) if (!m2[p.id]) m2[p.id] = { host: p.host, env: p.environment || "Unassigned", boot: bootById[p.id] ?? null };
     return m2;
   }, [fleet, posture]);
 
@@ -654,11 +631,19 @@ export default function Dashboard({ role, edition, onOpen }) {
       if (s) acc[key].suppressed.push({ ...entry, supp: s });
       else acc[key].active.push(entry);
     };
+    // Only count signals for hosts in the current (tag-filtered) view that
+    // aren't offline. Previously the posture loop ran over the WHOLE posture
+    // sweep, so the chips ignored the service-group filter and kept counting an
+    // offline host's stale cached flags — contradicting the donut/env cards,
+    // which run over filteredFleet and grade offline hosts as OFFLINE (not a
+    // live exposure). This aligns the chips with the per-host `analysis`.
+    const eligible = new Set(filteredFleet.filter((h) => h.online !== false).map((h) => h.id));
     for (const p of posture) {
-      if (!p.flags) continue;
+      if (!p.flags || !eligible.has(p.id)) continue;
       for (const key of POSTURE_SIGNAL_KEYS) if (p.flags[key] === true) place(key, p.id, p.host);
     }
     for (const h of filteredFleet) {
+      if (h.online === false) continue;
       if ((h.disk ?? 0) >= 90) place("disk_critical", h.id, h.host);
       if ((h.failed ?? 0) > 0) place("failed_units", h.id, h.host);
     }
@@ -739,14 +724,19 @@ export default function Dashboard({ role, edition, onOpen }) {
     for (const h of filteredFleet) {
       const a = analysis[h.id];
       if (!a) continue;
-      // Only ACTIVE (non-suppressed) findings drive the triage list.
+      const pe = postById[h.id] || {};
+      // Only ACTIVE (non-suppressed) findings drive the triage list. A failed
+      // posture scan is included too, so this list doesn't silently omit hosts
+      // the per-environment "needs attention" rollup counts (which also flags
+      // postureError).
       let reasons, sev;
       if (a.verdict === "OFFLINE") { reasons = ["offline"]; sev = 0; }
-      else {
-        if (a.active.length === 0) continue;   // clean, or only suppressed
+      else if (a.active.length > 0) {
         reasons = a.active.map((f) => f.text);
         sev = a.active.reduce((mn, f) => Math.min(mn, f.sev), 3);
       }
+      else if (pe.postureError) { reasons = ["posture scan incomplete"]; sev = 2; }
+      else continue;   // clean, or only suppressed
       const crit = (hostMetaMap[h.host] || {}).criticality || "normal";
       rows.push({ id: h.id, host: h.host, env: h.environment || "Unassigned", sev, reasons, crit, ctrl: !!h.is_controller });
     }
@@ -755,7 +745,7 @@ export default function Dashboard({ role, edition, onOpen }) {
       || (CRIT_RANK[a.crit] ?? 2) - (CRIT_RANK[b.crit] ?? 2)
       || b.reasons.length - a.reasons.length);
     return rows;
-  }, [filteredFleet, analysis, hostMetaMap]);
+  }, [filteredFleet, analysis, hostMetaMap, postById]);
 
   // Single environment-grouped rollup joining the two lenses by host id: each
   // host carries its live health (verdict, disk/mem, problem signals) AND its
@@ -773,8 +763,11 @@ export default function Dashboard({ role, edition, onOpen }) {
       // needs-attention list and the compliance strip AND honour suppressions.
       const ev = a.verdict;
       const activeIssues = a.active.filter((f) => f.key).length;   // suppressible findings still active
-      // Needs attention = has an ACTIVE finding, is offline, or its scan failed.
-      const needsAttention = a.active.length > 0 || ev === "OFFLINE" || !!pe.postureError;
+      // Matches the env card's "N needs attention" number (`problematic` below):
+      // offline is surfaced by the card's own separate "N offline" badge, so it
+      // isn't folded in here — otherwise the count and the host list it drills
+      // into (this same flag) disagreed whenever an environment had offline hosts.
+      const needsAttention = a.active.length > 0 || !!pe.postureError;
       const host = { ...h, issues: activeIssues, postureError: pe.postureError || null,
                      limited: !!pe.limited, verdict: ev, needsAttention };
       const e = g[env] || (g[env] = {
@@ -999,9 +992,9 @@ export default function Dashboard({ role, edition, onOpen }) {
                   <span><span className="dot" style={{ background: VERDICT_COLOR.OK }} /> {fleetSummary.counts.OK} OK</span>
                   <span><span className="dot" style={{ background: VERDICT_COLOR.WARNING }} /> {fleetSummary.counts.WARNING} warning</span>
                   <span><span className="dot" style={{ background: VERDICT_COLOR.CRITICAL }} /> {fleetSummary.counts.CRITICAL} critical</span>
-                  {suppressedList.length > 0 && (
-                    <span title={`${suppressedList.length} alert${suppressedList.length === 1 ? "" : "s"} suppressed across the fleet`}>
-                      <span className="dot" style={{ background: VERDICT_COLOR.SUPPRESSED }} /> {suppressedList.length} suppressed</span>
+                  {fleetSummary.counts.SUPPRESSED > 0 && (
+                    <span title={`${fleetSummary.counts.SUPPRESSED} host${fleetSummary.counts.SUPPRESSED === 1 ? "" : "s"} whose only findings are suppressed (this grey slice). All ${suppressedList.length} suppression${suppressedList.length === 1 ? "" : "s"} are listed in the Suppressed panel below.`}>
+                      <span className="dot" style={{ background: VERDICT_COLOR.SUPPRESSED }} /> {fleetSummary.counts.SUPPRESSED} suppressed</span>
                   )}
                   <span><span className="dot" style={{ background: VERDICT_COLOR.OFFLINE }} /> {fleetSummary.counts.OFFLINE} offline</span>
                 </div>
@@ -1021,7 +1014,7 @@ export default function Dashboard({ role, edition, onOpen }) {
 
             <div className="section-title" style={{ margin: "4px 0 6px" }}>
               Environments <span className="faint" style={{ fontWeight: 400, fontSize: 12 }}>
-                — {fleetEnvs.clear}/{fleetEnvs.total} clear
+                — {fleetEnvs.clear}/{fleetEnvs.total} hosts clear
               </span>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 10 }}>

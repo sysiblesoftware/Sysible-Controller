@@ -1,7 +1,7 @@
 """
-Single place where the desktop client talks to the Sysible backend.
+Single place where the web console talks to the Sysible backend.
 
-Every page should go through here instead of calling `requests`
+Callers should go through here instead of calling `requests`
 directly, so the API base URL and the admin API key are only
 configured in one spot.
 """
@@ -55,9 +55,8 @@ _ADMIN_TOKEN = None
 # Per-thread override of the admin token. The web BFF is a single shared process
 # serving every administrator concurrently, so a process-global token is unsafe:
 # one request (or fleet-health's parallel probe threads) can read another's
-# token. The BFF therefore sets a THREAD-scoped token per request/worker; the
-# desktop GUI never sets this and keeps using the process-global it sets once at
-# login (which its own worker threads inherit). A thread-local value of None
+# token. The BFF therefore sets a THREAD-scoped token per request/worker. A
+# thread-local value of None
 # means "explicitly no token for this thread" (e.g. the read-only fleet-health
 # metrics probe, which must run as root regardless of who is viewing) — distinct
 # from "no override set", hence the sentinel.

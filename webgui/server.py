@@ -1,34 +1,32 @@
 """
-Sysible Web GUI - a separate, browser-based front end to the Sysible
-Controller, intended for Windows (and any) machines that can't run the
-PySide6 desktop client but can reach the controller over the network.
+Sysible Web GUI - the browser-based front end to the Sysible Controller,
+reachable from any machine on the network, no local install required.
 
 Architecture (why it's shaped this way)
 ---------------------------------------
 This is a thin **backend-for-frontend (BFF)**. It does NOT re-implement
-any host-management logic. Instead it imports the desktop client's
-existing, battle-tested helpers:
+any host-management logic. Instead it imports the shared, battle-tested
+helpers under client/:
 
   * client.api               - admin login, agents, edition, base-URL/key
   * client._api_dispatch     - list_merged_hosts(), run_on_entry(),
                                poll_entry_result()  (agent-queue vs. SSH
                                dispatch hidden behind one call)
   * client._api_* (cmd_*)    - the hundreds of pure-Python shell-command
-                               builders the desktop tools already use
+                               builders the tool catalog uses
 
 The React SPA never builds shell commands and never sees the controller
 API key. It sends {action, params, targets}; this service looks the
 action up in webgui/actions.py, calls the matching cmd_* builder to get
-the exact same shell string the desktop app would run, dispatches it
-across the selected hosts, and returns per-host results. Reaching full
-desktop parity is therefore a matter of registering more actions, not
-re-writing dispatch logic per tool.
+the exact shell string to run, dispatches it across the selected hosts,
+and returns per-host results. Adding a tool is therefore a matter of
+registering more actions, not re-writing dispatch logic per tool.
 
-Auth: the browser logs in with the same administrator credentials the
-desktop app uses. We verify them against the controller's /admin/login
-(through client.api, which holds the API key server-side) and then set a
-signed, http-only session cookie via Starlette's SessionMiddleware. The
-API key stays on this server; it is never exposed to the browser.
+Auth: the browser logs in with a controller administrator's credentials.
+We verify them against the controller's /admin/login (through client.api,
+which holds the API key server-side) and then set a signed, http-only
+session cookie via Starlette's SessionMiddleware. The API key stays on
+this server; it is never exposed to the browser.
 
 Run:
     cd webgui
@@ -431,8 +429,8 @@ class PathCriticalRequest(BaseModel):
 def path_critical(body: PathCriticalRequest, user: str = Depends(require_login)):
     """Classify whether any of `paths` is a system-critical file/mount, so the
     UI can warn (superuser) or block (sysadmin) before a delete/unmount/fstab
-    removal. Single source of truth = client/system_paths (shared with the
-    desktop GUI and the cmd_* builder backstop)."""
+    removal. Single source of truth = client/system_paths (also enforced by
+    the cmd_* builder backstop)."""
     from client import system_paths
     for p in body.paths:
         reason = system_paths.system_critical_reason(p)
@@ -2409,7 +2407,7 @@ class RunRequest(BaseModel):
 
 @app.post("/api/tool/{action_name}")
 def run_tool(action_name: str, body: RunRequest, request: Request, user: str = Depends(require_operator)):
-    """Build the shell command for `action_name` via the desktop client's
+    """Build the shell command for `action_name` via the shared
     cmd_* builder, then dispatch it across every selected target and
     return per-host results. Synchronous: agent tasks are polled here up
     to a timeout so the browser gets one clean response."""
@@ -2795,7 +2793,7 @@ def _normalize(label, r, env="Unassigned"):
 # ----------------------------------------------------------------------
 # File transfer (Sysible Connect) - browser <-> host over SSH
 # ----------------------------------------------------------------------
-# Reuses the desktop client's SSH transfer helpers. Upload: the browser's
+# Reuses the shared SSH transfer helpers. Upload: the browser's
 # multipart file is spooled to a temp file, pushed with upload_file_ssh,
 # then the temp file is removed. Download: download_file_ssh writes to a
 # temp file which is streamed back as an attachment and cleaned up after.

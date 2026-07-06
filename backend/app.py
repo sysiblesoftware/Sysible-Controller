@@ -533,8 +533,8 @@ def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
         if not admin:
             raise HTTPException(status_code=401, detail="Invalid or expired admin token")
         # Read-only 'auditor' accounts can never dispatch a command to a host.
-        # Enforced here (front-end independent) so it holds for the web console,
-        # the desktop GUI, or a hand-crafted API call alike.
+        # Enforced here (front-end independent) so it holds for the web console
+        # or a hand-crafted API call alike.
         if admin.get("role") == "auditor":
             raise HTTPException(status_code=403, detail="Auditor accounts are read-only.")
         run_as = admin["username"]
@@ -1606,7 +1606,7 @@ def revoke_portal_session_route(session_id: int):
 
 
 # =========================================================
-# ADMINISTRATORS (gates the desktop GUI itself - the "Sysible
+# ADMINISTRATORS (gates the web console itself - the "Sysible
 # Administrator Configuration" page. Separate from portal_credentials
 # above, which is what a remote host *operator* logs into in a
 # browser, not what a Sysible admin uses. All routes still require

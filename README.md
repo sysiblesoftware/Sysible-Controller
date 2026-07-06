@@ -194,14 +194,12 @@ The first account is a **Superuser** — it can manage other administrators and 
 
 ## Logging out
 
-The dashboard header shows who's signed in and a **Log Out** button (also on the tray menu). Logging out revokes the current session's login token on the controller, closes the dashboard and every open tool window, and returns to the login screen — all without stopping the backend, so another administrator can sign straight in. This is distinct from **Quit** (tray menu), which exits the GUI process entirely, and from `sysible_controller stop`, which stops the backend service too.
-
-The **web console** has the same header **Log Out** button; it clears the browser's session cookie and returns to the login page, again without affecting the backend or the `sysible-webgui` service. Sessions also expire on their own after a configurable lifetime (12 hours by default).
+The **web console** header shows who's signed in and a **Log Out** button; it revokes the current session's login token on the controller, clears the browser's session cookie, and returns to the login page — all without affecting the backend or the `sysible-webgui` service, so another administrator can sign straight in. Sessions also expire on their own after a configurable lifetime (12 hours by default).
 
 ## CLI reference
 
 ```
-sysible_controller {start|stop|restart|status|logs|gui|webgui|reset-admin|enable-remote-gui|disable-remote-gui|destroy}
+sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|destroy}
 ```
 
 | Command | Root? | What it does |

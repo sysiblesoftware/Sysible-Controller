@@ -52,10 +52,9 @@ async def _security_headers(request, call_next):
 
 SESSION_COOKIE = "sysible_portal_session"
 
-# Same logo used throughout the desktop client (client/branding.py) -
-# duplicated here rather than imported from the client package to keep
-# backend/ free of any dependency on client/, since this process can
-# run on a headless server with no PySide6 installed at all.
+# The Sysible logo, served on the portal's own pages. Read from the
+# repo-root PNG rather than bundled elsewhere so this process stays free
+# of any extra dependency and can run on a headless server.
 LOGO_PATH = Path(__file__).resolve().parent.parent / "sysible_logo.png"
 
 
@@ -286,7 +285,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
         if cli:
             return Response(
                 "The portal has no login configured. Set one up in the "
-                "Webserver Portal page of the desktop app first.\n",
+                "Webserver Portal page of the web console first.\n",
                 status_code=409, media_type="text/plain",
             )
         return RedirectResponse("/?error=notconfigured", status_code=303)
@@ -416,7 +415,7 @@ async def download_bundle(request: Request, cli: int = 0):
             return Response(
                 "The controller has no configured address, so an agent "
                 "bundle can't be built. Set one in Controller "
-                "Configuration in the desktop app, then retry.\n",
+                "Configuration in the web console, then retry.\n",
                 status_code=409, media_type="text/plain",
             )
         return RedirectResponse("/files", status_code=303)
@@ -440,7 +439,7 @@ def _build_bundle_response():
         return Response(
             "The controller has no configured address, so an agent bundle "
             "can't be built. Set one in Controller Configuration in the "
-            "desktop app, then retry.\n",
+            "web console, then retry.\n",
             status_code=409, media_type="text/plain",
         )
     filename, zip_bytes = mint_agent_bundle(addresses, config["port"])
@@ -479,7 +478,7 @@ async def cli_bundle(request: Request):
     if not creds or not creds.get("username"):
         return Response(
             "The portal has no login configured. Set one up in the "
-            "Webserver Portal page of the desktop app first.\n",
+            "Webserver Portal page of the web console first.\n",
             status_code=409, media_type="text/plain",
         )
 

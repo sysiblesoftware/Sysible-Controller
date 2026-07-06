@@ -28,7 +28,7 @@ export default function Connect() {
     return Object.entries(m).sort(([a], [b]) => a.localeCompare(b));
   }, [hosts]);
 
-  // Terminals pop out into their own external window (mirrors the desktop app),
+  // Terminals pop out into their own external window,
   // rather than docking inside this page. Same-origin, so the pop-out shares the
   // session cookie. A per-host window name means re-opening the same host focuses
   // its existing window instead of spawning duplicates.

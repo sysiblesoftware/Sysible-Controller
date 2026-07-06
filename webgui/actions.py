@@ -1,6 +1,6 @@
 """
 The action registry: the single bridge between the React UI and the
-desktop client's cmd_* shell-command builders.
+cmd_* shell-command builders in client/_api_*.py.
 
 Each Action ties together:
   * name    - stable id used in the URL (/api/tool/<name>) and by the SPA
@@ -8,16 +8,15 @@ Each Action ties together:
   * label   - human label for the button/form
   * kind    - dispatch kind passed through to run_on_entry (mostly
               "command"; some result-heavy reads use a distinct kind so
-              the controller can cache/route them, matching the desktop)
+              the controller can cache/route them)
   * params  - ordered list of Param (name/label/type/default/required)
               the SPA renders a form from, and the server validates
   * build   - callable(params: dict) -> str : returns the exact shell
               string by delegating to the matching cmd_* builder
 
-To extend toward full desktop parity you ADD Action entries here that
-point at cmd_* functions that already exist in client/_api_*.py. You do
-not write any new dispatch or shell logic - that already exists and is
-shared with the desktop app, so the two stay in lockstep.
+To add a tool you ADD Action entries here that point at cmd_* functions
+that already exist in client/_api_*.py. You do not write any new dispatch
+or shell logic - that already exists in the shared builders.
 
 This file intentionally seeds only a representative slice across three
 tools (fleet run-command, service management, user & group). It proves

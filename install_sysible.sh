@@ -228,7 +228,7 @@ chmod +x "$BASE/sysible_controller"
 #
 # Only generated if missing, so re-running the installer (e.g.
 # a code redeploy) never rotates - and breaks - a cert that's
-# already been copied out to GUI machines and agents for pinning.
+# already been copied out to agents for pinning.
 # =========================================================
 CERT_DIR="$BASE/certs"
 CERT_FILE="$CERT_DIR/server.crt"
@@ -263,7 +263,7 @@ else
   echo "TLS certificate already present, leaving it in place."
 fi
 
-# trust.crt is the trust anchor copied out to GUI machines/agents for
+# trust.crt is the trust anchor copied out to agents for
 # pinning (see backend/tls_manager.py) - distinct from CERT_FILE once an
 # externally-issued PKI cert is installed via Sysible Settings, since a
 # PKI leaf does not verify against itself the way a self-signed one
@@ -279,7 +279,7 @@ fi
 
 # =========================================================
 # PROVISION THE ADMIN API KEY
-# Every admin/GUI endpoint requires this key (X-API-Key header).
+# Every admin/API endpoint requires this key (X-API-Key header).
 # Generate it now (mode 600) so it exists with the right
 # permissions before the service is ever started; the backend
 # will also auto-generate it on first run if it's missing.
@@ -333,7 +333,7 @@ fi
 
 # =========================================================
 # DEFAULT WEB-CONSOLE ADMIN
-# On a headless box there's no desktop first-run wizard to create the first
+# On a fresh install there's no first-run wizard to create the first
 # administrator, so the browser console would have nothing to log in with.
 # Seed a default superuser (only when NO administrators exist yet) with a
 # random password, flagged must-change. Printed once at the end of install.
@@ -356,7 +356,7 @@ PY
 
 # =========================================================
 # INSTALL THE WEB CONSOLE AS ITS OWN SYSTEMD SERVICE
-# Separate from the backend and from the desktop GUI, with its own start/stop
+# Separate from the backend, with its own start/stop
 # (sysible_controller webgui start|stop). Runs start_webgui.sh, which handles
 # the cookie secret, TLS, and a first-run front-end build.
 # =========================================================
@@ -387,7 +387,7 @@ chmod +x "$BASE/start_webgui.sh" 2>/dev/null || true
 
 # =========================================================
 # INSTALL THE `sysible_controller` CLI
-# Single global command (start/stop/restart/status/logs/gui/destroy)
+# Single global command (start/stop/restart/status/logs/webgui/destroy)
 # - see ./sysible_controller. Named after the product (Sysible
 # Controller, one product under the Sysible Enterprise Software
 # suite).
@@ -397,49 +397,15 @@ cp -f "$BASE/sysible_controller" /usr/local/bin/sysible_controller
 chmod +x /usr/local/bin/sysible_controller
 
 # =========================================================
-# RUNTIME DIR FOR THE GUI CLIENT (client.pid / gui.log)
-# $BASE itself is root-owned from this installer running as root, but
-# the GUI client (see sysible_controller's _start_gui/_fetch_api_key)
-# now usually runs as whichever desktop user clicked the application
-# menu icon, not as root - only a one-shot privileged read of the
-# admin API key still needs elevation. Made permissive (sticky bit, so
-# nobody can delete another user's files in here) so that works
-# regardless of which user - root via `sudo sysible_controller start`,
-# or a desktop user via the icon - happens to write client.pid/gui.log
-# first.
+# RUNTIME DIR (portal.pid, last_update.{json,log}, web-console secret)
+# $BASE is root-owned from this installer running as root; every
+# process that writes here - the backend, the web console, and the
+# portal - runs as root under systemd, so a plain root-owned run dir
+# is all that's needed.
 # =========================================================
 mkdir -p "$BASE/run"
-chmod 1777 "$BASE/run"
+chmod 755 "$BASE/run"
 
-# =========================================================
-# INSTALL THE APPLICATION MENU LAUNCHER
-# Closing the dashboard window (or choosing "Quit Sysible
-# Controller" from its tray icon - see client/main.py) can leave
-# the backend running as its systemd service with no GUI attached
-# to it at all. Until now the only way back in was a terminal
-# ('sudo sysible_controller gui'). This installs a standard
-# freedesktop .desktop entry so "Sysible Controller" shows up
-# in the host's application menu like any other installed
-# program, using the same logo the GUI itself displays
-# (sysible_logo.png, also $BASE/sysible_logo.png post-install -
-# see client/branding.py's LOGO_PATH).
-#
-# Exec= runs `sysible_controller gui` directly - no pkexec here.
-# The GUI process doesn't need to run as root (see
-# sysible_controller's _fetch_api_key): it elevates just the one
-# instant, display-free read of the admin API key when it isn't
-# already root, and runs the actual long-lived Qt process unprivileged
-# under whichever desktop session the icon was clicked from. An
-# earlier version of this launcher ran the *entire* GUI through
-# pkexec, which is what broke it - a pkexec'd process's environment is
-# reset, stripping the DISPLAY/XAUTHORITY/WAYLAND_DISPLAY/
-# XDG_RUNTIME_DIR a Qt app needs to draw a window on the desktop's
-# existing session, so the auth prompt (which comes from polkit's own
-# separate, always-running agent, not from the elevated process) would
-# pop up and succeed while the actual app had nowhere left to display
-# itself. Only installed if pkexec and a system applications menu
-# actually exist, so this is a silent no-op on a minimal/headless box.
-# =========================================================
 echo ""
 echo "Installation complete"
 echo "Installed to: $BASE"

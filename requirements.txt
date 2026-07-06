@@ -9,9 +9,3 @@ cryptography>=42.0
 
 # Agent
 requests>=2.31
-
-# Desktop GUI client dependencies live in requirements-gui.txt — they are NOT
-# required by the controller (backend + web console) and are intentionally
-# optional. PySide6 in particular has no wheels on some platforms (e.g. ARM /
-# Raspberry Pi), where the GUI uses the distro's PySide6 package instead. The
-# installer installs them best-effort so a headless/ARM controller still works.

@@ -395,14 +395,14 @@ def init_db():
 
     # -----------------------------------------------------
     # Administrators (multiple rows - replaces admin_credentials)
-    # Gates the desktop GUI itself - separate from portal_credentials
+    # Gates the web console itself - separate from portal_credentials
     # above (that's for a remote host operator in a browser) and from
-    # the admin API key in backend/auth.py (that's the GUI *process*
+    # the admin API key in backend/auth.py (that's the console *process*
     # proving it's a trusted installation, not a human typing a
     # password).
     #
     # must_change_password forces the forced-password-change flow
-    # (client/main.py) on next login - set for the auto-seeded default
+    # on next login - set for the auto-seeded default
     # admin/admin account, and for any admin a fellow admin re-adds
     # with a temporary password, but NOT for an account that already
     # picked its own password.
@@ -1550,7 +1550,7 @@ def list_portal_sessions():
 
 
 # =========================================================
-# ADMINISTRATORS (multiple rows - gates the desktop GUI itself)
+# ADMINISTRATORS (multiple rows - gates the web console itself)
 # Replaces the old single-row admin_credentials table; see the
 # migration in init_db() above.
 # =========================================================

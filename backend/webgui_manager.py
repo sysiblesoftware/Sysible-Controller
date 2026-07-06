@@ -4,10 +4,10 @@ Start/stop/status/diagnostics control for the Sysible Web GUI.
 The Web GUI (webgui/) is a separate process on its own port, managed the
 same way the Webserver Portal is (see backend/portal_manager.py): a
 PID-file under run/webgui.pid, the actually-bound port in a sidecar
-run/webgui.port, and logs in logs/webgui.log. This lets the desktop
-dashboard's "Browser Access" tile start it, stop it, see whether it's
-healthy, and diagnose why it won't start - without the admin needing a
-shell on the controller.
+run/webgui.port, and logs in logs/webgui.log. It's managed as its own
+systemd service (sysible-webgui) via the sysible_controller CLI, so an
+admin can start it, stop it, and see whether it's healthy - and diagnose
+why it won't start - without the admin needing a shell on the controller.
 
 Like the portal, it's served over HTTPS using the same self-signed cert
 the controller uses, so the admin password the browser sends at login

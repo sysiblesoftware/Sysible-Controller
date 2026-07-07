@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { api } from "../api.js";
 import ToolPage from "./ToolPage.jsx";
 import UserGroupPage from "./UserGroupPage.jsx";
@@ -48,7 +48,7 @@ const TOOLS = [
 // `solo` pins the runner to a single tool: no grid, no "← All tools" — used by
 // dedicated sidebar entries (e.g. Quick System Actions) that promote one tool to
 // its own top-level menu item.
-export default function ToolRunner({ openTool, openTab, openPrefill, onConsumed, solo }) {
+export default function ToolRunner({ openTool, openTab, openPrefill, onConsumed, solo, resetKey }) {
   const [catalog, setCatalog] = useState(null);
   const [hosts, setHosts] = useState([]);
   const [err, setErr] = useState("");
@@ -76,6 +76,19 @@ export default function ToolRunner({ openTool, openTab, openPrefill, onConsumed,
     onConsumed && onConsumed();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openTool, openTab]);
+
+  // Clicking the "System Administration Tools" nav item while already on this
+  // view bumps resetKey. Return to the tile grid rather than sitting on the tool
+  // page. (The parent can't do this via props alone: `open` is our own state,
+  // and the tool was opened after the parent already cleared its target, so the
+  // usual navigate call early-returns.) Skip the first run so mounting straight
+  // into a tool via task-search isn't clobbered.
+  const firstReset = useRef(true);
+  useEffect(() => {
+    if (firstReset.current) { firstReset.current = false; return; }
+    if (!solo) setOpen(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetKey]);
 
   const filtered = useMemo(() => {
     const visible = TOOLS.filter((t) => !t[5]);   // drop grid-hidden tools

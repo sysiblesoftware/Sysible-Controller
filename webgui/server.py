@@ -45,6 +45,7 @@ import re
 import secrets
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 # Make the repo root importable so `import client.*` works whether this
@@ -569,7 +570,7 @@ try:
     _HEALTH_TTL = float(os.getenv("SYSIBLE_FLEET_HEALTH_TTL", "15"))
 except ValueError:
     _HEALTH_TTL = 15.0
-_HEALTH_LOCK = _posture_threading.Lock()
+_HEALTH_LOCK = threading.Lock()
 
 
 @app.get("/api/fleet-health")

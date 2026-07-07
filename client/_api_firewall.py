@@ -493,10 +493,23 @@ _PKG_DETECT = (
 
 
 def cmd_install_firewalld() -> str:
-    """Install firewalld via the host's package manager, then enable+start it."""
+    """Install firewalld via the host's package manager, then enable+start it.
+
+    On openSUSE/SLES (zypper) also install python3-gobject: firewall-cmd imports
+    the GObject ('gi') bindings at startup, and minimal openSUSE images ship
+    firewalld without them, so every firewall-cmd call otherwise dies with
+    'ModuleNotFoundError: No module named gi'. Pulling them in here means the
+    Install button leaves a working firewall-cmd, not just a running daemon."""
     return (
         _PKG_DETECT
         + "DEBIAN_FRONTEND=noninteractive $PM firewalld 2>&1 && "
+        # openSUSE/SLES: ensure firewall-cmd's Python GObject bindings are present.
+        "if command -v zypper >/dev/null 2>&1; then "
+        "if ! firewall-cmd --version >/dev/null 2>&1; then "
+        "echo 'openSUSE detected - installing firewall-cmd Python (gi) bindings (python3-gobject)...'; "
+        "zypper --non-interactive install python3-gobject 2>&1 "
+        "|| echo 'Warning: could not install python3-gobject; firewall-cmd may not work until it is installed.' >&2; "
+        "fi; fi; "
         "systemctl enable --now firewalld 2>&1 && "
         "echo 'firewalld installed and started.'"
     )

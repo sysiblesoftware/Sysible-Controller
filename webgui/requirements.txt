@@ -1,4 +1,4 @@
-# Sysible Web GUI service (BFF). The host-management logic is reused
+# Sysible Web Console service (BFF). The host-management logic is reused
 # from the repo's existing client/ package, so this only needs the web
 # layer. The controller's own requirements (requests, etc.) must also be
 # importable - run this service in the same environment as the controller,

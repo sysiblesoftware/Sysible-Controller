@@ -102,24 +102,6 @@ case "$PKGMGR" in
 esac
 
 # =========================================================
-# RDP CLIENT (FreeRDP / xfreerdp) for Sysible Connect's RDP feature.
-# Optional and best-effort: package names differ across distros and the
-# controller works fine without it (RDP just falls back to Remmina, or is
-# unavailable), so a failure here must never abort the install.
-# =========================================================
-echo "Installing an RDP client (FreeRDP) for Sysible Connect..."
-case "$PKGMGR" in
-  dnf|yum)  "$PKGMGR" install -y freerdp || true ;;
-  zypper)   zypper --non-interactive install -y freerdp || true ;;
-  apt-get)  apt install -y freerdp3-x11 || apt install -y freerdp2-x11 || true ;;
-esac
-if command -v xfreerdp3 >/dev/null 2>&1 || command -v xfreerdp >/dev/null 2>&1; then
-  echo "FreeRDP (xfreerdp) installed - Sysible Connect RDP will use it."
-else
-  echo "NOTE: FreeRDP not installed - Sysible Connect RDP will fall back to Remmina if present."
-fi
-
-# =========================================================
 # NODE.JS / npm for building the web console front end.
 # The React console ships as source and is compiled to webgui/frontend/dist at
 # install time (and rebuilt on update). Without npm the build step below is
@@ -193,7 +175,7 @@ pip install --upgrade pip
 pip install -r "$BASE/requirements.txt"
 
 # =========================================================
-# WEB CONSOLE (browser-based, headless-friendly GUI)
+# WEB CONSOLE (browser-based, headless-friendly)
 # Extra Python deps the BFF needs, plus a production build of the React
 # front end so 'sysible_controller start' can serve it immediately.
 # Best-effort: if Node isn't present the controller is unaffected - the
@@ -375,7 +357,7 @@ PY
 # =========================================================
 WEBGUI_SERVICE_FILE="/etc/systemd/system/sysible-webgui.service"
 WEBGUI_UNIT="[Unit]
-Description=Sysible Web Console (browser GUI)
+Description=Sysible Web Console
 After=network-online.target sysible-backend.service
 Wants=network-online.target
 

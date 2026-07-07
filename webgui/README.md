@@ -1,8 +1,7 @@
 # Sysible Web Console
 
 The browser-based console for the Sysible Controller — reachable from any
-machine on the network, including Windows/macOS and headless servers with
-no desktop environment.
+machine on the network: Windows, macOS, Linux, or a headless server.
 
 It is a **separate service** from the controller backend. It runs as its
 own process on its own port (`sysible-webgui`, HTTPS on 8800 by default),

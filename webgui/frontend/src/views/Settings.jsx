@@ -761,8 +761,20 @@ function Tls() {
   function load() { api.tlsInfo().then(setInfo).catch((e) => setErr(e.message)); }
   useEffect(() => { load(); }, []);
   async function install(e) {
-    e.preventDefault(); setBusy(true); setErr(""); setMsg("");
-    try { await api.installCertificate(cert, key, chain); setMsg("Certificate installed. Restart the controller for it to take effect."); load(); }
+    e.preventDefault();
+    // Enrolled agents PIN the controller's current certificate. Replacing it and
+    // restarting will break TLS verification for every already-enrolled agent
+    // until the new trust bundle is redistributed to them out-of-band. Make the
+    // operator acknowledge that before proceeding — this is otherwise a silent
+    // fleet-wide outage.
+    if (!window.confirm(
+      "Replacing the controller certificate will break the connection for ALL " +
+      "already-enrolled agents until you redistribute the new trust bundle to them.\n\n" +
+      "After installing, download the Trust Certificate and push it to every host " +
+      "(e.g. re-run the agent bundle, or copy it to the pinned cert path), then restart " +
+      "the controller.\n\nContinue?")) return;
+    setBusy(true); setErr(""); setMsg("");
+    try { await api.installCertificate(cert, key, chain); setMsg("Certificate installed. Download the Trust Certificate above and redistribute it to every agent host, then restart the controller for it to take effect."); load(); }
     catch (e2) { setErr(e2.message); }
     finally { setBusy(false); }
   }
@@ -778,6 +790,11 @@ function Tls() {
       <form className="card" onSubmit={install}>
         <strong>Install Custom Certificate</strong>
         <p className="faint" style={{ marginTop: 4 }}>Upload a certificate + private key (and optional chain) to replace the self-signed cert.</p>
+        <div className="error-box" style={{ marginTop: 8 }} role="note">
+          ⚠ Enrolled agents pin the current certificate. After replacing it, download the
+          Trust Certificate and redistribute it to every host, then restart the controller —
+          otherwise agents will fail to connect until they have the new bundle.
+        </div>
         <label className="field"><span>Certificate (.crt/.pem) *</span><input type="file" onChange={(e) => setCert(e.target.files[0] || null)} /></label>
         <label className="field"><span>Private key (.key) *</span><input type="file" onChange={(e) => setKey(e.target.files[0] || null)} /></label>
         <label className="field"><span>Chain (optional)</span><input type="file" onChange={(e) => setChain(e.target.files[0] || null)} /></label>

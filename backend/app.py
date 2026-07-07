@@ -293,8 +293,15 @@ def _consume_ssh_enable_result(host_id, result_str):
     if f"{AGENT_SSH_MARKER}running" in stdout:
         if hostname and ip:
             try:
-                register_agent_ssh_host(hostname, ip, environment)
-                set_agent_ssh_state(host_id, {"status": "enabled"})
+                if register_agent_ssh_host(hostname, ip, environment):
+                    set_agent_ssh_state(host_id, {"status": "enabled"})
+                else:
+                    # IP already owned by another host — auto-SSH skipped rather
+                    # than clobbering that record. Surface it for an admin.
+                    set_agent_ssh_state(host_id, {
+                        "status": "error",
+                        "detail": f"SSH auto-enroll skipped: {ip} is already managed as another host",
+                    })
                 return
             except Exception:
                 pass

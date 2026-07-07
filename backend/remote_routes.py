@@ -418,13 +418,25 @@ def register_agent_ssh_host(name: str, ip: str, environment: str = ""):
 
     The agent's own hostname is the canonical identity for the box, so if a
     manually-enrolled SSH host already exists at this IP under a DIFFERENT
-    name, drop it - it's the same machine, and keeping both is the duplicate
-    we're trying to prevent."""
+    name, we do NOT delete it — see the security note below. Returns True if a
+    record was written, False if it was skipped because the IP already belongs
+    to another host."""
     with _HOSTS_LOCK:
         hosts = load_hosts()
         ip_n = _norm_ip(ip)
-        for n in [n for n, h in hosts.items() if n != name and _norm_ip(h.get("ip")) == ip_n and ip_n]:
-            del hosts[n]
+        # SECURITY: `ip` originates from the agent's own request body and is never
+        # verified against the socket peer (agents are commonly NAT'd, so the peer
+        # address isn't the agent's real IP). A malicious agent could therefore
+        # report a VICTIM host's IP and, under the old "delete any record at this
+        # IP" behaviour, erase or repoint the victim's inventory entry (fleet DoS
+        # / mislabelling). So never delete or overwrite a DIFFERENT-named record
+        # here: if this IP is already owned by another host, skip the auto-SSH
+        # record and surface the conflict for an admin to resolve, rather than
+        # silently destroying data. A same-name refresh (its own record, or the
+        # host's IP changing) still updates in place.
+        for n, h in hosts.items():
+            if n != name and ip_n and _norm_ip(h.get("ip")) == ip_n:
+                return False
         hosts[name] = {
             "ip": ip,
             "user": "root",
@@ -432,6 +444,7 @@ def register_agent_ssh_host(name: str, ip: str, environment: str = ""):
             "environment": environment or "",
         }
         save_hosts(hosts)
+        return True
 
 
 def forget_agent_ssh_host(name: str = None, ip: str = None):
@@ -886,13 +899,55 @@ def _reject_auditor(request: Request):
 _PTY_LOCK = threading.Lock()
 _PTY = {}   # session_id -> {host_id, out[], inq[], cols, rows, closed, ended, last}
 
+# Cap the per-session output buffer. The agent streams shell output faster than
+# a browser drains it (or a compromised agent floods it deliberately), and the
+# buffer would otherwise grow without bound in controller RAM. Keep the most
+# recent bytes (terminal scrollback semantics) and drop the oldest once over the
+# cap, so a flood can't OOM the controller. Env-tunable.
+try:
+    _PTY_OUT_MAX = int(os.getenv("SYSIBLE_MAX_PTY_BUFFER_BYTES", str(4 * 1024 * 1024)))
+except ValueError:
+    _PTY_OUT_MAX = 4 * 1024 * 1024
 
-def pty_create(host_id, cols=80, rows=24):
+
+def pty_create(host_id, cols=80, rows=24, owner=None):
     sid = uuid.uuid4().hex
     with _PTY_LOCK:
         _PTY[sid] = {"host_id": host_id, "out": [], "inq": [], "cols": cols, "rows": rows,
-                     "closed": False, "ended": False, "last": time.time()}
+                     "closed": False, "ended": False, "last": time.time(), "owner": owner}
     return sid
+
+
+def _terminal_owner(session_id):
+    """The admin username that opened this terminal session (PTY or SSH), or
+    None for a legacy/unowned session."""
+    with _PTY_LOCK:
+        s = _PTY.get(session_id)
+        if s is not None:
+            return s.get("owner")
+    with _TERMINAL_SESSIONS_LOCK:
+        s = _TERMINAL_SESSIONS.get(session_id)
+        return s.get("owner") if s else None
+
+
+def _check_terminal_owner(session_id, request):
+    """Bind a live terminal to the operator who opened it. session_ids never
+    leave the BFF process today (uuid4, server-side), so this is defence-in-depth
+    against a future path that routes terminal I/O with a user token or a leaked
+    id: if a token is presented it MUST match the session's owner and must not be
+    an auditor. A tokenless call (the current BFF pump, gated by the controller
+    API key) is allowed — the API key is the trust boundary there."""
+    owner = _terminal_owner(session_id)
+    if owner is None:
+        return
+    token = request.headers.get("X-Sysible-Admin-Token")
+    if not token:
+        return
+    from backend.db import resolve_admin_token
+    admin = resolve_admin_token(token)
+    if not admin or admin.get("role") == "auditor" or admin.get("username") != owner:
+        raise HTTPException(status_code=403,
+                            detail="This terminal session belongs to another operator.")
 
 
 def pty_is_session(session_id):
@@ -910,6 +965,11 @@ def pty_push_output(session_id, host_id, data, ended=False):
         s["last"] = time.time()
         if data:
             s["out"].append(data)
+            # Bound the buffer: if it has outgrown the cap (browser not draining,
+            # or a flood), coalesce and keep only the most recent bytes.
+            total = sum(len(c) for c in s["out"])
+            if total > _PTY_OUT_MAX:
+                s["out"] = ["".join(s["out"])[-_PTY_OUT_MAX:]]
         if ended:
             s["ended"] = True
         return s["closed"]
@@ -1139,10 +1199,10 @@ def open_terminal(name: str, request: Request):
     if _resolve_agent_target(name):
         host_id = _resolve_agent_target(name)[0]
         from backend.db import queue_task
-        session_id = pty_create(host_id)
         # Run the shell as the operator (their token identifies them), not root;
         # the agent falls back to a root shell only if that user doesn't exist.
         who = _resolve_admin_username(request) or ""
+        session_id = pty_create(host_id, owner=(who or None))
         queue_task(host_id, json.dumps({"session_id": session_id, "user": who,
                                         "cols": 80, "rows": 24}), kind="pty_open")
         return {"host": name, "session_id": session_id, "opened": True, "via": "agent"}
@@ -1208,13 +1268,15 @@ def open_terminal(name: str, request: Request):
             "lock": threading.Lock(),
             "name": name,
             "last_activity": time.time(),
+            "owner": admin_user,
         }
 
     return {"host": name, "session_id": session_id, "opened": True}
 
 
 @router.post("/terminal/{session_id}/write")
-def write_terminal(session_id: str, body: TerminalWriteRequest):
+def write_terminal(session_id: str, body: TerminalWriteRequest, request: Request):
+    _check_terminal_owner(session_id, request)
     if pty_is_session(session_id):
         pty_queue_input(session_id, {"t": "i", "d": body.data})
         return {"session_id": session_id, "written": len(body.data)}
@@ -1237,7 +1299,8 @@ def write_terminal(session_id: str, body: TerminalWriteRequest):
 
 
 @router.get("/terminal/{session_id}/read")
-def read_terminal(session_id: str):
+def read_terminal(session_id: str, request: Request):
+    _check_terminal_owner(session_id, request)
     if pty_is_session(session_id):
         # Agent-hosted PTY: drain the controller-side output buffer, with a short
         # long-poll so an idle shell doesn't spin the browser's read loop.
@@ -1315,7 +1378,8 @@ def read_terminal(session_id: str):
 
 
 @router.post("/terminal/{session_id}/close")
-def close_terminal(session_id: str):
+def close_terminal(session_id: str, request: Request):
+    _check_terminal_owner(session_id, request)
     if pty_is_session(session_id):
         pty_queue_input(session_id, {"t": "close"})   # agent kills the shell on its next poll
         return {"session_id": session_id, "closed": True}
@@ -1330,7 +1394,8 @@ def close_terminal(session_id: str):
 
 
 @router.post("/terminal/{session_id}/resize")
-def resize_terminal(session_id: str, body: TerminalResizeRequest):
+def resize_terminal(session_id: str, body: TerminalResizeRequest, request: Request):
+    _check_terminal_owner(session_id, request)
     cols = max(8, min(500, body.cols))
     rows = max(4, min(300, body.rows))
     if pty_is_session(session_id):

@@ -1726,6 +1726,38 @@ def delete_admin_tokens_for_user(username):
     conn.close()
 
 
+# Redact secret-bearing arguments before a command string is persisted to the
+# audit log. The agent deliberately refuses to log command text because it can
+# carry passwords/tokens/keys passed as args; the controller stores it for
+# accountability, so scrub the well-known secret-carrying forms (value replaced
+# with ***) rather than keeping them in cleartext at rest. Conservative on
+# purpose — it targets known flags/patterns and leaves the rest of the command
+# readable so the audit trail stays useful.
+import re as _re
+
+_SECRET_PATTERNS = [
+    # --password=xxx / --token xxx / -p xxx  (long or short opts, = or space)
+    _re.compile(
+        r'(?i)(--?(?:password|passwd|pass|token|secret|api[-_]?key|apikey|auth[-_]?token|'
+        r'access[-_]?key|private[-_]?key|client[-_]?secret)[=\s]+)(\S+)'),
+    # KEY=value env-style assignments for the same sensitive names
+    _re.compile(
+        r'(?i)\b((?:password|passwd|token|secret|api[-_]?key|apikey|access[-_]?key|'
+        r'client[-_]?secret)\s*=\s*)(\S+)'),
+    # Authorization: Bearer xxx  /  Authorization: Basic xxx
+    _re.compile(r'(?i)(authorization:\s*(?:bearer|basic)\s+)(\S+)'),
+]
+
+
+def _redact_secrets(command):
+    if not command:
+        return command
+    out = command
+    for pat in _SECRET_PATTERNS:
+        out = pat.sub(lambda m: m.group(1) + "***", out)
+    return out
+
+
 # --- Activity log (Live Activity & Logs feed) ---
 def log_activity(username, host, description, command=""):
   with contextlib.closing(_connect()) as conn:  # close even if the write raises
@@ -1733,7 +1765,8 @@ def log_activity(username, host, description, command=""):
     cur.execute(
         "INSERT INTO activity_log (timestamp, username, host, description, command) "
         "VALUES (?, ?, ?, ?, ?)",
-        (time.time(), username or "(unknown)", host or "", description or "", command or ""),
+        (time.time(), username or "(unknown)", host or "", description or "",
+         _redact_secrets(command or "")),
     )
     conn.commit()
     # Cap the table so it can't grow unbounded, but keep enough history to be

@@ -247,6 +247,42 @@ API that already had to be network-reachable:
 Treat it like the API: firewall its port to a trusted subnet/VPN, and if
 you don't use it, don't run it.
 
+## Known limitations & operational notes
+
+These are intentional trade-offs or scale boundaries, not defects. Know them
+before a production rollout:
+
+- **Replacing the TLS certificate needs a fleet trust-bundle refresh.** Enrolled
+  agents pin the controller's certificate. Installing a new/renewed cert and
+  restarting the controller will break every already-enrolled agent's connection
+  until the new **Trust Certificate** (Settings → TLS) is redistributed to each
+  host out-of-band (re-run the agent bundle, or copy it to the pinned cert path).
+  The console warns and requires confirmation before replacing the cert. Plan a
+  maintenance window and stage the bundle push.
+- **The activity/audit log is a local convenience record, not a system of
+  record.** It lives in the controller's SQLite DB: it has no hash-chaining or
+  WORM guarantee, and anyone with DB/filesystem (root) access can alter it.
+  Command text is scrubbed of well-known secret-bearing arguments before storage,
+  but for tamper-evident, durable retention forward events to an external SIEM.
+- **Single-node SQLite has a write ceiling.** Every agent heartbeat is a small
+  serialized write. One controller node comfortably handles a modest fleet;
+  for very large fleets, raise `SYSIBLE_POLL_INTERVAL`/`SYSIBLE_METRICS_INTERVAL`
+  to cut write pressure, and treat the single-writer DB as the scaling limit when
+  sizing. Backup/restore is file-level (stop the service, copy `sysible.db`* and
+  the keys/certs, restart).
+- **Enrollment tokens are bearer credentials.** A token grants enrollment on its
+  own (no second factor). Within the reuse window a token can re-enroll the host
+  it was bound to; the controller refuses to re-enroll a host that is still live
+  or was explicitly revoked, but treat bundles/tokens as secrets and revoke a
+  host to invalidate its access.
+- **Scheduled jobs run in the target host's local timezone**, not the operator's
+  browser — cron and systemd timers use the host clock. Set each host to the
+  timezone you expect maintenance windows in.
+- **Agent-channel payloads are size-capped** (metrics/snapshot/measurements,
+  task results, PTY output/buffer) to bound controller memory against a
+  misbehaving agent; the caps are generous but env-tunable
+  (`SYSIBLE_MAX_*_BYTES`) if a legitimate payload is ever truncated.
+
 ## Reporting a vulnerability
 
 Report suspected security issues privately to the Sysible maintainers

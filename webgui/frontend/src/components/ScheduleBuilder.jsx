@@ -100,6 +100,12 @@ export default function ScheduleBuilder({ mode = "cron", onChange }) {
       )}
       <div className="checkrow"><input id={`adv_${mode}`} type="checkbox" checked={advanced} onChange={(e) => setAdvanced(e.target.checked)} /><label htmlFor={`adv_${mode}`}>Advanced (type the expression)</label></div>
       <div className="cmd-preview" style={{ marginTop: 8 }}>{expr || "(empty)"}</div>
+      {freq !== "At system boot" && (
+        <p className="faint" style={{ marginTop: 6, fontSize: 12 }}>
+          Times run in the target host's local timezone (cron/systemd use the host clock),
+          not your browser's — set the host to the timezone you expect.
+        </p>
+      )}
     </div>
   );
 }

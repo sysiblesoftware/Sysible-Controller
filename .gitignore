@@ -28,7 +28,9 @@ logs/
 #  generator, the doc-regenerate hook, and the screenshot kit stay local.)
 /tools/generate_docs.py
 /docs/screenshots/
-/.claude/settings.json
+# Shared Claude Code config (settings.json + hooks) IS committed so the
+# SessionStart hook applies to every session; only personal overrides are local.
+/.claude/settings.local.json
 
 # Python virtualenv (created by the SessionStart hook)
 .venv/

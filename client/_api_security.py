@@ -333,7 +333,7 @@ def cmd_sshd_get_effective_config(key: str = "") -> str:
     return "sshd -T 2>&1"
 
 
-def _build_sshd_set_option_script(key: str, value: str) -> str:
+def _build_sshd_set_option_script(key: str, value: str, reload: bool = False) -> str:
     """Replaces an existing uncommented sshd_config line for `key` if
     present, or appends one if not. Backs up the file first, then
     validates the result with `sshd -t` and restores the backup if
@@ -354,12 +354,24 @@ def _build_sshd_set_option_script(key: str, value: str) -> str:
     # authoritative regardless of where an old one sat.
     qk = shlex.quote(key)
     qv = shlex.quote(value)
+    if reload:
+        # Apply-and-reload: after the new config validates, reload sshd so the
+        # change takes effect in one click (a reload keeps existing sessions).
+        svc = _sshd_service_fragment()
+        on_ok = (
+            f"{svc}; "
+            f"if systemctl reload \"$SSHSVC\" 2>&1; then "
+            f"printf 'sshd_config: %s set to %s, and sshd reloaded.\\n' {qk} \"$v\"; "
+            f"else printf 'sshd_config: %s set to %s, but the sshd reload FAILED - use the Reload sshd button to apply.\\n' {qk} \"$v\" >&2; fi"
+        )
+    else:
+        on_ok = f"printf 'sshd_config: %s set to %s. Reload sshd to apply.\\n' {qk} \"$v\""
     return (
         f"cp {q_cfg} {q_bak} 2>&1; "
         f"v={qv}; "
         f"sed -i -E '/^[[:space:]]*{key}[[:space:]]/d' {q_cfg}; "
         f"printf '%s %s\\n' {qk} \"$v\" >> {q_cfg}; "
-        f"if sshd -t 2>&1; then printf 'sshd_config: %s set to %s. Reload sshd to apply.\\n' {qk} \"$v\"; "
+        f"if sshd -t 2>&1; then {on_ok}; "
         f"else echo 'New config failed validation - restoring previous sshd_config.' >&2; cp {q_bak} {q_cfg}; exit 1; fi"
     )
 
@@ -384,8 +396,8 @@ def cmd_sshd_reload() -> str:
 # ===========================================================
 def cmd_set_root_login(allow: bool) -> str:
     value = "yes" if allow else "no"
-    verb = "enabled" if allow else "disabled"
-    return _build_sshd_set_option_script("PermitRootLogin", value) + f"; echo 'Root SSH login {verb} (reload sshd to apply).'"
+    # Apply + reload in one click (the button is labelled "Apply root login").
+    return _build_sshd_set_option_script("PermitRootLogin", value, reload=True)
 
 
 # ===========================================================
@@ -393,7 +405,7 @@ def cmd_set_root_login(allow: bool) -> str:
 # ===========================================================
 def cmd_set_pubkey_auth(enabled: bool) -> str:
     value = "yes" if enabled else "no"
-    return _build_sshd_set_option_script("PubkeyAuthentication", value)
+    return _build_sshd_set_option_script("PubkeyAuthentication", value, reload=True)
 
 
 def cmd_set_password_auth(enabled: bool) -> str:
@@ -401,7 +413,7 @@ def cmd_set_password_auth(enabled: bool) -> str:
     at least one working key is already installed before turning
     password auth off, or the account can be locked out."""
     value = "yes" if enabled else "no"
-    return _build_sshd_set_option_script("PasswordAuthentication", value)
+    return _build_sshd_set_option_script("PasswordAuthentication", value, reload=True)
 
 
 def cmd_list_authorized_keys(user: str) -> str:

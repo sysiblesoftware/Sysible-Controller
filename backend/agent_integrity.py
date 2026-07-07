@@ -26,6 +26,15 @@ _STATE_FILE = os.getenv(
     os.path.join(os.getenv("SYSIBLE_DATA_DIR", "/opt/sysible"), "agent_integrity_state.json"),
 )
 
+# How long after a controller-initiated agent update the host's changed
+# self-measurement is accepted (re-sealed) rather than quarantined. Generous by
+# default so an offline host that reconnects the same day still re-seals cleanly
+# on the update it applied; tune with SYSIBLE_INTEGRITY_RESEAL_WINDOW_S.
+try:
+    _RESEAL_WINDOW_S = int(os.getenv("SYSIBLE_INTEGRITY_RESEAL_WINDOW_S", str(24 * 60 * 60)))
+except ValueError:
+    _RESEAL_WINDOW_S = 24 * 60 * 60
+
 
 def _load():
     try:
@@ -73,6 +82,24 @@ def evaluate(host_id, measurements):
     try:
         data = _load()
         rec = data.get(host_id)
+
+        # Controller-initiated update window: when an admin pushed an agent
+        # update to this host, its agent files (and version) are EXPECTED to
+        # change, so a diverged measurement is legitimate, not tampering. While
+        # the window is open we re-seal the baseline to whatever the host now
+        # reports (and clear any standing quarantine) instead of flagging it —
+        # this survives the offline/poll-ordering race (the host heartbeats its
+        # old measurement, gets the update task, restarts, then reports the new
+        # one; any heartbeat in the window just re-seals). See mark_updating().
+        if rec is not None and rec.get("reseal_until", 0) > time.time():
+            rec["baseline"] = measurements
+            rec["status"] = "ok"
+            rec["mismatches"] = []
+            rec["sealed_at"] = time.time()
+            data[host_id] = rec
+            _save(data)
+            return {"status": "ok", "resealed": True}
+
         if rec is None or "baseline" not in rec:
             # First sighting: seal it.
             data[host_id] = {"baseline": measurements, "status": "ok",
@@ -111,3 +138,24 @@ def rebaseline(host_id):
     if host_id in data:
         del data[host_id]
         _save(data)
+
+
+def mark_updating(host_id, window_s=None):
+    """Called when the controller pushes an agent update to this host: open a
+    re-seal window so the host's expected file/version change (from the new
+    agent) is accepted and re-sealed rather than quarantined. Also clears any
+    standing quarantine immediately so the console reflects the pending update.
+    Never raises — a bookkeeping failure must not block the update push."""
+    try:
+        window = _RESEAL_WINDOW_S if window_s is None else int(window_s)
+        data = _load()
+        rec = data.get(host_id) or {}
+        rec["reseal_until"] = time.time() + window
+        # Don't leave a host visibly quarantined for the very change we asked for.
+        if rec.get("status") == "quarantined":
+            rec["status"] = "ok"
+            rec["mismatches"] = []
+        data[host_id] = rec
+        _save(data)
+    except Exception:
+        pass

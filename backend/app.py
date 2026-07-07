@@ -628,6 +628,7 @@ def update_agents_route(request: Request):
     agent. Agents apply it on their next poll and restart with the new code.
     Superuser-only. Offline agents pick it up whenever they next check in."""
     ver, cmd = _build_agent_update_command()
+    from backend import agent_integrity
     queued = 0
     for a in list_agents():
         hid = a.get("host_id")
@@ -635,6 +636,11 @@ def update_agents_route(request: Request):
             continue
         try:
             queue_task(hid, cmd, kind="agent-update", run_as=None)
+            # The agent's own files (and reported version) will change once it
+            # applies this update — that's an expected, controller-initiated
+            # change, so open a re-seal window instead of quarantining the host
+            # when its next heartbeat diverges from the sealed baseline.
+            agent_integrity.mark_updating(hid)
             queued += 1
         except Exception:
             pass

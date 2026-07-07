@@ -79,6 +79,12 @@ went into it:
 - Added a SessionStart hook that provisions the test environment for Claude Code
   on the web.
 
+### Housekeeping
+- Removed the legacy backward-compat shim scripts `sysible`, `start_sysible.sh`,
+  and `stop_sysible.sh` (thin redirects to the `sysible_controller` CLI). Use
+  `sysible_controller {start|stop|…}` — the systemd services and installer are
+  unaffected.
+
 ### Documentation
 - README and SECURITY updated for the current feature set, plus a
   "Known limitations & operational notes" section (TLS trust-bundle refresh,

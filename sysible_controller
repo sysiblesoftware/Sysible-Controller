@@ -255,8 +255,8 @@ cmd_update() {
   # SOURCE's mode, so if a script isn't marked +x in the repo the service's
   # ExecStart can't run it (systemd 203/EXEC -> crash loop). install_sysible.sh
   # chmods these for the same reason; do it here too as a backstop.
-  chmod +x "$BASE/start_webgui.sh" "$BASE/start_sysible.sh" "$BASE/stop_sysible.sh" \
-           "$BASE/install_sysible.sh" "$BASE/sysible_controller" 2>/dev/null || true
+  chmod +x "$BASE/start_webgui.sh" "$BASE/install_sysible.sh" \
+           "$BASE/sysible_controller" 2>/dev/null || true
 
   # Refresh the installed CLI wrapper too - rsync only updated $BASE's copy,
   # not the /usr/local/bin one we're running from. Atomic mv (not cp-in-place)

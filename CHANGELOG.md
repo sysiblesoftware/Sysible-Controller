@@ -52,6 +52,13 @@ went into it:
   until the trust bundle is redistributed).
 - Agent-update no longer false-quarantines a host; applying an SSH change can
   reload `sshd`.
+- **Agent install works on SUSE and other minimal images.** `run_agent.sh` now
+  installs Python 3 if absent, prefers the distro `python3-requests` package
+  (no PyPI/compiler needed, sidesteps PEP 668), only falls back to pip and only
+  passes `--break-system-packages` when that pip supports it, and hard-fails with
+  clear per-distro guidance if `requests` still can't be installed — instead of
+  the old pip-only path that aborted on SUSE. The systemd unit is also pointed at
+  the python3 that was actually found rather than a hardcoded `/usr/bin/python3`.
 
 ### Usability
 - **Host-enrolled notification.** When a new host enrolls, the console pops a

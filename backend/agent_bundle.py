@@ -92,28 +92,81 @@ _AGENT_INSTALL_DIR = "/opt/sysible-agent"
 _SERVICE_NAME = "sysible-agent"
 _SERVICE_UNIT_PATH = f"/etc/systemd/system/{_SERVICE_NAME}.service"
 
-# Robustly install the agent's Python deps on the target host. Some hosts
-# ship Python 3 without pip; the package to install is `python3-pip` (NOT
-# `pip3`, which isn't a package name on any distro). We also use
-# `python3 -m pip` rather than the `pip3` wrapper, since the wrapper isn't
-# always on PATH even when pip is installed. Each package-manager line is
-# `|| true`-guarded so it can't trip `set -e`; the guarded final install
-# (and ensurepip fallback) is what actually has to succeed.
-_PIP_INSTALL_BLOCK = """if ! python3 -m pip --version >/dev/null 2>&1; then
-  echo "pip not found - installing python3-pip via the host package manager..."
-  if command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update -y || true; apt-get install -y python3-pip || true;
-  elif command -v dnf >/dev/null 2>&1; then dnf install -y python3-pip || true;
-  elif command -v yum >/dev/null 2>&1; then yum install -y python3-pip || true;
-  elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install python3-pip || true;
-  else echo "No supported package manager found to install python3-pip." >&2; fi
+# Robustly install the agent's Python runtime + its one dependency (`requests`;
+# everything else in agent.py is stdlib) across apt / dnf / yum / zypper.
+#
+# Ordering matters for reliability on locked-down and non-Debian hosts:
+#   1. Make sure a `python3` interpreter exists at all (minimal SUSE/RHEL images
+#      may ship none) - install it from the distro if missing.
+#   2. Prefer the DISTRO `python3-requests` package. It needs no PyPI access
+#      (works offline / behind a proxy), needs no compiler, and sidesteps PEP 668
+#      entirely - which is exactly why the pip-only path failed on SUSE.
+#   3. Only if requests is still missing, fall back to pip - and use
+#      `--break-system-packages` ONLY when this pip actually supports the flag
+#      (SUSE Leap's older pip doesn't, and blindly passing it aborted the whole
+#      install under `set -e`).
+#   4. Hard-gate on `import requests`: the agent can't run without it, so fail
+#      loudly with copy-paste remediation rather than installing a dead service.
+# Every package-manager call is `|| true`-guarded so a mirror hiccup can't trip
+# `set -e`; the final import check is the real success criterion.
+_PIP_INSTALL_BLOCK = r"""# 1) Ensure a python3 interpreter exists.
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 not found - installing it via the host package manager..."
+  if command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update -y || true; apt-get install -y python3 || true;
+  elif command -v dnf >/dev/null 2>&1; then dnf install -y python3 || true;
+  elif command -v yum >/dev/null 2>&1; then yum install -y python3 || true;
+  elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install python3 || true;
+  else echo "No supported package manager (apt/dnf/yum/zypper) found to install python3." >&2; fi
 fi
-if ! python3 -m pip --version >/dev/null 2>&1; then
-  python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "ERROR: python3 is required but could not be installed automatically. Install Python 3 and re-run." >&2
+  exit 1
 fi
-if ! python3 -m pip install -r ./requirements.txt; then
-  echo "pip install failed - retrying with --break-system-packages (newer Debian/Ubuntu blocks system-wide installs by default, PEP 668)..."
-  python3 -m pip install --break-system-packages -r ./requirements.txt
-fi"""
+echo "Using $(python3 --version 2>&1) at $(command -v python3)"
+
+# 2) If requests isn't already importable, prefer the distro package.
+if ! python3 -c 'import requests' >/dev/null 2>&1; then
+  echo "Installing 'requests' from the host package manager (python3-requests)..."
+  if command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update -y || true; apt-get install -y python3-requests || true;
+  elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install python3-requests || true;
+  elif command -v dnf >/dev/null 2>&1; then dnf install -y python3-requests || true;
+  elif command -v yum >/dev/null 2>&1; then yum install -y python3-requests || true;
+  fi
+fi
+
+# 3) Still missing -> fall back to pip (ensuring pip exists first).
+if ! python3 -c 'import requests' >/dev/null 2>&1; then
+  if ! python3 -m pip --version >/dev/null 2>&1; then
+    echo "pip not found - installing python3-pip..."
+    if command -v apt-get >/dev/null 2>&1; then apt-get install -y python3-pip || true;
+    elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install python3-pip || true;
+    elif command -v dnf >/dev/null 2>&1; then dnf install -y python3-pip || true;
+    elif command -v yum >/dev/null 2>&1; then yum install -y python3-pip || true;
+    fi
+    python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
+  fi
+  if python3 -m pip --version >/dev/null 2>&1; then
+    echo "Installing requirements via pip..."
+    if ! python3 -m pip install -r ./requirements.txt >/dev/null 2>&1; then
+      if python3 -m pip install --help 2>/dev/null | grep -q -- '--break-system-packages'; then
+        echo "  retrying with --break-system-packages (PEP 668)..."
+        python3 -m pip install --break-system-packages -r ./requirements.txt || true
+      fi
+    fi
+  fi
+fi
+
+# 4) Hard gate: the agent cannot run without requests.
+if ! python3 -c 'import requests' >/dev/null 2>&1; then
+  echo "ERROR: could not install the 'requests' Python package automatically." >&2
+  echo "Install it manually, then re-run this script:" >&2
+  echo "  zypper install python3-requests    # SUSE / openSUSE" >&2
+  echo "  dnf install python3-requests       # RHEL / Fedora / Alma / Rocky" >&2
+  echo "  apt-get install python3-requests   # Debian / Ubuntu" >&2
+  echo "  (or) python3 -m pip install requests" >&2
+  exit 1
+fi
+echo "Python dependencies OK (requests present)." """
 
 # The exact fragment in host_agent/agent.py whose default we patch
 # below - kept as one constant so the patch and the loud failure if it
@@ -190,9 +243,9 @@ def _run_script(include_cert: bool) -> str:
 # want managed by Sysible. Installs the agent as a systemd service
 # ({_SERVICE_NAME}) that runs in the background, restarts itself on
 # crash/reboot, and logs to the journal instead of this terminal.
-# Requires Python 3 and systemd - pip is installed automatically (via the
-# host's python3-pip package) if missing, and everything else (see
-# requirements.txt) is installed automatically below.
+# Requires systemd. Python 3 and the agent's one dependency (`requests`) are
+# installed automatically below across apt/dnf/yum/zypper - preferring the
+# distro `python3-requests` package (no PyPI needed) and falling back to pip.
 #
 # Must be run as root: it writes the controller cert to
 # {_CERT_INSTALL_DIR}, installs the agent under {_AGENT_INSTALL_DIR},
@@ -270,6 +323,10 @@ if [[ "$AGENT_USER" != "root" ]]; then
 fi
 
 echo "Installing systemd service ({_SERVICE_NAME})..."
+# Point the unit at the python3 we actually found, rather than a hardcoded
+# /usr/bin/python3 (some hosts, incl. minimal SUSE, put it elsewhere).
+PY3="$(command -v python3)"
+sed -i "s#^ExecStart=/usr/bin/python3 #ExecStart=$PY3 #" ./{_SERVICE_NAME}.service
 cp -f ./{_SERVICE_NAME}.service {_SERVICE_UNIT_PATH}
 systemctl daemon-reload
 systemctl enable --now {_SERVICE_NAME}.service

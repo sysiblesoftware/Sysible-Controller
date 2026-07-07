@@ -1,26 +1,20 @@
-"""Edition gating for the Community branch.
+"""Edition metadata.
 
-The Community edition caps the number of *agent hosts* (one per agent
-enrollment / host_id) at HOST_LIMIT. SSH-only hosts are a Sysible Connect
-concept and don't count. This is an honest-user limit: because
-this branch is open source, the check below can be removed by anyone editing
-the source - genuine, tamper-resistant enforcement belongs in the Enterprise
-edition (a separate, license-gated build), not here. Set HOST_LIMIT to None
-to lift the cap, which is exactly what an Enterprise build does.
-
-Keeping it in one tiny module means there's a single, clearly-labelled place
-that defines the edition, rather than the limit being smeared across the
-codebase.
+There are no host or administrator-seat caps: HOST_LIMIT is None (unlimited)
+and ROLE_LIMITS is empty. The enforcement helpers below are kept as no-ops so
+their call sites (enrollment, bundle mint, admin add/role change) don't have to
+change, and so a downstream build could reintroduce a cap by setting a value
+here — but the Community edition ships uncapped. The UI just shows an edition
+badge, not a usage-vs-limit count.
 """
 from fastapi import HTTPException
 
 EDITION = "community"
-HOST_LIMIT = 10  # None == unlimited (Enterprise)
+HOST_LIMIT = None  # None == unlimited
 
-# RBAC seat caps for the Community edition. Same honest-user caveat as
-# HOST_LIMIT: this is an open-source build, so these are limits an editor
-# could lift - real enforcement lives in Enterprise. None == unlimited.
-ROLE_LIMITS = {"superuser": 2, "sysadmin": 5}
+# No RBAC seat caps. (An empty map means enforce_role_limit no-ops for every
+# role — see ROLE_LIMITS.get(role) below.)
+ROLE_LIMITS = {}
 
 
 def enforce_role_limit(role, current_count):

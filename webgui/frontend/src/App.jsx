@@ -188,12 +188,12 @@ export default function App() {
   // sees everything except superuser-gated items.
   const nav = NAV.filter((n) => (isAuditor ? n.aud : (!n.su || isSuper)));
 
+  // A plain edition badge — no usage-vs-limit counts (the edition is uncapped).
   const editionLabel = (() => {
     if (!edition) return "";
     const ed = (edition.edition || "community");
     const name = ed.charAt(0).toUpperCase() + ed.slice(1);
-    if (edition.host_limit) return `${name} · ${edition.host_count ?? 0}/${edition.host_limit} hosts`;
-    return name;
+    return `${name} Edition`;
   })();
 
   return (

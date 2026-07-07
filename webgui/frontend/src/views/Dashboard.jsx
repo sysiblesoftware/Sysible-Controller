@@ -867,11 +867,10 @@ export default function Dashboard({ role, edition, onOpen }) {
       )}
 
       <div className="metric-row">
-        {/* Use the license-authoritative deduped host_count (same number the
-            "Community · N/limit hosts" badge shows) so the two never disagree.
-            A host enrolled twice (re-enroll dupe, or agent+SSH) counts once. */}
+        {/* Deduped host_count: a host enrolled twice (re-enroll dupe, or
+            agent+SSH) counts once. The edition is uncapped, so there's no
+            usage-vs-limit — just the number of hosts under management. */}
         <MetricCard label="Hosts enrolled" value={edition?.host_count ?? m.total}
-          extra={edition?.host_limit ? <span className="faint" style={{ fontSize: 14, fontWeight: 400 }}> / {edition.host_limit}</span> : null}
           hosts={hostLists.all} onOpenHost={openHost} />
         <MetricCard label="Online" value={m.online}
           accent={m.total > 0 && m.online === 0 ? VERDICT_COLOR.CRITICAL : undefined}

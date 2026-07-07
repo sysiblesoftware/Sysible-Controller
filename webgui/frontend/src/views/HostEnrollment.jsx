@@ -163,6 +163,22 @@ export default function HostEnrollment() {
     }, `Disenrolled ${checked.length} host(s).`);
   }
 
+  async function forceDeleteChecked() {
+    if (checked.length === 0) { setErr("Check one or more hosts first."); return; }
+    if (!window.confirm(
+      `Force-delete ${checked.length} host(s) from the console?\n\n` +
+      "Use this for ZOMBIE agents — a broken build that keeps heartbeating but " +
+      "can't cleanly disenroll. This drops the controller record immediately " +
+      "WITHOUT waiting for the agent to tear itself down, and locks out its " +
+      "secret on the next heartbeat.\n\n" +
+      "The agent process may still be running on the host — stop it there with " +
+      "disenroll_agent.sh (or kill its service) afterwards. Continue?")) return;
+    await run(async () => {
+      for (const id of checked) await api.removeHost(id, true);
+      setChecked([]);
+    }, `Force-deleted ${checked.length} host(s) from the console.`);
+  }
+
   async function revokeHost(a, e) {
     if (e) { e.preventDefault(); e.stopPropagation(); }
     const name = a.hostname || a.host_id;
@@ -275,8 +291,12 @@ export default function HostEnrollment() {
               );
             })}
           </div>
-          <div className="row" style={{ marginTop: 10 }}>
+          <div className="row" style={{ marginTop: 10, alignItems: "center", gap: 8 }}>
             <button className="btn danger sm" onClick={disenrollChecked}>Disenroll Host(s)</button>
+            <button className="btn ghost sm danger" onClick={forceDeleteChecked}
+                    title="Force-remove a zombie/broken-build host from the console without waiting for its agent to tear down">
+              Force Delete
+            </button>
             <span className="faint">{checked.length} checked</span>
           </div>
         </fieldset>

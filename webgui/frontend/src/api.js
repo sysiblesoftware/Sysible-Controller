@@ -175,8 +175,8 @@ export const api = {
   envSudoDefaults: () => req("/api/environment-sudo-defaults"),
   setEnvSudoDefault: (name, required) =>
     req("/api/environment-sudo-default", { method: "POST", body: { name, required } }),
-  removeHost: (hostId) =>
-    req(`/api/host/${encodeURIComponent(hostId)}`, { method: "DELETE" }),
+  removeHost: (hostId, force = false) =>
+    req(`/api/host/${encodeURIComponent(hostId)}${force ? "?force=1" : ""}`, { method: "DELETE" }),
   uploadFile: (host, remotePath, file) => {
     const fd = new FormData();
     fd.append("host", host);

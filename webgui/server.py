@@ -1758,7 +1758,8 @@ def resume_host(host_id: str, request: Request, user: str = Depends(require_supe
 
 
 @app.delete("/api/host/{host_id}")
-def remove_host(host_id: str, request: Request, user: str = Depends(require_superuser_session)):
+def remove_host(host_id: str, request: Request, force: int = 0,
+                user: str = Depends(require_superuser_session)):
     """Disenroll an agent host. Superuser-only: besides the controller-side
     disenroll (itself superuser-gated), this route FIRST dispatches an agent
     teardown (cmd_uninstall_agent_service) to the host. Gating the whole route on
@@ -1783,6 +1784,14 @@ def remove_host(host_id: str, request: Request, user: str = Depends(require_supe
     # poll), which is exactly what leaves a revoked/dead host "stuck" in the
     # list. For those, skip the teardown and remove the enrollment record
     # directly — the record delete is what actually clears it from the console.
+    #
+    # force=1 is the "just delete it" escape hatch for a ZOMBIE agent — a broken
+    # build that keeps heartbeating (so it looks alive) but can't cleanly
+    # uninstall itself, which would otherwise stall the graceful teardown. Force
+    # skips the teardown entirely and drops the controller record now; deleting
+    # the record also invalidates the agent secret, so the zombie is locked out
+    # on its next heartbeat even though its process is still running. Clean it up
+    # on the host with disenroll_agent.sh (or kill the service) afterwards.
     import time as _t
     try:
         ag = next((a for a in api.get_agents() if a.get("host_id") == host_id), None)
@@ -1793,7 +1802,7 @@ def remove_host(host_id: str, request: Request, user: str = Depends(require_supe
     alive = bool(ls and (_t.time() - float(ls)) <= 30)
 
     teardown = None
-    if alive and not revoked:
+    if alive and not revoked and not force:
         # Online, un-revoked host: gracefully tear the agent service down first.
         # agent_only=True: an SSH-only "host" has no Sysible agent to uninstall.
         try:

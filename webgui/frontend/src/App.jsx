@@ -1,7 +1,8 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { api } from "./api.js";
 import Login from "./views/Login.jsx";
 import ForcePasswordChange from "./views/ForcePasswordChange.jsx";
+import Toasts from "./components/Toasts.jsx";
 import Dashboard from "./views/Dashboard.jsx";
 import Performance from "./views/Performance.jsx";
 import ToolRunner from "./views/ToolRunner.jsx";
@@ -104,7 +105,46 @@ export default function App() {
   const [sudoOpen, setSudoOpen] = useState(false);
   const [theme, setTheme] = useState(localStorage.getItem("sysible_theme") || "dark");
 
+  // Transient toast notifications (host enrolled, etc.). App owns the auto-
+  // dismiss timers; a monotonic ref counter keeps ids unique.
+  const [toasts, setToasts] = useState([]);
+  const toastId = useRef(0);
+  const pushToast = useCallback((msg, opts = {}) => {
+    const id = ++toastId.current;
+    setToasts((t) => [...t, { id, msg, title: opts.title, kind: opts.kind || "info" }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), opts.ttl || 9000);
+  }, []);
+  const dismissToast = useCallback((id) => setToasts((t) => t.filter((x) => x.id !== id)), []);
+
   useEffect(() => { applyTheme(theme); }, [theme]);
+
+  // Notify when a host enrolls: poll the agent inventory and toast any host_id
+  // that appears after the first (baseline) fetch. Runs while signed in.
+  const seenHostsRef = useRef(null);
+  useEffect(() => {
+    if (!user) { seenHostsRef.current = null; return; }
+    let stopped = false;
+    async function poll() {
+      try {
+        const list = (await api.agents()).agents || [];
+        if (stopped) return;
+        if (seenHostsRef.current === null) {
+          seenHostsRef.current = new Set(list.map((a) => a.host_id));  // baseline: no toasts
+          return;
+        }
+        for (const a of list) {
+          if (!seenHostsRef.current.has(a.host_id)) {
+            seenHostsRef.current.add(a.host_id);
+            pushToast(`${a.hostname || a.host_id} just enrolled${a.environment ? " · " + a.environment : ""}`,
+                      { title: "New host enrolled", kind: "success" });
+          }
+        }
+      } catch { /* transient — try again next tick */ }
+    }
+    poll();
+    const iv = setInterval(poll, 20000);
+    return () => { stopped = true; clearInterval(iv); };
+  }, [user, pushToast]);
 
   useEffect(() => {
     api.me()
@@ -206,6 +246,7 @@ export default function App() {
 
   return (
     <div className="shell">
+      <Toasts items={toasts} onDismiss={dismissToast} />
       <nav className="rail">
         <div className="rail-brand" onClick={() => go(null)}>
           <img className="rail-mark" src="/sysible_logo.png" alt=""

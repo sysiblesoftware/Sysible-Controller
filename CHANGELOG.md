@@ -54,6 +54,8 @@ went into it:
   reload `sshd`.
 
 ### Usability
+- **Host-enrolled notification.** When a new host enrolls, the console pops a
+  toast (from any page) and records the enrollment in the Live Activity feed.
 - Community Edition: all host/administrator seat caps removed; a small
   "Community Edition" badge replaces the counts.
 - Nav reordered to follow the fleet workflow; file-transfer panel and browse

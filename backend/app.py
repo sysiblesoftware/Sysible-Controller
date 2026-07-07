@@ -391,6 +391,17 @@ def enroll(req: EnrollRequest):
         force=True,
     )
 
+    # Surface the enrollment as a fleet event: it lands in the activity feed
+    # (Live Activity & Logs) and the web console pops a toast when it notices the
+    # new host. The actor is the host itself (enrollment is token-driven, not an
+    # operator action), so attribute it to "enrollment". Best-effort — a logging
+    # hiccup must never fail the enroll.
+    try:
+        log_activity("enrollment", req.hostname or host_id,
+                     f"Host enrolled ({req.platform or 'agent'}) at {req.ip or 'unknown IP'}", "")
+    except Exception:
+        pass
+
     return {
         "host_id": host_id,
         "agent_secret": agent_secret,

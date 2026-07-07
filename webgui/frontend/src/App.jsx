@@ -36,18 +36,32 @@ const SECTIONS = {
 // Left-rail navigation. `su` = superuser-only. `aud` = visible to the read-only
 // 'auditor' role (which sees ONLY these). Auditors get a strict allow-list:
 // Dashboard, Performance, and the Activity feed — nothing that can act.
+//
+// Ordered to follow how the fleet is actually run, top to bottom, rather than a
+// mixed list:
+//   1. Observe   — Dashboard, Topology, Performance (see the fleet's state)
+//   2. Onboard   — Host Enrollment (bring hosts under management first)
+//   3. Operate   — Connect, Quick System Actions, System Administration Tools,
+//                  Fleet Query (act on hosts, quick actions before deep tools)
+//   4. Maintain  — Update Hosts, Schedules, Alerts (keep it healthy over time)
+//   5. Oversee   — Activity & Logs, Settings (audit + configure)
 const NAV = [
+  // Observe
   { key: null, label: "Dashboard", icon: "grid", su: false, aud: true },
   { key: "topology", label: "Topology", icon: "share", su: false, aud: true },
   { key: "perf", label: "Performance", icon: "chart", su: false, aud: true },
-  { key: "updates", label: "Update Hosts", icon: "download", su: false, aud: true },
-  { key: "schedules", label: "Schedules", icon: "clock", su: false },
-  { key: "alerts", label: "Alerts", icon: "bell", su: false },
+  // Onboard
   { key: "hosts", label: "Host Enrollment", icon: "server", su: true },
+  // Operate
+  { key: "connect", label: "Connect", icon: "terminal", su: false },
   { key: "quickactions", label: "Quick System Actions", icon: "bolt", su: false },
   { key: "sysadmin", label: "System Administration Tools", icon: "tools", su: false },
   { key: "fleetquery", label: "Fleet Query", icon: "search", su: false },
-  { key: "connect", label: "Connect", icon: "terminal", su: false },
+  // Maintain
+  { key: "updates", label: "Update Hosts", icon: "download", su: false, aud: true },
+  { key: "schedules", label: "Schedules", icon: "clock", su: false },
+  { key: "alerts", label: "Alerts", icon: "bell", su: false },
+  // Oversee
   { key: "live", label: "Activity & Logs", icon: "activity", su: true, aud: true },
   { key: "settings", label: "Settings", icon: "cog", su: true },
 ];

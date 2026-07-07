@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import socket
@@ -631,7 +632,7 @@ def create_or_update_agent(
     agent_secret=None,
     ip=None
 ):
-    conn = _connect()
+  with contextlib.closing(_connect()) as conn:  # close even if the write raises
     cur = conn.cursor()
 
     cur.execute("""
@@ -670,11 +671,15 @@ def create_or_update_agent(
     ))
 
     conn.commit()
-    conn.close()
 
 
 def update_agent_heartbeat(host_id, ip=None, hostname=None, agent_version=None):
-    conn = _connect()
+  # closing(): guarantee the connection is released even if the UPDATE raises
+  # (e.g. OperationalError "database is locked"). A leaked connection holds its
+  # WAL read/write reservation until GC, which blocks checkpoint truncation and
+  # the single writer — compounding the very lock contention on the once-per-
+  # heartbeat hot path. Applied to the highest-frequency DB calls.
+  with contextlib.closing(_connect()) as conn:
     cur = conn.cursor()
 
     # ip/hostname are optional on heartbeat (older agent builds won't send
@@ -713,7 +718,6 @@ def update_agent_heartbeat(host_id, ip=None, hostname=None, agent_version=None):
     ))
 
     conn.commit()
-    conn.close()
 
 
 def list_agents():
@@ -788,37 +792,37 @@ def insert_metric_sample(host_id, ts, load1, cores, mem, disk,
     so the write rate is low enough not to add meaningful heartbeat contention.
     The trailing args are the richer scalars added later (CPU%, load 5/15m,
     swap%, network/disk throughput, process count); older agents omit them."""
-    conn = _connect()
-    cur = conn.cursor()
-    # INSERT OR REPLACE: the (host_id, ts) PK makes a duplicate timestamp
-    # (e.g. a retried heartbeat) idempotent rather than an error.
-    cur.execute(
-        "INSERT OR REPLACE INTO metric_samples "
-        "(host_id, ts, load1, cores, mem, disk, load5, load15, cpu, swap, "
-        " net_rx, net_tx, io_r, io_w, procs) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (host_id, float(ts), load1, cores, mem, disk, load5, load15, cpu, swap,
-         net_rx, net_tx, io_r, io_w, procs),
-    )
-    cur.execute(
-        "DELETE FROM metric_samples WHERE ts < ?",
-        (float(ts) - METRIC_RETENTION_S,),
-    )
-    conn.commit()
-    conn.close()
+    # closing(): release the connection even if the write raises, so a leaked
+    # WAL reservation can't compound lock contention on the heartbeat path.
+    with contextlib.closing(_connect()) as conn:
+        cur = conn.cursor()
+        # INSERT OR REPLACE: the (host_id, ts) PK makes a duplicate timestamp
+        # (e.g. a retried heartbeat) idempotent rather than an error.
+        cur.execute(
+            "INSERT OR REPLACE INTO metric_samples "
+            "(host_id, ts, load1, cores, mem, disk, load5, load15, cpu, swap, "
+            " net_rx, net_tx, io_r, io_w, procs) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (host_id, float(ts), load1, cores, mem, disk, load5, load15, cpu, swap,
+             net_rx, net_tx, io_r, io_w, procs),
+        )
+        cur.execute(
+            "DELETE FROM metric_samples WHERE ts < ?",
+            (float(ts) - METRIC_RETENTION_S,),
+        )
+        conn.commit()
 
 
 def upsert_host_snapshot(host_id, ts, data_json):
     """Store the latest rich detail snapshot (JSON string) for a host,
     overwriting any previous one. One row per host - never grows with time."""
-    conn = _connect()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT OR REPLACE INTO host_snapshot (host_id, ts, data) VALUES (?, ?, ?)",
-        (host_id, float(ts), data_json),
-    )
-    conn.commit()
-    conn.close()
+    with contextlib.closing(_connect()) as conn:  # close even if the write raises
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO host_snapshot (host_id, ts, data) VALUES (?, ?, ?)",
+            (host_id, float(ts), data_json),
+        )
+        conn.commit()
 
 
 def get_host_snapshot(host_id):
@@ -1724,7 +1728,7 @@ def delete_admin_tokens_for_user(username):
 
 # --- Activity log (Live Activity & Logs feed) ---
 def log_activity(username, host, description, command=""):
-    conn = _connect()
+  with contextlib.closing(_connect()) as conn:  # close even if the write raises
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO activity_log (timestamp, username, host, description, command) "
@@ -1751,7 +1755,6 @@ def log_activity(username, host, description, command=""):
         if cutoff > 0:
             cur.execute("DELETE FROM activity_log WHERE id <= ?", (cutoff,))
             conn.commit()
-    conn.close()
 
 
 def get_agent_hostname(host_id):

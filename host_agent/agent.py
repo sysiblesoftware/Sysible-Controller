@@ -1226,6 +1226,19 @@ def loop(state):
                     # somehow raised, etc.) must not take the whole
                     # agent process down - log it and keep polling.
                     print(f"[agent] task {task_id} failed: {e}")
+                    # Report the failure back so the controller marks the task
+                    # done NOW instead of leaving it 'dispatched' until the 15-min
+                    # reclaim rewrites it as a fabricated 'timed_out' (which looks
+                    # identical to a real timeout to the operator). Best-effort:
+                    # if this send also fails, the reclaim path is still the
+                    # backstop, so swallow any error here.
+                    if task_id is not None:
+                        try:
+                            send_result(state, task_id,
+                                        {"stdout": "", "stderr": f"agent error: {e}",
+                                         "returncode": 1})
+                        except Exception:
+                            pass
         except UnknownHostError:
             print(
                 f"[agent] controller no longer recognizes host_id {state['host_id']} "

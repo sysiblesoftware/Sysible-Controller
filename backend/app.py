@@ -323,6 +323,34 @@ def enroll(req: EnrollRequest):
 
         host_id = resolve_enroll_token_host(req.token, req.host_id)
 
+        # Re-enroll takeover guard. On a within-window token REUSE,
+        # resolve_enroll_token_host returns the ORIGINAL bound host_id, so this
+        # is a re-bind of an existing inventory entry (a fresh first-ever enroll
+        # instead lands on a brand-new random host_id with no existing record).
+        # Refuse the two dangerous re-binds a stolen token enables:
+        existing = _find_agent(host_id)
+        if existing:
+            # (a) An admin deliberately revoked this host — a replayed token
+            #     must not silently un-revoke and resurrect it.
+            if existing.get("revoked"):
+                raise HTTPException(
+                    status_code=403,
+                    detail="This host was revoked by an administrator; re-issue "
+                           "enrollment from the console to restore it.",
+                )
+            # (b) The bound host is still actively heartbeating — a live agent
+            #     already holds this identity and has no reason to re-enroll, so
+            #     a re-bind here would hijack it (new secret => real host locked
+            #     out). A genuine reinstall only happens once the old agent is
+            #     gone (last_seen goes stale).
+            last_seen = existing.get("last_seen") or 0
+            if time.time() - last_seen < _REENROLL_LIVE_HOST_GRACE_S:
+                raise HTTPException(
+                    status_code=409,
+                    detail="A live agent is already enrolled for this host; "
+                           "re-enrollment is blocked while it is online.",
+                )
+
         # Community-edition host cap (no-op in an unlimited/Enterprise build).
         # Keyed on host_id: a new agent host_id always counts against the cap,
         # even if its hostname collides with an already-enrolled host.
@@ -384,9 +412,16 @@ def heartbeat(req: HeartbeatRequest):
     # compare it against this host's sealed baseline (trust-on-first-use) and
     # quarantine on mismatch. evaluate() never raises, so integrity can't break
     # the heartbeat path. Quarantine is enforced in poll_agent_tasks below.
+    from backend import agent_integrity
     if req.measurements is not None:
-        from backend import agent_integrity
         agent_integrity.evaluate(req.host_id, req.measurements)
+    else:
+        # No manifest on this heartbeat. Harmless for an agent that never
+        # measured, but a host that HAS a sealed baseline and stops reporting is
+        # a compromised agent trying to evade the check by dropping the field —
+        # note_missing() quarantines it once the omission outlives the grace
+        # window. Never raises.
+        agent_integrity.note_missing(req.host_id)
 
     # Persist a performance sample if this heartbeat carried one (newer agents
     # attach one ~once per SYSIBLE_METRICS_INTERVAL). Wrapped so a malformed
@@ -469,6 +504,18 @@ _BECOME_TTL_S = 300
 # than one host and slip past the host cap. Enrollment is infrequent and the
 # controller is single-process, so a coarse lock here is cheap and correct.
 _ENROLL_LOCK = threading.Lock()
+
+# Re-enroll (enroll-token reuse within the grace window) hardening. The enroll
+# token is a bearer credential baked into the downloadable bundle, so a leaked
+# token could otherwise be replayed to re-bind an existing host_id — minting a
+# fresh agent_secret (locking out the real host and handing the attacker its
+# queued tasks) and clearing a prior admin revocation. A host that is still
+# actively heartbeating within this window has its identity and never needs to
+# re-enroll, so a re-bind against a live host is treated as a takeover attempt.
+try:
+    _REENROLL_LIVE_HOST_GRACE_S = int(os.getenv("SYSIBLE_REENROLL_LIVE_HOST_GRACE_S", "300"))
+except ValueError:
+    _REENROLL_LIVE_HOST_GRACE_S = 300
 
 # Reclaim tasks stuck in 'dispatched' (the host was handed the command but its
 # result never came back — lost in transit, or the agent died on receipt) so they
@@ -1157,6 +1204,14 @@ def add_environment(body: CreateEnvironmentRequest):
     if not name:
         raise HTTPException(status_code=400, detail="Environment name cannot be empty")
 
+    # create_environment uses INSERT OR IGNORE, which silently no-ops on a
+    # duplicate name and would report success — surface it as a clear 409 so the
+    # operator knows the name is taken rather than believing a second one was
+    # made (the per-environment sudo policy is keyed by name, so two "prod"s
+    # would be indistinguishable).
+    if any((e.get("name") if isinstance(e, dict) else e) == name for e in list_environments()):
+        raise HTTPException(status_code=409, detail=f"An environment named '{name}' already exists.")
+
     create_environment(name)
 
     return {
@@ -1165,7 +1220,25 @@ def add_environment(body: CreateEnvironmentRequest):
 
 
 @app.delete("/environments/{name}", dependencies=[Depends(require_api_key), Depends(require_superuser)])
-def remove_environment(name: str):
+def remove_environment(name: str, force: int = 0):
+
+    # Deleting an environment that still has hosts orphans them (their free-text
+    # environment label points at nothing) and silently drops the environment's
+    # sudo default. Refuse unless the caller explicitly forces it, telling them
+    # how many hosts to reassign first. force=1 keeps the escape hatch.
+    if not force:
+        in_env = [a for a in list_agents() if (a.get("environment") or "") == name]
+        try:
+            from backend.remote_routes import load_hosts
+            in_env += [n for n, h in load_hosts().items()
+                       if (h.get("environment") or "") == name]
+        except Exception:
+            pass
+        if in_env:
+            raise HTTPException(
+                status_code=409,
+                detail=(f"{len(in_env)} host(s) are still in '{name}'. Reassign them "
+                        f"to another environment first, or force deletion."))
 
     delete_environment(name)
 
@@ -1849,11 +1922,25 @@ def add_administrator_route(body: AddAdministratorRequest, acting: str = Depends
 @app.delete("/admin/administrators/{username}", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def remove_administrator_route(username: str, acting: str = Depends(acting_admin_name)):
 
-    if get_administrator(username) is None:
+    target = get_administrator(username)
+    if target is None:
         raise HTTPException(status_code=404, detail="No such administrator")
 
     if count_administrators() <= 1:
         raise HTTPException(status_code=400, detail="Cannot remove the last remaining administrator")
+
+    # Deleting the LAST superuser leaves nobody who can manage admins, enroll/
+    # remove hosts, change controller config, or run the portal — the same
+    # lockout the role-demote path already refuses. The total-admin check above
+    # doesn't catch it (sysadmins/auditors can still exist), so guard the role
+    # count explicitly. Recovery would otherwise require `sysible_controller
+    # reset-admin` on the host console.
+    if (target.get("role") or "superuser") == "superuser" and \
+            count_administrators_by_role("superuser") <= 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot remove the last remaining superuser — promote another "
+                   "administrator to superuser first.")
 
     remove_administrator(username)
     log_admin_audit("administrator_removed", username, f"removed by {acting}")

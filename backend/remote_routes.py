@@ -346,6 +346,16 @@ AGENT_SSH_MARKER = "SYSIBLE_SSHD="
 
 _AGENT_SSH_STATE_FILE = HOST_FILE.parent / "agent_ssh_state.json"
 
+# hosts.json and agent_ssh_state.json are both mutated with load->mutate->save
+# and are reached from the heartbeat path (via _maybe_enroll_agent_ssh /
+# _consume_ssh_enable_result), which FastAPI runs in a threadpool — so
+# concurrent heartbeats otherwise lost each other's updates (atomic-write only
+# stops truncation, not lost updates). Hold these across the whole
+# load->mutate->save in every mutator. RLock: some mutators nest (a host edit
+# that also touches SSH state). Single process, so a plain lock suffices.
+_HOSTS_LOCK = threading.RLock()
+_SSH_STATE_LOCK = threading.RLock()
+
 
 def agent_ssh_enable_command(public_key: str) -> str:
     """Root shell one-liner the agent runs: install the controller key
@@ -410,17 +420,18 @@ def register_agent_ssh_host(name: str, ip: str, environment: str = ""):
     manually-enrolled SSH host already exists at this IP under a DIFFERENT
     name, drop it - it's the same machine, and keeping both is the duplicate
     we're trying to prevent."""
-    hosts = load_hosts()
-    ip_n = _norm_ip(ip)
-    for n in [n for n, h in hosts.items() if n != name and _norm_ip(h.get("ip")) == ip_n and ip_n]:
-        del hosts[n]
-    hosts[name] = {
-        "ip": ip,
-        "user": "root",
-        "key_path": str(CONTROLLER_KEY_PATH),
-        "environment": environment or "",
-    }
-    save_hosts(hosts)
+    with _HOSTS_LOCK:
+        hosts = load_hosts()
+        ip_n = _norm_ip(ip)
+        for n in [n for n, h in hosts.items() if n != name and _norm_ip(h.get("ip")) == ip_n and ip_n]:
+            del hosts[n]
+        hosts[name] = {
+            "ip": ip,
+            "user": "root",
+            "key_path": str(CONTROLLER_KEY_PATH),
+            "environment": environment or "",
+        }
+        save_hosts(hosts)
 
 
 def forget_agent_ssh_host(name: str = None, ip: str = None):
@@ -431,19 +442,20 @@ def forget_agent_ssh_host(name: str = None, ip: str = None):
     that lists merged hosts (fleet health, Sysible Connect, the tools). Matches
     by record name first, then by IP, so it cleans up even if the host was
     renamed after auto-enrollment. Returns the number of records removed."""
-    hosts = load_hosts()
-    ip_n = _norm_ip(ip) if ip else ""
-    victims = [
-        n for n, h in hosts.items()
-        if (name and n == name) or (ip_n and _norm_ip(h.get("ip")) == ip_n)
-    ]
-    for n in victims:
-        removed = hosts.pop(n, None)
-        if removed and removed.get("ip"):
-            _forget_known_host(removed["ip"])
-    if victims:
-        save_hosts(hosts)
-    return len(victims)
+    with _HOSTS_LOCK:
+        hosts = load_hosts()
+        ip_n = _norm_ip(ip) if ip else ""
+        victims = [
+            n for n, h in hosts.items()
+            if (name and n == name) or (ip_n and _norm_ip(h.get("ip")) == ip_n)
+        ]
+        for n in victims:
+            removed = hosts.pop(n, None)
+            if removed and removed.get("ip"):
+                _forget_known_host(removed["ip"])
+        if victims:
+            save_hosts(hosts)
+        return len(victims)
 
 
 def sync_agent_ssh_environment(name: str = None, ip: str = None, environment: str = ""):
@@ -453,17 +465,18 @@ def sync_agent_ssh_environment(name: str = None, ip: str = None, environment: st
     out-of-sync SSH record still misleads anything that reads it directly).
     Matches by name first, then IP. No-op if there's no SSH record. Returns the
     number of records updated."""
-    hosts = load_hosts()
-    ip_n = _norm_ip(ip) if ip else ""
-    updated = 0
-    for n, h in hosts.items():
-        if (name and n == name) or (ip_n and _norm_ip(h.get("ip")) == ip_n):
-            if h.get("environment", "") != (environment or ""):
-                h["environment"] = environment or ""
-                updated += 1
-    if updated:
-        save_hosts(hosts)
-    return updated
+    with _HOSTS_LOCK:
+        hosts = load_hosts()
+        ip_n = _norm_ip(ip) if ip else ""
+        updated = 0
+        for n, h in hosts.items():
+            if (name and n == name) or (ip_n and _norm_ip(h.get("ip")) == ip_n):
+                if h.get("environment", "") != (environment or ""):
+                    h["environment"] = environment or ""
+                    updated += 1
+        if updated:
+            save_hosts(hosts)
+        return updated
 
 
 def _load_agent_ssh_state():
@@ -502,12 +515,13 @@ def get_agent_ssh_state(host_id: str):
 
 
 def set_agent_ssh_state(host_id: str, value):
-    state = _load_agent_ssh_state()
-    if value is None:
-        state.pop(host_id, None)
-    else:
-        state[host_id] = value
-    _save_agent_ssh_state(state)
+    with _SSH_STATE_LOCK:
+        state = _load_agent_ssh_state()
+        if value is None:
+            state.pop(host_id, None)
+        else:
+            state[host_id] = value
+        _save_agent_ssh_state(state)
 
 
 # =========================================================
@@ -524,16 +538,15 @@ def add_host(body: AddHostRequest):
             status_code=409,
             detail=f"{body.ip} is already managed as '{owner}'.")
 
-    hosts = load_hosts()
-
-    hosts[body.name] = {
-        "ip": body.ip,
-        "user": body.user,
-        "key_path": str(CONTROLLER_KEY_PATH),
-        "environment": body.environment or ""
-    }
-
-    save_hosts(hosts)
+    with _HOSTS_LOCK:
+        hosts = load_hosts()
+        hosts[body.name] = {
+            "ip": body.ip,
+            "user": body.user,
+            "key_path": str(CONTROLLER_KEY_PATH),
+            "environment": body.environment or ""
+        }
+        save_hosts(hosts)
 
     return {"added": True, "host": body.name}
 
@@ -545,9 +558,10 @@ def list_hosts():
 
 @router.delete("/hosts/{name}", dependencies=[Depends(require_superuser)])
 def delete_host(name: str):
-    hosts = load_hosts()
-    removed = hosts.pop(name, None)
-    save_hosts(hosts)
+    with _HOSTS_LOCK:
+        hosts = load_hosts()
+        removed = hosts.pop(name, None)
+        save_hosts(hosts)
     # Forget the pinned SSH host key too, so a rebuilt box can re-enroll at the
     # same IP without a manual known_hosts edit.
     if removed and removed.get("ip"):
@@ -560,13 +574,14 @@ def set_host_environment(name: str, body: SetEnvironmentRequest):
     """Re-tag an already-connected SSH host's environment without
     re-running the connect flow - mirrors POST /agents/{host_id}/environment
     for agent hosts, so both host kinds use the same reassignment UX."""
-    hosts = load_hosts()
+    with _HOSTS_LOCK:
+        hosts = load_hosts()
 
-    if name not in hosts:
-        raise HTTPException(status_code=404, detail="host not found")
+        if name not in hosts:
+            raise HTTPException(status_code=404, detail="host not found")
 
-    hosts[name]["environment"] = body.environment
-    save_hosts(hosts)
+        hosts[name]["environment"] = body.environment
+        save_hosts(hosts)
 
     return {"host": name, "environment": body.environment}
 
@@ -659,14 +674,15 @@ def enroll_ssh(body: EnrollSSHRequest):
 
     # Key is installed and working - now persist the host record so
     # exec_remote() (and the GUI's host list) knows about it.
-    hosts = load_hosts()
-    hosts[body.name] = {
-        "ip": body.ip,
-        "user": body.username,
-        "key_path": str(CONTROLLER_KEY_PATH),
-        "environment": body.environment or ""
-    }
-    save_hosts(hosts)
+    with _HOSTS_LOCK:
+        hosts = load_hosts()
+        hosts[body.name] = {
+            "ip": body.ip,
+            "user": body.username,
+            "key_path": str(CONTROLLER_KEY_PATH),
+            "environment": body.environment or ""
+        }
+        save_hosts(hosts)
 
     return {"enrolled": True, "host": body.name}
 
@@ -722,12 +738,15 @@ def exec_remote(name: str, body: ExecRequest, request: Request):
     if name not in hosts:
         raise HTTPException(status_code=404, detail="host not found")
 
-    # A logged exec is an operator action — read-only auditors may not run one.
-    # Unlogged (log=False) execs are the internal read-only sweeps (user-list
-    # sync, posture, fleet-health) that auditors are allowed to drive, so those
-    # pass through. Mirrors the agent dispatch path's auditor block in app.py.
-    if body.log:
-        _reject_auditor(request)
+    # Read-only auditors may NEVER run a command on a host — logged or not.
+    # This block is unconditional (not gated on the client-supplied body.log):
+    # a caller could otherwise set log=False to skip both this check AND the
+    # audit record below and execute arbitrary commands as an auditor with no
+    # trail. _reject_auditor is a no-op when no admin token is present, so the
+    # genuine internal read-only sweeps (posture, fleet-health, user-list sync)
+    # — which are dispatched tokenless — still pass through. Mirrors the agent
+    # dispatch path's unconditional auditor block in app.py.
+    _reject_auditor(request)
 
     # Activity feed: record admin-initiated SSH exec (identity from token),
     # unless this is a background/internal read (body.log=False, e.g. the

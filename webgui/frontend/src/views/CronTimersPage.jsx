@@ -20,8 +20,26 @@ export default function CronTimersPage({ hosts = [], onRefreshHosts }) {
   const [showCreate, setShowCreate] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
+  // A last-line validity check before a cron line is pushed to a host's crontab.
+  // The builder now clamps its numeric fields, but Advanced mode lets an
+  // operator type any string; a bad one (empty step `*/0`, `NaN`, wrong field
+  // count) installs and then silently never fires. Catch it here.
+  function cronValid(s) {
+    s = (s || "").trim();
+    if (!s) return false;
+    if (/^@(reboot|hourly|daily|weekly|monthly|yearly|annually|midnight)$/.test(s)) return true;
+    if (/NaN/i.test(s) || /\*\/0(\D|$)/.test(s)) return false;
+    const f = s.split(/\s+/);
+    if (f.length !== 5) return false;
+    return f.every((x) => /^[0-9*,/-]+$/.test(x));
+  }
+
   async function run(action, params, label, confirmMsg) {
     if (targets.length === 0) { setErr("Check one or more hosts first."); return; }
+    if (action === "cron_add" && !cronValid(params.schedule)) {
+      setErr("That schedule isn't a valid cron expression — check the fields (a blank or 0 interval never runs).");
+      return;
+    }
     if (confirmMsg && !window.confirm(`${confirmMsg} on ${targets.length} host${targets.length === 1 ? "" : "s"}?`)) return;
     setBusy(action); setErr("");
     try { const r = await api.runTool(action, targets, params); setResults((p) => [{ label, ...r, at: Date.now() }, ...p]); }

@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { api } from "./api.js";
 import Login from "./views/Login.jsx";
+import ForcePasswordChange from "./views/ForcePasswordChange.jsx";
 import Dashboard from "./views/Dashboard.jsx";
 import Performance from "./views/Performance.jsx";
 import ToolRunner from "./views/ToolRunner.jsx";
@@ -95,6 +96,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [role, setRole] = useState("");
   const [checking, setChecking] = useState(true);
+  const [mustChange, setMustChange] = useState(false);
   const [view, setView] = useState(null); // null = dashboard
   const [target, setTarget] = useState(null);
   const [history, setHistory] = useState([]); // breadcrumb stack of {view,target}
@@ -106,7 +108,7 @@ export default function App() {
 
   useEffect(() => {
     api.me()
-      .then((d) => { setUser(d.username); setRole(d.role || ""); })
+      .then((d) => { setUser(d.username); setRole(d.role || ""); setMustChange(!!d.must_change_password); })
       .catch(() => setUser(null))
       .finally(() => setChecking(false));
   }, []);
@@ -115,10 +117,12 @@ export default function App() {
     if (user) api.edition().then(setEdition).catch(() => setEdition({}));
   }, [user]);
 
-  const onLoggedIn = useCallback((username, r) => { setUser(username); setRole(r || ""); }, []);
+  const onLoggedIn = useCallback((username, r, mcp) => {
+    setUser(username); setRole(r || ""); setMustChange(!!mcp);
+  }, []);
   const onLogout = useCallback(async () => {
     try { await api.logout(); } catch { /* ignore */ }
-    setUser(null); setView(null); setHistory([]);
+    setUser(null); setView(null); setHistory([]); setMustChange(false);
   }, []);
 
   // Navigate, remembering where we came from so a global Back button can return
@@ -150,6 +154,10 @@ export default function App() {
 
   if (checking) return <div className="login-wrap"><span className="spin" /></div>;
   if (!user) return <Login onLoggedIn={onLoggedIn} />;
+  // A temporary password must be rotated before anything else is reachable.
+  if (mustChange) {
+    return <ForcePasswordChange username={user} onDone={() => setMustChange(false)} onLogout={onLogout} />;
+  }
 
   const qs = new URLSearchParams(location.search);
   if (qs.get("term")) {

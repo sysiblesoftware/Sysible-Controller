@@ -355,6 +355,10 @@ def login(body: LoginRequest, request: Request):
     # a server-side key, so it's unreadable from the cookie and never echoed.
     if result.get("token"):
         request.session["token_enc"] = _encrypt_token(result["token"])
+    # Persist the forced-change flag in the session so it also survives a page
+    # reload (which restores auth via /api/me, not /api/login) — the frontend
+    # gate below must keep blocking until the password is actually rotated.
+    request.session["must_change_password"] = bool(result.get("must_change_password"))
     return {
         "username": body.username.strip(),
         "role": request.session["role"],
@@ -428,6 +432,7 @@ def me(request: Request):
         "username": user,
         "role": request.session.get("role") or "superuser",
         "sudo_connect": bool(request.session.get("sudo_connect")),
+        "must_change_password": bool(request.session.get("must_change_password")),
     }
 
 
@@ -554,13 +559,46 @@ def _parse_sysmetrics(text):
     return None
 
 
+# Fleet-health cache, mirroring the posture cache above. Without it, EVERY
+# dashboard load re-probed every agent host live, and several admins loading the
+# dashboard at once each launched an independent fleet-wide sweep — at scale the
+# GET blocked on batches × per-host-timeout and starved the thread pool. A short
+# TTL coalesces a burst of loads into one sweep; ?refresh=1 forces a fresh one.
+_HEALTH_CACHE = {"ts": 0.0, "hosts": None}
+try:
+    _HEALTH_TTL = float(os.getenv("SYSIBLE_FLEET_HEALTH_TTL", "15"))
+except ValueError:
+    _HEALTH_TTL = 15.0
+_HEALTH_LOCK = _posture_threading.Lock()
+
+
 @app.get("/api/fleet-health")
-def fleet_health(user: str = Depends(require_login)):
+def fleet_health(refresh: int = 0, user: str = Depends(require_login)):
     """Snapshot health for the dashboard fleet overview: run the compact
     metrics command on every reachable host (in parallel) and return parsed
     per-host disk/mem/load/failed + a verdict. Offline agent hosts are reported
     without probing (so the sweep can't hang on them); read-only, dispatched
-    without an admin token so it isn't attributed/logged as an operator action."""
+    without an admin token so it isn't attributed/logged as an operator action.
+    Cached for a few seconds (shared across concurrent loads) unless ?refresh=1."""
+    import concurrent.futures
+    import time as _t
+
+    def _fresh():
+        return (not refresh) and _HEALTH_CACHE["hosts"] is not None \
+            and (_t.time() - _HEALTH_CACHE["ts"]) < _HEALTH_TTL
+
+    if _fresh():
+        return {"hosts": _HEALTH_CACHE["hosts"], "cached": True, "ts": _HEALTH_CACHE["ts"]}
+
+    with _HEALTH_LOCK:
+        # Another request may have completed the sweep while we waited on the
+        # lock — serve its result instead of re-sweeping.
+        if _fresh():
+            return {"hosts": _HEALTH_CACHE["hosts"], "cached": True, "ts": _HEALTH_CACHE["ts"]}
+        return _fleet_health_sweep()
+
+
+def _fleet_health_sweep():
     import concurrent.futures
     import time as _t
     try:
@@ -623,7 +661,9 @@ def fleet_health(user: str = Depends(require_login)):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
         hosts = list(ex.map(probe, entries)) if entries else []
-    return {"hosts": hosts}
+    _HEALTH_CACHE["hosts"] = hosts
+    _HEALTH_CACHE["ts"] = now
+    return {"hosts": hosts, "cached": False, "ts": now}
 
 
 @app.get("/api/fleet-metrics")
@@ -1573,12 +1613,26 @@ def fleet(body: FleetRequest, request: Request, user: str = Depends(require_oper
     desc = {"reboot": "Reboot host", "poweroff": "Power off host",
             "restart_agent": "Restart agent", "script": "Ran fleet script"}.get(body.action, body.action)
     token = _session_token(request)
+    # An explicit selection is respected as-is; an empty target list means the
+    # "all hosts" shortcut, which is where a self-brick hides.
+    explicit = bool(body.targets)
     targets = body.targets or list(all_entries.keys())
     results = []
     for tid in targets:
         entry = all_entries.get(tid)
         if entry is None:
             results.append({"host": tid, "ok": False, "error": "host not found",
+                            "stdout": "", "stderr": "", "code": None})
+            continue
+        # Never let an "all hosts" reboot/power-off silently take down the
+        # controller's own self-enrolled host — a power-off is unrecoverable
+        # without physical/IPMI access to the control node, and a reboot drops
+        # the whole control plane at once. Skipped only for the "all" shortcut;
+        # if an operator explicitly selects the control node, honour it.
+        if (not explicit) and body.action in ("poweroff", "reboot") and entry.get("is_controller"):
+            results.append({"host": entry.get("label", tid), "ok": False,
+                            "error": "skipped — this is the control node; select it explicitly if you really mean to "
+                                     f"{body.action} the controller itself",
                             "stdout": "", "stderr": "", "code": None})
             continue
         # An inline password supplied for this run wins; otherwise fall back to
@@ -2016,8 +2070,15 @@ class ChangeCreds(BaseModel):
 @app.post("/api/admin/change-credentials")
 def change_credentials(body: ChangeCreds, request: Request, user: str = Depends(require_login)):
     new_user = (body.new_username or "").strip() or user
-    return _wrap(lambda: _as_admin(request, lambda: api.change_admin_credentials(
+    result = _wrap(lambda: _as_admin(request, lambda: api.change_admin_credentials(
         user, body.current_password, new_user, body.new_password)))
+    # The change cleared must_change_password on the controller and (if renamed)
+    # moved the account — reflect both in the session so the forced-change gate
+    # releases and the session tracks the new username without a re-login.
+    request.session["must_change_password"] = False
+    if new_user != user:
+        request.session["user"] = new_user
+    return result
 
 
 @app.get("/api/local-ips")
@@ -3058,6 +3119,18 @@ async def terminal_ws(ws: WebSocket):
             await ws.close()
             return
 
+        # Audit trail: an interactive shell is the single most privileged action
+        # in the product, so record that admin X opened one on host Y (attributed
+        # via the login token, refused for auditors). Best-effort — a logging
+        # failure must never stop the operator getting their terminal.
+        _open_label = first.get("label") or host
+        try:
+            await asyncio.to_thread(
+                lambda: _with_token(ws_token,
+                                    lambda: api.log_action(_open_label, "opened an interactive terminal")))
+        except Exception:
+            pass
+
         # Initial size, if provided.
         if first.get("cols") and first.get("rows"):
             try:
@@ -3139,6 +3212,15 @@ async def terminal_ws(ws: WebSocket):
         if session_id is not None:
             try:
                 await asyncio.to_thread(api.close_terminal, session_id)
+            except Exception:
+                pass
+            # Close the audit loop opened above so a session has a clear
+            # start/end pair in the feed. Best-effort.
+            try:
+                _close_label = first.get("label") or host
+                await asyncio.to_thread(
+                    lambda: _with_token(ws_token,
+                                        lambda: api.log_action(_close_label, "closed the interactive terminal")))
             except Exception:
                 pass
 

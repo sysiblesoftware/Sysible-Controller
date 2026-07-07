@@ -472,7 +472,15 @@ cmd_destroy() {
   DB_FILE="$BASE/backend/sysible.db"
   if [[ -f "$DB_FILE" && "$PURGE" != "1" ]]; then
     BACKUP="/tmp/sysible-backup-$(date +%Y%m%d%H%M%S).db"
-    cp -f "$DB_FILE" "$BACKUP" 2>/dev/null && echo "Database backed up to $BACKUP (this copy is left behind on purpose - delete it yourself once you're sure you don't need it)."
+    # The DB holds admin password hashes, agent bearer secrets, live admin
+    # tokens and encrypted sudo passwords, so the live file is kept at 0600.
+    # A plain `cp` applies the current umask (0644 under root) and would leave
+    # this copy WORLD-READABLE in shared /tmp. Create it private: pre-touch at
+    # 0600 (owner-only before any bytes land), copy, then re-assert 0600.
+    if ( umask 077; : > "$BACKUP" ) 2>/dev/null && cp -f "$DB_FILE" "$BACKUP" 2>/dev/null; then
+      chmod 600 "$BACKUP" 2>/dev/null
+      echo "Database backed up to $BACKUP (contains secrets — kept at 0600 for root only; this copy is left behind on purpose, delete it yourself once you're sure you don't need it)."
+    fi
   fi
 
   echo "Removing $BASE..."

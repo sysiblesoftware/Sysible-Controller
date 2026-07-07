@@ -83,9 +83,12 @@ the controller safely.
 - Security response headers on both apps: HSTS, `X-Content-Type-Options:
   nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`,
   `Cache-Control: no-store`, and a Content-Security-Policy.
-- Interactive API docs (Swagger/ReDoc) **and the OpenAPI schema endpoint**
-  (`/openapi.json`) are disabled on both apps, so the API surface isn't
-  published to anyone who can reach the port.
+- Interactive API docs (Swagger/ReDoc) are disabled on both apps so the API
+  surface isn't published as a browsable console / request builder. The web
+  console (BFF) also disables its OpenAPI schema entirely; the controller keeps
+  `/openapi.json` (no Swagger UI) because its own readiness self-check fetches it
+  to confirm the running process is current code — and the controller is meant to
+  be firewalled to a trusted network with every real endpoint behind the API key.
 - Portal and web-console session cookies are `HttpOnly`, `Secure` (under
   TLS), `SameSite=Strict` — which also closes CSRF on the state-changing
   `POST`s without a separate token.

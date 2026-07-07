@@ -133,7 +133,7 @@ from backend.remote_routes import (
 # builder) for anyone who can reach the port. openapi_url is kept because
 # `sysible_controller`'s readiness self-check fetches /openapi.json to
 # confirm the running process is current code.
-app = FastAPI(title="Sysible Controller", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="Sysible Controller", docs_url=None, redoc_url=None)
 
 
 @app.middleware("http")

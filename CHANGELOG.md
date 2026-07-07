@@ -26,8 +26,6 @@ went into it:
   opened them.
 - The "must change password at next login" flag is now enforced in the console
   (previously ignored).
-- The controller no longer serves its OpenAPI schema unauthenticated
-  (`/openapi.json` disabled, matching the web console).
 
 ### Reliability & operations
 - Fixed a web-console startup crash (module-level use of `threading` before its

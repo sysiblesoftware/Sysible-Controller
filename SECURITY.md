@@ -51,13 +51,27 @@ the controller safely.
 - Admin API key: 256-bit random, stored at `/opt/sysible/api_key.txt`
   mode `600` (root-only), compared in constant time. Never sent to a
   browser.
-- Admin and portal passwords: hashed with PBKDF2-HMAC-SHA256, 200,000
-  iterations, per-credential random salt, constant-time verification.
-- Agent enrollment: single-use, admin-generated tokens; per-host secrets
-  thereafter.
+- Admin and portal passwords: hashed with PBKDF2-HMAC-SHA256, 600,000
+  iterations (OWASP-current), per-credential random salt, constant-time
+  verification, with transparent cost-upgrade on the next password change.
+- Agent enrollment: single-use, admin-generated tokens, **bound to the
+  first host that claims them** and valid for **30 days by default**
+  (`SYSIBLE_ENROLL_TOKEN_VALID_DAYS`) so a leaked-but-unused bundle can't
+  enroll a rogue host indefinitely; per-host secrets thereafter.
+- **Credentials at rest are owner-only.** The controller's SQLite database
+  (administrator password hashes, agent bearer secrets, live login tokens),
+  the API key, the TLS private key, the sudo-store key, and the SSH keys all
+  live under `/opt/sysible` with the DB (and its WAL/SHM sidecars) forced to
+  `0600` and the install tree to `0700` — so no other local account can copy
+  the database and impersonate agents or admins.
 - Secrets (SSH/CIFS/subscription credentials) are kept off the command
   line where the underlying tool supports it, and shell arguments are
   quoted (`shlex.quote`).
+- **Service hardening.** The `sysible-backend` and `sysible-webgui` systemd
+  units ship with a baseline of hardening directives (`ProtectKernelTunables`,
+  `ProtectKernelModules`, `ProtectControlGroups`, `ProtectClock`,
+  `RestrictRealtime`, `RestrictSUIDSGID`, `LockPersonality`) that don't
+  restrict the file/exec/network access the controller legitimately needs.
 
 **HTTP hardening**
 - Security response headers on both apps: HSTS, `X-Content-Type-Options:
@@ -69,10 +83,15 @@ the controller safely.
   TLS), `SameSite=Strict` — which also closes CSRF on the state-changing
   `POST`s without a separate token.
 - Brute-force throttling: per-IP lockout on the public portal login
-  (5 failures / 15 min → 15 min lockout) and, as defense-in-depth, on the
+  (5 failures / 15 min → 15 min lockout) — **shared by the portal's
+  `/cli/bundle` HTTP-Basic path**, so the copy-paste `curl` route can't be
+  used as an unthrottled password oracle — and, as defense-in-depth, on the
   admin login (10 / 15 min → 10 min lockout) and the web-console login
   (per-IP attempt cap → HTTP 429 cooldown; a successful login rotates the
   session as session-fixation hardening).
+- File-upload endpoints (web console and portal) reject an oversized
+  `Content-Length` and bound how much of a body they buffer, so a single
+  upload can't exhaust memory on the shared process.
 - No CORS is enabled; the apps are same-origin only.
 
 **Web console (BFF) specifics**
@@ -95,6 +114,19 @@ the controller safely.
   BFF and the controller (the portal/TLS/update controller routes are
   `require_superuser`, not just API-key, so a sysadmin can't drive them by
   hand).
+- **Immediate session revocation.** Removing, demoting, or password-resetting
+  an administrator invalidates their live login token **at once** — the token
+  is cross-checked against the account's current existence and role on every
+  request, and those actions also purge the target's tokens. A fired or
+  demoted admin therefore loses access immediately, not whenever their token
+  would have expired. Attribution for admin-account changes is taken from the
+  acting superuser's validated token, never a client-supplied field.
+- **File transfer honours the run-as model.** Uploads/downloads to an **agent
+  host** go through the agent *as the operator's own account* (bounded to a
+  small in-task size); to a **pure-SSH host** they use SFTP with the shared
+  controller key (the SSH login user, often root) and are therefore
+  **superuser-only**, checked before the request body is buffered. Every SSH
+  transfer is attributed in the activity feed.
 - **Read-only Auditor role.** An `auditor` account has oversight without any
   ability to act. Enforced server-side, independent of the UI: the controller
   refuses to queue any host task for an auditor token (`queue_agent_task`
@@ -137,6 +169,18 @@ the controller safely.
 - **Generated passwords always satisfy the admin password policy** (the
   seeded/`reset-admin`/web generators guarantee the required character classes
   and length), so a generated value can't fail the policy check that follows.
+
+**Auditing**
+- Two logs are kept: an **admin-audit log** (logins, lockouts, and every
+  administrator-account change — add/remove/role/password/sudo-grant, plus the
+  controller self-update) and a **fleet activity feed** (who did what on which
+  hosts). Both attribute the actor from the **validated login token**, never a
+  client-supplied name.
+- The activity feed is retained to a configurable depth
+  (`SYSIBLE_ACTIVITY_LOG_MAX_ROWS`, ~500k rows by default; `0` disables local
+  trimming). The local store is **not** a tamper-evident system of record —
+  controller root can edit SQLite directly — so for compliance, **forward the
+  logs to an external SIEM/log aggregator** and treat that as authoritative.
 
 ## Deploying safely — read this
 

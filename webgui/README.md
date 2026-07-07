@@ -128,6 +128,7 @@ on the controller) from the header's **Sudo Password** button, and it's fed to
 | `SYSIBLE_WEBGUI_LOGIN_MAX_ATTEMPTS` | Failed logins per IP before a temporary lockout (default 8). |
 | `SYSIBLE_WEBGUI_LOGIN_WINDOW`  | Lockout/counting window in seconds (default 300). |
 | `SYSIBLE_WEBGUI_TASK_TIMEOUT`  | Seconds to wait for an agent task result (default 60). |
+| `SYSIBLE_MAX_SSH_UPLOAD_BYTES` | Ceiling on a single pure-SSH file upload buffered by the console (default 100 MB). Agent-host transfers are separately capped far lower by the in-task transfer limit (~140 KB). |
 | `SYSIBLE_WEBGUI_NOBUILD`       | `1` to skip the front-end build on start (serve the existing `dist/` as-is). |
 | `SYSIBLE_API_BASE_URL`, `SYSIBLE_API_KEY`, `SYSIBLE_CA_CERT` | Controller connection — read by `client.api`. |
 

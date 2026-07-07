@@ -57,7 +57,13 @@ the controller safely.
 - Agent enrollment: single-use, admin-generated tokens, **bound to the
   first host that claims them** and valid for **30 days by default**
   (`SYSIBLE_ENROLL_TOKEN_VALID_DAYS`) so a leaked-but-unused bundle can't
-  enroll a rogue host indefinitely; per-host secrets thereafter.
+  enroll a rogue host indefinitely; per-host secrets thereafter. A replayed
+  token (within its reuse window) **cannot take over a host that is still live
+  or was administrator-revoked** — re-enrollment is refused in both cases, so a
+  leaked bundle can't hijack an active host's identity or resurrect a revoked
+  one. A removed/disenrolled host can be **force-deleted** from the console even
+  if its agent is a zombie that won't tear down; deleting the record
+  invalidates the secret on the next heartbeat.
 - **Credentials at rest are owner-only.** The controller's SQLite database
   (administrator password hashes, agent bearer secrets, live login tokens),
   the API key, the TLS private key, the sudo-store key, and the SSH keys all
@@ -77,8 +83,9 @@ the controller safely.
 - Security response headers on both apps: HSTS, `X-Content-Type-Options:
   nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`,
   `Cache-Control: no-store`, and a Content-Security-Policy.
-- Interactive API docs (Swagger/ReDoc) are disabled so the API surface
-  isn't published to anyone who can reach the port.
+- Interactive API docs (Swagger/ReDoc) **and the OpenAPI schema endpoint**
+  (`/openapi.json`) are disabled on both apps, so the API surface isn't
+  published to anyone who can reach the port.
 - Portal and web-console session cookies are `HttpOnly`, `Secure` (under
   TLS), `SameSite=Strict` — which also closes CSRF on the state-changing
   `POST`s without a separate token.
@@ -92,6 +99,12 @@ the controller safely.
 - File-upload endpoints (web console and portal) reject an oversized
   `Content-Length` and bound how much of a body they buffer, so a single
   upload can't exhaust memory on the shared process.
+- **The agent channel is size-capped.** A managed host runs the agent, so a
+  compromised one is in the threat model: the per-request payloads it can post
+  (metrics, snapshot, integrity measurements, task results, PTY output) are each
+  bounded, and the controller-side PTY buffer keeps only the most recent bytes —
+  so a hostile agent can't bloat the DB/state files or drive controller memory to
+  OOM. Caps are env-tunable (`SYSIBLE_MAX_*_BYTES`).
 - No CORS is enabled; the apps are same-origin only.
 
 **Web console (BFF) specifics**
@@ -175,7 +188,14 @@ the controller safely.
   administrator-account change — add/remove/role/password/sudo-grant, plus the
   controller self-update) and a **fleet activity feed** (who did what on which
   hosts). Both attribute the actor from the **validated login token**, never a
-  client-supplied name.
+  client-supplied name. **Opening and closing an interactive terminal is
+  recorded** in the activity feed too (attributed to the operator), and a live
+  terminal session is bound to the operator who opened it.
+- **Secrets are scrubbed from stored command text.** Before a command is
+  written to the activity feed, well-known secret-bearing arguments
+  (`--password`, `--token`, `api-key`, `Authorization: Bearer`, `KEY=value`
+  forms) are redacted to `***`, so a credential passed on a command line isn't
+  persisted in cleartext.
 - The activity feed is retained to a configurable depth
   (`SYSIBLE_ACTIVITY_LOG_MAX_ROWS`, ~500k rows by default; `0` disables local
   trimming). The local store is **not** a tamper-evident system of record —

@@ -276,3 +276,20 @@ either way). SSH-based, so the host picker lists SSH and agent+SSH hosts.
 
 The console covers the full tool surface: all 18 tool tiles
 (every `cmd_*` builder), the Sysible Connect terminal, and file transfer.
+
+## Testing
+
+An API test-suite (pytest) drives both the controller and this BFF through
+Starlette's `TestClient` against a throwaway DB — no network, no live
+controller. It covers authentication, RBAC/permissions, input validation,
+SQL/XSS injection, payload size caps, duplicate requests, and login rate
+limiting. From the repo root:
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+pytest
+```
+
+For Claude Code on the web, a `SessionStart` hook (`.claude/hooks/session-start.sh`)
+provisions a virtualenv with these dependencies automatically so `pytest` is
+runnable at the start of every session. See [`../tests/README.md`](../tests/README.md).

@@ -315,11 +315,26 @@ def _sshd_service_fragment(var: str = "SSHSVC") -> str:
     )
 
 
+def _sshd_bin_fragment(var: str = "SSHDBIN") -> str:
+    """Sets $<var> to the sshd binary's path. sshd ships in /usr/sbin (or /sbin),
+    which is NOT on a non-root user's PATH on openSUSE (and some others), so a
+    bare `sshd -t` / `sshd -T` fails with 'command not found' (exit 127). Resolve
+    it explicitly, falling back to a bare `sshd` if nothing is found so the error
+    message stays meaningful."""
+    return (
+        f"{var}=$(command -v sshd 2>/dev/null); "
+        f"if [ -z \"${var}\" ]; then for _p in /usr/sbin/sshd /sbin/sshd /usr/bin/sshd; do "
+        f"[ -x \"$_p\" ] && {var}=\"$_p\" && break; done; fi; "
+        f"[ -z \"${var}\" ] && {var}=sshd"
+    )
+
+
 def cmd_sshd_status() -> str:
     svc = _sshd_service_fragment()
+    binf = _sshd_bin_fragment()
     return (
-        f"{svc}; echo \"-- systemctl status $SSHSVC --\" && systemctl status \"$SSHSVC\" --no-pager 2>&1; "
-        "echo; echo '-- sshd -t (config syntax check) --' && sshd -t 2>&1 && echo 'sshd config OK.'"
+        f"{svc}; {binf}; echo \"-- systemctl status $SSHSVC --\" && systemctl status \"$SSHSVC\" --no-pager 2>&1; "
+        "echo; echo '-- sshd -t (config syntax check) --' && \"$SSHDBIN\" -t 2>&1 && echo 'sshd config OK.'"
     )
 
 
@@ -327,10 +342,11 @@ def cmd_sshd_get_effective_config(key: str = "") -> str:
     """Dumps sshd's effective (fully-resolved) configuration via
     `sshd -T`, optionally filtered to one directive."""
     key = (key or "").strip()
+    binf = _sshd_bin_fragment()
     if key:
         key = _validate_identifier(key, "Directive")
-        return f"sshd -T 2>&1 | grep -i {shlex.quote(key)}"
-    return "sshd -T 2>&1"
+        return f"{binf}; \"$SSHDBIN\" -T 2>&1 | grep -i {shlex.quote(key)}"
+    return f"{binf}; \"$SSHDBIN\" -T 2>&1"
 
 
 def _build_sshd_set_option_script(key: str, value: str, reload: bool = False) -> str:
@@ -354,6 +370,7 @@ def _build_sshd_set_option_script(key: str, value: str, reload: bool = False) ->
     # authoritative regardless of where an old one sat.
     qk = shlex.quote(key)
     qv = shlex.quote(value)
+    binf = _sshd_bin_fragment()
     if reload:
         # Apply-and-reload: after the new config validates, reload sshd so the
         # change takes effect in one click (a reload keeps existing sessions).
@@ -367,11 +384,12 @@ def _build_sshd_set_option_script(key: str, value: str, reload: bool = False) ->
     else:
         on_ok = f"printf 'sshd_config: %s set to %s. Reload sshd to apply.\\n' {qk} \"$v\""
     return (
+        f"{binf}; "
         f"cp {q_cfg} {q_bak} 2>&1; "
         f"v={qv}; "
         f"sed -i -E '/^[[:space:]]*{key}[[:space:]]/d' {q_cfg}; "
         f"printf '%s %s\\n' {qk} \"$v\" >> {q_cfg}; "
-        f"if sshd -t 2>&1; then {on_ok}; "
+        f"if \"$SSHDBIN\" -t 2>&1; then {on_ok}; "
         f"else echo 'New config failed validation - restoring previous sshd_config.' >&2; cp {q_bak} {q_cfg}; exit 1; fi"
     )
 
@@ -385,8 +403,9 @@ def cmd_sshd_set_option(key: str, value: str) -> str:
 
 def cmd_sshd_reload() -> str:
     svc = _sshd_service_fragment()
+    binf = _sshd_bin_fragment()
     return (
-        "if ! sshd -t 2>&1; then echo 'Current sshd_config does not pass validation - not reloading.' >&2; exit 1; fi; "
+        f"{binf}; if ! \"$SSHDBIN\" -t 2>&1; then echo 'Current sshd_config does not pass validation - not reloading.' >&2; exit 1; fi; "
         f"{svc}; systemctl reload \"$SSHSVC\" 2>&1 && echo 'sshd reloaded.'"
     )
 

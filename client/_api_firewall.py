@@ -88,6 +88,15 @@ def _resplit_quote(value: str, label: str) -> str:
 _FIREWALLD_MISSING = (
     "if ! command -v firewall-cmd >/dev/null 2>&1; then "
     "echo 'firewalld is not installed on this host (package: firewalld).' >&2; exit 1; fi; "
+    # firewall-cmd is a Python program that imports the GObject bindings ('gi')
+    # at startup. On minimal openSUSE/SUSE installs python3-gobject is absent, so
+    # every call dies with 'ModuleNotFoundError: No module named gi'. Probe once
+    # and turn that traceback into an actionable message. (`--version` still
+    # triggers the import, so a non-zero exit here reliably detects the break.)
+    "if ! firewall-cmd --version >/dev/null 2>&1; then "
+    "echo \"firewall-cmd is installed but not working - its Python GObject bindings ('gi') are missing.\" >&2; "
+    "echo 'Install them - openSUSE/SUSE: sudo zypper install python3-gobject; "
+    "Fedora/RHEL: sudo dnf install python3-gobject; Debian/Ubuntu: sudo apt install python3-gi' >&2; exit 1; fi; "
 )
 _NFT_MISSING = (
     "if ! command -v nft >/dev/null 2>&1; then "
@@ -136,7 +145,18 @@ def cmd_set_default_zone(zone: str) -> str:
 
 
 def cmd_reload_firewalld() -> str:
-    return _FIREWALLD_MISSING + "firewall-cmd --reload 2>&1 && echo 'firewalld configuration reloaded.'"
+    # Reload doesn't need the firewall-cmd Python CLI: `systemctl reload
+    # firewalld` signals the daemon to re-read its config directly. So prefer
+    # firewall-cmd, but fall back to systemctl when firewall-cmd is broken (e.g.
+    # openSUSE minimal, where its 'gi' GObject bindings are missing) — the reload
+    # still succeeds instead of dying with a Python traceback.
+    return (
+        "if firewall-cmd --reload 2>/dev/null; then echo 'firewalld configuration reloaded.'; "
+        "elif systemctl reload firewalld 2>&1; then "
+        "echo 'firewalld reloaded (via systemctl; the firewall-cmd CLI was unavailable).'; "
+        "else echo 'Could not reload firewalld. Check it is installed and running "
+        "(firewall-cmd may also be missing its python3-gobject gi bindings).' >&2; exit 1; fi"
+    )
 
 
 # ---------------------------------------------------------

@@ -98,6 +98,9 @@ export default function App() {
   const [role, setRole] = useState("");
   const [checking, setChecking] = useState(true);
   const [mustChange, setMustChange] = useState(false);
+  // Bumped on every nav click so a stateful view (e.g. the tools grid) can reset
+  // its own sub-page when its nav item is clicked again — see ToolRunner.
+  const [navTick, setNavTick] = useState(0);
   const [view, setView] = useState(null); // null = dashboard
   const [target, setTarget] = useState(null);
   const [history, setHistory] = useState([]); // breadcrumb stack of {view,target}
@@ -260,7 +263,7 @@ export default function App() {
             <button key={n.key ?? "dash"}
                     className={"rail-item" + (view === n.key ? " active" : "")}
                     title={n.key === "connect" ? "Opens in a new tab" : undefined}
-                    onClick={() => go(n.key, null)}>
+                    onClick={() => { setNavTick((t) => t + 1); go(n.key, null); }}>
               <NavIcon name={n.icon} /><span>{n.label}</span>
               {n.key === "connect" && <span className="rail-ext" aria-hidden="true">↗</span>}
             </button>
@@ -315,7 +318,7 @@ export default function App() {
           {!isAuditor && view === "quickactions" && <ToolRunner solo="Quick System Actions" />}
           {!isAuditor && view === "fleetquery" && <FleetQuery />}
           {!isAuditor && view === "sysadmin" && <ToolRunner openTool={target?.tool} openTab={target?.tab}
-            openPrefill={target?.prefill} onConsumed={() => setTarget(null)} />}
+            openPrefill={target?.prefill} onConsumed={() => setTarget(null)} resetKey={navTick} />}
           {view === "live" && <LiveActivity role={role} />}
         </div>
       </main>

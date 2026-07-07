@@ -126,9 +126,12 @@ def evaluate(host_id, measurements):
         rec = data.get(host_id)
 
         # A measurement arrived, so reset any "stopped reporting" evasion timer
-        # note_missing() may have started (see below).
-        if rec is not None:
+        # note_missing() may have started (see below). Track whether we actually
+        # cleared one so an otherwise-unchanged record still gets persisted.
+        cleared_missing = False
+        if rec is not None and "missing_since" in rec:
             rec.pop("missing_since", None)
+            cleared_missing = True
 
         # Controller-initiated update window: when an admin pushed an agent
         # update to this host, its agent files (and version) are EXPECTED to
@@ -155,6 +158,16 @@ def evaluate(host_id, measurements):
             return {"status": "ok", "sealed": True}
 
         mismatches = compare(measurements, rec["baseline"])
+        new_status = "quarantined" if mismatches else "ok"
+        # Only rewrite the whole state file when something actually changed. The
+        # steady state is an unchanged "ok" match on every heartbeat; persisting
+        # that each time would rewrite the entire (fleet-sized) JSON under the
+        # lock once per heartbeat per host — needless write amplification and
+        # serialization on the hottest path. Write on a status/mismatch change,
+        # or when we just cleared a missing-measurement timer.
+        changed = (rec.get("status") != new_status
+                   or rec.get("mismatches") != mismatches
+                   or cleared_missing)
         if mismatches:
             rec["status"] = "quarantined"
             rec["mismatches"] = mismatches
@@ -162,8 +175,9 @@ def evaluate(host_id, measurements):
         else:
             rec["status"] = "ok"
             rec["mismatches"] = []
-        data[host_id] = rec
-        _save(data)
+        if changed:
+            data[host_id] = rec
+            _save(data)
         return {"status": rec["status"], "mismatches": rec.get("mismatches", [])}
     except Exception as e:  # pragma: no cover
         return {"status": "error", "error": str(e)}

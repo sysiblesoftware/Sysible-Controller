@@ -61,27 +61,48 @@ export default function FileTransfer({ host, onErr }) {
     finally { setBusy(""); }
   }
 
+  const secLabel = { fontSize: 12, fontWeight: 600, color: "var(--text-dim)", margin: "0 0 6px" };
+
   return (
     <div>
-      <form onSubmit={upload} className="row" style={{ flexWrap: "wrap", gap: 8 }}>
-        <input style={{ flex: 2, minWidth: 160 }} placeholder="Remote destination path (e.g. /tmp or /home/me/app.conf)"
-               value={remotePath} onChange={(e) => setRemotePath(e.target.value)} />
-        <button type="button" className="btn sm ghost" onClick={() => setBrowse("upload")}>Browse…</button>
-        <input style={{ flex: 2, minWidth: 160 }} type="file"
-               onChange={(e) => setFile(e.target.files[0] || null)} />
-        <button className="btn sm" disabled={busy === "up" || !file || !remotePath.trim()}>
-          {busy === "up" ? <span className="spin" /> : "Upload"}
-        </button>
+      {/* Upload: pick a local file, then say where it goes on the host. */}
+      <form onSubmit={upload}>
+        <div style={secLabel}>Upload a file to this host</div>
+        <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+          <label className="btn sm ghost" style={{ flexShrink: 0, cursor: "pointer" }}>
+            Choose File…
+            <input type="file" style={{ display: "none" }}
+                   onChange={(e) => setFile(e.target.files[0] || null)} />
+          </label>
+          <span className="faint" style={{ minWidth: 0, overflow: "hidden",
+                       textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {file ? file.name : "No file chosen"}
+          </span>
+        </div>
+        <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+          <input style={{ flex: 1, minWidth: 160 }} placeholder="Remote destination path (e.g. /tmp or /home/me/app.conf)"
+                 value={remotePath} onChange={(e) => setRemotePath(e.target.value)} />
+          <button type="button" className="btn sm ghost" onClick={() => setBrowse("upload")}>Browse…</button>
+          <button className="btn sm" disabled={busy === "up" || !file || !remotePath.trim()}>
+            {busy === "up" ? <span className="spin" /> : "Upload"}
+          </button>
+        </div>
       </form>
-      <form onSubmit={download} className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 8 }}>
-        <input style={{ flex: 3, minWidth: 200 }} placeholder="Remote file path to fetch (e.g. /var/log/syslog)"
-               value={dnPath} onChange={(e) => setDnPath(e.target.value)} />
-        <button type="button" className="btn sm ghost" onClick={() => setBrowse("download")}>Browse…</button>
-        <button className="btn sm" disabled={busy === "dn" || !dnPath.trim()}>
-          {busy === "dn" ? <span className="spin" /> : "Download"}
-        </button>
+
+      {/* Download: a remote file path off the host. */}
+      <form onSubmit={download} style={{ marginTop: 14 }}>
+        <div style={secLabel}>Download a file from this host</div>
+        <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+          <input style={{ flex: 1, minWidth: 200 }} placeholder="Remote file path to fetch (e.g. /var/log/syslog)"
+                 value={dnPath} onChange={(e) => setDnPath(e.target.value)} />
+          <button type="button" className="btn sm ghost" onClick={() => setBrowse("download")}>Browse…</button>
+          <button className="btn sm" disabled={busy === "dn" || !dnPath.trim()}>
+            {busy === "dn" ? <span className="spin" /> : "Download"}
+          </button>
+        </div>
       </form>
-      <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>
+
+      <div className="faint" style={{ fontSize: 12, marginTop: 10 }}>
         Agent-managed hosts transfer as your own account through the agent (limit 140&nbsp;KB per file). Pure-SSH hosts use the shared controller key and are superuser-only.
       </div>
       {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}

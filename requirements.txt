@@ -4,7 +4,8 @@ uvicorn[standard]>=0.29
 pydantic>=2.0
 psutil>=5.9
 paramiko>=3.4
-python-multipart>=0.0.9
+python-multipart>=0.0.9   # multipart/form-data (file upload endpoints)
+itsdangerous>=2.0         # Starlette SessionMiddleware (web console login cookie)
 cryptography>=42.0
 
 # Agent

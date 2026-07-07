@@ -29,3 +29,6 @@ logs/
 /tools/generate_docs.py
 /docs/screenshots/
 /.claude/settings.json
+
+# Python virtualenv (created by the SessionStart hook)
+.venv/

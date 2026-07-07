@@ -31,11 +31,21 @@ import shlex
 import socket
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import uuid
 
 import requests
+
+# Agent integrity (Tier 1): self-measurement shipped alongside agent.py. Guarded
+# so the agent still runs if the module isn't present (e.g. an older bundle) — it
+# just won't report measurements and the controller won't seal a baseline for it.
+try:
+    import agent_integrity
+    _HAVE_INTEGRITY = True
+except Exception:
+    _HAVE_INTEGRITY = False
 
 # Short identity of THIS agent build: a hash of our own source. Reported on
 # every heartbeat so the controller (and the web console's Update-agents
@@ -337,6 +347,9 @@ _PRIV_ERROR_HINTS = (
     "you need to be root", "eperm", "eacces",
     "a password is required", "a terminal is required", "sudo:", "root privileges",
     "access denied", "not authorized", "requires root",
+    # dnf/yum AND zypper print this verbatim when run as a non-root user:
+    # "This command has to be run with superuser privileges ...".
+    "superuser privileges", "run with superuser",
     # polkit / D-Bus (systemctl, hostnamectl, timedatectl, etc. run as a
     # non-root user answer this instead of a plain permission error):
     "interactive authentication required", "authentication is required",
@@ -851,13 +864,40 @@ def _sample_metrics():
     return c["metrics"] if c else None
 
 
-# Timestamp of the last metrics report, so heartbeat() can rate-limit to
-# METRICS_INTERVAL instead of attaching a sample to every 1.5s heartbeat.
-_last_metrics_at = 0.0
+# Latest performance sample, produced by the dedicated metrics thread
+# (_metrics_loop) and attached to the next heartbeat by the heartbeat thread.
+# Collection is heavy (a full /proc walk for top processes, plus statvfs on
+# every real mount, which can be slow or momentarily stall on a sluggish/stale
+# filesystem) and used to run INLINE on the heartbeat thread, so a slow gather
+# delayed the 1.5s pulse and could make the host lag/flicker offline. Publishing
+# from a separate thread takes it off the heartbeat critical path entirely.
+_metrics_lock = threading.Lock()
+_pending_metrics = None   # {"metrics": {...}, "snapshot": {...}} awaiting send, or None
+
+
+def _metrics_loop(state):
+    """Collect performance metrics on a dedicated thread, on their own cadence,
+    fully off the heartbeat critical path. Publishes the newest sample for the
+    heartbeat thread to attach on its next tick; however long a collection takes
+    (big /proc scan, a slow statvfs), it can never stall the heartbeat pulse that
+    keeps last_seen fresh. The delta metrics (CPU%, net, I/O rates) keep their
+    previous-sample state in-process here, so they're computed over a clean
+    METRICS_INTERVAL window. Best-effort: any error is logged and retried."""
+    global _pending_metrics
+    if METRICS_INTERVAL <= 0:
+        return
+    while True:
+        try:
+            collected = _collect_metrics()
+            if collected is not None:
+                with _metrics_lock:
+                    _pending_metrics = collected
+        except Exception as e:
+            print("[agent] metrics thread:", e)
+        time.sleep(METRICS_INTERVAL)
 
 
 def heartbeat(state):
-    global _last_metrics_at
     body = {
         "host_id": state["host_id"],
         "agent_secret": state["agent_secret"],
@@ -874,22 +914,258 @@ def heartbeat(state):
         "agent_version": AGENT_VERSION,
     }
 
-    # Attach a performance sample at most once per METRICS_INTERVAL. Most
-    # heartbeats carry none, so the controller's time-series table grows at
-    # roughly one row per host per interval rather than per heartbeat.
-    now = time.time()
-    if METRICS_INTERVAL > 0 and (now - _last_metrics_at) >= METRICS_INTERVAL:
-        collected = _collect_metrics()
-        if collected is not None:
-            body["metrics"] = collected["metrics"]
-            body["snapshot"] = collected["snapshot"]
-            _last_metrics_at = now
+    # Agent integrity (Tier 1): self-measurement manifest the controller compares
+    # to this host's sealed baseline. Omitted entirely if the module isn't
+    # present, so it stays non-breaking for older bundles.
+    if _HAVE_INTEGRITY:
+        try:
+            body["measurements"] = agent_integrity.measure()
+        except Exception:
+            pass
+
+    # Attach the newest sample the metrics thread has published, if any. This is
+    # non-blocking (no collection here) — the gather happens on _metrics_loop, so
+    # a slow sample never delays this heartbeat. Draining it (set back to None)
+    # means each collected sample lands on exactly one heartbeat, so the
+    # controller's time-series table still grows at ~one row per host per
+    # METRICS_INTERVAL rather than per 1.5s heartbeat.
+    global _pending_metrics
+    with _metrics_lock:
+        pending = _pending_metrics
+        _pending_metrics = None
+    if pending is not None:
+        body["metrics"] = pending["metrics"]
+        body["snapshot"] = pending["snapshot"]
 
     try:
         r = _request("POST", "/agents/heartbeat", json=body, timeout=10)
         _raise_with_detail(r)
     except requests.RequestException as e:
         print("[agent] heartbeat failed:", e)
+
+
+def _heartbeat_loop(state):
+    """Send the heartbeat (and periodic metrics sample) on a DEDICATED thread, on
+    its own steady cadence, independent of task execution.
+
+    Previously heartbeat + task execution shared one thread: while the agent was
+    busy running a long command (applying updates, a slow posture gather), it
+    couldn't get back to the top of the loop to heartbeat — so `last_seen` went
+    stale and the console showed the host OFFLINE mid-operation (e.g. "patched a
+    VM and now it says it's offline"). Running heartbeats here means the host
+    keeps reporting in no matter how long a task takes.
+
+    Best-effort: any error is logged and retried on the next tick. The task loop
+    remains the single authority for enrollment/exit (UnknownHostError), so this
+    thread just swallows everything and keeps the pulse going."""
+    while True:
+        try:
+            heartbeat(state)
+        except Exception as e:               # incl. UnknownHostError — the task loop handles exit
+            print("[agent] heartbeat thread:", e)
+        time.sleep(POLL_INTERVAL)
+
+
+# =========================================================
+# AGENT-HOSTED PTY (Option B): run the interactive shell locally and stream it
+# to the controller over the agent's own outbound HTTP channel, so terminals
+# work on hosts the controller can't reach inbound (NAT/firewall, no SSH).
+# =========================================================
+def _start_pty_session(state, task):
+    """Spawn a shell on a local PTY and bridge it to the controller on its own
+    threads (so the main task loop keeps polling)."""
+    import json as _json
+    try:
+        cfg = _json.loads(task.get("command") or "{}")
+    except Exception:
+        cfg = {}
+    sid = cfg.get("session_id")
+    if not sid:
+        return
+    user = cfg.get("user") or None
+    cols = int(cfg.get("cols") or 80)
+    rows = int(cfg.get("rows") or 24)
+    threading.Thread(target=_pty_bridge, args=(state, sid, user, cols, rows),
+                     name="sysible-pty", daemon=True).start()
+
+
+def _pty_set_winsize(fd, cols, rows):
+    import fcntl
+    import struct
+    import termios
+    try:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    except Exception:
+        pass
+
+
+def _pty_post_output(state, sid, data, ended=False):
+    """POST a chunk of shell output up to the controller. Returns True if the
+    browser has closed the session (tells us to stop and kill the shell)."""
+    try:
+        r = _request("POST", f"/agents/{state['host_id']}/pty/{sid}/output",
+                     json={"agent_secret": state["agent_secret"], "data": data, "ended": ended},
+                     timeout=20)
+        try:
+            return bool(r.json().get("closed"))
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
+def _pty_poll_io(state, sid):
+    """Long-poll the controller for queued input/resize/close. Returns
+    (messages, closed)."""
+    try:
+        r = _request("GET", f"/agents/{state['host_id']}/pty/{sid}/io",
+                     params={"agent_secret": state["agent_secret"]}, timeout=35)
+        d = r.json()
+        return d.get("msgs", []), bool(d.get("closed"))
+    except Exception:
+        return [], False
+
+
+def _pty_child_exec(user, info, default_shell):
+    """In the pty.fork() child (which already has the slave as its controlling
+    terminal): drop to the operator's user if we resolved one and we're root,
+    set up their login environment, then exec an interactive shell. `info` is a
+    pre-resolved (uid, gid, home, shell) tuple — resolved in the PARENT so no
+    NSS lookup runs in the forked child."""
+    env = dict(os.environ)
+    env["TERM"] = "xterm"
+    sh = default_shell
+    if info and os.geteuid() == 0 and info[0] != 0:
+        uid, gid, home, ushell = info
+        try:
+            os.setgid(gid)
+            try:
+                os.initgroups(user, gid)   # supplementary groups (needs root)
+            except Exception:
+                pass
+            os.setuid(uid)                 # drop privileges LAST
+        except Exception:
+            pass
+        home = home if (home and os.path.isdir(home)) else "/tmp"
+        env["HOME"] = home
+        env["USER"] = user
+        env["LOGNAME"] = user
+        env["PWD"] = home
+        try:
+            os.chdir(home)
+        except Exception:
+            try:
+                os.chdir("/tmp")
+            except Exception:
+                pass
+        if ushell:
+            sh = ushell
+    if not sh or not os.path.exists(sh):
+        sh = "/bin/bash" if os.path.exists("/bin/bash") else "/bin/sh"
+    # argv[0] with a leading '-' makes it a login shell (sources profile);
+    # the controlling tty (from pty.fork) makes it interactive with job control.
+    argv0 = "-" + os.path.basename(sh)
+    try:
+        os.execve(sh, [argv0], env)
+    except Exception:
+        try:
+            os.execve("/bin/sh", ["-sh"], env)
+        except Exception:
+            pass
+    os._exit(1)
+
+
+def _pty_bridge(state, sid, user, cols, rows):
+    import pty as _pty
+    import select as _select
+    import signal as _signal
+    shell = os.environ.get("SHELL") or "/bin/bash"
+    if not os.path.exists(shell):
+        shell = "/bin/sh"
+
+    # Resolve the operator's account in the PARENT (before fork) so the child
+    # does no NSS lookup. None => run as the agent (root).
+    info = None
+    if user:
+        try:
+            import pwd
+            pw = pwd.getpwnam(user)
+            info = (pw.pw_uid, pw.pw_gid, pw.pw_dir, pw.pw_shell)
+        except Exception:
+            info = None
+
+    try:
+        pid, master = _pty.fork()   # child gets the slave as its controlling tty
+    except Exception as e:
+        _pty_post_output(state, sid, f"[sysible] could not allocate a terminal: {e}\r\n", ended=True)
+        return
+    if pid == 0:
+        _pty_child_exec(user, info, shell)   # never returns
+        os._exit(1)
+
+    _pty_set_winsize(master, cols, rows)
+    stop = {"v": False}
+
+    def out_loop():
+        while not stop["v"]:
+            try:
+                r, _, _ = _select.select([master], [], [], 0.2)
+            except Exception:
+                break
+            if master in r:
+                try:
+                    data = os.read(master, 65536)
+                except OSError:
+                    break            # shell exited / tty closed
+                if not data:
+                    break
+                if _pty_post_output(state, sid, data.decode(errors="replace")):
+                    stop["v"] = True
+                    break
+        stop["v"] = True
+        _pty_post_output(state, sid, "", ended=True)   # tell the browser it ended
+
+    ot = threading.Thread(target=out_loop, name="sysible-pty-out", daemon=True)
+    ot.start()
+
+    # Input loop: long-poll the controller for keystrokes / resize / close.
+    while not stop["v"]:
+        try:
+            wpid, _ = os.waitpid(pid, os.WNOHANG)
+            if wpid == pid:
+                break
+        except ChildProcessError:
+            break
+        except Exception:
+            pass
+        msgs, closed = _pty_poll_io(state, sid)
+        if closed:
+            break
+        for m in msgs:
+            t = m.get("t")
+            if t == "i":
+                try:
+                    os.write(master, (m.get("d") or "").encode())
+                except OSError:
+                    stop["v"] = True
+                    break
+            elif t == "r":
+                _pty_set_winsize(master, int(m.get("cols") or cols), int(m.get("rows") or rows))
+
+    stop["v"] = True
+    try:
+        os.kill(pid, _signal.SIGKILL)
+    except Exception:
+        pass
+    try:
+        os.waitpid(pid, 0)
+    except Exception:
+        pass
+    try:
+        os.close(master)
+    except Exception:
+        pass
+    _pty_post_output(state, sid, "", ended=True)
 
 
 def loop(state):
@@ -900,12 +1176,22 @@ def loop(state):
     )
     print("[agent] running:", state["host_id"], "controller:", controller_desc)
 
+    # Pulse on its own thread so a long-running task never makes the host look
+    # offline. Daemon: it dies with the process when the task loop exits.
+    threading.Thread(target=_heartbeat_loop, args=(state,), daemon=True,
+                     name="sysible-heartbeat").start()
+
+    # Gather performance metrics on their own thread too, so a heavy/slow
+    # collection is off the heartbeat critical path (see _metrics_loop). Daemon
+    # for the same reason. No-op when METRICS_INTERVAL <= 0.
+    if METRICS_INTERVAL > 0:
+        threading.Thread(target=_metrics_loop, args=(state,), daemon=True,
+                         name="sysible-metrics").start()
+
     while True:
         ran_task = False
 
         try:
-            heartbeat(state)
-
             tasks = fetch_tasks(state)
             ran_task = bool(tasks)
 
@@ -921,6 +1207,14 @@ def loop(state):
                 print("[agent] running task", task_id)
 
                 try:
+                    # Agent-hosted terminal: spawn a local shell on a PTY and
+                    # stream it to the controller (no inbound SSH). It runs on
+                    # its own threads; mark the task done so it isn't reclaimed.
+                    if task.get("kind") == "pty_open":
+                        _start_pty_session(state, task)
+                        send_result(state, task_id,
+                                    {"stdout": "pty session started", "stderr": "", "returncode": 0})
+                        continue
                     result = run_command(task["command"], task.get("run_as"),
                                          task.get("become_password"))
                     send_result(state, task_id, result)
@@ -932,6 +1226,19 @@ def loop(state):
                     # somehow raised, etc.) must not take the whole
                     # agent process down - log it and keep polling.
                     print(f"[agent] task {task_id} failed: {e}")
+                    # Report the failure back so the controller marks the task
+                    # done NOW instead of leaving it 'dispatched' until the 15-min
+                    # reclaim rewrites it as a fabricated 'timed_out' (which looks
+                    # identical to a real timeout to the operator). Best-effort:
+                    # if this send also fails, the reclaim path is still the
+                    # backstop, so swallow any error here.
+                    if task_id is not None:
+                        try:
+                            send_result(state, task_id,
+                                        {"stdout": "", "stderr": f"agent error: {e}",
+                                         "returncode": 1})
+                        except Exception:
+                            pass
         except UnknownHostError:
             print(
                 f"[agent] controller no longer recognizes host_id {state['host_id']} "

@@ -129,7 +129,7 @@ def _build_agent_download_script(remote_path: str) -> str:
     )
 
 
-def queue_agent_upload(host_id: str, local_path, remote_path: str):
+def queue_agent_upload(host_id: str, local_path, remote_path: str, become_password: str = None):
     local_path = Path(local_path)
     size = local_path.stat().st_size
     if size > AGENT_FILE_TRANSFER_LIMIT_BYTES:
@@ -139,10 +139,11 @@ def queue_agent_upload(host_id: str, local_path, remote_path: str):
         )}
     script = _build_agent_upload_script(remote_path, local_path.name, local_path.read_bytes())
     cmd = _wrap_python_script(script)
-    # Writing under a privileged path (e.g. /etc) needs root - attach the
-    # operator's sudo password for password-sudo hosts, same as run_on_entry.
+    # Writing under a privileged path (e.g. /etc) needs root - the caller passes
+    # the operator's sudo password for password-sudo hosts (resolved from the
+    # controller-side store), same as run_on_entry.
     task_ids = queue_command_on_hosts([host_id], cmd, kind="upload_file",
-                                      become_password=become_password_for_host(host_id))
+                                      become_password=become_password)
     task_id = task_ids.get(host_id)
     return {"task_id": task_id, "error": None if task_id is not None else "failed to queue upload"}
 
@@ -157,13 +158,14 @@ def poll_agent_upload(host_id: str, task_id):
     return {"error": output.get("stderr") or f"upload exited {output.get('returncode')}", "remote_path": None}
 
 
-def queue_agent_download(host_id: str, remote_path: str):
+def queue_agent_download(host_id: str, remote_path: str, become_password: str = None):
     script = _build_agent_download_script(remote_path)
     cmd = _wrap_python_script(script)
-    # Reading a root-only file needs root - attach the sudo password for
-    # password-sudo hosts so the agent can elevate.
+    # Reading a root-only file needs root - the caller passes the sudo password
+    # for password-sudo hosts (resolved from the controller-side store) so the
+    # agent can elevate.
     task_ids = queue_command_on_hosts([host_id], cmd, kind="download_file",
-                                      become_password=become_password_for_host(host_id))
+                                      become_password=become_password)
     task_id = task_ids.get(host_id)
     return {"task_id": task_id, "error": None if task_id is not None else "failed to queue download"}
 
@@ -186,33 +188,16 @@ def poll_agent_download(host_id: str, task_id, save_path):
     return {"error": None}
 
 
-def become_password_for_host(host_id):
-    """The stored sudo ('become') password for an agent host that requires one,
-    else None. Lets the direct agent-dispatch paths that DON'T go through
-    run_on_entry (file transfer, the agent console, disenroll, ...) elevate the
-    same way - so a privileged action on a password-sudo host isn't silently
-    sent without the password and bounced off `sudo -n`. None for NOPASSWD
-    hosts, so a password is never sent where it isn't needed."""
-    try:
-        from client.api import get_agents
-        from client import become_credentials
-        for a in get_agents():
-            if a.get("host_id") == host_id:
-                if not a.get("requires_sudo_password"):
-                    return None
-                return become_credentials.get_password(a.get("hostname") or host_id)
-    except Exception:
-        pass
-    return None
-
-
 def queue_command_on_hosts(host_ids, command: str, kind: str = "command",
-                           description: str = None, become_password: str = None):
+                           description: str = None, become_password: str = None,
+                           log: bool = True):
     body_base = {"command": command, "kind": kind}
     if description:
         body_base["description"] = description
     if become_password:
         body_base["become_password"] = become_password
+    if not log:
+        body_base["log"] = False
     task_ids = {}
     for host_id in host_ids:
         try:
@@ -423,13 +408,18 @@ def cmd_set_sudo(username: str, enable: bool) -> str:
             f"{detect}; "
             f'if ! getent group "$grp" >/dev/null 2>&1; then '
             f'echo "sudo group \'$grp\' does not exist on this host." >&2; exit 1; fi; '
-            f'usermod -aG "$grp" {u} && echo "Granted sudo to {username} (added to group $grp)."'
+            # The username appears ONLY in the shlex-quoted usermod arg ({u}).
+            # It must not be interpolated into the confirmation echo — neither
+            # raw nor shlex-quoted is safe inside a double-quoted string, since a
+            # value like `$(id)` still command-substitutes there. Keep the echo
+            # value-free; the caller already knows which user it acted on.
+            f'usermod -aG "$grp" {u} && echo "Granted sudo (added to group $grp)."'
         )
     return (
         f"{detect}; "
         # No 2>&1 here: a privilege failure must stay on stderr so the agent's
         # run-as-user path recognizes it and retries under the host's sudo.
-        f'gpasswd -d {u} "$grp" && echo "Revoked sudo from {username} (removed from group $grp)."'
+        f'gpasswd -d {u} "$grp" && echo "Revoked sudo (removed from group $grp)."'
     )
 
 

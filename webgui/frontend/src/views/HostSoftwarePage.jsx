@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { api } from "../api.js";
 import HostTree from "../components/HostTree.jsx";
 import ResultsPane from "../components/ResultsPane.jsx";
+import PkgResults from "../components/PkgResults.jsx";
 
 // Bespoke Host Software Management page, mirroring the desktop: a package-name
 // field, a live clickable installed-packages list (click to fill), action
@@ -30,8 +31,9 @@ export default function HostSoftwarePage({ hosts = [], onRefreshHosts }) {
     finally { setBusy(""); }
   }
 
-  async function run(action, params, label) {
+  async function run(action, params, label, confirmMsg) {
     if (targets.length === 0) { setErr("Check one or more hosts first."); return; }
+    if (confirmMsg && !window.confirm(`${confirmMsg} on ${targets.length} host${targets.length === 1 ? "" : "s"}?`)) return;
     setBusy(action); setErr("");
     try { const r = await api.runTool(action, targets, params); setResults((p) => [{ label, ...r, at: Date.now() }, ...p]); }
     catch (e) { setErr(e.message); }
@@ -60,18 +62,27 @@ export default function HostSoftwarePage({ hosts = [], onRefreshHosts }) {
         </label>
 
         <fieldset className="tool-group-box" style={{ marginTop: 12 }}><legend>Query</legend>
+          <div className="faint" style={{ fontSize: 12, marginBottom: 10 }}>
+            "Check status" reports, per checked host, whether the named package(s) are installed and which version.
+          </div>
           <div className="group-buttons">
+            <button className="btn sm" disabled={busy || !name.trim()}
+                    onClick={() => run("pkg_status", { names: name }, `Status: ${name}`)}>Check status on checked hosts</button>
             <button className="btn sm" disabled={busy} onClick={() => run("pkg_detect_env", {}, "Detect package manager / OS")}>Detect Package Manager / OS</button>
-            <button className="btn sm" disabled={busy === "list"} onClick={listInstalled}>{busy === "list" ? <span className="spin" /> : "List Installed"}</button>
             <button className="btn sm" disabled={busy || !name} onClick={() => run("pkg_search", { term: name }, `Search ${name}`)}>Search Available</button>
             <button className="btn sm" disabled={busy || !name} onClick={() => run("pkg_query", { name }, `Query ${name}`)}>Query Package Info</button>
             <button className="btn sm" disabled={busy || !name} onClick={() => run("pkg_verify", { name }, `Verify ${name}`)}>Verify Package Integrity</button>
           </div>
         </fieldset>
 
-        <div className="section-title">Installed packages {listHost ? `(on ${listHost})` : ""} — click to fill</div>
-        <div className="card" style={{ maxHeight: 200, overflowY: "auto", padding: 6 }}>
-          {filtered.length === 0 ? <div className="faint" style={{ padding: 8 }}>Click “List Installed” to populate.</div>
+        <div className="section-title">Browse installed on one host — click a name to fill the field</div>
+        <div className="row" style={{ gap: 8, marginBottom: 6, alignItems: "center" }}>
+          <button className="btn sm ghost" disabled={busy === "list"} onClick={listInstalled}>
+            {busy === "list" ? <span className="spin" /> : (listHost ? `Refresh list (${listHost})` : "List installed on a host")}</button>
+          <span className="faint" style={{ fontSize: 12 }}>reads from one host, as a package-name picker</span>
+        </div>
+        <div className="card" style={{ maxHeight: 180, overflowY: "auto", padding: 6 }}>
+          {filtered.length === 0 ? <div className="faint" style={{ padding: 8 }}>Click “List installed on a host” to populate this picker.</div>
             : filtered.map((p) => (
               <div key={p} className="host-row" style={{ cursor: "pointer", paddingLeft: 6 }} onClick={() => setName(p)}>{p}</div>
             ))}
@@ -81,7 +92,7 @@ export default function HostSoftwarePage({ hosts = [], onRefreshHosts }) {
           <div className="group-buttons">
             <button className="btn sm" disabled={busy || !name} onClick={() => run("pkg_install", { names: name }, `Install ${name}`)}>Install</button>
             <button className="btn sm" disabled={busy} onClick={() => run("pkg_update", { names: name }, name ? `Update ${name}` : "Update / upgrade all")}>Update / Upgrade</button>
-            <button className="btn sm danger" disabled={busy || !name} onClick={() => run("pkg_remove", { names: name }, `Remove ${name}`)}>Remove</button>
+            <button className="btn sm danger" disabled={busy || !name} onClick={() => run("pkg_remove", { names: name }, `Remove ${name}`, `Remove the package "${name}"`)}>Remove</button>
           </div>
           <div className="row" style={{ marginTop: 10 }}>
             <label className="btn sm" style={{ cursor: targets.length ? "pointer" : "not-allowed", opacity: targets.length ? 1 : 0.5 }}>
@@ -103,7 +114,8 @@ export default function HostSoftwarePage({ hosts = [], onRefreshHosts }) {
 
       <ResultsPane results={results} setResults={setResults} expanded={expanded}
                    onToggleExpand={() => setExpanded((v) => !v)}
-                   empty="Run an action — output appears here." />
+                   renderRun={(run) => <PkgResults run={run} />}
+                   empty="Run an action — install/remove/status show a clear per-host result here." />
     </div>
   );
 }

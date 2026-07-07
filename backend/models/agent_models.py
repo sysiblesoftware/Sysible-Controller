@@ -1,26 +1,67 @@
+import json
+import os
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
+
+# Size caps for the agent-facing channel. A managed host runs the agent, and a
+# compromised/malicious agent could otherwise POST arbitrarily large payloads
+# every heartbeat (metrics/snapshot/measurements dicts, task results, PTY output)
+# to bloat the DB / the integrity state file or drive controller RSS to OOM.
+# These bound each field; string fields use Pydantic's max_length, dict fields a
+# validator on the serialized size. Generous enough for real payloads, small
+# enough to make flooding ineffective. The large ones are env-tunable.
+_ID_MAX = 128
+_HOSTNAME_MAX = 256
+_SHORT_MAX = 512
+
+
+def _int_env(name, default):
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+_METRICS_MAX = _int_env("SYSIBLE_MAX_METRICS_BYTES", 64 * 1024)
+_SNAPSHOT_MAX = _int_env("SYSIBLE_MAX_SNAPSHOT_BYTES", 512 * 1024)
+_MEASUREMENTS_MAX = _int_env("SYSIBLE_MAX_MEASUREMENTS_BYTES", 512 * 1024)
+_COMMAND_MAX = _int_env("SYSIBLE_MAX_COMMAND_BYTES", 1024 * 1024)
+_RESULT_MAX = _int_env("SYSIBLE_MAX_RESULT_BYTES", 4 * 1024 * 1024)
+_PTY_DATA_MAX = _int_env("SYSIBLE_MAX_PTY_CHUNK_BYTES", 512 * 1024)
+
+
+def _bounded_dict(v, cap, name):
+    """Reject a dict whose serialized size exceeds `cap` bytes (None passes)."""
+    if v is None:
+        return v
+    try:
+        size = len(json.dumps(v))
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} is not JSON-serializable")
+    if size > cap:
+        raise ValueError(f"{name} too large ({size} > {cap} bytes)")
+    return v
 
 
 class EnrollRequest(BaseModel):
-    token: str
-    host_id: str
-    hostname: Optional[str] = None
-    platform: Optional[str] = None
-    kernel: Optional[str] = None
-    ip: Optional[str] = None
+    token: str = Field(max_length=_SHORT_MAX)
+    host_id: str = Field(max_length=_ID_MAX)
+    hostname: Optional[str] = Field(default=None, max_length=_HOSTNAME_MAX)
+    platform: Optional[str] = Field(default=None, max_length=_SHORT_MAX)
+    kernel: Optional[str] = Field(default=None, max_length=_SHORT_MAX)
+    ip: Optional[str] = Field(default=None, max_length=_HOSTNAME_MAX)
 
 
 class HeartbeatRequest(BaseModel):
-    host_id: str
-    agent_secret: str
-    ip: Optional[str] = None
-    hostname: Optional[str] = None
+    host_id: str = Field(max_length=_ID_MAX)
+    agent_secret: str = Field(max_length=_ID_MAX)
+    ip: Optional[str] = Field(default=None, max_length=_HOSTNAME_MAX)
+    hostname: Optional[str] = Field(default=None, max_length=_HOSTNAME_MAX)
     # Short hash of the agent's own agent.py, so the controller knows which hosts
     # run the current agent (drives the web console's Update-agents progress).
     # Older agents omit it.
-    agent_version: Optional[str] = None
+    agent_version: Optional[str] = Field(default=None, max_length=_SHORT_MAX)
     # Optional performance sample (load/cpu/mem/swap/disk/net/io/procs). Sent by
     # newer agents at most once per SYSIBLE_METRICS_INTERVAL, not on every
     # heartbeat; older agents omit it (or send only load1/cores/mem/disk). See
@@ -30,6 +71,26 @@ class HeartbeatRequest(BaseModel):
     # network, per-mount disk, top processes) for the per-host drill-down. Latest
     # only - overwritten each interval. See host_agent/agent.py's _sample_snapshot().
     snapshot: Optional[Dict[str, Any]] = None
+    # Agent integrity (Tier 1): the agent's self-measurement manifest (sha256 of
+    # its own files + version). Optional so older agents that don't send it keep
+    # working; when present the controller compares it to the host's sealed
+    # baseline and quarantines on mismatch. See backend/agent_integrity.py.
+    measurements: Optional[dict] = None
+
+    @field_validator("metrics")
+    @classmethod
+    def _cap_metrics(cls, v):
+        return _bounded_dict(v, _METRICS_MAX, "metrics")
+
+    @field_validator("snapshot")
+    @classmethod
+    def _cap_snapshot(cls, v):
+        return _bounded_dict(v, _SNAPSHOT_MAX, "snapshot")
+
+    @field_validator("measurements")
+    @classmethod
+    def _cap_measurements(cls, v):
+        return _bounded_dict(v, _MEASUREMENTS_MAX, "measurements")
 
 
 class SelfDisenrollRequest(BaseModel):
@@ -38,19 +99,38 @@ class SelfDisenrollRequest(BaseModel):
     disenroll_agent.sh script (in the agent bundle) remove its own
     enrollment using the same host_id+agent_secret it already has on
     disk, instead of needing the controller's API key."""
-    host_id: str
-    agent_secret: str
+    host_id: str = Field(max_length=_ID_MAX)
+    agent_secret: str = Field(max_length=_ID_MAX)
 
 
 class TaskCreateRequest(BaseModel):
-    command: str
-    kind: str = "command"
-    description: Optional[str] = None  # human label for the activity log
-    become_password: Optional[str] = None  # held in RAM only, never persisted
+    command: str = Field(max_length=_COMMAND_MAX)
+    kind: str = Field(default="command", max_length=_SHORT_MAX)
+    description: Optional[str] = Field(default=None, max_length=4096)  # human label for the activity log
+    become_password: Optional[str] = Field(default=None, max_length=_SHORT_MAX)  # RAM only, never persisted
+    # When False, skip the per-host activity-feed entry. The web console sets
+    # this for multi-host tool runs so it can log ONE grouped summary entry
+    # instead of N near-identical rows ("List disks · dev1", "· prod1", ...).
+    log: bool = True
+
+
+class ActivityLogRequest(BaseModel):
+    """One attributed activity-feed entry, written by the web console to record a
+    single grouped summary for a multi-host tool run."""
+    host: str = Field(default="", max_length=_HOSTNAME_MAX)
+    description: str = Field(max_length=4096)
 
 
 class TaskResultRequest(BaseModel):
-    host_id: str
-    agent_secret: str
+    host_id: str = Field(max_length=_ID_MAX)
+    agent_secret: str = Field(max_length=_ID_MAX)
     task_id: int
-    result: str
+    result: str = Field(max_length=_RESULT_MAX)
+
+
+class PtyOutputRequest(BaseModel):
+    """Agent -> controller: a chunk of shell output for an agent-hosted terminal
+    (Option B). `ended` marks the shell exiting."""
+    agent_secret: str = Field(max_length=_ID_MAX)
+    data: str = Field(default="", max_length=_PTY_DATA_MAX)
+    ended: bool = False

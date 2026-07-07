@@ -3,12 +3,13 @@ from typing import Optional
 from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 import json
+import os
 import secrets
 import threading
 import time
 
-from backend.agent_bundle import build_agent_bundle, detect_local_ips, resolve_controller_addresses
-from backend.auth import require_api_key, require_superuser, require_activity_viewer
+from backend.agent_bundle import mint_agent_bundle, detect_local_ips, resolve_controller_addresses
+from backend.auth import require_api_key, require_superuser, require_activity_viewer, acting_admin_name
 from backend.db import (
     create_enroll_token,
     validate_enroll_token,
@@ -23,10 +24,13 @@ from backend.db import (
     list_agents,
     delete_agent,
     get_agent_secret,
+    revoke_agent,
+    is_agent_revoked,
     agent_exists,
     queue_task,
     fetch_pending_tasks,
     submit_task_result,
+    reclaim_stale_tasks,
     get_task_kind,
     get_task_host,
     list_results,
@@ -71,6 +75,7 @@ from backend.db import (
     create_admin_token,
     resolve_admin_token,
     delete_admin_token,
+    delete_admin_tokens_for_user,
     log_activity,
     get_activity_log,
     get_agent_hostname,
@@ -79,8 +84,10 @@ from backend.db import (
 from backend import portal_auth, portal_files, portal_manager, tls_manager
 from backend.policy import validate_password_against_policy
 from backend.models.agent_models import (
+    ActivityLogRequest,
     EnrollRequest,
     HeartbeatRequest,
+    PtyOutputRequest,
     SelfDisenrollRequest,
     TaskCreateRequest,
     TaskResultRequest,
@@ -154,6 +161,14 @@ def verify_agent(host_id: str, agent_secret: str):
     if not agent_exists(host_id):
         raise HTTPException(status_code=404, detail="Unknown host_id")
 
+    # Revoked hosts are locked out regardless of a correct secret, until an admin
+    # re-enrolls them (which mints a fresh secret and clears revocation).
+    if is_agent_revoked(host_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Agent secret revoked — re-enroll this host to restore it.",
+        )
+
     expected = get_agent_secret(host_id)
 
     if not expected or not secrets.compare_digest(agent_secret, expected):
@@ -178,13 +193,21 @@ async def generate_token(request: Request):
             detail="Forbidden"
         )
 
+    # Early guardrail: a freshly-minted token always binds to a NEW host, so if
+    # we're already at the community host cap, refuse here instead of letting the
+    # operator set up an agent that would only be rejected at the final enroll
+    # step. (Re-enrolling a wiped host reuses its original token, not this one.)
+    from backend.edition import enforce_host_limit
+    enforce_host_limit()
+
     token = secrets.token_hex(16)
 
     create_enroll_token(token)
 
+    from backend.db import ENROLL_TOKEN_VALID_DAYS
     return {
         "token": token,
-        "valid_days": 365
+        "valid_days": ENROLL_TOKEN_VALID_DAYS
     }
 
 
@@ -270,8 +293,15 @@ def _consume_ssh_enable_result(host_id, result_str):
     if f"{AGENT_SSH_MARKER}running" in stdout:
         if hostname and ip:
             try:
-                register_agent_ssh_host(hostname, ip, environment)
-                set_agent_ssh_state(host_id, {"status": "enabled"})
+                if register_agent_ssh_host(hostname, ip, environment):
+                    set_agent_ssh_state(host_id, {"status": "enabled"})
+                else:
+                    # IP already owned by another host — auto-SSH skipped rather
+                    # than clobbering that record. Surface it for an admin.
+                    set_agent_ssh_state(host_id, {
+                        "status": "error",
+                        "detail": f"SSH auto-enroll skipped: {ip} is already managed as another host",
+                    })
                 return
             except Exception:
                 pass
@@ -300,9 +330,39 @@ def enroll(req: EnrollRequest):
 
         host_id = resolve_enroll_token_host(req.token, req.host_id)
 
+        # Re-enroll takeover guard. On a within-window token REUSE,
+        # resolve_enroll_token_host returns the ORIGINAL bound host_id, so this
+        # is a re-bind of an existing inventory entry (a fresh first-ever enroll
+        # instead lands on a brand-new random host_id with no existing record).
+        # Refuse the two dangerous re-binds a stolen token enables:
+        existing = _find_agent(host_id)
+        if existing:
+            # (a) An admin deliberately revoked this host — a replayed token
+            #     must not silently un-revoke and resurrect it.
+            if existing.get("revoked"):
+                raise HTTPException(
+                    status_code=403,
+                    detail="This host was revoked by an administrator; re-issue "
+                           "enrollment from the console to restore it.",
+                )
+            # (b) The bound host is still actively heartbeating — a live agent
+            #     already holds this identity and has no reason to re-enroll, so
+            #     a re-bind here would hijack it (new secret => real host locked
+            #     out). A genuine reinstall only happens once the old agent is
+            #     gone (last_seen goes stale).
+            last_seen = existing.get("last_seen") or 0
+            if time.time() - last_seen < _REENROLL_LIVE_HOST_GRACE_S:
+                raise HTTPException(
+                    status_code=409,
+                    detail="A live agent is already enrolled for this host; "
+                           "re-enrollment is blocked while it is online.",
+                )
+
         # Community-edition host cap (no-op in an unlimited/Enterprise build).
+        # Keyed on host_id: a new agent host_id always counts against the cap,
+        # even if its hostname collides with an already-enrolled host.
         from backend.edition import enforce_host_limit
-        enforce_host_limit(req.hostname or host_id)
+        enforce_host_limit(req.hostname or host_id, candidate_host_id=host_id)
 
         agent_secret = secrets.token_hex(24)
 
@@ -331,6 +391,17 @@ def enroll(req: EnrollRequest):
         force=True,
     )
 
+    # Surface the enrollment as a fleet event: it lands in the activity feed
+    # (Live Activity & Logs) and the web console pops a toast when it notices the
+    # new host. The actor is the host itself (enrollment is token-driven, not an
+    # operator action), so attribute it to "enrollment". Best-effort — a logging
+    # hiccup must never fail the enroll.
+    try:
+        log_activity("enrollment", req.hostname or host_id,
+                     f"Host enrolled ({req.platform or 'agent'}) at {req.ip or 'unknown IP'}", "")
+    except Exception:
+        pass
+
     return {
         "host_id": host_id,
         "agent_secret": agent_secret,
@@ -354,6 +425,21 @@ def heartbeat(req: HeartbeatRequest):
     verify_agent(req.host_id, req.agent_secret)
 
     update_agent_heartbeat(req.host_id, req.ip, req.hostname, agent_version=req.agent_version)
+
+    # Agent integrity (Tier 1): when the agent reports a self-measurement,
+    # compare it against this host's sealed baseline (trust-on-first-use) and
+    # quarantine on mismatch. evaluate() never raises, so integrity can't break
+    # the heartbeat path. Quarantine is enforced in poll_agent_tasks below.
+    from backend import agent_integrity
+    if req.measurements is not None:
+        agent_integrity.evaluate(req.host_id, req.measurements)
+    else:
+        # No manifest on this heartbeat. Harmless for an agent that never
+        # measured, but a host that HAS a sealed baseline and stops reporting is
+        # a compromised agent trying to evade the check by dropping the field —
+        # note_missing() quarantines it once the omission outlives the grace
+        # window. Never raises.
+        agent_integrity.note_missing(req.host_id)
 
     # Persist a performance sample if this heartbeat carried one (newer agents
     # attach one ~once per SYSIBLE_METRICS_INTERVAL). Wrapped so a malformed
@@ -423,7 +509,7 @@ def heartbeat(req: HeartbeatRequest):
 # Task kinds that are background/internal reads, not operator actions -
 # kept out of the activity feed (e.g. the User & Group panel's user-list
 # sync that fires automatically after any change).
-_NON_LOGGED_KINDS = {"sync_users", "ssh_enable"}
+_NON_LOGGED_KINDS = {"sync_users", "ssh_enable", "ssh_grant", "ssh_revoke"}
 
 _PENDING_BECOME = {}            # task_id -> {"password": str, "expiry": float}
 _PENDING_BECOME_LOCK = threading.Lock()
@@ -436,6 +522,42 @@ _BECOME_TTL_S = 300
 # than one host and slip past the host cap. Enrollment is infrequent and the
 # controller is single-process, so a coarse lock here is cheap and correct.
 _ENROLL_LOCK = threading.Lock()
+
+# Re-enroll (enroll-token reuse within the grace window) hardening. The enroll
+# token is a bearer credential baked into the downloadable bundle, so a leaked
+# token could otherwise be replayed to re-bind an existing host_id — minting a
+# fresh agent_secret (locking out the real host and handing the attacker its
+# queued tasks) and clearing a prior admin revocation. A host that is still
+# actively heartbeating within this window has its identity and never needs to
+# re-enroll, so a re-bind against a live host is treated as a takeover attempt.
+try:
+    _REENROLL_LIVE_HOST_GRACE_S = int(os.getenv("SYSIBLE_REENROLL_LIVE_HOST_GRACE_S", "300"))
+except ValueError:
+    _REENROLL_LIVE_HOST_GRACE_S = 300
+
+# Reclaim tasks stuck in 'dispatched' (the host was handed the command but its
+# result never came back — lost in transit, or the agent died on receipt) so they
+# reach a terminal 'timed_out' state with a synthetic result instead of living
+# forever. Well beyond the agent's 300s command timeout + the 300s become TTL, so
+# a legitimately-long task is never reclaimed early. NOT re-queued (see
+# db.reclaim_stale_tasks): at-most-once, to avoid double-running a privileged
+# command whose result was merely lost.
+_TASK_RECLAIM_SECONDS = int(os.getenv("SYSIBLE_TASK_RECLAIM_SECONDS", "900"))
+
+
+def _task_reclaim_loop():
+    import time as _t
+    while True:
+        _t.sleep(60)
+        try:
+            n = reclaim_stale_tasks(_TASK_RECLAIM_SECONDS)
+            if n:
+                print(f"[controller] reclaimed {n} stale task(s) as timed_out")
+        except Exception:
+            pass
+
+
+threading.Thread(target=_task_reclaim_loop, name="sysible-task-reclaim", daemon=True).start()
 
 
 def _sweep_become(now=None):
@@ -478,8 +600,8 @@ def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
         if not admin:
             raise HTTPException(status_code=401, detail="Invalid or expired admin token")
         # Read-only 'auditor' accounts can never dispatch a command to a host.
-        # Enforced here (front-end independent) so it holds for the web console,
-        # the desktop GUI, or a hand-crafted API call alike.
+        # Enforced here (front-end independent) so it holds for the web console
+        # or a hand-crafted API call alike.
         if admin.get("role") == "auditor":
             raise HTTPException(status_code=403, detail="Auditor accounts are read-only.")
         run_as = admin["username"]
@@ -495,7 +617,7 @@ def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
     # tasks (run_as set), and not background/internal reads - the user-list
     # sync and SSH auto-enroll aren't operator actions and would just be
     # noise (showing as "ran a script" after an unrelated click).
-    if run_as and body.kind not in _NON_LOGGED_KINDS:
+    if run_as and body.log and body.kind not in _NON_LOGGED_KINDS:
         log_activity(run_as, get_agent_hostname(host_id),
                      body.description or _describe_command(body.command), body.command)
 
@@ -503,6 +625,26 @@ def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
         "task_id": task_id,
         "status": "queued"
     }
+
+
+@app.post("/activity", dependencies=[Depends(require_api_key)])
+def post_activity_route(body: ActivityLogRequest, request: Request):
+    """Record ONE attributed activity entry. The web console uses this to log a
+    single grouped summary for a multi-host tool run (e.g. "List disks · dev1,
+    prod1, prod2") instead of one near-identical row per host. Attributed to the
+    caller's admin token; read-only auditors are refused."""
+    token = request.headers.get("X-Sysible-Admin-Token")
+    admin = resolve_admin_token(token) if token else None
+    if not admin:
+        raise HTTPException(status_code=401, detail="A login token is required for this action.")
+    if admin.get("role") == "auditor":
+        raise HTTPException(status_code=403, detail="Auditor accounts are read-only.")
+    # Bound the free-text fields — this is a one-line summary, not a payload.
+    desc = (body.description or "").strip()[:200]
+    if not desc:
+        raise HTTPException(status_code=400, detail="description required")
+    log_activity(admin["username"], (body.host or "")[:200], desc, "")
+    return {"ok": True}
 
 
 def _build_agent_update_command():
@@ -551,6 +693,7 @@ def update_agents_route(request: Request):
     agent. Agents apply it on their next poll and restart with the new code.
     Superuser-only. Offline agents pick it up whenever they next check in."""
     ver, cmd = _build_agent_update_command()
+    from backend import agent_integrity
     queued = 0
     for a in list_agents():
         hid = a.get("host_id")
@@ -558,6 +701,11 @@ def update_agents_route(request: Request):
             continue
         try:
             queue_task(hid, cmd, kind="agent-update", run_as=None)
+            # The agent's own files (and reported version) will change once it
+            # applies this update — that's an expected, controller-initiated
+            # change, so open a re-seal window instead of quarantining the host
+            # when its next heartbeat diverges from the sealed baseline.
+            agent_integrity.mark_updating(hid)
             queued += 1
         except Exception:
             pass
@@ -581,6 +729,69 @@ def update_agents_route(request: Request):
                        "Each applies it on its next check-in and restarts."}
 
 
+def _current_agent_version():
+    """Short hash of the controller's CURRENT host_agent/agent.py — the build an
+    'update agents' push would deliver. Agents report theirs on heartbeat, so a
+    mismatch means the agent is out of date."""
+    import hashlib
+    from backend.agent_bundle import AGENT_SOURCE_FILE
+    try:
+        return hashlib.sha256(AGENT_SOURCE_FILE.read_text(encoding="utf-8").encode()).hexdigest()[:12]
+    except Exception:
+        return None
+
+
+def _controller_update_available():
+    """Best-effort: is the deployed controller behind its git remote? Reads the
+    install checkout path from <base>/.install_src (written at install time),
+    fetches, and counts commits behind. Never raises — returns a dict the UI can
+    render, with checked=False + a reason when it can't tell (no git, no network,
+    private-repo auth, etc.)."""
+    import os as _os
+    import subprocess as _sp
+    base = _os.getenv("SYSIBLE_HOME", "/opt/sysible")
+    try:
+        src = open(_os.path.join(base, ".install_src")).read().strip()
+    except Exception:
+        return {"checked": False, "reason": "install source unknown (.install_src missing)"}
+    if not src or not _os.path.isdir(_os.path.join(src, ".git")):
+        return {"checked": False, "reason": "install source is not a git checkout"}
+
+    def _git(*args, timeout=25):
+        return _sp.run(["git", "-C", src, "-c", f"safe.directory={src}", *args],
+                       capture_output=True, text=True, timeout=timeout)
+    try:
+        cur = _git("rev-parse", "--short", "HEAD").stdout.strip()
+        branch = _git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        if _git("fetch", "--quiet", timeout=35).returncode != 0:
+            return {"checked": False, "reason": "git fetch failed (network or auth)",
+                    "current": cur, "branch": branch}
+        n = int((_git("rev-list", "--count", "HEAD..@{u}").stdout.strip() or "0"))
+        return {"checked": True, "available": n > 0, "behind": n, "current": cur,
+                "latest": _git("rev-parse", "--short", "@{u}").stdout.strip(), "branch": branch}
+    except Exception as e:
+        return {"checked": False, "reason": str(e)[:120]}
+
+
+@app.get("/update-status", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def update_status_route():
+    """Whether the CONTROLLER (git-behind) and AGENTS (build-hash mismatch) have a
+    software update available. Superuser-only. The git check does a live fetch, so
+    call it on demand, not on a poll."""
+    cur_ver = _current_agent_version()
+    agents = list_agents()
+    outdated = [{"host_id": a.get("host_id"), "hostname": a.get("hostname"),
+                 "agent_version": a.get("agent_version")}
+                for a in agents if cur_ver and a.get("agent_version") and a.get("agent_version") != cur_ver]
+    unknown = sum(1 for a in agents if not a.get("agent_version"))
+    return {
+        "controller": _controller_update_available(),
+        "agents": {"current_version": cur_ver, "total": len(agents),
+                   "outdated": outdated, "outdated_count": len(outdated),
+                   "unknown_count": unknown},
+    }
+
+
 def _describe_command(command: str) -> str:
     """Fallback human description when a tool didn't supply one. Deliberately
     NEVER echoes raw code into the feed: multi-line / script / python
@@ -595,8 +806,11 @@ def _describe_command(command: str) -> str:
         or first.startswith(("import ", "python", "#!", "cat <<", "base64", "{"))
         or len(first) > 80
     )
+    # Never the words "ran a script" here — that phrasing is reserved for the
+    # explicit "Run a script on all hosts" action from Connect (which passes its
+    # own description). A generic multi-line/opaque command is just "ran a command".
     if is_scripty:
-        return "ran a script"
+        return "ran a command"
     return "ran: " + first[:80]
 
 
@@ -606,6 +820,14 @@ def poll_agent_tasks(host_id: str, agent_secret: str = "",
     # Prefer the header (kept out of URLs/access logs); fall back to the query
     # param so already-deployed agents keep working.
     verify_agent(host_id, x_agent_secret or agent_secret)
+
+    # Agent integrity: a quarantined host (self-measurement diverged from its
+    # sealed baseline) keeps heartbeating but is handed NO work — the soft
+    # lockout — so a tampered agent is cut off from dispatch. Enforced here on
+    # the controller (the trust anchor). Cleared by an admin resume/rebaseline.
+    from backend import agent_integrity
+    if agent_integrity.is_quarantined(host_id):
+        return {"tasks": [], "quarantined": True}
 
     tasks = fetch_pending_tasks(host_id)
     # Attach any RAM-held become-password to its task, exactly once. Only this
@@ -635,18 +857,45 @@ def post_task_result(host_id: str, body: TaskResultRequest):
     if owner is None or owner != body.host_id:
         raise HTTPException(status_code=404, detail="Unknown task for this host")
 
-    submit_task_result(body.task_id, body.host_id, body.result)
+    applied = submit_task_result(body.task_id, body.host_id, body.result)
 
+    # Only act on the FIRST valid result for a dispatched task. A duplicate /
+    # retried result (task already 'done') or a result for a never-dispatched
+    # task is ignored, so side effects like the SSH-enable registration below
+    # can't run twice.
     # The controller's own SSH-terminal auto-enroll command reports back
     # through this same path - intercept its result to register the SSH
     # connection (or record sshd_missing) rather than showing it to the
     # operator as an ordinary command result.
-    if get_task_kind(body.task_id) == "ssh_enable":
+    if applied and get_task_kind(body.task_id) == "ssh_enable":
         _consume_ssh_enable_result(body.host_id, body.result)
 
     return {
-        "status": "recorded"
+        "status": "recorded" if applied else "ignored"
     }
+
+
+# =========================================================
+# AGENT-HOSTED PTY (Option B): the agent runs the shell locally and streams it
+# to the controller over these outbound calls, so terminals work with no inbound
+# SSH to the host. Authenticated by the per-host agent secret. See
+# backend/remote_routes.py for the controller-side session buffers.
+# =========================================================
+@app.post("/agents/{host_id}/pty/{session_id}/output")
+def pty_output(host_id: str, session_id: str, body: PtyOutputRequest):
+    verify_agent(host_id, body.agent_secret)
+    from backend.remote_routes import pty_push_output
+    closed = pty_push_output(session_id, host_id, body.data, body.ended)
+    return {"ok": True, "closed": closed}
+
+
+@app.get("/agents/{host_id}/pty/{session_id}/io")
+def pty_io(host_id: str, session_id: str, agent_secret: str = "",
+           x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
+    verify_agent(host_id, x_agent_secret or agent_secret)
+    from backend.remote_routes import pty_take_input
+    msgs, closed = pty_take_input(session_id, host_id, wait=25.0)
+    return {"msgs": msgs, "closed": closed}
 
 
 @app.get("/agents/{host_id}/results", dependencies=[Depends(require_api_key)])
@@ -734,14 +983,57 @@ def get_metrics_snapshot_route(host_id: str):
     return {"host_id": host_id, "ts": snap.get("ts"), "snapshot": data}
 
 
+def _controller_identity():
+    """This controller host's own names + IPs, so an enrolled host that IS the
+    controller can be labelled as such. Best-effort; empty sets never match."""
+    import socket as _s
+    names = set()
+    try:
+        hn = _s.gethostname() or ""
+        if hn:
+            names.add(hn.lower()); names.add(hn.split(".")[0].lower())
+        try:
+            names.add((_s.getfqdn() or "").lower())
+        except Exception:
+            pass
+    except Exception:
+        pass
+    names.discard("")
+    ips = {"127.0.0.1", "::1"}
+    try:
+        ips.update(detect_local_ips())
+    except Exception:
+        pass
+    return names, ips
+
+
+def _is_controller_host(hostname, ip, names, ips):
+    hn = (hostname or "").lower()
+    if hn and (hn in names or hn.split(".")[0] in names):
+        return True
+    return bool(ip) and ip in ips
+
+
 @app.get("/agents", dependencies=[Depends(require_api_key)])
 def get_agents():
 
+    from backend import agent_integrity
     agents = list_agents()
+    ctrl_names, ctrl_ips = _controller_identity()
     for a in agents:
         st = get_agent_ssh_state(a.get("host_id"))
         # "enabled" | "pending" | "sshd_missing" | "error" | None
         a["ssh_terminal_state"] = (st or {}).get("status")
+        # Agent integrity: let the console flag a host whose self-measurement
+        # diverged from its sealed baseline ('revoked' already comes from
+        # list_agents). integrity_detail carries the mismatch reasons for the UI.
+        _ist = agent_integrity.status(a.get("host_id"))
+        a["integrity_quarantined"] = _ist.get("status") == "quarantined"
+        a["integrity_detail"] = _ist.get("mismatches", [])
+        # Is THIS enrolled host the controller itself (self-managed)? Lets the
+        # console label it so an operator never mistakes the control node for an
+        # ordinary managed host.
+        a["is_controller"] = _is_controller_host(a.get("hostname"), a.get("ip"), ctrl_names, ctrl_ips)
 
     return {
         "agents": agents
@@ -771,6 +1063,55 @@ def remove_agent(host_id: str):
         "status": "removed",
         "host_id": host_id
     }
+
+
+@app.post("/agents/{host_id}/revoke", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def revoke_agent_route(host_id: str,
+                       x_admin_token: str = Header(default=None, alias="X-Sysible-Admin-Token")):
+    """Hard lock-out: invalidate the host's agent secret so every authenticated
+    request (heartbeat/poll/result) is rejected until an admin re-enrolls it with
+    a fresh single-use token. This is the escalation from an integrity quarantine
+    ('no tasks') to 'cannot talk to the controller at all'. The sealed integrity
+    baseline is dropped too, so a re-enrolled/reimaged host re-seals cleanly."""
+    if not agent_exists(host_id):
+        raise HTTPException(status_code=404, detail="Unknown host_id")
+
+    revoke_agent(host_id)
+    from backend import agent_integrity
+    agent_integrity.rebaseline(host_id)
+
+    actor = None
+    if x_admin_token:
+        from backend.db import resolve_admin_token
+        admin = resolve_admin_token(x_admin_token)
+        actor = admin["username"] if admin else None
+    log_admin_audit("agent_secret_revoked", actor or "superuser", f"host {host_id}")
+
+    return {"status": "revoked", "host_id": host_id}
+
+
+@app.post("/agents/{host_id}/resume", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def resume_agent_route(host_id: str,
+                       x_admin_token: str = Header(default=None, alias="X-Sysible-Admin-Token")):
+    """Clear an integrity QUARANTINE (the soft lockout): drop the sealed baseline
+    so the next heartbeat re-seals from the host's current measurements and
+    dispatch resumes. Use after a legitimate change (e.g. an agent upgrade) that
+    tripped the check. Does NOT un-revoke a hard-revoked host — that needs a
+    re-enroll."""
+    if not agent_exists(host_id):
+        raise HTTPException(status_code=404, detail="Unknown host_id")
+
+    from backend import agent_integrity
+    agent_integrity.rebaseline(host_id)
+
+    actor = None
+    if x_admin_token:
+        from backend.db import resolve_admin_token
+        admin = resolve_admin_token(x_admin_token)
+        actor = admin["username"] if admin else None
+    log_admin_audit("agent_integrity_resumed", actor or "superuser", f"host {host_id}")
+
+    return {"status": "resumed", "host_id": host_id}
 
 
 # =========================================================
@@ -881,6 +1222,14 @@ def add_environment(body: CreateEnvironmentRequest):
     if not name:
         raise HTTPException(status_code=400, detail="Environment name cannot be empty")
 
+    # create_environment uses INSERT OR IGNORE, which silently no-ops on a
+    # duplicate name and would report success — surface it as a clear 409 so the
+    # operator knows the name is taken rather than believing a second one was
+    # made (the per-environment sudo policy is keyed by name, so two "prod"s
+    # would be indistinguishable).
+    if any((e.get("name") if isinstance(e, dict) else e) == name for e in list_environments()):
+        raise HTTPException(status_code=409, detail=f"An environment named '{name}' already exists.")
+
     create_environment(name)
 
     return {
@@ -889,7 +1238,25 @@ def add_environment(body: CreateEnvironmentRequest):
 
 
 @app.delete("/environments/{name}", dependencies=[Depends(require_api_key), Depends(require_superuser)])
-def remove_environment(name: str):
+def remove_environment(name: str, force: int = 0):
+
+    # Deleting an environment that still has hosts orphans them (their free-text
+    # environment label points at nothing) and silently drops the environment's
+    # sudo default. Refuse unless the caller explicitly forces it, telling them
+    # how many hosts to reassign first. force=1 keeps the escape hatch.
+    if not force:
+        in_env = [a for a in list_agents() if (a.get("environment") or "") == name]
+        try:
+            from backend.remote_routes import load_hosts
+            in_env += [n for n, h in load_hosts().items()
+                       if (h.get("environment") or "") == name]
+        except Exception:
+            pass
+        if in_env:
+            raise HTTPException(
+                status_code=409,
+                detail=(f"{len(in_env)} host(s) are still in '{name}'. Reassign them "
+                        f"to another environment first, or force deletion."))
 
     delete_environment(name)
 
@@ -964,7 +1331,7 @@ def get_local_ips_route():
     return {"ips": detect_local_ips()}
 
 
-@app.get("/controller-config/agent-bundle", dependencies=[Depends(require_api_key)])
+@app.get("/controller-config/agent-bundle", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def download_agent_bundle_route():
     """Build and hand back a ready-to-run agent bundle straight from the
     admin GUI - the same zip the Webserver Portal hands a remote host
@@ -983,12 +1350,7 @@ def download_agent_bundle_route():
         )
         raise HTTPException(status_code=400, detail=detail)
 
-    enroll_token = secrets.token_hex(16)
-    create_enroll_token(enroll_token)
-
-    filename, zip_bytes = build_agent_bundle(
-        addresses, config["port"], enroll_token
-    )
+    filename, zip_bytes = mint_agent_bundle(addresses, config["port"])
 
     return Response(
         content=zip_bytes,
@@ -1048,8 +1410,24 @@ async def install_tls_certificate_route(
     }
 
 
+@app.post("/controller/restart", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def controller_restart_route():
+    """Restart the controller backend service (systemctl restart sysible-backend)
+    from the web console, so an admin can bounce it without shell access.
+    Superuser-only.
+
+    Unlike a self-update this touches only the backend service, not the web
+    console (a separate service), so the operator's session survives — API calls
+    just blip for a few seconds while it comes back (systemd Restart=always). The
+    restart is fired ~1.5s later on a background thread (see tls_manager) so this
+    response flushes to the caller before uvicorn is killed."""
+    from backend import tls_manager
+    tls_manager.restart_backend()
+    return {"restarting": True, "service": "sysible-backend"}
+
+
 @app.post("/controller/update", dependencies=[Depends(require_api_key), Depends(require_superuser)])
-def controller_update_route():
+def controller_update_route(acting: str = Depends(acting_admin_name)):
     """Trigger an in-place controller self-update: the same work as the CLI
     `sysible_controller update` (git pull -> rsync into /opt/sysible -> rebuild
     the web console -> restart services). Superuser-only.
@@ -1094,6 +1472,14 @@ def controller_update_route():
     if r.returncode != 0:
         detail = (r.stderr or r.stdout or "").strip() or "failed to launch updater"
         raise HTTPException(status_code=500, detail=f"Could not start update: {detail}")
+
+    # Production code change — record it in the audit trail, attributed to the
+    # superuser who triggered it (the agent-fleet update is logged too).
+    try:
+        log_admin_audit("controller_update_started", acting,
+                        "in-place controller self-update triggered")
+    except Exception:
+        pass
 
     return {
         "status": "started",
@@ -1327,7 +1713,7 @@ def revoke_portal_session_route(session_id: int):
 
 
 # =========================================================
-# ADMINISTRATORS (gates the desktop GUI itself - the "Sysible
+# ADMINISTRATORS (gates the web console itself - the "Sysible
 # Administrator Configuration" page. Separate from portal_credentials
 # above, which is what a remote host *operator* logs into in a
 # browser, not what a Sysible admin uses. All routes still require
@@ -1513,7 +1899,7 @@ def list_administrators_route():
 
 
 @app.post("/admin/administrators", dependencies=[Depends(require_api_key), Depends(require_superuser)])
-def add_administrator_route(body: AddAdministratorRequest):
+def add_administrator_route(body: AddAdministratorRequest, acting: str = Depends(acting_admin_name)):
     from backend.edition import enforce_role_limit
     from backend.db import count_administrators_by_role
 
@@ -1540,36 +1926,50 @@ def add_administrator_route(body: AddAdministratorRequest):
     salt, password_hash = portal_auth.hash_password(body.password)
     created = add_administrator(
         username, password_hash, salt, must_change_password=1,
-        created_by=body.actor or None, role=role,
+        created_by=acting, role=role,
     )
 
     if not created:
         raise HTTPException(status_code=409, detail="An administrator with that username already exists")
 
-    log_admin_audit("administrator_added", username,
-                    f"{role} added by {body.actor}" if body.actor else f"{role} added")
+    log_admin_audit("administrator_added", username, f"{role} added by {acting}")
 
     return {"username": username, "status": "added", "role": role}
 
 
 @app.delete("/admin/administrators/{username}", dependencies=[Depends(require_api_key), Depends(require_superuser)])
-def remove_administrator_route(username: str, actor: str = ""):
+def remove_administrator_route(username: str, acting: str = Depends(acting_admin_name)):
 
-    if get_administrator(username) is None:
+    target = get_administrator(username)
+    if target is None:
         raise HTTPException(status_code=404, detail="No such administrator")
 
     if count_administrators() <= 1:
         raise HTTPException(status_code=400, detail="Cannot remove the last remaining administrator")
 
+    # Deleting the LAST superuser leaves nobody who can manage admins, enroll/
+    # remove hosts, change controller config, or run the portal — the same
+    # lockout the role-demote path already refuses. The total-admin check above
+    # doesn't catch it (sysadmins/auditors can still exist), so guard the role
+    # count explicitly. Recovery would otherwise require `sysible_controller
+    # reset-admin` on the host console.
+    if (target.get("role") or "superuser") == "superuser" and \
+            count_administrators_by_role("superuser") <= 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot remove the last remaining superuser — promote another "
+                   "administrator to superuser first.")
+
     remove_administrator(username)
-    log_admin_audit("administrator_removed", username, f"removed by {actor}" if actor else "")
+    log_admin_audit("administrator_removed", username, f"removed by {acting}")
 
     return {"username": username, "status": "removed"}
 
 
 @app.post("/admin/administrators/{username}/sudo-connect",
           dependencies=[Depends(require_api_key), Depends(require_superuser)])
-def set_administrator_sudo_connect_route(username: str, body: SetSudoConnectRequest):
+def set_administrator_sudo_connect_route(username: str, body: SetSudoConnectRequest,
+                                         acting: str = Depends(acting_admin_name)):
     """Superuser-gated: grant or revoke an administrator's access to the
     Sysible Connect terminal's "Send sudo password" button. Off by default;
     applies to every account (a superuser can grant their own)."""
@@ -1579,15 +1979,15 @@ def set_administrator_sudo_connect_route(username: str, body: SetSudoConnectRequ
     set_administrator_sudo_connect(username, body.allowed)
     log_admin_audit(
         "sudo_connect_set", username,
-        f"{'granted' if body.allowed else 'revoked'}"
-        + (f" by {body.actor}" if body.actor else ""))
+        f"{'granted' if body.allowed else 'revoked'} by {acting}")
 
     return {"username": username, "sudo_connect": bool(body.allowed)}
 
 
 @app.post("/admin/administrators/{username}/role",
           dependencies=[Depends(require_api_key), Depends(require_superuser)])
-def set_administrator_role_route(username: str, body: SetRoleRequest):
+def set_administrator_role_route(username: str, body: SetRoleRequest,
+                                 acting: str = Depends(acting_admin_name)):
     """Superuser-gated promote/demote of an administrator's role
     ('superuser' | 'sysadmin' | 'auditor'). Guards:
       - refuse to demote the LAST superuser (would lock everyone out of admin
@@ -1616,8 +2016,11 @@ def set_administrator_role_route(username: str, body: SetRoleRequest):
     enforce_role_limit(new_role, count_administrators_by_role(new_role))
 
     set_administrator_role(username, new_role)
+    # Revoke the target's live sessions so the new role takes effect immediately
+    # (a demoted superuser must not keep superuser powers on their old token).
+    delete_admin_tokens_for_user(username)
     log_admin_audit("administrator_role_changed", username,
-                    f"{current} -> {new_role}" + (f" by {body.actor}" if body.actor else ""))
+                    f"{current} -> {new_role} by {acting}")
     return {"username": username, "role": new_role, "status": "updated"}
 
 
@@ -1694,7 +2097,8 @@ def force_admin_password_change(body: ForcePasswordChangeRequest):
 
 @app.post("/admin/administrators/{username}/password",
           dependencies=[Depends(require_api_key), Depends(require_superuser)])
-def reset_administrator_password_route(username: str, body: ResetAdministratorPasswordRequest):
+def reset_administrator_password_route(username: str, body: ResetAdministratorPasswordRequest,
+                                       acting: str = Depends(acting_admin_name)):
     """Superuser resets ANOTHER administrator's password without knowing the
     target's current password. The target must change it on next login."""
 
@@ -1712,9 +2116,12 @@ def reset_administrator_password_route(username: str, body: ResetAdministratorPa
 
     salt, password_hash = portal_auth.hash_password(body.new_password)
     update_administrator_password(username, password_hash, salt, must_change_password=1)
+    # Kill the target's existing sessions — a password reset on a suspected-
+    # compromised account must invalidate any token the attacker already holds
+    # (username/role are unchanged, so resolve_admin_token can't catch this).
+    delete_admin_tokens_for_user(username)
 
-    log_admin_audit("password_reset", username,
-                    f"reset by {body.actor}" if body.actor else "reset by superuser")
+    log_admin_audit("password_reset", username, f"reset by {acting}")
 
     return {"username": username, "status": "reset"}
 

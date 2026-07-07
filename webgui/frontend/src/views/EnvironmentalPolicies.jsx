@@ -7,15 +7,23 @@ import ResultsPane from "../components/ResultsPane.jsx";
 // for managed hosts. Edit & save the controller-side defaults, then push the
 // selected policies to the checked hosts (runs the policy_* catalog actions).
 // Mirrors the desktop's two-part page (defaults editor + push section).
-export default function EnvironmentalPolicies({ hosts = [], onRefreshHosts }) {
+export default function EnvironmentalPolicies({ hosts = [], onRefreshHosts, prefill }) {
   const [pol, setPol] = useState(null);
-  const [targets, setTargets] = useState([]);
+  // Pre-check the host a "Fix in Environmental Policies →" deep-link came from,
+  // so the operator lands ready to push instead of hunting for it in the tree.
+  const [targets, setTargets] = useState(prefill?.host ? [prefill.host] : []);
   const [push, setPush] = useState({ password: true, lockout: true, sudo: true, umask: true });
   const [err, setErr] = useState(""); const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(""); const [results, setResults] = useState([]);
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => { api.envPolicy().then((p) => setPol(normalize(p || {}))).catch((e) => setErr(e.message)); }, []);
+  useEffect(() => {
+    if (prefill?.host) setTargets((t) => (t.includes(prefill.host) ? t : [...t, prefill.host]));
+  }, [prefill]);
+  const prefillName = prefill?.host
+    ? (hosts.find((h) => h.id === prefill.host || h.host_id === prefill.host) || {}).label || prefill.host
+    : null;
   if (err && !pol) return <div className="error-box">{err}</div>;
   if (!pol) return <div className="empty"><span className="spin" /></div>;
 
@@ -36,7 +44,11 @@ export default function EnvironmentalPolicies({ hosts = [], onRefreshHosts }) {
       minlen: pol.minlen, retry: pol.retry, dcredit: pol.require_digit ? -1 : 0,
       ucredit: pol.require_upper ? -1 : 0, lcredit: pol.require_lower ? -1 : 0, ocredit: pol.require_symbol ? -1 : 0 }, "Password quality"]);
     if (push.lockout) jobs.push(["policy_lockout", { deny: pol.deny, unlock_time: pol.unlock_time }, "Account lockout"]);
-    if (push.sudo) jobs.push(["policy_sudo", { timestamp_timeout: pol.sudo_timeout, require_password: pol.sudo_require_password, group: "" }, "Sudo policy"]);
+    // policy_sudo's builder expects the select-string "require"/"nopasswd"/"unchanged"
+    // (not a boolean); pushing this form is an explicit choice, so map the checkbox
+    // to require|nopasswd. Sending the raw boolean stringified to "True"/"False",
+    // which matched neither and always configured NOPASSWD — the opposite of checked.
+    if (push.sudo) jobs.push(["policy_sudo", { timestamp_timeout: pol.sudo_timeout, require_password: pol.sudo_require_password ? "require" : "nopasswd", group: "" }, "Sudo policy"]);
     if (push.umask) jobs.push(["policy_umask", { value: pol.umask }, "Umask"]);
     try {
       for (const [action, params, label] of jobs) {
@@ -55,6 +67,11 @@ export default function EnvironmentalPolicies({ hosts = [], onRefreshHosts }) {
 
       {!expanded && (
       <div className="tool-actions-col"><div className="tool-actions-scroll" style={{ maxWidth: 560 }}>
+        {prefillName && (
+          <div className="ok-text" style={{ fontSize: 12.5, marginBottom: 10 }}>
+            Pre-selected <strong>{prefillName}</strong> as the push target. Adjust Password Quality below, then Push.
+          </div>
+        )}
         <fieldset className="tool-group-box" style={{ marginTop: 0 }}><legend>Password Quality</legend>
           <div className="group-fields">
             <div className="group-field"><label className="field"><span>Minimum length</span>

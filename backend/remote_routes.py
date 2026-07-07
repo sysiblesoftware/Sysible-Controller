@@ -22,6 +22,7 @@ ip, user) is persisted to hosts.json.
 import io
 import json
 import os
+import tempfile
 import posixpath
 import re
 import select
@@ -133,6 +134,31 @@ def _close_session(session):
         session["client"].close()
     except Exception:
         pass
+    # Revoke this session's per-session key on the host (agent hosts only).
+    _queue_ephemeral_revoke(session.get("revoke"))
+
+
+def _reaper_loop():
+    import time as _t
+    while True:
+        _t.sleep(60)
+        try:
+            _reap_idle_sessions()
+        except Exception:
+            pass
+        try:
+            _reap_pty_sessions()
+        except Exception:
+            pass
+
+
+# Reap idle terminal sessions on a TIMER, not only when a new terminal opens.
+# Otherwise a browser that dies abruptly (and whose cleanup RPC is lost) leaves
+# an orphaned paramiko client + channel + transport thread alive for the whole
+# process lifetime if no further terminal is ever opened. daemon=True so it
+# never blocks shutdown; started once at import.
+_REAPER_THREAD = threading.Thread(target=_reaper_loop, name="sysible-term-reaper", daemon=True)
+_REAPER_THREAD.start()
 
 
 # =========================================================
@@ -141,16 +167,35 @@ def _close_session(session):
 def load_hosts():
     if HOST_FILE.exists():
         try:
-            return json.loads(HOST_FILE.read_text())
+            data = json.loads(HOST_FILE.read_text())
+            return data if isinstance(data, dict) else {}
         except (json.JSONDecodeError, OSError):
             return {}
     return {}
 
 
 def save_hosts(hosts):
+    """Atomic write (temp file + os.replace) so a crash / disk-full / concurrent
+    writer can't truncate hosts.json into invalid JSON — which load_hosts would
+    then read as {}, making the entire SSH-host inventory silently disappear.
+    (A residual lost-update race remains between concurrent load->mutate->save
+    mutators; it self-heals as the agent re-reports SSH state / the operator
+    re-runs, whereas the truncation this fixes was permanent.)"""
     HOST_FILE.parent.mkdir(parents=True, exist_ok=True)
-    HOST_FILE.write_text(json.dumps(hosts, indent=2))
-    os.chmod(HOST_FILE, 0o600)
+    fd, tmp = tempfile.mkstemp(dir=str(HOST_FILE.parent), prefix=".hosts-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(hosts, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, HOST_FILE)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # =========================================================
@@ -175,7 +220,8 @@ def _ensure_controller_key() -> str:
     proc = subprocess.run(
         ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(CONTROLLER_KEY_PATH)],
         capture_output=True,
-        text=True
+        text=True,
+        timeout=30,  # never let a stuck ssh-keygen (e.g. blocked entropy) hang the worker
     )
 
     if proc.returncode != 0:
@@ -300,6 +346,16 @@ AGENT_SSH_MARKER = "SYSIBLE_SSHD="
 
 _AGENT_SSH_STATE_FILE = HOST_FILE.parent / "agent_ssh_state.json"
 
+# hosts.json and agent_ssh_state.json are both mutated with load->mutate->save
+# and are reached from the heartbeat path (via _maybe_enroll_agent_ssh /
+# _consume_ssh_enable_result), which FastAPI runs in a threadpool — so
+# concurrent heartbeats otherwise lost each other's updates (atomic-write only
+# stops truncation, not lost updates). Hold these across the whole
+# load->mutate->save in every mutator. RLock: some mutators nest (a host edit
+# that also touches SSH state). Single process, so a plain lock suffices.
+_HOSTS_LOCK = threading.RLock()
+_SSH_STATE_LOCK = threading.RLock()
+
 
 def agent_ssh_enable_command(public_key: str) -> str:
     """Root shell one-liner the agent runs: install the controller key
@@ -362,19 +418,33 @@ def register_agent_ssh_host(name: str, ip: str, environment: str = ""):
 
     The agent's own hostname is the canonical identity for the box, so if a
     manually-enrolled SSH host already exists at this IP under a DIFFERENT
-    name, drop it - it's the same machine, and keeping both is the duplicate
-    we're trying to prevent."""
-    hosts = load_hosts()
-    ip_n = _norm_ip(ip)
-    for n in [n for n, h in hosts.items() if n != name and _norm_ip(h.get("ip")) == ip_n and ip_n]:
-        del hosts[n]
-    hosts[name] = {
-        "ip": ip,
-        "user": "root",
-        "key_path": str(CONTROLLER_KEY_PATH),
-        "environment": environment or "",
-    }
-    save_hosts(hosts)
+    name, we do NOT delete it — see the security note below. Returns True if a
+    record was written, False if it was skipped because the IP already belongs
+    to another host."""
+    with _HOSTS_LOCK:
+        hosts = load_hosts()
+        ip_n = _norm_ip(ip)
+        # SECURITY: `ip` originates from the agent's own request body and is never
+        # verified against the socket peer (agents are commonly NAT'd, so the peer
+        # address isn't the agent's real IP). A malicious agent could therefore
+        # report a VICTIM host's IP and, under the old "delete any record at this
+        # IP" behaviour, erase or repoint the victim's inventory entry (fleet DoS
+        # / mislabelling). So never delete or overwrite a DIFFERENT-named record
+        # here: if this IP is already owned by another host, skip the auto-SSH
+        # record and surface the conflict for an admin to resolve, rather than
+        # silently destroying data. A same-name refresh (its own record, or the
+        # host's IP changing) still updates in place.
+        for n, h in hosts.items():
+            if n != name and ip_n and _norm_ip(h.get("ip")) == ip_n:
+                return False
+        hosts[name] = {
+            "ip": ip,
+            "user": "root",
+            "key_path": str(CONTROLLER_KEY_PATH),
+            "environment": environment or "",
+        }
+        save_hosts(hosts)
+        return True
 
 
 def forget_agent_ssh_host(name: str = None, ip: str = None):
@@ -385,19 +455,20 @@ def forget_agent_ssh_host(name: str = None, ip: str = None):
     that lists merged hosts (fleet health, Sysible Connect, the tools). Matches
     by record name first, then by IP, so it cleans up even if the host was
     renamed after auto-enrollment. Returns the number of records removed."""
-    hosts = load_hosts()
-    ip_n = _norm_ip(ip) if ip else ""
-    victims = [
-        n for n, h in hosts.items()
-        if (name and n == name) or (ip_n and _norm_ip(h.get("ip")) == ip_n)
-    ]
-    for n in victims:
-        removed = hosts.pop(n, None)
-        if removed and removed.get("ip"):
-            _forget_known_host(removed["ip"])
-    if victims:
-        save_hosts(hosts)
-    return len(victims)
+    with _HOSTS_LOCK:
+        hosts = load_hosts()
+        ip_n = _norm_ip(ip) if ip else ""
+        victims = [
+            n for n, h in hosts.items()
+            if (name and n == name) or (ip_n and _norm_ip(h.get("ip")) == ip_n)
+        ]
+        for n in victims:
+            removed = hosts.pop(n, None)
+            if removed and removed.get("ip"):
+                _forget_known_host(removed["ip"])
+        if victims:
+            save_hosts(hosts)
+        return len(victims)
 
 
 def sync_agent_ssh_environment(name: str = None, ip: str = None, environment: str = ""):
@@ -407,23 +478,25 @@ def sync_agent_ssh_environment(name: str = None, ip: str = None, environment: st
     out-of-sync SSH record still misleads anything that reads it directly).
     Matches by name first, then IP. No-op if there's no SSH record. Returns the
     number of records updated."""
-    hosts = load_hosts()
-    ip_n = _norm_ip(ip) if ip else ""
-    updated = 0
-    for n, h in hosts.items():
-        if (name and n == name) or (ip_n and _norm_ip(h.get("ip")) == ip_n):
-            if h.get("environment", "") != (environment or ""):
-                h["environment"] = environment or ""
-                updated += 1
-    if updated:
-        save_hosts(hosts)
-    return updated
+    with _HOSTS_LOCK:
+        hosts = load_hosts()
+        ip_n = _norm_ip(ip) if ip else ""
+        updated = 0
+        for n, h in hosts.items():
+            if (name and n == name) or (ip_n and _norm_ip(h.get("ip")) == ip_n):
+                if h.get("environment", "") != (environment or ""):
+                    h["environment"] = environment or ""
+                    updated += 1
+        if updated:
+            save_hosts(hosts)
+        return updated
 
 
 def _load_agent_ssh_state():
     if _AGENT_SSH_STATE_FILE.exists():
         try:
-            return json.loads(_AGENT_SSH_STATE_FILE.read_text())
+            data = json.loads(_AGENT_SSH_STATE_FILE.read_text())
+            return data if isinstance(data, dict) else {}
         except (json.JSONDecodeError, OSError):
             return {}
     return {}
@@ -431,11 +504,20 @@ def _load_agent_ssh_state():
 
 def _save_agent_ssh_state(state):
     _AGENT_SSH_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _AGENT_SSH_STATE_FILE.write_text(json.dumps(state, indent=2))
+    fd, tmp = tempfile.mkstemp(dir=str(_AGENT_SSH_STATE_FILE.parent), prefix=".sshstate-", suffix=".json")
     try:
-        os.chmod(_AGENT_SSH_STATE_FILE, 0o600)
-    except OSError:
-        pass
+        with os.fdopen(fd, "w") as f:
+            json.dump(state, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, _AGENT_SSH_STATE_FILE)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def get_agent_ssh_state(host_id: str):
@@ -446,12 +528,13 @@ def get_agent_ssh_state(host_id: str):
 
 
 def set_agent_ssh_state(host_id: str, value):
-    state = _load_agent_ssh_state()
-    if value is None:
-        state.pop(host_id, None)
-    else:
-        state[host_id] = value
-    _save_agent_ssh_state(state)
+    with _SSH_STATE_LOCK:
+        state = _load_agent_ssh_state()
+        if value is None:
+            state.pop(host_id, None)
+        else:
+            state[host_id] = value
+        _save_agent_ssh_state(state)
 
 
 # =========================================================
@@ -468,16 +551,15 @@ def add_host(body: AddHostRequest):
             status_code=409,
             detail=f"{body.ip} is already managed as '{owner}'.")
 
-    hosts = load_hosts()
-
-    hosts[body.name] = {
-        "ip": body.ip,
-        "user": body.user,
-        "key_path": str(CONTROLLER_KEY_PATH),
-        "environment": body.environment or ""
-    }
-
-    save_hosts(hosts)
+    with _HOSTS_LOCK:
+        hosts = load_hosts()
+        hosts[body.name] = {
+            "ip": body.ip,
+            "user": body.user,
+            "key_path": str(CONTROLLER_KEY_PATH),
+            "environment": body.environment or ""
+        }
+        save_hosts(hosts)
 
     return {"added": True, "host": body.name}
 
@@ -489,9 +571,10 @@ def list_hosts():
 
 @router.delete("/hosts/{name}", dependencies=[Depends(require_superuser)])
 def delete_host(name: str):
-    hosts = load_hosts()
-    removed = hosts.pop(name, None)
-    save_hosts(hosts)
+    with _HOSTS_LOCK:
+        hosts = load_hosts()
+        removed = hosts.pop(name, None)
+        save_hosts(hosts)
     # Forget the pinned SSH host key too, so a rebuilt box can re-enroll at the
     # same IP without a manual known_hosts edit.
     if removed and removed.get("ip"):
@@ -504,13 +587,14 @@ def set_host_environment(name: str, body: SetEnvironmentRequest):
     """Re-tag an already-connected SSH host's environment without
     re-running the connect flow - mirrors POST /agents/{host_id}/environment
     for agent hosts, so both host kinds use the same reassignment UX."""
-    hosts = load_hosts()
+    with _HOSTS_LOCK:
+        hosts = load_hosts()
 
-    if name not in hosts:
-        raise HTTPException(status_code=404, detail="host not found")
+        if name not in hosts:
+            raise HTTPException(status_code=404, detail="host not found")
 
-    hosts[name]["environment"] = body.environment
-    save_hosts(hosts)
+        hosts[name]["environment"] = body.environment
+        save_hosts(hosts)
 
     return {"host": name, "environment": body.environment}
 
@@ -574,7 +658,7 @@ def enroll_ssh(body: EnrollSSHRequest):
         exit_status = stdout.channel.recv_exit_status()
 
         if exit_status != 0:
-            raise HTTPException(status_code=400, detail=stderr.read().decode())
+            raise HTTPException(status_code=400, detail=stderr.read().decode(errors="replace"))
 
     except paramiko.BadHostKeyException as e:
         # This IP is already pinned in known_hosts with a DIFFERENT key than the
@@ -603,14 +687,15 @@ def enroll_ssh(body: EnrollSSHRequest):
 
     # Key is installed and working - now persist the host record so
     # exec_remote() (and the GUI's host list) knows about it.
-    hosts = load_hosts()
-    hosts[body.name] = {
-        "ip": body.ip,
-        "user": body.username,
-        "key_path": str(CONTROLLER_KEY_PATH),
-        "environment": body.environment or ""
-    }
-    save_hosts(hosts)
+    with _HOSTS_LOCK:
+        hosts = load_hosts()
+        hosts[body.name] = {
+            "ip": body.ip,
+            "user": body.username,
+            "key_path": str(CONTROLLER_KEY_PATH),
+            "environment": body.environment or ""
+        }
+        save_hosts(hosts)
 
     return {"enrolled": True, "host": body.name}
 
@@ -619,12 +704,62 @@ def enroll_ssh(body: EnrollSSHRequest):
 # SSH EXECUTION (key-based - the target must already have the
 # controller's public key installed via /enroll-ssh or out-of-band)
 # =========================================================
+# "This failed because it needs more privilege" — mirrors the agent's
+# _looks_like_privilege_error so SSH dispatch escalates the SAME, safe way (retry
+# under sudo ONLY on a genuine privilege error, never on an ordinary failure).
+_SSH_PRIV_ERR = re.compile(
+    r"permission denied|operation not permitted|must be run as root|must be root|"
+    r"not in the sudoers|a terminal is required|no tty present|password is required|"
+    r"not allowed to execute|are not allowed|superuser privileges|run with superuser",
+    re.I)
+
+
+def _ssh_argv(key_path, target, remote_cmd):
+    return [
+        "ssh", "-i", key_path,
+        "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", f"UserKnownHostsFile={KNOWN_HOSTS_PATH}",
+        "-o", "HashKnownHosts=no", "-o", "ConnectTimeout=10",
+        target, remote_cmd,
+    ]
+
+
+def _as_admin_remote(ssh_user: str, admin: str, cmd: str, elevate=False, password=False) -> str:
+    """Remote command that runs `cmd` AS the initiating admin (per-user) — the
+    same least-privilege model as agent hosts and the SSH terminal: `runuser`
+    from a root SSH login, else the login user's `sudo -u`. `elevate` runs it
+    under the admin's OWN sudo (for a privileged op; `-S` reads their password
+    from stdin). Exits 126 with a clear message if the admin has no local account
+    here, rather than silently running as the SSH login user."""
+    u = shlex.quote(admin)
+    inner_c = shlex.quote(cmd)
+    if elevate:
+        inner = f"sudo -S -p '' bash -c {inner_c}" if password else f"sudo -n bash -c {inner_c}"
+    else:
+        inner = f"bash -c {inner_c}"
+    switch = f"runuser -u {u} -- {inner}" if ssh_user == "root" else f"sudo -n -u {u} -- {inner}"
+    return (f"id {u} >/dev/null 2>&1 || {{ echo \"[sysible] user {admin} does not exist on this "
+            f"host - create it (with the sudo policy you want) so commands run as that role\" >&2; "
+            f"exit 126; }}; {switch}")
+
+
 @router.post("/hosts/{name}/exec")
 def exec_remote(name: str, body: ExecRequest, request: Request):
     hosts = load_hosts()
 
     if name not in hosts:
         raise HTTPException(status_code=404, detail="host not found")
+
+    # Read-only auditors may NEVER run a command on a host — logged or not.
+    # This block is unconditional (not gated on the client-supplied body.log):
+    # a caller could otherwise set log=False to skip both this check AND the
+    # audit record below and execute arbitrary commands as an auditor with no
+    # trail. _reject_auditor is a no-op when no admin token is present, so the
+    # genuine internal read-only sweeps (posture, fleet-health, user-list sync)
+    # — which are dispatched tokenless — still pass through. Mirrors the agent
+    # dispatch path's unconditional auditor block in app.py.
+    _reject_auditor(request)
 
     # Activity feed: record admin-initiated SSH exec (identity from token),
     # unless this is a background/internal read (body.log=False, e.g. the
@@ -635,32 +770,42 @@ def exec_remote(name: str, body: ExecRequest, request: Request):
         log_activity(admin, name, body.description or ("ran: " + body.cmd[:80]), body.cmd)
 
     host = hosts[name]
-    target = f"{host['user']}@{host['ip']}"
+    ssh_user = host["user"]
+    target = f"{ssh_user}@{host['ip']}"
     key_path = host.get("key_path") or str(CONTROLLER_KEY_PATH)
 
-    # Share the one TOFU trust store with the paramiko paths above, rather than
-    # using root's default ~/.ssh/known_hosts: a key pinned during enrollment or
-    # a terminal session is then honoured here too (and vice versa).
-    # accept-new = pin a first-seen host, but refuse a CHANGED key (exit 255).
+    # Share the one TOFU trust store with the paramiko paths above.
     _ensure_known_hosts_file()
 
+    def _run(remote_cmd, stdin=None):
+        # errors="replace": an SSH host can emit non-UTF-8 bytes (a binary/log
+        # cat, a locale-encoded message). Strict decoding (the text=True default)
+        # would raise UnicodeDecodeError and 500 the whole dispatch; replace keeps
+        # it a normal result. Matches the other decode sites in this module.
+        return subprocess.run(_ssh_argv(key_path, target, remote_cmd),
+                              capture_output=True, text=True, errors="replace",
+                              input=stdin, timeout=60)
+
     try:
-        result = subprocess.run(
-            [
-                "ssh",
-                "-i", key_path,
-                "-o", "IdentitiesOnly=yes",
-                "-o", "BatchMode=yes",
-                "-o", "StrictHostKeyChecking=accept-new",
-                "-o", f"UserKnownHostsFile={KNOWN_HOSTS_PATH}",
-                "-o", "HashKnownHosts=no",
-                "-o", "ConnectTimeout=10",
-                target, body.cmd
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
+        if admin:
+            # Per-user (attributed) dispatch: run AS the initiating admin, then
+            # escalate via THEIR own sudo only on a genuine privilege error —
+            # exactly like the agent's _run_as_user (no unsafe blind retry). This
+            # aligns SSH hosts with agent hosts: an operator is constrained by
+            # their per-user account + sudo, not handed the SSH login user (root).
+            result = _run(_as_admin_remote(ssh_user, admin, body.cmd))
+            combined = (result.stderr or "") + "\n" + (result.stdout or "")
+            if result.returncode not in (0, 126) and _SSH_PRIV_ERR.search(combined):
+                if body.become_password:
+                    result = _run(_as_admin_remote(ssh_user, admin, body.cmd, elevate=True, password=True),
+                                  stdin=body.become_password + "\n")
+                else:
+                    result = _run(_as_admin_remote(ssh_user, admin, body.cmd, elevate=True))
+        else:
+            # Tokenless / internal (background reads, e.g. user-list sync, the
+            # fleet-health/query probes) run as the SSH login user — the SSH
+            # analogue of the agent's tokenless=root path.
+            result = _run(body.cmd)
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="Command timed out")
 
@@ -669,7 +814,7 @@ def exec_remote(name: str, body: ExecRequest, request: Request):
         "cmd": body.cmd,
         "stdout": result.stdout,
         "stderr": result.stderr,
-        "code": result.returncode
+        "code": result.returncode,
     }
 
 
@@ -723,18 +868,346 @@ def _resolve_admin_username(request: Request):
     return admin["username"] if admin else None
 
 
+def _reject_auditor(request: Request):
+    """Read-only 'auditor' accounts must never run a command or open a shell on
+    an SSH host. The agent dispatch path already blocks this in backend/app.py;
+    the SSH exec/terminal path resolves identity but never checked the role, so
+    a token-bearing auditor could execute here. Enforce it controller-side too
+    (defence-in-depth alongside the BFF's require_operator gate)."""
+    token = request.headers.get("X-Sysible-Admin-Token")
+    if not token:
+        return
+    from backend.db import resolve_admin_token
+    admin = resolve_admin_token(token)
+    if admin and admin.get("role") == "auditor":
+        raise HTTPException(status_code=403, detail="Auditor accounts are read-only.")
+
+
+# =========================================================
+# AGENT-HOSTED PTY BRIDGE (terminals with NO inbound SSH)
+#
+# The agent only ever connects OUTBOUND to the controller, so on a fleet where
+# the controller can't reach the host (NAT / firewall / non-routable IP) an SSH
+# terminal — which needs controller→host connectivity — can't work at all.
+# Instead the agent, already running on the host, opens the shell LOCALLY on a
+# PTY and streams it to the controller over its existing outbound channel:
+#   - the agent POSTs shell output up to  /agents/{id}/pty/{sid}/output
+#   - the agent long-polls input/resize/close from /agents/{id}/pty/{sid}/io
+# The controller buffers both directions here so the browser terminal endpoints
+# (read/write/resize/close) drive it exactly like an SSH session.
+# =========================================================
+_PTY_LOCK = threading.Lock()
+_PTY = {}   # session_id -> {host_id, out[], inq[], cols, rows, closed, ended, last}
+
+# Cap the per-session output buffer. The agent streams shell output faster than
+# a browser drains it (or a compromised agent floods it deliberately), and the
+# buffer would otherwise grow without bound in controller RAM. Keep the most
+# recent bytes (terminal scrollback semantics) and drop the oldest once over the
+# cap, so a flood can't OOM the controller. Env-tunable.
+try:
+    _PTY_OUT_MAX = int(os.getenv("SYSIBLE_MAX_PTY_BUFFER_BYTES", str(4 * 1024 * 1024)))
+except ValueError:
+    _PTY_OUT_MAX = 4 * 1024 * 1024
+
+
+def pty_create(host_id, cols=80, rows=24, owner=None):
+    sid = uuid.uuid4().hex
+    with _PTY_LOCK:
+        _PTY[sid] = {"host_id": host_id, "out": [], "inq": [], "cols": cols, "rows": rows,
+                     "closed": False, "ended": False, "last": time.time(), "owner": owner}
+    return sid
+
+
+def _terminal_owner(session_id):
+    """The admin username that opened this terminal session (PTY or SSH), or
+    None for a legacy/unowned session."""
+    with _PTY_LOCK:
+        s = _PTY.get(session_id)
+        if s is not None:
+            return s.get("owner")
+    with _TERMINAL_SESSIONS_LOCK:
+        s = _TERMINAL_SESSIONS.get(session_id)
+        return s.get("owner") if s else None
+
+
+def _check_terminal_owner(session_id, request):
+    """Bind a live terminal to the operator who opened it. session_ids never
+    leave the BFF process today (uuid4, server-side), so this is defence-in-depth
+    against a future path that routes terminal I/O with a user token or a leaked
+    id: if a token is presented it MUST match the session's owner and must not be
+    an auditor. A tokenless call (the current BFF pump, gated by the controller
+    API key) is allowed — the API key is the trust boundary there."""
+    owner = _terminal_owner(session_id)
+    if owner is None:
+        return
+    token = request.headers.get("X-Sysible-Admin-Token")
+    if not token:
+        return
+    from backend.db import resolve_admin_token
+    admin = resolve_admin_token(token)
+    if not admin or admin.get("role") == "auditor" or admin.get("username") != owner:
+        raise HTTPException(status_code=403,
+                            detail="This terminal session belongs to another operator.")
+
+
+def pty_is_session(session_id):
+    with _PTY_LOCK:
+        return session_id in _PTY
+
+
+def pty_push_output(session_id, host_id, data, ended=False):
+    """Agent -> controller: append shell output. Returns True if the browser has
+    closed the session, which tells the agent to stop and kill the shell."""
+    with _PTY_LOCK:
+        s = _PTY.get(session_id)
+        if not s or s["host_id"] != host_id:
+            return True
+        s["last"] = time.time()
+        if data:
+            s["out"].append(data)
+            # Bound the buffer: if it has outgrown the cap (browser not draining,
+            # or a flood), coalesce and keep only the most recent bytes.
+            total = sum(len(c) for c in s["out"])
+            if total > _PTY_OUT_MAX:
+                s["out"] = ["".join(s["out"])[-_PTY_OUT_MAX:]]
+        if ended:
+            s["ended"] = True
+        return s["closed"]
+
+
+def pty_read_output(session_id):
+    """Browser read: drain buffered output; closed once the shell ended or the
+    session was closed. Returns None if this isn't a PTY session."""
+    with _PTY_LOCK:
+        s = _PTY.get(session_id)
+        if not s:
+            return None
+        s["last"] = time.time()
+        data = "".join(s["out"])
+        s["out"] = []
+        return {"data": data, "closed": s["closed"] or s["ended"]}
+
+
+def pty_queue_input(session_id, msg):
+    """Browser -> controller: queue a keystroke/resize/close for the agent."""
+    with _PTY_LOCK:
+        s = _PTY.get(session_id)
+        if not s:
+            return False
+        s["last"] = time.time()
+        if msg.get("t") == "close":
+            s["closed"] = True
+        else:
+            s["inq"].append(msg)
+        return True
+
+
+def pty_take_input(session_id, host_id, wait=25.0):
+    """Agent long-poll: return queued input/resize msgs (and the closed flag),
+    waiting briefly for something to arrive so typing stays responsive."""
+    import time as _t
+    deadline = _t.time() + wait
+    while True:
+        with _PTY_LOCK:
+            s = _PTY.get(session_id)
+            if not s or s["host_id"] != host_id:
+                return [], True
+            if s["inq"] or s["closed"]:
+                msgs = s["inq"]
+                s["inq"] = []
+                return msgs, s["closed"]
+        if _t.time() >= deadline:
+            return [], False
+        _t.sleep(0.08)
+
+
+def _reap_pty_sessions():
+    now = time.time()
+    with _PTY_LOCK:
+        for sid in list(_PTY):
+            s = _PTY[sid]
+            if s["ended"] or (now - s["last"]) > TERMINAL_IDLE_TIMEOUT_S:
+                s["closed"] = True   # signal the agent to stop
+                if s["ended"] and (now - s["last"]) > 30:
+                    _PTY.pop(sid, None)
+
+
+# =========================================================
+# EPHEMERAL, PER-SESSION SSH ACCESS (agent-provisioned terminals)
+#
+# For an AGENT host we don't rely on a standing controller key in the host's
+# authorized_keys. Instead, each terminal open asks the agent (already root,
+# already authenticated over its task channel) to install a throwaway key just
+# for this session, we connect with it, and we ask the agent to revoke it when
+# the session closes. This makes the terminal work as long as the agent is
+# online — no dependency on a persistent SSH enrollment — and leaves no standing
+# root credential on the host. A crash-safe backstop: each key line carries an
+# expiry in its comment, and every grant prunes ephemeral lines whose expiry has
+# passed, so a controller that dies mid-session can't leave a usable key behind.
+# =========================================================
+_EPHEMERAL_LINE_TTL = 6 * 3600     # seconds before an unrevoked key line is pruned
+_EPHEMERAL_GRANT_TIMEOUT = 15.0    # seconds to wait for the agent to install the key
+
+
+def _resolve_agent_target(name: str):
+    """If `name` is an enrolled agent host (matched by host_id, else hostname),
+    return (host_id, ip, hostname); else None. Agent hosts get just-in-time
+    terminal access through the agent rather than a standing SSH key."""
+    try:
+        from backend.db import list_agents
+        agents = list_agents()
+    except Exception:
+        return None
+    by_name = None
+    for a in agents:
+        if a.get("host_id") == name and a.get("ip"):
+            return a.get("host_id"), a.get("ip"), a.get("hostname")
+        if by_name is None and a.get("hostname") == name and a.get("ip"):
+            by_name = (a.get("host_id"), a.get("ip"), a.get("hostname"))
+    return by_name
+
+
+def _generate_ephemeral_keypair():
+    """Throwaway ed25519 keypair (the controller's own key type, which hosts
+    already accept). Returns (paramiko_pkey, pub_body) where pub_body is
+    'ssh-ed25519 AAAA…' with no comment. The private key is written to a 0700
+    temp dir only long enough for paramiko to load it, then removed — it never
+    persists and lives only in the session's memory afterwards."""
+    import paramiko
+    import tempfile
+    import shutil
+    d = tempfile.mkdtemp(prefix="sysible-eph-")
+    try:
+        os.chmod(d, 0o700)
+        kp = os.path.join(d, "k")
+        subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", kp],
+                       check=True, timeout=30, capture_output=True)
+        pkey = paramiko.Ed25519Key.from_private_key_file(kp)
+        with open(kp + ".pub") as f:
+            parts = f.read().split()
+        return pkey, parts[0] + " " + parts[1]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def _ephemeral_grant_command(user: str, pub_line: str) -> str:
+    """Root sh one-liner that installs this session's key into <user>'s
+    authorized_keys — so the controller logs in AS that operator (not root), and
+    a host with root SSH disabled is never in the way. The agent runs as root, so
+    it can write into any user's ~/.ssh; it fixes ownership, perms, and (on
+    SELinux hosts) the file context so sshd's StrictModes accepts the file.
+
+    Prunes expired sysible-ephemeral entries first (comment ends -<expiry-epoch>),
+    so a controller that died mid-session leaves nothing usable. Reports
+    SYSIBLE_GRANT_NOUSER if the account doesn't exist on the host, or
+    SYSIBLE_GRANT_OK once the key is verified present."""
+    parts = pub_line.split()
+    b64 = parts[2] if len(parts) > 2 else pub_line
+    qu = shlex.quote(user)
+    q = shlex.quote(pub_line)
+    qb = shlex.quote(b64)
+    awk = ("awk -v now=\"$now\" '/sysible-ephemeral-/"
+           "{n=split($NF,a,\"-\");e=a[n];if(e ~ /^[0-9]+$/ && e+0<now)next}{print}'")
+    return "\n".join([
+        f'U={qu}',
+        'h=$(getent passwd "$U" | cut -d: -f6)',
+        '[ -n "$h" ] || { echo SYSIBLE_GRANT_NOUSER; exit 0; }',
+        'D="$h/.ssh"; K="$D/authorized_keys"',
+        'mkdir -p "$D"; touch "$K"',
+        'now=$(date +%s)',
+        'tmp=$(mktemp "$D/.ak.XXXXXX") || exit 1',
+        f'{awk} "$K" > "$tmp"',
+        'mv "$tmp" "$K"',
+        f'printf "%s\\n" {q} >> "$K"',
+        # Own it by the user (the agent is root, so fresh files are root-owned;
+        # sshd StrictModes would then reject them) and restore the SELinux label.
+        'g=$(id -gn "$U" 2>/dev/null || echo "$U")',
+        'chown "$U":"$g" "$D" "$K" 2>/dev/null || chown "$U" "$D" "$K" 2>/dev/null || true',
+        'chmod 700 "$D"; chmod 600 "$K"',
+        'command -v restorecon >/dev/null 2>&1 && restorecon -R "$D" 2>/dev/null || true',
+        # Confirm the key actually landed, so SYSIBLE_GRANT_OK is proof it's there.
+        f'grep -qF {qb} "$K" && echo SYSIBLE_GRANT_OK || echo SYSIBLE_GRANT_FAIL',
+    ])
+
+
+def _ephemeral_revoke_command(user: str, tag: str) -> str:
+    """Root sh one-liner: delete this session's key line from <user>'s
+    authorized_keys (tag is hex-only, safe in a sed address)."""
+    qu = shlex.quote(user)
+    return ("\n".join([
+        f'U={qu}',
+        'h=$(getent passwd "$U" | cut -d: -f6)',
+        f'[ -n "$h" ] && K="$h/.ssh/authorized_keys" && [ -f "$K" ] && sed -i "/{tag}/d" "$K"',
+        'echo SYSIBLE_REVOKE_OK',
+    ]))
+
+
+def _run_agent_task_sync(host_id, command, kind, timeout):
+    """Queue a root command on the agent and block (bounded) until it reports
+    back. Returns {"status", "stdout", "stderr"}; status is 'done' on success,
+    'timeout' if the agent didn't answer in time (offline / slow poll)."""
+    from backend.db import queue_task, get_task_result
+    tid = queue_task(host_id, command, kind=kind)   # run_as=None -> runs as the root agent
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        r = get_task_result(tid)
+        if r and r.get("status") in ("done", "timed_out"):
+            stdout = stderr = ""
+            raw = r.get("result")
+            if raw:
+                try:
+                    d = json.loads(raw)
+                    if isinstance(d, dict):
+                        stdout = d.get("stdout") or ""
+                        stderr = d.get("stderr") or ""
+                    else:
+                        stdout = str(raw)
+                except (ValueError, TypeError):
+                    stdout = raw
+            return {"status": r["status"], "stdout": stdout, "stderr": stderr}
+        time.sleep(0.25)
+    return {"status": "timeout", "stdout": "", "stderr": ""}
+
+
+def _queue_ephemeral_revoke(revoke):
+    """Best-effort: queue the revoke of a session's ephemeral key. If the agent
+    is offline the task waits; the key's embedded expiry is the backstop."""
+    if not revoke:
+        return
+    try:
+        from backend.db import queue_task
+        queue_task(revoke["host_id"],
+                   _ephemeral_revoke_command(revoke.get("user", "root"), revoke["tag"]),
+                   kind="ssh_revoke")
+    except Exception:
+        pass
+
+
 @router.post("/hosts/{name}/terminal/open")
 def open_terminal(name: str, request: Request):
-    hosts = load_hosts()
-
-    if name not in hosts:
-        raise HTTPException(status_code=404, detail="host not found")
-
-    # Each open mints a brand-new, independent session - never reuse an
-    # existing one - so a host can have several shells open at once.
-    # Opportunistically reap sessions abandoned by a dead GUI first.
+    # An interactive shell is never a read-only action — auditors are blocked
+    # controller-side (the BFF websocket also rejects them), defence-in-depth.
+    _reject_auditor(request)
+    # Each open mints a brand-new, independent session so a host can have
+    # several shells at once; reap sessions abandoned by a dead GUI first.
     _reap_idle_sessions()
 
+    # AGENT host → the agent hosts the shell locally and streams it over its own
+    # outbound channel (no inbound SSH to the host at all). Create the bridge
+    # session, ask the agent to attach, and return immediately — output starts
+    # flowing as soon as the agent's next poll picks up the pty_open task.
+    if _resolve_agent_target(name):
+        host_id = _resolve_agent_target(name)[0]
+        from backend.db import queue_task
+        # Run the shell as the operator (their token identifies them), not root;
+        # the agent falls back to a root shell only if that user doesn't exist.
+        who = _resolve_admin_username(request) or ""
+        session_id = pty_create(host_id, owner=(who or None))
+        queue_task(host_id, json.dumps({"session_id": session_id, "user": who,
+                                        "cols": 80, "rows": 24}), kind="pty_open")
+        return {"host": name, "session_id": session_id, "opened": True, "via": "agent"}
+
+    # Non-agent (pure SSH / Connect) host: the standing controller-key SSH path.
     try:
         import paramiko
     except ImportError:
@@ -742,32 +1215,28 @@ def open_terminal(name: str, request: Request):
             status_code=501,
             detail="paramiko is not installed - interactive terminal is unavailable"
         )
-
+    hosts = load_hosts()
+    if name not in hosts:
+        raise HTTPException(status_code=404, detail="host not found")
     host = hosts[name]
-    key_path = host.get("key_path") or str(CONTROLLER_KEY_PATH)
+    ip = host["ip"]
     ssh_user = host.get("user", "root")
+    connect_kwargs = {"key_filename": host.get("key_path") or str(CONTROLLER_KEY_PATH)}
 
-    # Run the terminal as the controller admin (their token identifies them),
-    # so it behaves like dispatched commands: as <admin> on the host, with
-    # that user's own sudo. Falls back to the SSH login shell when no admin
-    # identity is presented or the admin is already the SSH user.
+    # Run the terminal as the controller admin (their token identifies them), so
+    # it behaves like dispatched commands: as <admin> on the host with that
+    # user's own sudo. Falls back to the SSH login shell when no admin identity
+    # is presented or the admin is already the SSH user.
     admin_user = _resolve_admin_username(request)
     become = None
     if admin_user and admin_user != ssh_user:
         become = _become_user_command(ssh_user, admin_user)
 
     client = _new_ssh_client()
-
+    session_id = uuid.uuid4().hex
     try:
-        client.connect(
-            host["ip"],
-            username=ssh_user,
-            key_filename=key_path,
-            timeout=10,
-        )
+        client.connect(ip, username=ssh_user, timeout=10, **connect_kwargs)
         if become:
-            # Start the session as the admin user via an interactive PTY exec
-            # rather than the SSH user's default shell.
             channel = client.get_transport().open_session()
             channel.get_pty(term="xterm", width=120, height=32)
             channel.exec_command(become)
@@ -778,7 +1247,7 @@ def open_terminal(name: str, request: Request):
         client.close()
         raise HTTPException(
             status_code=409,
-            detail=(f"Host key for {host['ip']} does not match the key pinned on first "
+            detail=(f"Host key for {ip} does not match the key pinned on first "
                     f"contact - possible man-in-the-middle, or the host was rebuilt. "
                     f"If you trust the change, remove its entry from {KNOWN_HOSTS_PATH} "
                     f"and reconnect. ({e})"))
@@ -792,7 +1261,6 @@ def open_terminal(name: str, request: Request):
         client.close()
         raise HTTPException(status_code=400, detail=f"SSH error: {e}")
 
-    session_id = uuid.uuid4().hex
     with _TERMINAL_SESSIONS_LOCK:
         _TERMINAL_SESSIONS[session_id] = {
             "client": client,
@@ -800,13 +1268,18 @@ def open_terminal(name: str, request: Request):
             "lock": threading.Lock(),
             "name": name,
             "last_activity": time.time(),
+            "owner": admin_user,
         }
 
     return {"host": name, "session_id": session_id, "opened": True}
 
 
 @router.post("/terminal/{session_id}/write")
-def write_terminal(session_id: str, body: TerminalWriteRequest):
+def write_terminal(session_id: str, body: TerminalWriteRequest, request: Request):
+    _check_terminal_owner(session_id, request)
+    if pty_is_session(session_id):
+        pty_queue_input(session_id, {"t": "i", "d": body.data})
+        return {"session_id": session_id, "written": len(body.data)}
     session = _get_terminal_session(session_id)
 
     if session is None:
@@ -826,7 +1299,21 @@ def write_terminal(session_id: str, body: TerminalWriteRequest):
 
 
 @router.get("/terminal/{session_id}/read")
-def read_terminal(session_id: str):
+def read_terminal(session_id: str, request: Request):
+    _check_terminal_owner(session_id, request)
+    if pty_is_session(session_id):
+        # Agent-hosted PTY: drain the controller-side output buffer, with a short
+        # long-poll so an idle shell doesn't spin the browser's read loop.
+        import time as _t
+        deadline = _t.time() + TERMINAL_LONG_POLL_S
+        while True:
+            r = pty_read_output(session_id)
+            if r is None:
+                return {"session_id": session_id, "data": "", "closed": True}
+            if r["data"] or r["closed"] or _t.time() >= deadline:
+                return {"session_id": session_id, "data": r["data"], "closed": r["closed"]}
+            _t.sleep(0.08)
+
     session = _get_terminal_session(session_id)
 
     if session is None:
@@ -891,7 +1378,12 @@ def read_terminal(session_id: str):
 
 
 @router.post("/terminal/{session_id}/close")
-def close_terminal(session_id: str):
+def close_terminal(session_id: str, request: Request):
+    _check_terminal_owner(session_id, request)
+    if pty_is_session(session_id):
+        pty_queue_input(session_id, {"t": "close"})   # agent kills the shell on its next poll
+        return {"session_id": session_id, "closed": True}
+
     with _TERMINAL_SESSIONS_LOCK:
         session = _TERMINAL_SESSIONS.pop(session_id, None)
 
@@ -902,7 +1394,14 @@ def close_terminal(session_id: str):
 
 
 @router.post("/terminal/{session_id}/resize")
-def resize_terminal(session_id: str, body: TerminalResizeRequest):
+def resize_terminal(session_id: str, body: TerminalResizeRequest, request: Request):
+    _check_terminal_owner(session_id, request)
+    cols = max(8, min(500, body.cols))
+    rows = max(4, min(300, body.rows))
+    if pty_is_session(session_id):
+        pty_queue_input(session_id, {"t": "r", "cols": cols, "rows": rows})
+        return {"session_id": session_id, "cols": cols, "rows": rows}
+
     session = _get_terminal_session(session_id)
 
     if session is None:
@@ -912,8 +1411,6 @@ def resize_terminal(session_id: str, body: TerminalResizeRequest):
         )
 
     _touch_session(session)
-    cols = max(8, min(500, body.cols))
-    rows = max(4, min(300, body.rows))
     with session["lock"]:
         try:
             session["channel"].resize_pty(width=cols, height=rows)
@@ -995,7 +1492,10 @@ def _resolve_remote_upload_path(sftp, remote_path: str, filename: str) -> str:
         return remote_path
 
     if stat_module.S_ISDIR(st.st_mode):
-        return posixpath.join(remote_path.rstrip("/") or "/", filename)
+        # Basename the client-supplied filename so a crafted "../" can't place the
+        # file outside the chosen directory on the remote host.
+        safe = posixpath.basename((filename or "").strip()) or "uploaded_file"
+        return posixpath.join(remote_path.rstrip("/") or "/", safe)
 
     return remote_path
 
@@ -1003,6 +1503,7 @@ def _resolve_remote_upload_path(sftp, remote_path: str, filename: str) -> str:
 @router.post("/hosts/{name}/files/upload")
 async def upload_file(
     name: str,
+    request: Request,
     remote_path: str = Form(...),
     file: UploadFile = File(...),
 ):
@@ -1026,11 +1527,18 @@ async def upload_file(
         sftp.close()
         client.close()
 
+    # Attribute the transfer in the activity feed (identity from the token) — an
+    # SFTP write as the SSH login user is a privileged, superuser-only action.
+    admin = _resolve_admin_username(request)
+    if admin:
+        from backend.db import log_activity
+        log_activity(admin, name, f"Uploaded file to {full_path} (SFTP)")
+
     return {"host": name, "uploaded": True, "remote_path": full_path, "size": len(data)}
 
 
 @router.get("/hosts/{name}/files/download")
-def download_file(name: str, path: str):
+def download_file(name: str, path: str, request: Request):
     """Download one file from an SSH-enrolled host over SFTP. Returns
     the raw bytes with a Content-Disposition header, same convention
     as the agent-bundle and portal-file-pool downloads in backend/app.py."""
@@ -1055,6 +1563,12 @@ def download_file(name: str, path: str):
     finally:
         sftp.close()
         client.close()
+
+    # Attribute the read in the activity feed (superuser-only SFTP as root).
+    admin = _resolve_admin_username(request)
+    if admin:
+        from backend.db import log_activity
+        log_activity(admin, name, f"Downloaded file {path} (SFTP)")
 
     filename = posixpath.basename(path.rstrip("/")) or "download"
 

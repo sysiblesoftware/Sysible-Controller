@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
 import HostTree from "../components/HostTree.jsx";
 import ResultsPane from "../components/ResultsPane.jsx";
@@ -7,9 +7,23 @@ import ResultsPane from "../components/ResultsPane.jsx";
 // service browser: list the running (or installed) services on a selected host,
 // click one to select it, then Restart / Start / Stop. Everything runs across
 // the checked target hosts.
-export default function QuickSystemActionsPage({ hosts = [], onRefreshHosts }) {
-  const [targets, setTargets] = useState([]);
-  const [name, setName] = useState("");
+//
+// `prefill` ({name?, host?}) lets a "Fix in Quick System Actions →" deep-link
+// (e.g. a failed unit on the host posture page) arrive with the Service field
+// and target host already filled in.
+export default function QuickSystemActionsPage({ hosts = [], onRefreshHosts, prefill }) {
+  const [targets, setTargets] = useState(prefill?.host ? [prefill.host] : []);
+  const [name, setName] = useState(prefill?.name || "");
+  // Re-apply if a fresh deep-link arrives while the page is already open.
+  const lastPrefill = useRef(null);
+  useEffect(() => {
+    if (!prefill) return;
+    const sig = `${prefill.host || ""}|${prefill.name || ""}`;
+    if (sig === lastPrefill.current) return;
+    lastPrefill.current = sig;
+    if (prefill.name) setName(prefill.name);
+    if (prefill.host) setTargets((t) => (t.includes(prefill.host) ? t : [...t, prefill.host]));
+  }, [prefill]);
   const [services, setServices] = useState([]);
   const [listHost, setListHost] = useState("");
   const [busy, setBusy] = useState("");
@@ -71,7 +85,16 @@ export default function QuickSystemActionsPage({ hosts = [], onRefreshHosts }) {
 
       {!expanded && (
       <div className="tool-actions-col"><div className="tool-actions-scroll">
-        <fieldset className="tool-group-box" style={{ marginTop: 0 }}><legend>Service (by name)</legend>
+        <fieldset className="tool-group-box" style={{ marginTop: 0 }}><legend>Reachability</legend>
+          <div className="faint" style={{ fontSize: 12, marginBottom: 8 }}>
+            Confirm the checked hosts are reachable and their agents are answering — a green OK per host means it responded.
+          </div>
+          <div className="group-buttons">
+            <button className="btn sm" disabled={busy} onClick={() => run("qsa_ping", {}, "Ping (reachability)")}>Ping</button>
+          </div>
+        </fieldset>
+
+        <fieldset className="tool-group-box"><legend>Service (by name)</legend>
           <label className="field" style={{ marginTop: 0 }}>
             <span>Service name (also filters the list below)</span>
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. nginx, docker, postgresql" />
@@ -82,19 +105,31 @@ export default function QuickSystemActionsPage({ hosts = [], onRefreshHosts }) {
             <button className="btn sm" disabled={busy === "installed"} onClick={() => listServices(false)}>
               {busy === "installed" ? <span className="spin" /> : "List Installed Services"}</button>
           </div>
-          <div className="section-title" style={{ marginTop: 10 }}>
-            Services {listHost ? `(on ${listHost})` : ""} — click to select
-          </div>
-          <div className="card" style={{ maxHeight: 200, overflowY: "auto", padding: 6 }}>
-            {filtered.length === 0
-              ? <div className="faint" style={{ padding: 8 }}>List a host's services to populate.</div>
-              : filtered.map((s) => (
-                  <div key={s} className={"host-row" + (s === name ? " active" : "")}
-                       style={{ cursor: "pointer", paddingLeft: 6,
-                                background: s === name ? "var(--panel-2)" : undefined }}
-                       onClick={() => setName(s)}>{s}</div>
-                ))}
-          </div>
+          {/* The service list is an OPTIONAL browser — you can act on a typed
+              name without it. Only show the (potentially empty) list once the
+              operator has actually listed a host's services, so an empty box
+              doesn't read like a required step. */}
+          {services.length === 0 ? (
+            <div className="faint" style={{ fontSize: 12, marginTop: 8 }}>
+              Type a service name above and act — or use “List … Services” to browse and pick one.
+            </div>
+          ) : (
+            <>
+              <div className="section-title" style={{ marginTop: 10 }}>
+                Services {listHost ? `(on ${listHost})` : ""} — click to select
+              </div>
+              <div className="card" style={{ maxHeight: 200, overflowY: "auto", padding: 6 }}>
+                {filtered.length === 0
+                  ? <div className="faint" style={{ padding: 8 }}>No services match “{name}”.</div>
+                  : filtered.map((s) => (
+                      <div key={s} className={"host-row" + (s === name ? " active" : "")}
+                           style={{ cursor: "pointer", paddingLeft: 6,
+                                    background: s === name ? "var(--panel-2)" : undefined }}
+                           onClick={() => setName(s)}>{s}</div>
+                    ))}
+              </div>
+            </>
+          )}
           <div className="group-buttons" style={{ marginTop: 10 }}>
             <button className="btn sm" disabled={busy || !name} onClick={() => svc("svc_restart", `Restart ${name}`)}>Restart</button>
             <button className="btn sm" disabled={busy || !name} onClick={() => svc("svc_start", `Start ${name}`)}>Start</button>

@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import socket
@@ -10,6 +11,14 @@ from pathlib import Path
 # =========================================================
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "sysible.db"
+
+# How many activity-log rows to retain (0 = never trim; let a SIEM own
+# retention). Default ~months of history rather than the old 5000-row cap that
+# silently dropped recent activity on a busy fleet.
+try:
+    _ACTIVITY_LOG_MAX_ROWS = int(os.getenv("SYSIBLE_ACTIVITY_LOG_MAX_ROWS", "500000"))
+except ValueError:
+    _ACTIVITY_LOG_MAX_ROWS = 500000
 
 
 def _connect():
@@ -45,7 +54,30 @@ def _connect():
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
+    # The DB holds administrator password hashes, agent bearer secrets, and live
+    # admin tokens. SQLite creates the file under the process umask (0644 under
+    # systemd's default), leaving it world-readable so any local account could
+    # copy it and impersonate agents/admins. Force owner-only on the DB and its
+    # WAL/SHM sidecars. Once per process (not on the per-connection hot path that
+    # heartbeats hammer): the mode persists on disk, so a single pass suffices.
+    global _db_perms_done
+    if not _db_perms_done:
+        _restrict_db_permissions()
+        _db_perms_done = True
     return conn
+
+
+_db_perms_done = False
+
+
+def _restrict_db_permissions():
+    for suffix in ("", "-wal", "-shm"):
+        p = Path(str(DB_PATH) + suffix)
+        try:
+            if p.exists():
+                os.chmod(p, 0o600)
+        except OSError:
+            pass
 
 
 # =========================================================
@@ -114,6 +146,15 @@ def init_db():
     # older agents simply don't report it.
     try:
         cur.execute("ALTER TABLE agents ADD COLUMN agent_version TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+    # Migration: agent secret revocation. 0 = active; 1 = revoked, so every
+    # authenticated agent request (heartbeat/poll/result) is rejected until an
+    # admin re-enrolls the host (which mints a fresh secret and clears this).
+    # The hard "lock this host out" control — see revoke_agent / verify_agent.
+    try:
+        cur.execute("ALTER TABLE agents ADD COLUMN revoked INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
         pass
 
@@ -386,14 +427,14 @@ def init_db():
 
     # -----------------------------------------------------
     # Administrators (multiple rows - replaces admin_credentials)
-    # Gates the desktop GUI itself - separate from portal_credentials
+    # Gates the web console itself - separate from portal_credentials
     # above (that's for a remote host operator in a browser) and from
-    # the admin API key in backend/auth.py (that's the GUI *process*
+    # the admin API key in backend/auth.py (that's the console *process*
     # proving it's a trusted installation, not a human typing a
     # password).
     #
     # must_change_password forces the forced-password-change flow
-    # (client/main.py) on next login - set for the auto-seeded default
+    # on next login - set for the auto-seeded default
     # admin/admin account, and for any admin a fellow admin re-adds
     # with a temporary password, but NOT for an account that already
     # picked its own password.
@@ -591,7 +632,7 @@ def create_or_update_agent(
     agent_secret=None,
     ip=None
 ):
-    conn = _connect()
+  with contextlib.closing(_connect()) as conn:  # close even if the write raises
     cur = conn.cursor()
 
     cur.execute("""
@@ -613,7 +654,10 @@ def create_or_update_agent(
         status=excluded.status,
         last_seen=excluded.last_seen,
         agent_secret=excluded.agent_secret,
-        ip=excluded.ip
+        ip=excluded.ip,
+        -- A genuine re-enroll (valid single-use token, admin-authorized) clears
+        -- a prior revocation: the host is being deliberately let back in.
+        revoked=0
     """,
     (
         host_id,
@@ -627,11 +671,15 @@ def create_or_update_agent(
     ))
 
     conn.commit()
-    conn.close()
 
 
 def update_agent_heartbeat(host_id, ip=None, hostname=None, agent_version=None):
-    conn = _connect()
+  # closing(): guarantee the connection is released even if the UPDATE raises
+  # (e.g. OperationalError "database is locked"). A leaked connection holds its
+  # WAL read/write reservation until GC, which blocks checkpoint truncation and
+  # the single writer — compounding the very lock contention on the once-per-
+  # heartbeat hot path. Applied to the highest-frequency DB calls.
+  with contextlib.closing(_connect()) as conn:
     cur = conn.cursor()
 
     # ip/hostname are optional on heartbeat (older agent builds won't send
@@ -670,7 +718,6 @@ def update_agent_heartbeat(host_id, ip=None, hostname=None, agent_version=None):
     ))
 
     conn.commit()
-    conn.close()
 
 
 def list_agents():
@@ -680,7 +727,7 @@ def list_agents():
 
     cur.execute("""
     SELECT host_id, hostname, platform, kernel, status, last_seen, environment, ip,
-           requires_sudo_password, agent_version
+           requires_sudo_password, agent_version, revoked
     FROM agents
     ORDER BY hostname
     """)
@@ -745,37 +792,37 @@ def insert_metric_sample(host_id, ts, load1, cores, mem, disk,
     so the write rate is low enough not to add meaningful heartbeat contention.
     The trailing args are the richer scalars added later (CPU%, load 5/15m,
     swap%, network/disk throughput, process count); older agents omit them."""
-    conn = _connect()
-    cur = conn.cursor()
-    # INSERT OR REPLACE: the (host_id, ts) PK makes a duplicate timestamp
-    # (e.g. a retried heartbeat) idempotent rather than an error.
-    cur.execute(
-        "INSERT OR REPLACE INTO metric_samples "
-        "(host_id, ts, load1, cores, mem, disk, load5, load15, cpu, swap, "
-        " net_rx, net_tx, io_r, io_w, procs) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (host_id, float(ts), load1, cores, mem, disk, load5, load15, cpu, swap,
-         net_rx, net_tx, io_r, io_w, procs),
-    )
-    cur.execute(
-        "DELETE FROM metric_samples WHERE ts < ?",
-        (float(ts) - METRIC_RETENTION_S,),
-    )
-    conn.commit()
-    conn.close()
+    # closing(): release the connection even if the write raises, so a leaked
+    # WAL reservation can't compound lock contention on the heartbeat path.
+    with contextlib.closing(_connect()) as conn:
+        cur = conn.cursor()
+        # INSERT OR REPLACE: the (host_id, ts) PK makes a duplicate timestamp
+        # (e.g. a retried heartbeat) idempotent rather than an error.
+        cur.execute(
+            "INSERT OR REPLACE INTO metric_samples "
+            "(host_id, ts, load1, cores, mem, disk, load5, load15, cpu, swap, "
+            " net_rx, net_tx, io_r, io_w, procs) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (host_id, float(ts), load1, cores, mem, disk, load5, load15, cpu, swap,
+             net_rx, net_tx, io_r, io_w, procs),
+        )
+        cur.execute(
+            "DELETE FROM metric_samples WHERE ts < ?",
+            (float(ts) - METRIC_RETENTION_S,),
+        )
+        conn.commit()
 
 
 def upsert_host_snapshot(host_id, ts, data_json):
     """Store the latest rich detail snapshot (JSON string) for a host,
     overwriting any previous one. One row per host - never grows with time."""
-    conn = _connect()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT OR REPLACE INTO host_snapshot (host_id, ts, data) VALUES (?, ?, ?)",
-        (host_id, float(ts), data_json),
-    )
-    conn.commit()
-    conn.close()
+    with contextlib.closing(_connect()) as conn:  # close even if the write raises
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO host_snapshot (host_id, ts, data) VALUES (?, ?, ?)",
+            (host_id, float(ts), data_json),
+        )
+        conn.commit()
 
 
 def get_host_snapshot(host_id):
@@ -853,6 +900,28 @@ def get_agent_secret(host_id):
     conn.close()
 
     return row[0] if row else None
+
+
+def revoke_agent(host_id):
+    """Revoke a host's agent secret — the hard lock-out. Every authenticated
+    request (verify_agent) then fails until the host is re-enrolled with a fresh
+    single-use token. Returns True if a row was affected."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("UPDATE agents SET revoked=1 WHERE host_id=?", (host_id,))
+    conn.commit()
+    changed = cur.rowcount
+    conn.close()
+    return changed > 0
+
+
+def is_agent_revoked(host_id):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT revoked FROM agents WHERE host_id=?", (host_id,))
+    row = cur.fetchone()
+    conn.close()
+    return bool(row and row[0])
 
 
 def agent_exists(host_id):
@@ -976,6 +1045,10 @@ def delete_environment(name):
 # 7 days - matches the user-facing "...unless it's been 7 days or
 # more" requirement for re-using a token tied to the same host.
 ENROLL_TOKEN_REUSE_WINDOW = 7 * 24 * 60 * 60
+try:
+    ENROLL_TOKEN_VALID_DAYS = int(os.getenv("SYSIBLE_ENROLL_TOKEN_VALID_DAYS", "30"))
+except ValueError:
+    ENROLL_TOKEN_VALID_DAYS = 30
 
 
 def create_enroll_token(token):
@@ -984,8 +1057,11 @@ def create_enroll_token(token):
 
     created = time.time()
 
-    # One year - hard ceiling, not affected by reuse.
-    expires = created + (365 * 24 * 60 * 60)
+    # Validity ceiling for an UNUSED bundle token (once claimed, the bound-host
+    # reuse window in ENROLL_TOKEN_REUSE_WINDOW governs). Shortened from a year
+    # to 30 days by default: a leaked-but-unused agent bundle shouldn't be able
+    # to enroll a rogue host for that long. Tune with SYSIBLE_ENROLL_TOKEN_VALID_DAYS.
+    expires = created + (ENROLL_TOKEN_VALID_DAYS * 24 * 60 * 60)
 
     cur.execute("""
     INSERT INTO enroll_tokens (
@@ -1516,7 +1592,7 @@ def list_portal_sessions():
 
 
 # =========================================================
-# ADMINISTRATORS (multiple rows - gates the desktop GUI itself)
+# ADMINISTRATORS (multiple rows - gates the web console itself)
 # Replaces the old single-row admin_credentials table; see the
 # migration in init_db() above.
 # =========================================================
@@ -1593,7 +1669,15 @@ def create_admin_token(token, username, role, expiry):
 
 def resolve_admin_token(token):
     """Return {'username','role'} for a valid, unexpired token, else None.
-    Expired tokens are deleted as a side effect."""
+    Invalid/expired/stale tokens are deleted as a side effect.
+
+    Beyond the 12h expiry, the token is cross-checked against the LIVE account:
+    it's rejected (and deleted) if the administrator no longer exists or no
+    longer holds the role the token was minted with. Without this a removed
+    admin keeps full API access, and a demoted superuser keeps superuser
+    powers, until their token happens to expire — a revocation control silently
+    deferred up to 12h. (Password resets can't be caught this way since the
+    username/role are unchanged, so those call delete_admin_tokens_for_user.)"""
     if not token:
         return None
     conn = _connect()
@@ -1603,11 +1687,18 @@ def resolve_admin_token(token):
     row = cur.fetchone()
     result = None
     if row:
-        if (row["expiry"] or 0) >= time.time():
-            result = {"username": row["username"], "role": row["role"]}
-        else:
+        stale = (row["expiry"] or 0) < time.time()
+        if not stale:
+            cur.execute("SELECT role FROM administrators WHERE username=?", (row["username"],))
+            acct = cur.fetchone()
+            # Account gone, or role changed since the token was minted → stale.
+            if acct is None or (acct["role"] or "superuser") != (row["role"] or "superuser"):
+                stale = True
+        if stale:
             cur.execute("DELETE FROM admin_tokens WHERE token=?", (token,))
             conn.commit()
+        else:
+            result = {"username": row["username"], "role": row["role"]}
     conn.close()
     return result
 
@@ -1622,23 +1713,81 @@ def delete_admin_token(token):
     conn.close()
 
 
+def delete_admin_tokens_for_user(username):
+    """Revoke ALL live login tokens for one administrator — used when their
+    account is removed, their role changes, or their password is reset, so an
+    existing session can't outlive the change (up to the 12h token TTL)."""
+    if not username:
+        return
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM admin_tokens WHERE username=?", (username,))
+    conn.commit()
+    conn.close()
+
+
+# Redact secret-bearing arguments before a command string is persisted to the
+# audit log. The agent deliberately refuses to log command text because it can
+# carry passwords/tokens/keys passed as args; the controller stores it for
+# accountability, so scrub the well-known secret-carrying forms (value replaced
+# with ***) rather than keeping them in cleartext at rest. Conservative on
+# purpose — it targets known flags/patterns and leaves the rest of the command
+# readable so the audit trail stays useful.
+import re as _re
+
+_SECRET_PATTERNS = [
+    # --password=xxx / --token xxx / -p xxx  (long or short opts, = or space)
+    _re.compile(
+        r'(?i)(--?(?:password|passwd|pass|token|secret|api[-_]?key|apikey|auth[-_]?token|'
+        r'access[-_]?key|private[-_]?key|client[-_]?secret)[=\s]+)(\S+)'),
+    # KEY=value env-style assignments for the same sensitive names
+    _re.compile(
+        r'(?i)\b((?:password|passwd|token|secret|api[-_]?key|apikey|access[-_]?key|'
+        r'client[-_]?secret)\s*=\s*)(\S+)'),
+    # Authorization: Bearer xxx  /  Authorization: Basic xxx
+    _re.compile(r'(?i)(authorization:\s*(?:bearer|basic)\s+)(\S+)'),
+]
+
+
+def _redact_secrets(command):
+    if not command:
+        return command
+    out = command
+    for pat in _SECRET_PATTERNS:
+        out = pat.sub(lambda m: m.group(1) + "***", out)
+    return out
+
+
 # --- Activity log (Live Activity & Logs feed) ---
 def log_activity(username, host, description, command=""):
-    conn = _connect()
+  with contextlib.closing(_connect()) as conn:  # close even if the write raises
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO activity_log (timestamp, username, host, description, command) "
         "VALUES (?, ?, ?, ?, ?)",
-        (time.time(), username or "(unknown)", host or "", description or "", command or ""),
+        (time.time(), username or "(unknown)", host or "", description or "",
+         _redact_secrets(command or "")),
     )
     conn.commit()
-    # Keep the table from growing forever - trim to the most recent 5000 rows.
-    cur.execute(
-        "DELETE FROM activity_log WHERE id NOT IN "
-        "(SELECT id FROM activity_log ORDER BY id DESC LIMIT 5000)"
-    )
-    conn.commit()
-    conn.close()
+    # Cap the table so it can't grow unbounded, but keep enough history to be
+    # useful as an audit record. The old 5000-row cap silently discarded
+    # hours-to-days of activity on a busy fleet (a compliance red flag).
+    # SYSIBLE_ACTIVITY_LOG_MAX_ROWS (default 500000, ~months of history) tunes
+    # it; set 0 to disable trimming entirely when an external SIEM/export owns
+    # retention. Compliance note: this local log is NOT a system of record —
+    # forward it to a SIEM for durable, tamper-evident retention.
+    #
+    # Trim by id window off the just-inserted rowid: an indexed range delete of
+    # only the rows that fell out of the window (usually one), NOT a full
+    # `NOT IN (SELECT ... LIMIT cap)` anti-join that would rescan up to `cap`
+    # rows on every insert — at cap=500k that ran a 500k-row scan per log write,
+    # holding the single WAL writer each time. ids are monotonic (INTEGER PRIMARY
+    # KEY), so `id <= lastrowid - cap` keeps the most recent ~cap rows.
+    if _ACTIVITY_LOG_MAX_ROWS > 0:
+        cutoff = cur.lastrowid - _ACTIVITY_LOG_MAX_ROWS
+        if cutoff > 0:
+            cur.execute("DELETE FROM activity_log WHERE id <= ?", (cutoff,))
+            conn.commit()
 
 
 def get_agent_hostname(host_id):
@@ -1704,6 +1853,9 @@ def remove_administrator(username):
     cur = conn.cursor()
 
     cur.execute("DELETE FROM administrators WHERE username=?", (username,))
+    # Kill any live sessions for the removed account in the same breath, so its
+    # token stops resolving immediately (resolve_admin_token also cross-checks).
+    cur.execute("DELETE FROM admin_tokens WHERE username=?", (username,))
     conn.commit()
     conn.close()
 
@@ -1841,22 +1993,75 @@ def fetch_pending_tasks(host_id):
 
 
 def submit_task_result(task_id, host_id, result):
+    """Record a result and mark the task done — but ONLY if it is currently
+    'dispatched'. Returns True if it applied, False otherwise. Guarding on the
+    status makes result submission idempotent: a duplicate/retried result for an
+    already-'done' task is a no-op (no second agent_results row, no re-run of
+    side effects like ssh_enable), and an agent cannot mark its own still-
+    'pending' task done without it ever being delivered/run."""
     conn = _connect()
     cur = conn.cursor()
 
-    cur.execute("""
-    INSERT INTO agent_results (task_id, host_id, result, completed)
-    VALUES (?, ?, ?, ?)
-    """,
-    (task_id, host_id, result, time.time()))
-
     cur.execute(
-        "UPDATE agent_tasks SET status='done' WHERE id=?",
-        (task_id,)
+        "UPDATE agent_tasks SET status='done' WHERE id=? AND status='dispatched'",
+        (task_id,),
     )
+    applied = cur.rowcount == 1
+    if applied:
+        cur.execute("""
+        INSERT INTO agent_results (task_id, host_id, result, completed)
+        VALUES (?, ?, ?, ?)
+        """,
+        (task_id, host_id, result, time.time()))
 
     conn.commit()
     conn.close()
+    return applied
+
+
+def reclaim_stale_tasks(timeout_seconds):
+    """Surface tasks stuck in 'dispatched' longer than `timeout_seconds`: move
+    them to the terminal 'timed_out' state and record a synthetic result, so a
+    lost delivery (the host was handed the command but its result never came
+    back) reaches closure and shows up as timed-out instead of silently living
+    forever and accumulating.
+
+    It does NOT re-queue the command: the host may have actually run it and only
+    the RESULT was lost, so silently re-delivering a privileged command could
+    double-execute it (at-most-once by design). An operator re-queues manually if
+    they want. Returns the number reclaimed. `dispatched` is stamped by
+    fetch_pending_tasks when a task is handed out."""
+    import json as _json
+    conn = _connect()
+    cur = conn.cursor()
+    cutoff = time.time() - float(timeout_seconds)
+    cur.execute(
+        "SELECT id, host_id FROM agent_tasks "
+        "WHERE status='dispatched' AND dispatched IS NOT NULL AND dispatched < ?",
+        (cutoff,),
+    )
+    stale = cur.fetchall()
+    msg = _json.dumps({
+        "stdout": "",
+        "stderr": ("[sysible] Task timed out: the host was handed this command but never "
+                   "reported a result. It may or may not have run — re-queue it if needed."),
+        "returncode": -1,
+    })
+    now = time.time()
+    reclaimed = 0
+    for tid, host_id in stale:
+        # Guard on status again: if a real result won the race between the SELECT
+        # and here, the row is already 'done' -> 0 rows -> don't add a synthetic one.
+        cur.execute("UPDATE agent_tasks SET status='timed_out' WHERE id=? AND status='dispatched'", (tid,))
+        if cur.rowcount == 1:
+            cur.execute(
+                "INSERT INTO agent_results (task_id, host_id, result, completed) VALUES (?, ?, ?, ?)",
+                (tid, host_id, msg, now),
+            )
+            reclaimed += 1
+    conn.commit()
+    conn.close()
+    return reclaimed
 
 
 def get_task_kind(task_id):
@@ -1882,6 +2087,32 @@ def get_task_host(task_id):
     row = cur.fetchone()
     conn.close()
     return row[0] if row else None
+
+
+def get_task_result(task_id):
+    """Current status of a task plus its stored result text once it's terminal.
+    Returns {"status": <str>, "result": <str|None>}, or None if the task is
+    unknown. Lets a synchronous caller queue a task and wait for the agent to run
+    it (e.g. the terminal open path installing a per-session SSH key)."""
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT status FROM agent_tasks WHERE id=?", (task_id,))
+    row = cur.fetchone()
+    if row is None:
+        conn.close()
+        return None
+    status = row["status"]
+    result = None
+    if status in ("done", "timed_out"):
+        cur.execute(
+            "SELECT result FROM agent_results WHERE task_id=? ORDER BY completed DESC LIMIT 1",
+            (task_id,),
+        )
+        rr = cur.fetchone()
+        result = rr["result"] if rr else None
+    conn.close()
+    return {"status": status, "result": result}
 
 
 def list_results(host_id, limit=50, kind=None, task_id=None):

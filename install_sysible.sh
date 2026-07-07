@@ -102,24 +102,6 @@ case "$PKGMGR" in
 esac
 
 # =========================================================
-# RDP CLIENT (FreeRDP / xfreerdp) for Sysible Connect's RDP feature.
-# Optional and best-effort: package names differ across distros and the
-# controller works fine without it (RDP just falls back to Remmina, or is
-# unavailable), so a failure here must never abort the install.
-# =========================================================
-echo "Installing an RDP client (FreeRDP) for Sysible Connect..."
-case "$PKGMGR" in
-  dnf|yum)  "$PKGMGR" install -y freerdp || true ;;
-  zypper)   zypper --non-interactive install -y freerdp || true ;;
-  apt-get)  apt install -y freerdp3-x11 || apt install -y freerdp2-x11 || true ;;
-esac
-if command -v xfreerdp3 >/dev/null 2>&1 || command -v xfreerdp >/dev/null 2>&1; then
-  echo "FreeRDP (xfreerdp) installed - Sysible Connect RDP will use it."
-else
-  echo "NOTE: FreeRDP not installed - Sysible Connect RDP will fall back to Remmina if present."
-fi
-
-# =========================================================
 # NODE.JS / npm for building the web console front end.
 # The React console ships as source and is compiled to webgui/frontend/dist at
 # install time (and rebuilt on update). Without npm the build step below is
@@ -192,26 +174,8 @@ source "$VENV/bin/activate"
 pip install --upgrade pip
 pip install -r "$BASE/requirements.txt"
 
-# Desktop GUI client deps (PySide6, ...) are OPTIONAL — the controller (backend +
-# web console) doesn't need them. Install best-effort and NEVER fail the install:
-# PySide6 has no wheels on some platforms (ARM / Raspberry Pi, very new Python),
-# where the GUI uses the distro's PySide6 package instead. A headless controller
-# doesn't run the desktop GUI at all.
-if [[ -f "$BASE/requirements-gui.txt" ]]; then
-  echo "Installing desktop GUI dependencies (optional)..."
-  if pip install -r "$BASE/requirements-gui.txt"; then
-    echo "Desktop GUI dependencies installed."
-  else
-    echo "NOTE: desktop GUI dependencies (e.g. PySide6) were not installed on this"
-    echo "      platform. This is expected on headless servers and ARM/Raspberry Pi,"
-    echo "      and does NOT affect the controller or the web console."
-    echo "      To use the desktop GUI here, install them from your distro, e.g.:"
-    echo "        sudo apt install python3-pyside6 python3-qtawesome python3-pyte"
-  fi
-fi
-
 # =========================================================
-# WEB CONSOLE (browser-based, headless-friendly GUI)
+# WEB CONSOLE (browser-based, headless-friendly)
 # Extra Python deps the BFF needs, plus a production build of the React
 # front end so 'sysible_controller start' can serve it immediately.
 # Best-effort: if Node isn't present the controller is unaffected - the
@@ -246,7 +210,7 @@ chmod +x "$BASE/sysible_controller"
 #
 # Only generated if missing, so re-running the installer (e.g.
 # a code redeploy) never rotates - and breaks - a cert that's
-# already been copied out to GUI machines and agents for pinning.
+# already been copied out to agents for pinning.
 # =========================================================
 CERT_DIR="$BASE/certs"
 CERT_FILE="$CERT_DIR/server.crt"
@@ -281,7 +245,7 @@ else
   echo "TLS certificate already present, leaving it in place."
 fi
 
-# trust.crt is the trust anchor copied out to GUI machines/agents for
+# trust.crt is the trust anchor copied out to agents for
 # pinning (see backend/tls_manager.py) - distinct from CERT_FILE once an
 # externally-issued PKI cert is installed via Sysible Settings, since a
 # PKI leaf does not verify against itself the way a self-signed one
@@ -297,7 +261,7 @@ fi
 
 # =========================================================
 # PROVISION THE ADMIN API KEY
-# Every admin/GUI endpoint requires this key (X-API-Key header).
+# Every admin/API endpoint requires this key (X-API-Key header).
 # Generate it now (mode 600) so it exists with the right
 # permissions before the service is ever started; the backend
 # will also auto-generate it on first run if it's missing.
@@ -335,6 +299,19 @@ ExecStart=$VENV/bin/uvicorn backend.app:app --host 0.0.0.0 --port 9000 --ssl-key
 Restart=always
 RestartSec=5
 User=root
+# Baseline systemd hardening. These directives don't restrict the file
+# writes, process exec (systemctl/systemd-run), or networking this service
+# needs, so they're safe to ship on by default. Fuller confinement
+# (NoNewPrivileges, ProtectSystem=strict, SystemCallFilter, a locked-down
+# CapabilityBoundingSet) is recommended but must be validated per-site since
+# the controller execs privileged host tooling — see SECURITY.md.
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target
@@ -351,7 +328,7 @@ fi
 
 # =========================================================
 # DEFAULT WEB-CONSOLE ADMIN
-# On a headless box there's no desktop first-run wizard to create the first
+# On a fresh install there's no first-run wizard to create the first
 # administrator, so the browser console would have nothing to log in with.
 # Seed a default superuser (only when NO administrators exist yet) with a
 # random password, flagged must-change. Printed once at the end of install.
@@ -374,13 +351,13 @@ PY
 
 # =========================================================
 # INSTALL THE WEB CONSOLE AS ITS OWN SYSTEMD SERVICE
-# Separate from the backend and from the desktop GUI, with its own start/stop
+# Separate from the backend, with its own start/stop
 # (sysible_controller webgui start|stop). Runs start_webgui.sh, which handles
 # the cookie secret, TLS, and a first-run front-end build.
 # =========================================================
 WEBGUI_SERVICE_FILE="/etc/systemd/system/sysible-webgui.service"
 WEBGUI_UNIT="[Unit]
-Description=Sysible Web Console (browser GUI)
+Description=Sysible Web Console
 After=network-online.target sysible-backend.service
 Wants=network-online.target
 
@@ -405,7 +382,7 @@ chmod +x "$BASE/start_webgui.sh" 2>/dev/null || true
 
 # =========================================================
 # INSTALL THE `sysible_controller` CLI
-# Single global command (start/stop/restart/status/logs/gui/destroy)
+# Single global command (start/stop/restart/status/logs/webgui/destroy)
 # - see ./sysible_controller. Named after the product (Sysible
 # Controller, one product under the Sysible Enterprise Software
 # suite).
@@ -415,79 +392,20 @@ cp -f "$BASE/sysible_controller" /usr/local/bin/sysible_controller
 chmod +x /usr/local/bin/sysible_controller
 
 # =========================================================
-# RUNTIME DIR FOR THE GUI CLIENT (client.pid / gui.log)
-# $BASE itself is root-owned from this installer running as root, but
-# the GUI client (see sysible_controller's _start_gui/_fetch_api_key)
-# now usually runs as whichever desktop user clicked the application
-# menu icon, not as root - only a one-shot privileged read of the
-# admin API key still needs elevation. Made permissive (sticky bit, so
-# nobody can delete another user's files in here) so that works
-# regardless of which user - root via `sudo sysible_controller start`,
-# or a desktop user via the icon - happens to write client.pid/gui.log
-# first.
+# RUNTIME DIR (portal.pid, last_update.{json,log}, web-console secret)
+# $BASE is root-owned from this installer running as root; every
+# process that writes here - the backend, the web console, and the
+# portal - runs as root under systemd, so a plain root-owned run dir
+# is all that's needed.
 # =========================================================
 mkdir -p "$BASE/run"
-chmod 1777 "$BASE/run"
+chmod 750 "$BASE/run"
 
-# =========================================================
-# INSTALL THE APPLICATION MENU LAUNCHER
-# Closing the dashboard window (or choosing "Quit Sysible
-# Controller" from its tray icon - see client/main.py) can leave
-# the backend running as its systemd service with no GUI attached
-# to it at all. Until now the only way back in was a terminal
-# ('sudo sysible_controller gui'). This installs a standard
-# freedesktop .desktop entry so "Sysible Controller" shows up
-# in the host's application menu like any other installed
-# program, using the same logo the GUI itself displays
-# (sysible_logo.png, also $BASE/sysible_logo.png post-install -
-# see client/branding.py's LOGO_PATH).
-#
-# Exec= runs `sysible_controller gui` directly - no pkexec here.
-# The GUI process doesn't need to run as root (see
-# sysible_controller's _fetch_api_key): it elevates just the one
-# instant, display-free read of the admin API key when it isn't
-# already root, and runs the actual long-lived Qt process unprivileged
-# under whichever desktop session the icon was clicked from. An
-# earlier version of this launcher ran the *entire* GUI through
-# pkexec, which is what broke it - a pkexec'd process's environment is
-# reset, stripping the DISPLAY/XAUTHORITY/WAYLAND_DISPLAY/
-# XDG_RUNTIME_DIR a Qt app needs to draw a window on the desktop's
-# existing session, so the auth prompt (which comes from polkit's own
-# separate, always-running agent, not from the elevated process) would
-# pop up and succeed while the actual app had nowhere left to display
-# itself. Only installed if pkexec and a system applications menu
-# actually exist, so this is a silent no-op on a minimal/headless box.
-# =========================================================
-DESKTOP_DIR="/usr/share/applications"
-
-if command -v pkexec >/dev/null 2>&1 && [[ -d "$DESKTOP_DIR" ]]; then
-  echo "Installing application menu launcher..."
-
-  DESKTOP_FILE="$DESKTOP_DIR/sysible-controller.desktop"
-
-  cat > "$DESKTOP_FILE" <<EOF
-[Desktop Entry]
-Type=Application
-Name=Sysible Controller
-Comment=Reopen the Sysible Controller dashboard
-Exec=/usr/local/bin/sysible_controller gui
-Icon=$BASE/sysible_logo.png
-Terminal=false
-StartupWMClass=sysible-controller
-Categories=System;Settings;
-EOF
-
-  chmod 644 "$DESKTOP_FILE"
-
-  # Best-effort menu refresh - not every desktop environment ships
-  # this command, and none of them require it to pick up a new
-  # .desktop file eventually, so a missing binary here is not an
-  # install failure.
-  command -v update-desktop-database >/dev/null 2>&1 && \
-    update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1
-else
-  echo "No desktop menu environment detected (pkexec or $DESKTOP_DIR missing) - skipping application menu launcher."
-fi
+# Owner-only on the whole install tree. Everything under $BASE (the SQLite DB
+# with admin hashes/agent secrets/live tokens, the API key, TLS private key,
+# SSH keys, sudo-store key) is read only by the root-run services, so no other
+# local account should be able to traverse in and read them.
+chmod 700 "$BASE"
 
 echo ""
 echo "Installation complete"
@@ -496,22 +414,14 @@ echo "Admin API key: $BASE/api_key.txt (mode 600, root-only)"
 echo "TLS certificate: $CERT_FILE"
 echo ""
 echo "Sysible Controller now serves HTTPS only. Copy $CERT_FILE (not server.key) to:"
-echo "  - any machine running the GUI client, if not this one"
 echo "  - every host you run host_agent/agent.py on"
 echo "and point them at it with the SYSIBLE_CA_CERT env var so they can"
 echo "verify this controller instead of trusting it blindly."
 echo ""
-if [[ -f "$DESKTOP_DIR/sysible-controller.desktop" ]]; then
-  echo "A 'Sysible Controller' icon has been added to this machine's application"
-  echo "menu - use it any time to reopen the dashboard if it's been closed,"
-  echo "without needing a terminal (it will prompt for the admin/root password)."
-  echo ""
-fi
 echo "==================================================================="
 echo " SERVICES (each started separately):"
 echo "   Controller backend : sudo sysible_controller start"
-echo "   Web console (GUI)  : sudo sysible_controller webgui start   ->  https://<this-host>:8800/"
-echo "   Desktop GUI client : sysible_controller gui   (needs a desktop session)"
+echo "   Web console        : sudo sysible_controller webgui start   ->  https://<this-host>:8800/"
 echo "==================================================================="
 if [[ "$SEEDED_ADMIN" == "created" ]]; then
   R='\033[1;91m'; Z='\033[0m'   # bold bright red / reset

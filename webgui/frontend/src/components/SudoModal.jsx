@@ -25,6 +25,12 @@ export default function SudoModal({ onClose }) {
     } catch (e) { setErr(e.message); }
   }
   useEffect(() => { refresh(); }, []);
+  // Escape closes the dialog — a basic keyboard expectation for any modal.
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   const isStored = stored.includes(scope);
 
@@ -55,7 +61,7 @@ export default function SudoModal({ onClose }) {
 
   return (
     <div className="modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal">
+      <div className="modal" role="dialog" aria-modal="true" aria-label="My Sudo Password">
         <h3>My Sudo Password</h3>
         <p className="muted" style={{ marginTop: 0 }}>
           Used to elevate commands on hosts whose sudo requires a password. It's

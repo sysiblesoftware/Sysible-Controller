@@ -3,6 +3,10 @@ __pycache__/
 venv/
 .venv/
 *.db
+# SQLite write-ahead-log / shared-memory / rollback sidecars (regenerated at runtime)
+*.db-wal
+*.db-shm
+*.db-journal
 api_key.txt
 hosts.json
 agent_state.json
@@ -18,3 +22,15 @@ portal_files/
 # Runtime state (PID/port/secret) and logs - never commit
 run/
 logs/
+
+# Documentation tooling - kept local, NOT published on GitHub.
+# (The generated HTML guides at the repo root ARE committed, and the release
+#  screenshots under docs/screenshots/ are now tracked so the README renders on
+#  GitHub; only the doc generator/regenerate hook stays local.)
+/tools/generate_docs.py
+# Shared Claude Code config (settings.json + hooks) IS committed so the
+# SessionStart hook applies to every session; only personal overrides are local.
+/.claude/settings.local.json
+
+# Python virtualenv (created by the SessionStart hook)
+.venv/

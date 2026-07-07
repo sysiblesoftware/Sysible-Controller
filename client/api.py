@@ -1,7 +1,7 @@
 """
-Single place where the desktop client talks to the Sysible backend.
+Single place where the web console talks to the Sysible backend.
 
-Every page should go through here instead of calling `requests`
+Callers should go through here instead of calling `requests`
 directly, so the API base URL and the admin API key are only
 configured in one spot.
 """
@@ -55,9 +55,8 @@ _ADMIN_TOKEN = None
 # Per-thread override of the admin token. The web BFF is a single shared process
 # serving every administrator concurrently, so a process-global token is unsafe:
 # one request (or fleet-health's parallel probe threads) can read another's
-# token. The BFF therefore sets a THREAD-scoped token per request/worker; the
-# desktop GUI never sets this and keeps using the process-global it sets once at
-# login (which its own worker threads inherit). A thread-local value of None
+# token. The BFF therefore sets a THREAD-scoped token per request/worker. A
+# thread-local value of None
 # means "explicitly no token for this thread" (e.g. the read-only fleet-health
 # metrics probe, which must run as root regardless of who is viewing) — distinct
 # from "no override set", hence the sentinel.
@@ -143,6 +142,13 @@ def get_agents():
     return _request("GET", "/agents").get("agents", [])
 
 
+def log_action(host: str, description: str):
+    """Record ONE attributed activity-feed entry — a grouped summary for a
+    multi-host tool run, so the feed shows "List disks · dev1, prod1" instead of
+    one row per host. See backend POST /activity."""
+    return _request("POST", "/activity", json={"host": host, "description": description})
+
+
 def get_metrics_timeseries(window=3600):
     """Per-host performance time-series (load/mem/disk) for the last `window`
     seconds. Returns {"hosts": [...], "window": int, "now": float}."""
@@ -170,6 +176,19 @@ def get_edition():
 
 def disenroll_agent(host_id: str):
     return _request("DELETE", f"/agents/{host_id}")
+
+
+def revoke_agent(host_id: str):
+    """Hard lock-out: revoke the host's agent secret so it can't heartbeat,
+    poll, or report until an admin re-enrolls it. Superuser-only on the backend.
+    Used to cut off a host suspected of being compromised/tampered."""
+    return _request("POST", f"/agents/{host_id}/revoke")
+
+
+def resume_agent(host_id: str):
+    """Clear an integrity quarantine: re-seal the host's baseline to its current
+    measurements and resume dispatching tasks to it. Superuser-only."""
+    return _request("POST", f"/agents/{host_id}/resume")
 
 
 def set_agent_environment(host_id: str, environment: str):
@@ -241,6 +260,13 @@ def set_controller_config(hostname: str, ip: str, address_mode: str, port: int):
     )
 
 
+def controller_restart():
+    """Restart the controller backend service (no update). Returns immediately;
+    systemd bounces sysible-backend and it comes back on its own. The web console
+    is a separate service and stays up, so the operator's session survives."""
+    return _request("POST", "/controller/restart", timeout=30)
+
+
 def controller_update():
     """Trigger an in-place controller self-update (git pull + redeploy + restart)
     on the controller host. The controller launches it as a detached transient
@@ -267,6 +293,14 @@ def update_agents():
     existing task channel. Returns {"queued", "version", "message"}. Agents
     apply it on their next check-in and restart with the new code."""
     return _request("POST", "/agents/update", timeout=30)
+
+
+def get_update_status():
+    """Whether a software update is available for the controller (git-behind its
+    remote) and/or agents (reported build hash != controller's current agent
+    build). Returns {"controller": {...}, "agents": {...}}. Does a live git
+    fetch on the controller, so call on demand, not on a poll."""
+    return _request("GET", "/update-status", timeout=45)
 
 
 def get_license_config():

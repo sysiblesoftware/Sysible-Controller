@@ -1,6 +1,6 @@
 """
 The action registry: the single bridge between the React UI and the
-desktop client's cmd_* shell-command builders.
+cmd_* shell-command builders in client/_api_*.py.
 
 Each Action ties together:
   * name    - stable id used in the URL (/api/tool/<name>) and by the SPA
@@ -8,16 +8,15 @@ Each Action ties together:
   * label   - human label for the button/form
   * kind    - dispatch kind passed through to run_on_entry (mostly
               "command"; some result-heavy reads use a distinct kind so
-              the controller can cache/route them, matching the desktop)
+              the controller can cache/route them)
   * params  - ordered list of Param (name/label/type/default/required)
               the SPA renders a form from, and the server validates
   * build   - callable(params: dict) -> str : returns the exact shell
               string by delegating to the matching cmd_* builder
 
-To extend toward full desktop parity you ADD Action entries here that
-point at cmd_* functions that already exist in client/_api_*.py. You do
-not write any new dispatch or shell logic - that already exists and is
-shared with the desktop app, so the two stay in lockstep.
+To add a tool you ADD Action entries here that point at cmd_* functions
+that already exist in client/_api_*.py. You do not write any new dispatch
+or shell logic - that already exists in the shared builders.
 
 This file intentionally seeds only a representative slice across three
 tools (fleet run-command, service management, user & group). It proves
@@ -39,6 +38,10 @@ class Param:
     required: bool = True
     options: list = field(default_factory=list)   # for type == "select"
     help: str = ""
+    # Greyed-out example shown in an empty field (HTML placeholder). Always an
+    # EXAMPLE of what to type, e.g. "e.g. nginx" — never a value that gets
+    # submitted. The frontend falls back to `help` when this is empty.
+    placeholder: str = ""
 
 
 @dataclass
@@ -197,6 +200,21 @@ _register(Action(
 
 
 # ---- Tool: Host Software Management ----------------------------------
+def _pkg_and_status(op_cmd: str, names: str) -> str:
+    """Run a package op, then append a clean per-package status readout so each
+    host's result shows the RESULTING state (installed <ver> / absent) — while
+    preserving the op's own exit code, so ok/failed still reflects the op itself
+    and not the trailing status query."""
+    ns = (names or "").strip()
+    if not ns:
+        return op_cmd
+    return "\n".join([op_cmd, "rc=$?", api.cmd_package_status(ns), "exit $rc"])
+
+
+_register(Action(
+    name="pkg_status", tool="Host Software Management", label="Check status",
+    params=[Param("names", "Package name(s)", help="space-separated")],
+    build=lambda p: api.cmd_package_status(_s(p, "names"))))
 _register(Action(
     name="pkg_list_installed", tool="Host Software Management",
     label="List installed packages", params=[],
@@ -212,17 +230,20 @@ _register(Action(
 _register(Action(
     name="pkg_install", tool="Host Software Management", label="Install packages",
     params=[Param("names", "Package name(s)", help="space-separated")],
-    build=lambda p: api.cmd_install_packages(_s(p, "names"))))
+    build=lambda p: _pkg_and_status(api.cmd_install_packages(_s(p, "names")), _s(p, "names")),
+))
 _register(Action(
     name="pkg_update", tool="Host Software Management",
     label="Update / upgrade packages",
     params=[Param("names", "Package name(s)", required=False,
                   help="leave blank to update everything")],
-    build=lambda p: api.cmd_update_packages(_s(p, "names"))))
+    build=lambda p: _pkg_and_status(api.cmd_update_packages(_s(p, "names")), _s(p, "names")),
+))
 _register(Action(
     name="pkg_remove", tool="Host Software Management", label="Remove packages",
     danger=True, params=[Param("names", "Package name(s)")],
-    build=lambda p: api.cmd_remove_packages(_s(p, "names"))))
+    build=lambda p: _pkg_and_status(api.cmd_remove_packages(_s(p, "names")), _s(p, "names")),
+))
 _register(Action(
     name="pkg_clean_cache", tool="Host Software Management",
     label="Clean package cache", params=[],
@@ -368,15 +389,18 @@ _register(Action(name="fw_open_port", tool="Firewall Administration", label="Ope
     params=[Param("port", "Port", help="e.g. 8080"),
             Param("protocol", "Protocol", type="select", options=["tcp", "udp"], default="tcp"),
             Param("zone", "Zone", required=False)],
-    build=lambda p: api.cmd_open_port(_s(p, "port"), _s(p, "protocol", "tcp"), _s(p, "zone"))))
+    build=lambda p: api.cmd_open_port(_s(p, "port"), _s(p, "protocol", "tcp"), _s(p, "zone")),
+))
 _register(Action(name="fw_close_port", tool="Firewall Administration", label="Close port",
     danger=True,
     params=[Param("port", "Port"),
             Param("protocol", "Protocol", type="select", options=["tcp", "udp"], default="tcp"),
             Param("zone", "Zone", required=False)],
-    build=lambda p: api.cmd_close_port(_s(p, "port"), _s(p, "protocol", "tcp"), _s(p, "zone"))))
+    build=lambda p: api.cmd_close_port(_s(p, "port"), _s(p, "protocol", "tcp"), _s(p, "zone")),
+))
 _register(Action(name="fw_reload", tool="Firewall Administration", label="Reload firewalld",
-    params=[], build=lambda p: api.cmd_reload_firewalld()))
+    params=[], build=lambda p: api.cmd_reload_firewalld(),
+))
 _register(Action(name="fw_install_firewalld", tool="Firewall Administration",
     label="Install firewalld", params=[], build=lambda p: api.cmd_install_firewalld()))
 _register(Action(name="fw_install_ufw", tool="Firewall Administration",
@@ -395,7 +419,8 @@ _register(Action(name="sec_install_selinux", tool="Security Administration",
 _register(Action(name="sec_set_selinux_mode", tool="Security Administration",
     label="Set SELinux mode",
     params=[Param("mode", "Mode", type="select", options=["enforcing", "permissive"], default="enforcing")],
-    build=lambda p: api.cmd_set_selinux_mode(_s(p, "mode", "enforcing"))))
+    build=lambda p: api.cmd_set_selinux_mode(_s(p, "mode", "enforcing")),
+))
 _register(Action(name="sec_sshd_status", tool="Security Administration",
     label="SSH daemon status", params=[], build=lambda p: api.cmd_sshd_status()))
 _register(Action(name="sec_sshd_set", tool="Security Administration", label="Set sshd option",
@@ -423,7 +448,7 @@ _register(Action(name="fs_list_dir", tool="File System Management", label="List 
     params=[Param("path", "Path", default="/", help="e.g. /opt")],
     build=lambda p: api.cmd_list_directory(_s(p, "path", "/") or "/")))
 _register(Action(name="fs_view", tool="File System Management", label="View file",
-    params=[Param("path", "Path")], build=lambda p: api.cmd_view_file(_s(p, "path"))))
+    params=[Param("path", "Path", help="e.g. /etc/hosts")], build=lambda p: api.cmd_view_file(_s(p, "path"))))
 # Cross-host file comparison: check several hosts, enter a path, and see which
 # hosts have a different version (grouped by content hash). The web console
 # handles this specially (POST /api/files/compare aggregates the per-host
@@ -433,24 +458,24 @@ _register(Action(name="fs_compare", tool="File System Management",
     params=[Param("path", "Path", help="e.g. /etc/ssh/sshd_config")],
     build=lambda p: api.cmd_file_fingerprint(_s(p, "path"))))
 _register(Action(name="fs_mkdir", tool="File System Management", label="Create directory",
-    params=[Param("path", "Path")], build=lambda p: api.cmd_create_directory(_s(p, "path"))))
+    params=[Param("path", "Path", help="e.g. /etc/hosts")], build=lambda p: api.cmd_create_directory(_s(p, "path"))))
 _register(Action(name="fs_rmdir", tool="File System Management", label="Remove directory",
-    danger=True, params=[Param("path", "Path"),
+    danger=True, params=[Param("path", "Path", help="e.g. /etc/hosts"),
                          Param("recursive", "Recursive", type="checkbox", default=False, required=False)],
     build=lambda p: api.cmd_remove_directory(_s(p, "path"), _b(p, "recursive"),
                                              allow_critical=_b(p, "allow_critical", False))))
 _register(Action(name="fs_copy", tool="File System Management", label="Copy",
-    params=[Param("source", "Source"), Param("destination", "Destination")],
+    params=[Param("source", "Source", help="e.g. /tmp/file.txt"), Param("destination", "Destination", help="e.g. /opt/file.txt")],
     build=lambda p: api.cmd_copy_file(_s(p, "source"), _s(p, "destination"))))
 _register(Action(name="fs_move", tool="File System Management", label="Move",
-    params=[Param("source", "Source"), Param("destination", "Destination")],
+    params=[Param("source", "Source", help="e.g. /tmp/file.txt"), Param("destination", "Destination", help="e.g. /opt/file.txt")],
     build=lambda p: api.cmd_move_file(_s(p, "source"), _s(p, "destination"))))
 _register(Action(name="fs_chmod", tool="File System Management", label="Change permissions",
-    params=[Param("path", "Path"), Param("mode", "Mode", help="e.g. 0644"),
+    params=[Param("path", "Path", help="e.g. /etc/hosts"), Param("mode", "Mode", help="e.g. 0644"),
             Param("recursive", "Recursive", type="checkbox", default=False, required=False)],
     build=lambda p: api.cmd_change_permissions(_s(p, "path"), _s(p, "mode"), _b(p, "recursive"))))
 _register(Action(name="fs_chown", tool="File System Management", label="Change ownership",
-    params=[Param("path", "Path"), Param("owner", "Owner", required=False),
+    params=[Param("path", "Path", help="e.g. /etc/hosts"), Param("owner", "Owner", required=False),
             Param("group", "Group", required=False),
             Param("recursive", "Recursive", type="checkbox", default=False, required=False)],
     build=lambda p: api.cmd_change_ownership(_s(p, "path"), _s(p, "owner"),
@@ -464,12 +489,12 @@ _register(Action(name="fs_archive", tool="File System Management", label="Create
 _register(Action(name="fs_show_fstab", tool="File System Management", label="Show fstab",
     params=[], build=lambda p: api.cmd_show_fstab()))
 _register(Action(name="fs_mount_nfs", tool="File System Management", label="Mount NFS",
-    params=[Param("server", "Server"), Param("export_path", "Export path"),
-            Param("mount_point", "Mount point")],
+    params=[Param("server", "Server", help="e.g. 192.168.1.50 or nfs.example.com"), Param("export_path", "Export path"),
+            Param("mount_point", "Mount point", help="e.g. /mnt/data")],
     build=lambda p: api.cmd_mount_nfs(_s(p, "server"), _s(p, "export_path"), _s(p, "mount_point"))))
 _register(Action(name="fs_mount_cifs", tool="File System Management", label="Mount CIFS/SMB",
-    params=[Param("server", "Server"), Param("share", "Share"),
-            Param("mount_point", "Mount point"),
+    params=[Param("server", "Server", help="e.g. 192.168.1.50 or nfs.example.com"), Param("share", "Share"),
+            Param("mount_point", "Mount point", help="e.g. /mnt/data"),
             Param("username", "Username", required=False),
             Param("password", "Password", type="password", required=False)],
     build=lambda p: api.cmd_mount_cifs(_s(p, "server"), _s(p, "share"), _s(p, "mount_point"),
@@ -524,7 +549,8 @@ _register(Action(name="time_set_ntp", tool="Time Synchronization", label="Set NT
     build=lambda p: api.cmd_set_ntp_servers(_s(p, "servers"))))
 _register(Action(name="time_set_tz", tool="Time Synchronization", label="Set timezone",
     params=[Param("tz", "Timezone", help="e.g. America/New_York")],
-    build=lambda p: api.cmd_set_timezone(_s(p, "tz"))))
+    build=lambda p: api.cmd_set_timezone(_s(p, "tz")),
+))
 _register(Action(name="time_list_tz", tool="Time Synchronization", label="List timezones",
     params=[Param("filter_text", "Filter", required=False)],
     build=lambda p: api.cmd_list_timezones(_s(p, "filter_text"))))
@@ -684,10 +710,12 @@ _register(Action(name="user_set_aging", tool="User & Group Administration",
                                                       _io(p, "min_days"), _io(p, "warn_days"))))
 _register(Action(name="group_create", tool="User & Group Administration",
     label="Create group", params=[Param("name", "Group name")],
-    build=lambda p: api.cmd_create_group(_s(p, "name"))))
+    build=lambda p: api.cmd_create_group(_s(p, "name")),
+))
 _register(Action(name="group_delete", tool="User & Group Administration",
     label="Delete group", danger=True, params=[Param("name", "Group name")],
-    build=lambda p: api.cmd_delete_group(_s(p, "name"))))
+    build=lambda p: api.cmd_delete_group(_s(p, "name")),
+))
 _register(Action(name="group_add_user", tool="User & Group Administration",
     label="Add user to group", params=[Param("group", "Group"), Param("username", "Username")],
     build=lambda p: api.cmd_add_user_to_group(_s(p, "group"), _s(p, "username"))))
@@ -816,7 +844,8 @@ _register(Action(name="timer_delete", tool="Cron & Systemd Timers", label="Delet
 # ---- Network Management (advanced) -----------------------------------
 _register(Action(name="net_set_hostname", tool="Network Management", label="Set hostname",
     params=[Param("new_hostname", "Hostname")],
-    build=lambda p: api.cmd_set_hostname(_s(p, "new_hostname"))))
+    build=lambda p: api.cmd_set_hostname(_s(p, "new_hostname")),
+))
 _register(Action(name="net_set_gateway", tool="Network Management", label="Set gateway",
     params=[Param("connection", "Connection"), Param("gateway", "Gateway")],
     build=lambda p: api.cmd_set_gateway(_s(p, "connection"), _s(p, "gateway"))))
@@ -940,7 +969,8 @@ _register(Action(name="fw_set_enabled", tool="Firewall Administration", label="E
     params=[Param("enabled", "Enabled", type="checkbox", default=True, required=False)],
     build=lambda p: api.cmd_set_firewalld_enabled(_b(p, "enabled", True))))
 _register(Action(name="fw_set_default_zone", tool="Firewall Administration", label="Set default zone",
-    params=[Param("zone", "Zone")], build=lambda p: api.cmd_set_default_zone(_s(p, "zone"))))
+    params=[Param("zone", "Zone")], build=lambda p: api.cmd_set_default_zone(_s(p, "zone")),
+))
 _register(Action(name="fw_create_zone", tool="Firewall Administration", label="Create zone",
     params=[Param("zone_name", "Zone name")], build=lambda p: api.cmd_create_zone(_s(p, "zone_name"))))
 _register(Action(name="fw_delete_zone", tool="Firewall Administration", label="Delete zone",
@@ -1004,7 +1034,8 @@ _register(Action(name="sec_selinux_booleans", tool="Security Administration", la
 _register(Action(name="sec_selinux_set_bool", tool="Security Administration", label="Set SELinux boolean",
     params=[Param("name", "Boolean"), Param("enabled", "On", type="checkbox", default=True, required=False),
             Param("permanent", "Permanent", type="checkbox", default=True, required=False)],
-    build=lambda p: api.cmd_set_selinux_boolean(_s(p, "name"), _b(p, "enabled", True), _b(p, "permanent", True))))
+    build=lambda p: api.cmd_set_selinux_boolean(_s(p, "name"), _b(p, "enabled", True), _b(p, "permanent", True)),
+))
 _register(Action(name="sec_selinux_denials", tool="Security Administration", label="Recent SELinux denials",
     params=[Param("lines", "Lines", type="number", default="50", required=False)],
     build=lambda p: api.cmd_selinux_recent_denials(_i(p, "lines", 50))))
@@ -1015,9 +1046,9 @@ _register(Action(name="sec_selinux_journal", tool="Security Administration", lab
     params=[Param("lines", "Lines", type="number", default="50", required=False)],
     build=lambda p: api.cmd_selinux_journal_denials(_i(p, "lines", 50))))
 _register(Action(name="sec_selinux_getctx", tool="Security Administration", label="Get SELinux context",
-    params=[Param("path", "Path")], build=lambda p: api.cmd_selinux_get_context(_s(p, "path"))))
+    params=[Param("path", "Path", help="e.g. /etc/hosts")], build=lambda p: api.cmd_selinux_get_context(_s(p, "path"))))
 _register(Action(name="sec_selinux_restorectx", tool="Security Administration", label="Restore SELinux context",
-    params=[Param("path", "Path"), Param("recursive", "Recursive", type="checkbox", default=False, required=False)],
+    params=[Param("path", "Path", help="e.g. /etc/hosts"), Param("recursive", "Recursive", type="checkbox", default=False, required=False)],
     build=lambda p: api.cmd_selinux_restore_context(_s(p, "path"), _b(p, "recursive"))))
 _register(Action(name="sec_selinux_list_fctx", tool="Security Administration", label="List file contexts",
     params=[Param("pattern", "Pattern", required=False)],
@@ -1036,24 +1067,45 @@ _register(Action(name="sec_sshd_get", tool="Security Administration", label="Get
     build=lambda p: api.cmd_sshd_get_effective_config(_s(p, "key"))))
 _register(Action(name="sec_sshd_reload", tool="Security Administration", label="Reload sshd",
     params=[], build=lambda p: api.cmd_sshd_reload()))
-_register(Action(name="sec_set_root_login", tool="Security Administration", label="Set root SSH login",
-    params=[Param("allow", "Allow root login", type="checkbox", default=False, required=False)],
+# SSH auth policy: each toggle edits one sshd_config directive, then reloads
+# sshd. Distinct param names (not a shared "enabled") so the three checkboxes
+# don't collapse into one in the grouped tool UI — each button reads its own box.
+_register(Action(name="sec_set_root_login", tool="Security Administration", label="Apply root login",
+    description="Set sshd's PermitRootLogin from the checkbox, then reload sshd. "
+                "Checked = root may log in over SSH; unchecked = root SSH login denied.",
+    params=[Param("allow", "Allow root login over SSH", type="checkbox", default=False, required=False,
+                  help="on = PermitRootLogin yes, off = no")],
     build=lambda p: api.cmd_set_root_login(_b(p, "allow"))))
-_register(Action(name="sec_set_pubkey_auth", tool="Security Administration", label="Set pubkey auth",
-    params=[Param("enabled", "Enabled", type="checkbox", default=True, required=False)],
-    build=lambda p: api.cmd_set_pubkey_auth(_b(p, "enabled", True))))
-_register(Action(name="sec_set_password_auth", tool="Security Administration", label="Set password auth",
-    params=[Param("enabled", "Enabled", type="checkbox", default=False, required=False)],
-    build=lambda p: api.cmd_set_password_auth(_b(p, "enabled"))))
+_register(Action(name="sec_set_pubkey_auth", tool="Security Administration", label="Apply public-key auth",
+    description="Set sshd's PubkeyAuthentication from the checkbox, then reload sshd. "
+                "Checked = allow key-based SSH login (recommended); unchecked = disable it.",
+    params=[Param("pubkey_enabled", "Enable public-key auth", type="checkbox", default=True, required=False,
+                  help="on = PubkeyAuthentication yes")],
+    build=lambda p: api.cmd_set_pubkey_auth(_b(p, "pubkey_enabled", True))))
+_register(Action(name="sec_set_password_auth", tool="Security Administration", label="Apply password auth",
+    description="Set sshd's PasswordAuthentication from the checkbox, then reload sshd. "
+                "Checked = allow password SSH login; unchecked = keys only (more secure).",
+    params=[Param("password_enabled", "Enable password auth", type="checkbox", default=False, required=False,
+                  help="on = PasswordAuthentication yes")],
+    build=lambda p: api.cmd_set_password_auth(_b(p, "password_enabled"))))
 _register(Action(name="sec_list_authkeys", tool="Security Administration", label="List authorized keys",
-    params=[Param("user", "User")], build=lambda p: api.cmd_list_authorized_keys(_s(p, "user"))))
+    description="Show the keys in ~USER/.ssh/authorized_keys on the selected hosts.",
+    params=[Param("user", "User", help="account whose authorized_keys to read, e.g. alice")],
+    build=lambda p: api.cmd_list_authorized_keys(_s(p, "user"))))
 _register(Action(name="sec_install_authkey", tool="Security Administration", label="Install authorized key",
-    params=[Param("user", "User"), Param("public_key", "Public key")],
+    description="Append the public key to USER's ~/.ssh/authorized_keys (created if missing).",
+    params=[Param("user", "User", help="account to add the key to, e.g. alice"),
+            Param("public_key", "Public key", help="paste the full one-line key, e.g. ssh-ed25519 AAAA… user@host")],
     build=lambda p: api.cmd_install_authorized_key(_s(p, "user"), _s(p, "public_key"))))
 _register(Action(name="sec_remove_authkey", tool="Security Administration", label="Remove authorized key",
-    danger=True, params=[Param("user", "User"), Param("match_text", "Match text")],
+    description="Remove any line in USER's authorized_keys that contains the match text.",
+    danger=True, params=[Param("user", "User", help="account whose key to remove, e.g. alice"),
+                         Param("match_text", "Match text",
+                               help="substring of the key line to remove, e.g. user@host or a key comment")],
     build=lambda p: api.cmd_remove_authorized_key(_s(p, "user"), _s(p, "match_text"))))
 _register(Action(name="sec_rotate_hostkeys", tool="Security Administration", label="Rotate SSH host keys",
+    description="Regenerate this host's SSH host keys and restart sshd. Clients will see a "
+                "changed-host-key warning on their next connection.",
     danger=True, params=[], build=lambda p: api.cmd_rotate_host_keys()))
 _register(Action(name="sec_auditd_status", tool="Security Administration", label="auditd status",
     params=[], build=lambda p: api.cmd_auditd_status()))
@@ -1099,7 +1151,7 @@ _register(Action(name="sec_run_rkhunter", tool="Security Administration", label=
 
 # ---- File System Management (advanced) -------------------------------
 _register(Action(name="fs_rename", tool="File System Management", label="Rename",
-    params=[Param("path", "Path"), Param("new_name", "New name")],
+    params=[Param("path", "Path", help="e.g. /etc/hosts"), Param("new_name", "New name")],
     build=lambda p: api.cmd_rename_file(_s(p, "path"), _s(p, "new_name"))))
 _register(Action(name="fs_symlink", tool="File System Management", label="Create symlink",
     params=[Param("target", "Target"), Param("link_path", "Link path")],
@@ -1108,24 +1160,24 @@ _register(Action(name="fs_hardlink", tool="File System Management", label="Creat
     params=[Param("target", "Target"), Param("link_path", "Link path")],
     build=lambda p: api.cmd_create_hardlink(_s(p, "target"), _s(p, "link_path"))))
 _register(Action(name="fs_show_acl", tool="File System Management", label="Show ACL",
-    params=[Param("path", "Path")], build=lambda p: api.cmd_show_acl(_s(p, "path"))))
+    params=[Param("path", "Path", help="e.g. /etc/hosts")], build=lambda p: api.cmd_show_acl(_s(p, "path"))))
 _register(Action(name="fs_set_acl", tool="File System Management", label="Set ACL",
-    params=[Param("path", "Path"), Param("acl_entries", "ACL entries", help="e.g. u:bob:rwx"),
+    params=[Param("path", "Path", help="e.g. /etc/hosts"), Param("acl_entries", "ACL entries", help="e.g. u:bob:rwx"),
             Param("recursive", "Recursive", type="checkbox", default=False, required=False)],
     build=lambda p: api.cmd_set_acl(_s(p, "path"), _s(p, "acl_entries"), _b(p, "recursive"))))
 _register(Action(name="fs_extract", tool="File System Management", label="Extract archive",
     params=[Param("archive_path", "Archive"), Param("destination_dir", "Destination dir")],
     build=lambda p: api.cmd_extract_archive(_s(p, "archive_path"), _s(p, "destination_dir"))))
 _register(Action(name="fs_compress", tool="File System Management", label="Compress file",
-    params=[Param("path", "Path"),
+    params=[Param("path", "Path", help="e.g. /etc/hosts"),
             Param("method", "Method", type="select", options=["gzip", "bzip2", "xz"], default="gzip"),
             Param("keep_original", "Keep original", type="checkbox", default=True, required=False)],
     build=lambda p: api.cmd_compress_file(_s(p, "path"), _s(p, "method", "gzip"), _b(p, "keep_original", True))))
 _register(Action(name="fs_decompress", tool="File System Management", label="Decompress file",
-    params=[Param("path", "Path"), Param("keep_original", "Keep original", type="checkbox", default=True, required=False)],
+    params=[Param("path", "Path", help="e.g. /etc/hosts"), Param("keep_original", "Keep original", type="checkbox", default=True, required=False)],
     build=lambda p: api.cmd_decompress_file(_s(p, "path"), _b(p, "keep_original", True))))
 _register(Action(name="fs_mount", tool="File System Management", label="Mount filesystem",
-    params=[Param("device", "Device"), Param("mount_point", "Mount point"),
+    params=[Param("device", "Device"), Param("mount_point", "Mount point", help="e.g. /mnt/data"),
             Param("fstype", "FS type", required=False), Param("options", "Options", required=False)],
     build=lambda p: api.cmd_mount_filesystem(_s(p, "device"), _s(p, "mount_point"),
                                              _s(p, "fstype"), _s(p, "options"))))
@@ -1135,30 +1187,31 @@ _register(Action(name="fs_unmount", tool="File System Management", label="Unmoun
     build=lambda p: api.cmd_unmount_filesystem(_s(p, "target"), _b(p, "force"),
                                                allow_critical=_b(p, "allow_critical", False))))
 _register(Action(name="fs_add_fstab", tool="File System Management", label="Add fstab entry",
-    params=[Param("device", "Device"), Param("mount_point", "Mount point"), Param("fstype", "FS type"),
+    params=[Param("device", "Device"), Param("mount_point", "Mount point", help="e.g. /mnt/data"), Param("fstype", "FS type"),
             Param("options", "Options", default="defaults", required=False),
             Param("dump", "dump", type="number", default="0", required=False),
             Param("pass_num", "pass", type="number", default="0", required=False)],
     build=lambda p: api.cmd_add_fstab_entry(_s(p, "device"), _s(p, "mount_point"), _s(p, "fstype"),
         _s(p, "options", "defaults") or "defaults", _i(p, "dump", 0), _i(p, "pass_num", 0))))
 _register(Action(name="fs_remove_fstab", tool="File System Management", label="Remove fstab entry",
-    danger=True, params=[Param("mount_point", "Mount point")],
+    danger=True, params=[Param("mount_point", "Mount point", help="e.g. /mnt/data")],
     build=lambda p: api.cmd_remove_fstab_entry(_s(p, "mount_point"),
                                                allow_critical=_b(p, "allow_critical", False))))
 _register(Action(name="fs_resize", tool="File System Management", label="Resize filesystem",
-    params=[Param("target", "Target"), Param("new_size", "New size", required=False, help="blank = grow to max")],
+    params=[Param("target", "Target", help="mount point or device, e.g. /data or /dev/mapper/vg-lv"),
+            Param("new_size", "New size", required=False, help="e.g. 20G — blank = grow to max")],
     build=lambda p: api.cmd_resize_filesystem(_s(p, "target"), _s(p, "new_size"))))
 _register(Action(name="fs_repair", tool="File System Management", label="Repair filesystem",
-    danger=True, params=[Param("device", "Device")],
+    danger=True, params=[Param("device", "Device", help="e.g. /dev/sda1")],
     build=lambda p: api.cmd_repair_filesystem(_s(p, "device"))))
 _register(Action(name="fs_show_quotas", tool="File System Management", label="Show quotas",
     params=[Param("mount_point", "Mount point", required=False)],
     build=lambda p: api.cmd_show_quotas(_s(p, "mount_point"))))
 _register(Action(name="fs_enable_quotas", tool="File System Management", label="Enable quotas",
-    params=[Param("mount_point", "Mount point")],
+    params=[Param("mount_point", "Mount point", help="e.g. /mnt/data")],
     build=lambda p: api.cmd_enable_quotas(_s(p, "mount_point"))))
 _register(Action(name="fs_set_quota", tool="File System Management", label="Set user quota",
-    params=[Param("username", "User"), Param("mount_point", "Mount point"),
+    params=[Param("username", "User"), Param("mount_point", "Mount point", help="e.g. /mnt/data"),
             Param("block_soft", "Block soft (KB)", type="number"), Param("block_hard", "Block hard (KB)", type="number"),
             Param("inode_soft", "Inode soft", type="number", default="0", required=False),
             Param("inode_hard", "Inode hard", type="number", default="0", required=False)],
@@ -1264,11 +1317,11 @@ _register(Action(name="dir_realm_permit", tool="Directory Services (Active Direc
 _register(Action(name="dir_mkhomedir", tool="Directory Services (Active Directory / LDAP)",
     label="Enable mkhomedir", params=[], build=lambda p: api.cmd_enable_mkhomedir()))
 _register(Action(name="dir_test_ldaps", tool="Directory Services (Active Directory / LDAP)",
-    label="Test LDAPS", params=[Param("server", "Server"), Param("port", "Port", default="636", required=False),
+    label="Test LDAPS", params=[Param("server", "Server", help="e.g. 192.168.1.50 or nfs.example.com"), Param("port", "Port", default="636", required=False),
         Param("base_dn", "Base DN", required=False)],
     build=lambda p: api.cmd_test_ldaps(_s(p, "server"), _s(p, "port", "636") or "636", _s(p, "base_dn"))))
 _register(Action(name="dir_config_ldap_client", tool="Directory Services (Active Directory / LDAP)",
-    label="Configure LDAP client", params=[Param("server", "Server"), Param("base_dn", "Base DN"),
+    label="Configure LDAP client", params=[Param("server", "Server", help="e.g. 192.168.1.50 or nfs.example.com"), Param("base_dn", "Base DN"),
         Param("use_ldaps", "Use LDAPS", type="checkbox", default=True, required=False)],
     build=lambda p: api.cmd_configure_ldap_client(_s(p, "server"), _s(p, "base_dn"), _b(p, "use_ldaps", True))))
 
@@ -1385,16 +1438,17 @@ _LAYOUT: dict[str, list] = {
         ("Diagnostics", "Boot & GRUB", ["health_list_kernels", "health_grub", "boot_analyze", "boot_set_grub_default", "boot_set_grub_timeout", "boot_rebuild_grub", "boot_set_target", "boot_set_cmdline", "boot_regen_initramfs", "boot_remove_kernels"]),
         ("Support & Reports", "Support", ["health_support_info", "health_sos_report", "health_install_sos", "health_install_auditd"]),
     ],
+    # Single-pane (empty tab key): all groups on one page instead of 7 tabs.
     "File System Management": [
-        ("Directories and Files", "Directories & Files", ["fs_list_dir", "fs_view", "fs_mkdir", "fs_rmdir", "fs_copy", "fs_move", "fs_rename"]),
-        ("Permissions, Ownership and Links", "Permissions & Ownership", ["fs_chmod", "fs_chown", "fs_show_acl", "fs_set_acl"]),
-        ("Permissions, Ownership and Links", "Links", ["fs_symlink", "fs_hardlink"]),
-        ("Mount / Unmount", "Mount / Unmount", ["fs_mount", "fs_unmount"]),
-        ("Network Mounts (NFS/CIFS)", "Network Mounts", ["fs_mount_nfs", "fs_mount_cifs"]),
-        ("Resize & Repair", "Resize & Repair", ["fs_resize", "fs_repair"]),
-        ("fstab and Quotas", "fstab", ["fs_show_fstab", "fs_add_fstab", "fs_remove_fstab"]),
-        ("fstab and Quotas", "Quotas", ["fs_show_quotas", "fs_enable_quotas", "fs_set_quota"]),
-        ("Archive and Compress", "Archive & Compress", ["fs_archive", "fs_extract", "fs_compress", "fs_decompress"]),
+        ("", "Directories & Files", ["fs_list_dir", "fs_view", "fs_mkdir", "fs_rmdir", "fs_copy", "fs_move", "fs_rename"]),
+        ("", "Permissions & Ownership", ["fs_chmod", "fs_chown", "fs_show_acl", "fs_set_acl"]),
+        ("", "Links", ["fs_symlink", "fs_hardlink"]),
+        ("", "Mount / Unmount", ["fs_mount", "fs_unmount"]),
+        ("", "Network Mounts (NFS/CIFS)", ["fs_mount_nfs", "fs_mount_cifs"]),
+        ("", "Resize & Repair", ["fs_resize", "fs_repair"]),
+        ("", "fstab", ["fs_show_fstab", "fs_add_fstab", "fs_remove_fstab"]),
+        ("", "Quotas", ["fs_show_quotas", "fs_enable_quotas", "fs_set_quota"]),
+        ("", "Archive & Compress", ["fs_archive", "fs_extract", "fs_compress", "fs_decompress"]),
     ],
     "Distro Subscription & Licensing": [
         ("Overview", "Overview", ["sub_detect", "sub_register_all"]),
@@ -1417,8 +1471,10 @@ _LAYOUT: dict[str, list] = {
         ("Schedule & DR", "Schedule & DR", ["backup_schedule", "backup_test_dr"]),
     ],
     "Certificate Management": [
-        ("Certificates", "Certificates", ["cert_generate_csr", "cert_check", "cert_install", "cert_renew_certbot"]),
-        ("Chain & TLS", "Chain & TLS", ["cert_verify_chain", "cert_troubleshoot_tls"]),
+        # Single-pane (empty tab keys): titled sections, no tab bar — it all fits.
+        ("", "Certificates", ["cert_generate_csr", "cert_check", "cert_install"]),
+        ("", "Let's Encrypt (certbot)", ["cert_install_certbot", "cert_renew_certbot"]),
+        ("", "Chain & TLS", ["cert_verify_chain", "cert_troubleshoot_tls"]),
     ],
     # ---- single-pane tools: no tab bar, just titled group sections ----
     "Service Management": [
@@ -1469,23 +1525,19 @@ def _apply_layout():
 # command for the everyday "just reboot it / restart NetworkManager / clear the
 # failed units" tasks. Every build= delegates to an existing cmd_* builder.
 _register(Action(
+    name="qsa_ping", tool="Quick System Actions", group="Reachability",
+    label="Ping (reachability)",
+    description="Confirm each checked host is reachable and its agent is answering — "
+                "runs a trivial command; a green OK means the host responded.",
+    params=[],
+    build=lambda p: 'echo pong; hostname 2>/dev/null; uptime 2>/dev/null || true',
+))
+_register(Action(
     name="qsa_restart_service", tool="Quick System Actions", group="Service (by name)",
     label="Restart a service",
     description="Restart any systemd service by name on the selected hosts.",
     params=[Param("service", "Service name", help="e.g. nginx, docker, postgresql")],
     build=lambda p: api.cmd_service_restart(_s(p, "service")),
-))
-_register(Action(
-    name="qsa_start_service", tool="Quick System Actions", group="Service (by name)",
-    label="Start", params=[],
-    description="Start the service named above on the selected hosts.",
-    build=lambda p: api.cmd_service_start(_s(p, "service")),
-))
-_register(Action(
-    name="qsa_stop_service", tool="Quick System Actions", group="Service (by name)",
-    label="Stop", params=[],
-    description="Stop the service named above on the selected hosts.",
-    build=lambda p: api.cmd_service_stop(_s(p, "service")),
 ))
 _register(Action(
     name="qsa_restart_networkmanager", tool="Quick System Actions", group="Common services",
@@ -1605,6 +1657,62 @@ def get(name: str):
     return _ACTIONS.get(name)
 
 
+# Example text shown greyed-out in an empty field when a Param sets no explicit
+# placeholder/help. Keyed by the param's LABEL so one table gives every tool's
+# fields a worked example ("what do I type here?") without annotating all ~200
+# params individually. Always an EXAMPLE, never a value that gets submitted. A
+# Param's own placeholder=/help= still wins over this.
+_EXAMPLE_PLACEHOLDERS = {
+    "Command": "e.g. uname -a && uptime",
+    "Service name": "e.g. sshd", "Service": "e.g. sshd",
+    "Username": "e.g. alice", "User": "e.g. alice",
+    "Search term": "e.g. nginx",
+    "Package name": "e.g. nginx", "Package name(s)": "e.g. nginx curl",
+    "Alias": "e.g. epel", "Alias / id": "e.g. epel",
+    "Repo URL / file": "e.g. https://example.com/repo.repo",
+    "Base URL": "e.g. https://repo.example.com/8/os",
+    "Display name": "e.g. Example Repo", "GPG key URL": "e.g. https://repo.example.com/RPM-GPG-KEY",
+    "Distribution (deb)": "e.g. jammy", "Components (deb)": "e.g. main",
+    "Comment": "e.g. nightly cleanup", "Full name / comment": "e.g. Alice Smith",
+    "Timer name": "e.g. nightly-backup",
+    "Interface": "e.g. eth0", "Parent interface": "e.g. eth0",
+    "Target": "e.g. 8.8.8.8 or example.com", "Host": "e.g. example.com", "Name": "e.g. example.com",
+    "DNS server": "e.g. 8.8.8.8", "DNS servers": "e.g. 8.8.8.8 1.1.1.1", "DNS": "e.g. 8.8.8.8",
+    "Connection": "e.g. eth0", "Gateway": "e.g. 192.168.1.1", "Via gateway": "e.g. 192.168.1.1",
+    "Destination CIDR": "e.g. 10.0.0.0/24",
+    "Device": "e.g. /dev/sda", "Device / partition": "e.g. /dev/sda1", "Partition #": "e.g. 1",
+    "Volume group": "e.g. vg0", "LV name": "e.g. data",
+    "Zone": "e.g. public", "Port": "e.g. 8080",
+    "Option": "e.g. net.ipv4.ip_forward", "Value": "e.g. 1",
+    "Common name": "e.g. host.example.com", "Organization": "e.g. Example Corp",
+    "Certificate path": "e.g. /etc/pki/tls/certs/host.crt",
+    "Container": "e.g. web",
+    "Domain": "e.g. corp.example.com", "Admin user": "e.g. Administrator",
+    "Computer OU": "e.g. OU=Servers,DC=corp,DC=example,DC=com",
+    "Source": "e.g. /tmp/file.txt", "Source path": "e.g. /var/www",
+    "Destination": "e.g. /opt/file.txt", "Destination dir": "e.g. /opt",
+    "Archive": "e.g. /tmp/backup.tar.gz", "Archive path": "e.g. /tmp/backup.tar.gz",
+    "Group": "e.g. developers", "Group name": "e.g. developers",
+    "PID": "e.g. 1234",
+    "ExecStart": "e.g. /usr/local/bin/app --flag", "ExecStart command": "e.g. /usr/local/bin/backup.sh",
+    "Working dir": "e.g. /opt/app", "Unit name": "e.g. myapp", "Description": "e.g. My application service",
+    "Hostname": "e.g. web01",
+    "Bond name": "e.g. bond0", "Team name": "e.g. team0", "Bridge name": "e.g. br0",
+    "VLAN ID": "e.g. 100", "VLAN name": "e.g. eth0.100",
+    "Export path": "e.g. /exports/data", "Share": "e.g. shared",
+    "Query": "e.g. type=USER_LOGIN", "Module name": "e.g. mypolicy",
+    "Path regex": "e.g. /srv/web(/.*)?", "Type": "e.g. httpd_sys_content_t",
+    "Public key": "e.g. ssh-ed25519 AAAA… user@host",
+    "Activation key": "e.g. rhel-prod-key", "Email": "e.g. admin@example.com",
+}
+
+
+def _placeholder_for(pr):
+    """Effective example placeholder for a param: its own placeholder wins, then
+    its help, then a label-based example from the table above."""
+    return pr.placeholder or pr.help or _EXAMPLE_PLACEHOLDERS.get(pr.label, "")
+
+
 def catalog():
     """Group actions by tool for the SPA, serializing Param to plain
     dicts. The build= callable is intentionally not serialized."""
@@ -1612,7 +1720,7 @@ def catalog():
     for a in _ACTIONS.values():
         by_tool.setdefault(a.tool, []).append({
             "name": a.name,
-            "label": a.label,
+            "label": (a.label[:1].upper() + a.label[1:]) if a.label else a.label,
             "description": a.description,
             "danger": a.danger,
             "tab": a.tab,
@@ -1622,6 +1730,7 @@ def catalog():
                     "name": pr.name, "label": pr.label, "type": pr.type,
                     "default": pr.default, "required": pr.required,
                     "options": pr.options, "help": pr.help,
+                    "placeholder": _placeholder_for(pr),
                 }
                 for pr in a.params
             ],

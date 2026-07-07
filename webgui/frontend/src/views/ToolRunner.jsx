@@ -48,7 +48,7 @@ const TOOLS = [
 // `solo` pins the runner to a single tool: no grid, no "← All tools" — used by
 // dedicated sidebar entries (e.g. Quick System Actions) that promote one tool to
 // its own top-level menu item.
-export default function ToolRunner({ openTool, openTab, onConsumed, solo }) {
+export default function ToolRunner({ openTool, openTab, openPrefill, onConsumed, solo }) {
   const [catalog, setCatalog] = useState(null);
   const [hosts, setHosts] = useState([]);
   const [err, setErr] = useState("");
@@ -72,7 +72,7 @@ export default function ToolRunner({ openTool, openTab, onConsumed, solo }) {
   useEffect(() => {
     if (!openTool) return;
     const t = TOOLS.find(([name]) => name === openTool);
-    if (t) setOpen({ name: t[0], special: t[4], tab: openTab });
+    if (t) setOpen({ name: t[0], special: t[4], tab: openTab, prefill: openPrefill });
     onConsumed && onConsumed();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openTool, openTab]);
@@ -97,9 +97,9 @@ export default function ToolRunner({ openTool, openTab, onConsumed, solo }) {
           <strong>{open.name}</strong>
         </div>
         {open.special === "env"
-          ? <EnvironmentalPolicies hosts={hosts} onRefreshHosts={loadHosts} />
+          ? <EnvironmentalPolicies prefill={open.prefill} hosts={hosts} onRefreshHosts={loadHosts} />
           : Custom
-            ? <Custom initialTab={open.tab} hosts={hosts} onRefreshHosts={loadHosts} />
+            ? <Custom initialTab={open.tab} prefill={open.prefill} hosts={hosts} onRefreshHosts={loadHosts} />
             : tool
               ? <ToolPage tool={tool} hosts={hosts} onRefreshHosts={loadHosts} />
               : <div className="empty">This tool isn't available.</div>}

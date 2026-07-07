@@ -1,7 +1,6 @@
-// Task search index — maps plain-language tasks to a destination, mirroring
-// the desktop client/feature_search.py registry. Each entry: a section to open
-// (hosts/settings/connect/portal/sysadmin/live) and, for System Administration,
-// the tool name (and optional User & Group tab).
+// Task search index — maps plain-language tasks to a destination. Each entry:
+// a section to open (hosts/settings/connect/portal/sysadmin/live) and, for
+// System Administration, the tool name (and optional User & Group tab).
 export const REGISTRY = [
   { title: "Host Enrollment", section: "hosts",
     keywords: ["enroll host", "add host", "new host", "download agent", "agent bundle", "managed hosts", "fleet", "host enrollment", "curl", "enrollment token", "disenroll"] },

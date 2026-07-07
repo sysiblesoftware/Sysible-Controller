@@ -56,6 +56,7 @@ def merge_duplicate_host_entries(entries):
                 "type_text": "Agent + SSH",
                 "address": f"agent: {agent_entry['address']}   |   ssh: {ssh_entry['address']}",
                 "environment": agent_entry.get("environment") or ssh_entry.get("environment") or "",
+                "is_controller": bool(agent_entry.get("is_controller") or ssh_entry.get("is_controller")),
                 "agent_entry": agent_entry,
                 "ssh_entry": ssh_entry,
             })
@@ -127,6 +128,8 @@ def list_merged_hosts(agent_only=True):
             # Host forbids passwordless sudo: dispatch supplies the operator's
             # sudo password (the agent then uses `sudo -S`). See run_on_entry.
             "requires_sudo_password": bool(a.get("requires_sudo_password")),
+            # This enrolled host IS the controller itself (self-managed).
+            "is_controller": bool(a.get("is_controller")),
         })
 
     try:
@@ -164,32 +167,44 @@ def _entry_ip(entry):
 
 
 def _dedupe_same_ip(entries):
-    """Collapse entries that resolve to the SAME physical machine (same IP)
-    into one, keeping the richest connection (merged > agent > ssh). Without
-    this, a box enrolled twice under different names - e.g. an agent host plus
-    a stray manual SSH record at the same IP - shows up as two separate hosts.
-    Entries with no usable IP pass through untouched (deduped by name already).
-    Order is preserved, with the surviving entry taking the first position its
-    IP appeared at."""
-    rank = {"merged": 3, "agent": 2, "ssh": 1}
-    best = {}
-    for e in entries:
-        ip = _entry_ip(e)
-        if not ip:
-            continue
-        cur = best.get(ip)
-        if cur is None or rank.get(e.get("kind"), 0) > rank.get(cur.get("kind"), 0):
-            best[ip] = e
+    """Fold a stray SSH-only record into the agent host at the same IP.
+
+    Two *agent* hosts are ALWAYS distinct machines even when they report the
+    same IP (bridge/VPN/NAT, or both default to a LAN address): each agent is a
+    separate enrollment (host_id) and must never be merged away — doing so hid a
+    genuinely-enrolled host. So agent/merged entries are always kept.
+
+    The only collapsing here is for a pure-SSH entry (kind 'ssh') that shares an
+    IP with an agent/merged entry: that's the agent host's own SSH transport
+    showing up a second time, so it folds into the agent. Two SSH-only entries
+    at the same IP dedupe to the first. Entries with no usable IP pass through
+    untouched (already deduped by name). Order is preserved."""
+    # IPs that have a real agent behind them (kind 'agent' or 'merged').
+    agent_ips = {
+        _entry_ip(e)
+        for e in entries
+        if e.get("kind") in ("agent", "merged") and _entry_ip(e)
+    }
 
     result = []
-    seen = set()
+    seen_ssh_ips = set()
     for e in entries:
+        kind = e.get("kind")
+        # Agent/merged hosts are always distinct — keep every one.
+        if kind in ("agent", "merged"):
+            result.append(e)
+            continue
+        # Pure-SSH entry.
         ip = _entry_ip(e)
         if not ip:
-            result.append(e)
-        elif ip not in seen:
-            seen.add(ip)
-            result.append(best[ip])
+            result.append(e)  # can't identify a machine; leave it alone
+            continue
+        if ip in agent_ips:
+            continue  # the agent host's own SSH transport — fold it away
+        if ip in seen_ssh_ips:
+            continue  # duplicate SSH-only record at the same IP
+        seen_ssh_ips.add(ip)
+        result.append(e)
     return result
 
 
@@ -218,7 +233,7 @@ def _sudo_hint(entry):
 
 
 def run_on_entry(entry, command: str, kind: str = "command", description: str = None,
-                 become_password: str = None, needs_sudo: bool = True):
+                 become_password: str = None, needs_sudo: bool = True, log: bool = True):
     """Run `command` on one merged-host entry (as produced by
     list_merged_hosts()). SSH executes synchronously over exec_remote()
     - the result is ready immediately. Agent dispatch is async - only a
@@ -234,27 +249,12 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
     """
     entry = _underlying_entry(entry)
 
-    # Resolve the sudo (become) password.
-    #
-    # If the caller already supplied one - e.g. the web console resolves it from
-    # its controller-side store and passes it in - ALWAYS honour it; never
-    # discard it. Only when none was supplied do we fall back to the desktop's
-    # workstation-local store, and only for a host flagged password-sudo.
-    #
-    # The previous code did `else: become_password = None`, which silently
-    # zeroed ANY caller-supplied password whenever this entry's flag was
-    # missing/stale - and SSH (and merged-resolved-to-SSH) entries never carried
-    # the flag. That's exactly what broke the web console: the password was
-    # resolved correctly upstream, then thrown away here. Passing a password to a
-    # host that doesn't need it is harmless - the agent's `sudo -S` just ignores
-    # it under NOPASSWD - so honouring an explicit password is always safe.
-    if not become_password and entry.get("requires_sudo_password"):
-        try:
-            from client import become_credentials
-            become_password = become_credentials.get_password(entry.get("label", ""))
-        except Exception:
-            become_password = None
-
+    # The sudo (become) password is resolved by the caller and passed in: the
+    # web console reads it from the controller-side store (webgui/sudo_store.py)
+    # for the logged-in admin and supplies it here. We only ever honour what we
+    # were given — passing a password to a host that doesn't need it is harmless
+    # (the agent's `sudo -S` just ignores it under NOPASSWD), so an explicit
+    # password is always safe to forward.
     if entry.get("requires_sudo_password") and needs_sudo:
         # Fail fast with a clear instruction instead of dispatching a command
         # that will just bounce off `sudo` for lack of a password. This host is
@@ -273,7 +273,7 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
     if entry["kind"] == "ssh":
         try:
             result = exec_remote(entry["id"], command, description=description,
-                                 become_password=become_password)
+                                 become_password=become_password, log=log)
             stderr = result.get("stderr", "")
             return {
                 "sync": True,
@@ -286,7 +286,8 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
             return {"sync": True, "stdout": "", "stderr": "", "code": None, "error": str(e)}
 
     task_ids = queue_command_on_hosts([entry["id"]], command, kind=kind,
-                                      description=description, become_password=become_password)
+                                      description=description, become_password=become_password,
+                                      log=log)
     task_id = task_ids.get(entry["id"])
     return {
         "sync": False,
@@ -529,6 +530,46 @@ def cmd_flush_dns() -> str:
     )
 
 
+def cmd_update_status(refresh: bool = False) -> str:
+    """Read-only fleet patch status as one machine-readable line:
+    `SYSUPDATES|mgr=<dnf|zypper|apt|unknown>|total=<n>|security=<n>|reboot=<0|1>`.
+    Counts pending package updates (best-effort, cross-distro) and whether a
+    reboot is required. All probes are `command -v`-guarded; anything missing
+    yields 0.
+
+    refresh=False (default): use each manager's already-downloaded metadata — fast
+    and read-only; counts reflect the host's last repo refresh.
+    refresh=True ("live"): force a metadata refresh first (dnf makecache / zypper
+    refresh / apt-get update) so the counts are current. Slower and hits the
+    mirrors, so it's opt-in from the UI."""
+    prep = ""
+    if refresh:
+        prep = (
+            "if command -v dnf >/dev/null 2>&1; then dnf -q makecache --refresh >/dev/null 2>&1; "
+            "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive -q refresh >/dev/null 2>&1; "
+            "elif command -v apt-get >/dev/null 2>&1; then apt-get -qq update >/dev/null 2>&1; fi\n"
+        )
+    return (
+        prep +
+        "mgr=unknown; total=0; sec=0; rr=0\n"
+        "if command -v dnf >/dev/null 2>&1; then mgr=dnf; "
+        "total=$(dnf -q check-update 2>/dev/null | awk 'NF>=3 && $1!~/^(Obsoleting|Last|Security|Loaded|Dependencies)/{c++} END{print c+0}'); "
+        "sec=$(dnf -q --security check-update 2>/dev/null | awk 'NF>=3 && $1!~/^(Obsoleting|Last|Security|Loaded|Dependencies)/{c++} END{print c+0}'); "
+        "elif command -v zypper >/dev/null 2>&1; then mgr=zypper; "
+        "total=$(zypper --non-interactive -q list-updates 2>/dev/null | grep -cE '^v \\|'); "
+        "sec=$(zypper --non-interactive -q list-patches --category security 2>/dev/null | grep -cE '\\| *needed'); "
+        "elif command -v apt-get >/dev/null 2>&1; then mgr=apt; "
+        "up=$(apt-get -s -o Debug::NoLocking=true upgrade 2>/dev/null | grep '^Inst '); "
+        "total=$(printf '%s\\n' \"$up\" | grep -c '^Inst '); "
+        "sec=$(printf '%s\\n' \"$up\" | grep -ci security); "
+        "fi\n"
+        "[ -f /var/run/reboot-required ] && rr=1\n"
+        "if command -v needs-restarting >/dev/null 2>&1; then needs-restarting -r >/dev/null 2>&1 || rr=1; fi\n"
+        "if command -v zypper >/dev/null 2>&1; then zypper needs-rebooting >/dev/null 2>&1; [ \"$?\" = 102 ] && rr=1; fi\n"
+        "printf 'SYSUPDATES|mgr=%s|total=%s|security=%s|reboot=%s\\n' \"$mgr\" \"${total:-0}\" \"${sec:-0}\" \"$rr\"\n"
+    )
+
+
 def cmd_drop_caches() -> str:
     """Free reclaimable memory: sync, then drop the page cache / dentries /
     inodes. Safe — the kernel only drops CLEAN caches, no data is lost; it just
@@ -603,9 +644,17 @@ def cmd_metrics_snapshot() -> str:
         "mem=$(awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{if(t>0)printf \"%d\",(t-a)*100/t; else print 0}' /proc/meminfo 2>/dev/null); "
         "load1=$(awk '{print $1}' /proc/loadavg 2>/dev/null); "
         "cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1); "
-        "failed=$(systemctl --failed --no-legend 2>/dev/null | wc -l | tr -d ' '); [ -z \"$failed\" ] && failed=0; "
+        # Derive the failed-unit COUNT from the actual unit NAMES (not a separate
+        # `wc -l`), so the two can never disagree and stray/blank/legend/bullet
+        # lines can't produce a phantom "1 failed" the operator can't find. We
+        # scan each line for the first token that looks like a real unit name,
+        # which is robust across systemd versions and the '●' bullet prefix
+        # (with or without --plain).
+        "flist=$(systemctl --failed --no-legend 2>/dev/null | awk "
+        "'{for(i=1;i<=NF;i++) if($i ~ /\\.(service|socket|mount|timer|target|path|scope|automount|swap|slice)$/){print $i; break}}'); "
+        "failed=$(printf '%s' \"$flist\" | grep -c .); [ -z \"$failed\" ] && failed=0; "
         # Names of the failed/crashed units (first few) so the card can say WHICH.
-        "units=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | head -4 | paste -sd, - 2>/dev/null); [ -z \"$units\" ] && units=-; "
+        "units=$(printf '%s\\n' \"$flist\" | grep . | head -4 | paste -sd, - 2>/dev/null); [ -z \"$units\" ] && units=-; "
         # Overall systemd state: 'degraded' means a unit failed (incl. at boot),
         # 'maintenance'/'starting' are also not-healthy. 'running' is good.
         "sysd=$(systemctl is-system-running 2>/dev/null); [ -z \"$sysd\" ] && sysd=unknown; "
@@ -744,9 +793,26 @@ for mp in / /tmp /var /home /dev/shm /boot; do
   key=$(printf '%s' "$mp" | sed 's#^/$#root#; s#^/##; s#/#_#g')
   [ -n "$opts" ] && p "mount.$key" "$opts"
 done
-sg2=$($TMO find / -xdev -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | wc -l 2>/dev/null | tr -d ' '); p fs.suid_sgid_count "${sg2:-na}"
-ww=$($TMO find / -xdev -type f -perm -0002 2>/dev/null | wc -l 2>/dev/null | tr -d ' '); p fs.world_writable_count "${ww:-na}"
-no=$($TMO find / -xdev \( -nouser -o -nogroup \) 2>/dev/null | wc -l 2>/dev/null | tr -d ' '); p fs.unowned_count "${no:-na}"
+# These three integrity checks are each a full-tree `find /` walk — by far the
+# slowest part of posture. Run them in PARALLEL (each into its own temp file),
+# so this section costs roughly ONE walk instead of three back-to-back. Falls
+# back to sequential if mktemp -d isn't available.
+FSD=$(mktemp -d 2>/dev/null)
+if [ -n "$FSD" ] && [ -d "$FSD" ]; then
+  ( $TMO find / -xdev -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | wc -l | tr -d ' ' > "$FSD/suid" ) &
+  ( $TMO find / -xdev -type f -perm -0002 2>/dev/null | wc -l | tr -d ' ' > "$FSD/ww" ) &
+  ( $TMO find / -xdev \( -nouser -o -nogroup \) 2>/dev/null | wc -l | tr -d ' ' > "$FSD/no" ) &
+  wait
+  sg2=$(cat "$FSD/suid" 2>/dev/null); ww=$(cat "$FSD/ww" 2>/dev/null); no=$(cat "$FSD/no" 2>/dev/null)
+  rm -rf "$FSD" 2>/dev/null
+else
+  sg2=$($TMO find / -xdev -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | wc -l | tr -d ' ')
+  ww=$($TMO find / -xdev -type f -perm -0002 2>/dev/null | wc -l | tr -d ' ')
+  no=$($TMO find / -xdev \( -nouser -o -nogroup \) 2>/dev/null | wc -l | tr -d ' ')
+fi
+p fs.suid_sgid_count "${sg2:-na}"
+p fs.world_writable_count "${ww:-na}"
+p fs.unowned_count "${no:-na}"
 
 # --- Time synchronization ---------------------------------------------------
 if command -v timedatectl >/dev/null 2>&1; then
@@ -772,6 +838,10 @@ if command -v ss >/dev/null 2>&1; then
   p net.listen_count "$(ss -tulnH 2>/dev/null | wc -l | tr -d ' ')"
   p net.listen_ports "$(ss -tulnH 2>/dev/null | awk '{print $5}' | sed 's/.*://' | grep -E '^[0-9]+$' | sort -un | paste -sd, - | cut -c1-300)"
 fi
+_sy_ips="$(ip -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1)"
+[ -n "$_sy_ips" ] || _sy_ips="$(hostname -I 2>/dev/null | tr ' ' '\n')"
+p net.ipv4 "$(printf '%s\n' "$_sy_ips" | grep -E '^[0-9]+\.' | paste -sd, - | cut -c1-300)"
+p net.ipv6 "$(printf '%s\n' "$_sy_ips" | grep ':' | grep -viE '^fe80' | paste -sd, - | cut -c1-300)"
 p net.dns "$(awk '/^nameserver/{print $2}' /etc/resolv.conf 2>/dev/null | paste -sd, -)"
 p net.gateway "$(ip route 2>/dev/null | awk '/^default/{print $3; exit}')"
 p net.ip_forward "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)"

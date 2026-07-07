@@ -1,11 +1,28 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
+import SuppressMenu from "../components/SuppressMenu.jsx";
+import { findSupp, describeSupp } from "../suppress.js";
+
+// Map a posture row key to the dashboard suppression signal key where one
+// exists, so suppressing a finding here stays consistent with the compliance
+// strip. Rows without a mapping suppress under their own posture key.
+const SUPP_KEY = {
+  "ssh.permit_root_login": "ssh_root_login",
+  "fw.active": "firewall_disabled",
+  "mac.selinux": "mac_not_enforcing", "mac.apparmor": "mac_not_enforcing",
+  "reboot.required": "reboot_required",
+  "time.synced": "time_unsynced",
+  "users.uid0_count": "risky_accounts", "users.empty_pw_count": "risky_accounts",
+  "cert.expiring_30d": "cert_expiring", "cert.nearest_days": "cert_expiring",
+  "svc.failed_count": "failed_units",
+  "fs.disk_pct": "disk_critical",
+};
 
 // Per-host posture / compliance drill-down. Read-only: renders the full
 // category breakdown from /api/host-posture/{id} (see cmd_posture_snapshot),
 // with pass/warn/fail coloring on the signals that have a clear good/bad state.
 
-const C = { good: "#4ec07a", warn: "#e0a83a", bad: "#e06c6c", none: "#7a7a7a" };
+const C = { good: "#4ec07a", warn: "#e0a83a", bad: "#e06c6c", none: "#7a7a7a", supp: "#6c7fa8" };
 
 // Display sections: each pulls one or more gather categories together under a
 // friendly title. `labels` renames known keys; anything else is humanized so
@@ -46,6 +63,7 @@ const SECTIONS = [
     "log.rsyslog": "rsyslog", "log.journald": "journald", "log.remote_forward": "Remote forwarding",
     "log.logrotate": "logrotate", "log.var_log_mb": "/var/log size (MB)" } },
   { title: "Networking", cats: ["net"], labels: {
+    "net.ipv4": "IPv4 addresses", "net.ipv6": "IPv6 addresses",
     "net.listen_count": "Listening sockets", "net.listen_ports": "Listening ports",
     "net.dns": "DNS servers", "net.gateway": "Default gateway", "net.ip_forward": "IP forwarding",
     "net.ipv6_disabled": "IPv6 disabled", "net.hostname": "Hostname" } },
@@ -99,7 +117,7 @@ function evalStatus(fullKey, v) {
     case "sec.usb_storage": return s === "blocked" ? "good" : "none";
     case "ssh.permit_root_login": return s === "yes" ? "bad" : (s === "no" ? "good" : (s ? "warn" : "none"));
     case "ssh.password_auth": return s === "yes" ? "warn" : s === "no" ? "good" : "none";
-    case "ssh.weak_ciphers": case "ssh.weak_macs": case "ssh.weak_kex": return s ? "bad" : "good";
+    case "ssh.weak_ciphers": case "ssh.weak_macs": case "ssh.weak_kex": return s ? "warn" : "good";
     case "users.uid0_count": return parseInt(s, 10) > 1 ? "bad" : "good";
     case "users.empty_pw_count": return parseInt(s, 10) > 0 ? "bad" : "good";
     case "users.dup_uid": case "users.dup_gid": return s ? "bad" : "good";
@@ -152,21 +170,32 @@ const ACTIONS = {
   "ssh.weak_macs": { kind: "tool", tool: "Security Administration" },
   "ssh.weak_kex": { kind: "tool", tool: "Security Administration" },
   "time.synced": { kind: "tool", tool: "Time Synchronization" },
-  "svc.failed_count": { kind: "tool", tool: "Quick System Actions" },
+  "svc.failed_count": { kind: "tool", tool: "Quick System Actions",
+    // Carry the failed unit's name + this host over to Quick System Actions so
+    // its "Service (by name)" field and target are already filled in.
+    prefill: (posture, hostId) => {
+      const names = String((posture.svc || {}).failed || "").split(/[\s,]+/).filter(Boolean);
+      return { name: names[0] || "", host: hostId };
+    } },
   "fs.disk_pct": { kind: "tool", tool: "Storage Administration" },
   "fs.inode_pct": { kind: "tool", tool: "Storage Administration" },
   "users.empty_pw_count": { kind: "tool", tool: "User & Group Administration" },
   "users.uid0_count": { kind: "tool", tool: "User & Group Administration" },
-  "users.pw_complexity": { kind: "tool", tool: "Environmental Policies" },
+  "users.pw_complexity": { kind: "tool", tool: "Environmental Policies",
+    // Land on Environmental Policies with THIS host already checked as the push
+    // target, so the operator can adjust password quality and push in one go.
+    prefill: (posture, hostId) => ({ host: hostId }) },
 };
 
-function RowAction({ action, hostId, onOpen, onRefreshSoon }) {
+function RowAction({ action, hostId, posture, onOpen, onRefreshSoon }) {
   const [state, setState] = useState("idle"); // idle | busy | ok | err
   const [msg, setMsg] = useState("");
   if (action.kind === "tool") {
     return (
       <button className="btn ghost sm" style={{ whiteSpace: "nowrap" }}
-              onClick={() => onOpen && onOpen("sysadmin", { tool: action.tool })}
+              onClick={() => onOpen && onOpen("sysadmin", {
+                tool: action.tool, tab: action.tab,
+                prefill: action.prefill ? action.prefill(posture || {}, hostId) : undefined })}
               title={`Open ${action.tool}`}>
         Fix in {action.tool} →
       </button>
@@ -195,31 +224,59 @@ function RowAction({ action, hostId, onOpen, onRefreshSoon }) {
   );
 }
 
-function Row({ fullKey, label, value, hostId, onOpen, canAct, onRefreshSoon }) {
+function Row({ fullKey, label, value, hostId, posture, host, env, boot, supps, onOpen, canAct, onRefreshSoon, onSuppressed, onChanged }) {
   const st = evalStatus(fullKey, value);
-  const action = (canAct && (st === "bad" || st === "warn")) ? ACTIONS[fullKey] : null;
+  const flagged = st === "bad" || st === "warn";
+  const suppKey = SUPP_KEY[fullKey] || fullKey;
+  // Is this (still-alerting) finding suppressed? Then show it muted/gray rather
+  // than amber/red — it's flagging but the operator has accepted/silenced it.
+  const supp = flagged ? findSupp(supps, { key: suppKey, host, env, bootEpoch: boot }) : null;
+  const action = (flagged && canAct && !supp) ? ACTIONS[fullKey] : null;
+  const dotColor = supp ? C.supp : C[st];
+  const valColor = supp ? C.supp : (st === "bad" ? C.bad : st === "warn" ? C.warn : "var(--text)");
+  // An unsuppressed bad/warn finding gets a tinted band with a colored left
+  // accent so it's noticeable at a glance instead of blending into the list.
+  // Non-flagged rows keep a transparent accent of the same width to stay aligned.
+  const accent = (flagged && !supp) ? (st === "bad" ? C.bad : C.warn) : null;
+  const rowBg = st === "bad" ? "rgba(224,108,108,0.12)" : "rgba(224,168,58,0.10)";
   return (
-    <div style={{ padding: "5px 0", borderBottom: "1px solid var(--border)" }}>
+    <div style={{
+      padding: "5px 8px",
+      borderBottom: "1px solid var(--border)",
+      borderLeft: `3px solid ${accent || "transparent"}`,
+      background: accent ? rowBg : "transparent",
+      borderRadius: accent ? "0 4px 4px 0" : 0,
+    }}>
       <div className="spread" style={{ gap: 12, alignItems: "baseline" }}>
         <span className="faint" style={{ fontSize: 13, whiteSpace: "nowrap" }}>{label}</span>
         <span style={{ fontSize: 13, textAlign: "right", minWidth: 0, overflowWrap: "anywhere",
                        display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}>
-          {st !== "none" && <span className="dot" style={{ background: C[st], flex: "0 0 auto" }} />}
-          <span style={{ color: st === "bad" ? C.bad : st === "warn" ? C.warn : "var(--text)", fontWeight: st === "bad" ? 600 : 400 }}>
+          {st !== "none" && <span className="dot" style={{ background: dotColor, flex: "0 0 auto" }} />}
+          <span style={{ color: valColor, fontWeight: st === "bad" && !supp ? 600 : 400 }}>
             {fmtValue(fullKey, value)}
           </span>
         </span>
       </div>
-      {action && (
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 5 }}>
-          <RowAction action={action} hostId={hostId} onOpen={onOpen} onRefreshSoon={onRefreshSoon} />
+      {flagged && supp && (
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8, marginTop: 5 }}>
+          <span style={{ fontSize: 11, color: C.supp, border: `1px solid ${C.supp}`, borderRadius: 10, padding: "0 8px" }}
+                title={describeSupp(supp)}>⊘ suppressed · {describeSupp(supp)}</span>
+          {canAct && <button className="btn ghost sm" title="Remove suppression"
+                  onClick={async () => { try { await api.removeSuppression(supp.id); onChanged && onChanged(); } catch { /* ignore */ } }}>
+            Un-suppress</button>}
+        </div>
+      )}
+      {flagged && canAct && !supp && (
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 5 }}>
+          {action && <RowAction action={action} hostId={hostId} posture={posture} onOpen={onOpen} onRefreshSoon={onRefreshSoon} />}
+          <SuppressMenu ctx={{ key: suppKey, host, env, bootEpoch: boot }} onDone={onSuppressed} />
         </div>
       )}
     </div>
   );
 }
 
-function SectionCard({ section, posture, hostId, onOpen, canAct, onRefreshSoon }) {
+function SectionCard({ section, posture, hostId, host, env, boot, supps, onOpen, canAct, onRefreshSoon, onSuppressed, onChanged }) {
   // Collect every present key within this section's categories: known keys keep
   // their friendly label and stated order; unknown ones are appended humanized.
   const rows = [];
@@ -240,15 +297,107 @@ function SectionCard({ section, posture, hostId, onOpen, canAct, onRefreshSoon }
     <div className="card" style={{ padding: "12px 14px" }}>
       <div className="section-title" style={{ marginBottom: 6 }}>{section.title}</div>
       {rows.map((r) => <Row key={r.fullKey} fullKey={r.fullKey} label={r.label} value={r.value}
-                            hostId={hostId} onOpen={onOpen} canAct={canAct} onRefreshSoon={onRefreshSoon} />)}
+                            hostId={hostId} posture={posture} host={host} env={env} boot={boot} supps={supps}
+                            onOpen={onOpen} canAct={canAct} onRefreshSoon={onRefreshSoon}
+                            onSuppressed={onSuppressed} onChanged={onChanged} />)}
     </div>
   );
 }
 
+const CRIT_COLOR = { low: "#7a7a7a", normal: "#7a7a7a", high: "#e0a83a", critical: "#e06c6c" };
+
+// Operator metadata for one host: criticality / owner / tags / notes, keyed by
+// host name (applies to agent + SSH hosts alike). View + inline edit.
+function HostMetaPanel({ name, canAct }) {
+  const [meta, setMeta] = useState(null);
+  const [crits, setCrits] = useState(["low", "normal", "high", "critical"]);
+  const [edit, setEdit] = useState(false);
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!name) return;
+    const fallback = { tags: [], owner: "", notes: "", criticality: "normal" };
+    api.hostMeta()
+      .then((d) => { setCrits(d.criticality || crits); setMeta((d.meta || {})[name] || fallback); })
+      .catch(() => setMeta(fallback));
+  }, [name]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!meta) return null;
+  const crit = meta.criticality || "normal";
+  const startEdit = () => { setDraft({ ...meta, tagsText: (meta.tags || []).join(", ") }); setErr(""); setEdit(true); };
+  async function save() {
+    setBusy(true); setErr("");
+    const body = {
+      tags: draft.tagsText.split(",").map((t) => t.trim()).filter(Boolean),
+      owner: draft.owner, notes: draft.notes, criticality: draft.criticality,
+    };
+    try { setMeta(await api.setHostMeta(name, body)); setEdit(false); }
+    catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 12 }}>
+      <div className="spread" style={{ marginBottom: edit ? 8 : 0 }}>
+        <strong>Host info</strong>
+        {canAct && !edit && <button className="btn ghost sm" onClick={startEdit}>Edit</button>}
+      </div>
+      {!edit ? (
+        <div className="row" style={{ gap: 16, flexWrap: "wrap", fontSize: 13, alignItems: "center" }}>
+          <span><span className="dot" style={{ background: CRIT_COLOR[crit] }} /> {crit}</span>
+          <span className="faint">owner: {meta.owner || "—"}</span>
+          <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {(meta.tags || []).length
+              ? meta.tags.map((t) => <span key={t} className="badge" style={{ fontSize: 11 }}>{t}</span>)
+              : <span className="faint">no tags</span>}
+          </span>
+          {meta.notes && <span className="faint" style={{ fontSize: 12, flexBasis: "100%" }}>{meta.notes}</span>}
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 8, maxWidth: 520 }}>
+          <label className="field"><span>Criticality</span>
+            <select value={draft.criticality} onChange={(e) => setDraft({ ...draft, criticality: e.target.value })}>
+              {crits.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select></label>
+          <label className="field"><span>Owner</span>
+            <input value={draft.owner} onChange={(e) => setDraft({ ...draft, owner: e.target.value })}
+                   placeholder="e.g. platform-team or alice" /></label>
+          <label className="field"><span>Tags <span className="faint">(comma-separated)</span></span>
+            <input value={draft.tagsText} onChange={(e) => setDraft({ ...draft, tagsText: e.target.value })}
+                   placeholder="e.g. web, edge, pci" /></label>
+          <label className="field"><span>Notes</span>
+            <textarea value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
+                      rows={2} style={{ width: "100%" }} placeholder="Anything worth remembering about this host" /></label>
+          {err && <div className="error-box">{err}</div>}
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn sm" onClick={save} disabled={busy}>{busy ? <span className="spin" /> : "Save"}</button>
+            <button className="btn ghost sm" onClick={() => setEdit(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Module-level posture cache (survives unmount): navigating to a "Fix in…" tool
+// and back re-mounts this component, and a fresh gather is a live host round-trip.
+// We seed instantly from the last result for this host, then revalidate in the
+// background (stale-while-revalidate) so "back" is seamless, not a spinner.
+const _POSTURE_CACHE = new Map();   // hostId -> { data, ts }
+
 export default function HostDetail({ hostId, label, onBack, onOpen, canAct = true }) {
-  const [data, setData] = useState(null);
+  const cached = hostId ? _POSTURE_CACHE.get(hostId) : null;
+  const [data, setData] = useState(cached ? cached.data : null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [suppMsg, setSuppMsg] = useState(false);
+  const [supps, setSupps] = useState([]);
+  const loadSupps = useCallback(() => {
+    api.suppressions().then((d) => setSupps(d.suppressions || [])).catch(() => {});
+  }, []);
+  useEffect(() => { loadSupps(); }, [loadSupps]);
 
   const [rebooting, setRebooting] = useState(false);
   const pollRef = useRef(null);
@@ -256,15 +405,27 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
   useEffect(() => { dataRef.current = data; }, [data]);
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
+  const store = useCallback((d) => {
+    if (hostId && d && d.posture) _POSTURE_CACHE.set(hostId, { data: d, ts: Date.now() });
+    setData(d);
+  }, [hostId]);
+
   const load = useCallback(() => {
     if (!hostId) { setErr("No host selected."); return; }
-    setLoading(true); setErr("");
+    // Only show the full-page spinner when we have nothing cached to show.
+    if (!_POSTURE_CACHE.get(hostId)) setLoading(true);
+    setErr("");
     api.hostPosture(hostId)
-      .then((d) => setData(d))
-      .catch((e) => setErr(e.message))
+      .then((d) => store(d))
+      .catch((e) => { if (!_POSTURE_CACHE.get(hostId)) setErr(e.message); })
       .finally(() => setLoading(false));
-  }, [hostId]);
-  useEffect(() => { load(); }, [load]);
+  }, [hostId, store]);
+  // Seed from cache immediately on host change, then revalidate.
+  useEffect(() => {
+    const c = hostId ? _POSTURE_CACHE.get(hostId) : null;
+    setData(c ? c.data : null);
+    load();
+  }, [hostId, load]);
 
   // After a reboot the host goes down and comes back. Poll posture and ALWAYS
   // swap in the latest successful gather (so the box never sits on stale uptime),
@@ -313,6 +474,14 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
       </div>
 
       {err && <div className="error-box">{err}</div>}
+      {suppMsg && (
+        <div className="ok-text" style={{ fontSize: 12.5, marginBottom: 10, display: "flex", gap: 8, alignItems: "center" }}>
+          ✓ Finding suppressed — it’ll drop from the dashboard donut and “needs attention”.
+          <button className="btn ghost sm" onClick={() => setSuppMsg(false)}>Dismiss</button>
+        </div>
+      )}
+
+      {label && <HostMetaPanel name={label} canAct={canAct} />}
 
       {rebooting && (
         <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "9px 12px",
@@ -341,8 +510,11 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))",
                       gap: 12, alignItems: "start" }}>
           {SECTIONS.map((s) => <SectionCard key={s.title} section={s} posture={posture}
-                                            hostId={hostId} onOpen={onOpen} canAct={canAct}
-                                            onRefreshSoon={refreshAfterReboot} />)}
+                                            hostId={hostId} host={label} env={data && data.environment}
+                                            boot={(posture.os || {}).boot_epoch} supps={supps}
+                                            onOpen={onOpen} canAct={canAct} onRefreshSoon={refreshAfterReboot}
+                                            onSuppressed={() => { setSuppMsg(true); loadSupps(); }}
+                                            onChanged={loadSupps} />)}
         </div>
       )}
     </div>

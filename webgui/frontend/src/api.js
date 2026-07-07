@@ -71,10 +71,12 @@ export const api = {
   controllerConfig: () => req("/api/controller-config"),
   setControllerConfig: (cfg) =>
     req("/api/controller-config", { method: "POST", body: cfg }),
+  controllerRestart: () => req("/api/controller-restart", { method: "POST" }),
   controllerUpdate: () => req("/api/controller-update", { method: "POST" }),
   controllerUpdateStatus: () => req("/api/controller-update-status"),
   controllerUpdateLog: (lines = 400) => req(`/api/controller-update-log?lines=${lines}`),
   updateAgents: () => req("/api/update-agents", { method: "POST" }),
+  updateStatus: () => req("/api/update-status"),
   auditLog: (limit = 200) => req(`/api/audit-log?limit=${limit}`),
   license: () => req("/api/license"),
   changeMyCredentials: (current_password, new_username, new_password) =>
@@ -116,6 +118,10 @@ export const api = {
   installLocalPackage: (file, targets) => { const fd = new FormData(); fd.append("file", file); fd.append("targets", JSON.stringify(targets)); return req("/api/packages/install-local", { method: "POST", body: fd }); },
   // Host Enrollment
   agents: () => req("/api/agents"),
+  revokeHost: (hostId) =>
+    req(`/api/host/${encodeURIComponent(hostId)}/revoke`, { method: "POST" }),
+  resumeHost: (hostId) =>
+    req(`/api/host/${encodeURIComponent(hostId)}/resume`, { method: "POST" }),
   enrollToken: () => req("/api/enroll-token", { method: "POST" }),
   agentBundleUrl: () => "/api/agent-bundle",
   // Sudo (become) password — encrypted at rest on the controller, per admin.
@@ -128,14 +134,40 @@ export const api = {
   fleet: (action, targets, command, sudoPassword = "") =>
     req("/api/fleet", { method: "POST", body: { action, targets, command, sudo_password: sudoPassword } }),
   checkin: (targets = []) => req("/api/checkin", { method: "POST", body: { targets } }),
+  // Per-host operator metadata (tags / owner / notes / criticality).
+  hostMeta: () => req("/api/host-meta"),
+  setHostMeta: (name, meta) =>
+    req(`/api/host-meta/${encodeURIComponent(name)}`, { method: "POST", body: meta }),
+  // Finding suppressions — silence a dashboard finding on a host or environment.
+  suppressions: () => req("/api/suppressions"),
+  addSuppression: (body) => req("/api/suppressions", { method: "POST", body }),
+  removeSuppression: (id) => req(`/api/suppressions/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  // Fleet Query — ask one read-only question across the fleet.
+  fleetQueryTypes: () => req("/api/fleet-query/types"),
+  fleetQuery: (qtype, arg, targets = []) =>
+    req("/api/fleet-query", { method: "POST", body: { qtype, arg, targets } }),
+  fleetUpdates: (refresh = 0, live = 0) =>
+    req("/api/fleet-updates" + (live ? "?refresh=1&live=1" : refresh ? "?refresh=1" : "")),
+  fleetInstall: (targets, kind) => req("/api/fleet-updates/install", { method: "POST", body: { targets, kind } }),
+  fleetInstallStatus: (jobId) => req(`/api/fleet-updates/install-status/${encodeURIComponent(jobId)}`),
+  schedules: () => req("/api/schedules"),
+  scheduleCreate: (body) => req("/api/schedules", { method: "POST", body }),
+  scheduleUpdate: (id, body) => req(`/api/schedules/${encodeURIComponent(id)}`, { method: "PATCH", body }),
+  scheduleDelete: (id) => req(`/api/schedules/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  scheduleRunNow: (id) => req(`/api/schedules/${encodeURIComponent(id)}/run-now`, { method: "POST" }),
+  alertsGet: () => req("/api/alerts"),
+  alertsSet: (body) => req("/api/alerts", { method: "POST", body }),
+  alertsTest: () => req("/api/alerts/test", { method: "POST" }),
   restartUnit: (hostId, unit, sudoPassword = "") =>
     req(`/api/host/${encodeURIComponent(hostId)}/restart-unit`,
-        { method: "POST", body: { unit, sudo_password: sudoPassword } }),
+        { method: "POST", body: { unit, sudo_password: sudoPassword, mode: "restart" } }),
+  resetUnit: (hostId, unit, sudoPassword = "") =>
+    req(`/api/host/${encodeURIComponent(hostId)}/restart-unit`,
+        { method: "POST", body: { unit, sudo_password: sudoPassword, mode: "reset-failed" } }),
   controllerKey: () => req("/api/controller-key"),
   enrollSsh: (payload) => req("/api/enroll-ssh", { method: "POST", body: payload }),
   setHostEnvironment: (hostId, environment) =>
     req(`/api/host/${encodeURIComponent(hostId)}/environment`, { method: "POST", body: { environment } }),
-  environments: () => req("/api/environments"),
   createEnvironment: (name) => req("/api/environments", { method: "POST", body: { name } }),
   deleteEnvironment: (name) => req(`/api/environments/${encodeURIComponent(name)}`, { method: "DELETE" }),
   setHostSudo: (hostId, required) =>
@@ -143,8 +175,8 @@ export const api = {
   envSudoDefaults: () => req("/api/environment-sudo-defaults"),
   setEnvSudoDefault: (name, required) =>
     req("/api/environment-sudo-default", { method: "POST", body: { name, required } }),
-  removeHost: (hostId) =>
-    req(`/api/host/${encodeURIComponent(hostId)}`, { method: "DELETE" }),
+  removeHost: (hostId, force = false) =>
+    req(`/api/host/${encodeURIComponent(hostId)}${force ? "?force=1" : ""}`, { method: "DELETE" }),
   uploadFile: (host, remotePath, file) => {
     const fd = new FormData();
     fd.append("host", host);

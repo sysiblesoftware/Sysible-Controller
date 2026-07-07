@@ -53,12 +53,24 @@ const TerminalSession = forwardRef(function TerminalSession({ hostId, label, act
   }));
 
   useEffect(() => {
+    // Pull the app's palette so the terminal matches the console (not pure
+    // black). Falls back to the dark defaults if the vars aren't present.
+    const cssVar = (name, fallback) => {
+      const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      return v || fallback;
+    };
+    const bg = cssVar("--bg", "#17191d");
+    const fg = cssVar("--text", "#e7e9ec");
+    const accent = cssVar("--accent", "#8c95cf");
     const term = new XTerm({
       fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
       fontSize: font,
-      theme: { background: "#000000", foreground: "#e6edf3" },
+      theme: { background: bg, foreground: fg, cursor: accent,
+               cursorAccent: bg, selectionBackground: "rgba(140,149,207,0.35)" },
       cursorBlink: true,
     });
+    let ready = false;
+    const dim = (s) => term.writeln("\x1b[2m" + s + "\x1b[0m");
     const fit = new FitAddon();
     const search = new SearchAddon();
     term.loadAddon(fit);
@@ -72,17 +84,27 @@ const TerminalSession = forwardRef(function TerminalSession({ hostId, label, act
     const ws = new WebSocket(terminalWsUrl());
     wsRef.current = ws;
     onStatus && onStatus("connecting");
+    dim(`Connecting to ${label || hostId}…`);
 
     ws.onopen = () => ws.send(JSON.stringify({ t: "open", host: hostId, label, cols: term.cols, rows: term.rows }));
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.t === "ready") { onStatus && onStatus("connected"); term.focus(); }
+      if (m.t === "ready") { ready = true; onStatus && onStatus("connected"); dim("Connected."); term.focus(); }
       else if (m.t === "o") term.write(m.d);
-      else if (m.t === "closed") { onStatus && onStatus("closed"); onClosed && onClosed(); }
-      else if (m.t === "error") { onStatus && onStatus("error:" + (m.d || "")); }
+      else if (m.t === "closed") { onStatus && onStatus("closed"); term.writeln("\r\n\x1b[33m[session closed]\x1b[0m"); onClosed && onClosed(); }
+      // Write the reason INTO the terminal — otherwise a failed connection just
+      // looks like a blank screen with a blinking cursor and no explanation.
+      else if (m.t === "error") {
+        onStatus && onStatus("error:" + (m.d || ""));
+        term.writeln("\r\n\x1b[31m" + (m.d || "terminal error") + "\x1b[0m");
+        dim("The host's own agent runs this shell locally and streams it back over its check-in channel — no inbound SSH to the host is used. Check that the host is online and its agent is checking in (Sysible Connect → ping), then reopen the terminal.");
+      }
     };
     ws.onerror = () => onStatus && onStatus("error:websocket");
-    ws.onclose = () => onStatus && onStatus("disconnected");
+    ws.onclose = () => {
+      onStatus && onStatus("disconnected");
+      if (!ready) term.writeln("\r\n\x1b[31mCould not connect — the controller closed the terminal connection.\x1b[0m");
+    };
     term.onData((d) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "i", d })); });
 
     const onResize = () => {

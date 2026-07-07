@@ -89,8 +89,9 @@ export default function UserGroupPage({ initialTab } = {}) {
   }
   const selUserObj = selUser ? userObj(selUser) : null;
 
-  async function run(action, targets, params, label) {
+  async function run(action, targets, params, label, confirmMsg) {
     if (targets.length === 0) { setErr("No target host(s) for this action."); return; }
+    if (confirmMsg && !window.confirm(`${confirmMsg} on ${targets.length} host${targets.length === 1 ? "" : "s"}?`)) return;
     setRunning(true); setErr(""); setResults(null);
     try {
       const r = await api.runTool(action, targets, params);
@@ -163,9 +164,24 @@ export default function UserGroupPage({ initialTab } = {}) {
         <div className="host-tree">
           {groups.map(([env, list]) => {
             const open = !collapsed[env];
+            const groupIds = list.map((h) => h.id);
+            const allInGroup = groupIds.every((id) => checked.includes(id));
             return (
               <div className="env-group" key={env}>
                 <div className="env-head" onClick={() => setCollapsed((c) => ({ ...c, [env]: open }))}>
+                  <input
+                    type="checkbox"
+                    className="env-check"
+                    title={`Select all in ${env}`}
+                    checked={allInGroup}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => {
+                      e.stopPropagation();
+                      setChecked((c) => allInGroup
+                        ? c.filter((id) => !groupIds.includes(id))
+                        : [...new Set([...c, ...groupIds])]);
+                    }}
+                  />
                   {open ? "▾" : "▸"} {env}
                 </div>
                 {open && list.map((h) => (
@@ -296,9 +312,9 @@ function Account({ user, targets, run, running, statusRows = [], allHostIds = []
         <button className="btn sm ghost" onClick={() => setShowStatus((v) => !v)}>View Status by Host</button>
         <button className="btn sm" disabled={running} onClick={() => run("user_lock", targets, { username: u }, `Lock ${u}`)}>Lock</button>
         <button className="btn sm" disabled={running} onClick={() => run("user_unlock", targets, { username: u }, `Unlock ${u}`)}>Unlock</button>
-        <button className="btn sm" disabled={running} onClick={() => run("user_set_sudo", targets, { username: u, enable: !user.sudo }, `Toggle sudo for ${u}`)}>
+        <button className="btn sm" disabled={running} onClick={() => run("user_set_sudo", targets, { username: u, enable: !user.sudo }, `Toggle sudo for ${u}`, `${user.sudo ? "Remove sudo from" : "Grant sudo to"} "${u}"`)}>
           {user.sudo ? "Remove Sudo" : "Grant Sudo"}</button>
-        <button className="btn sm" disabled={running} onClick={() => run("user_kill_sessions", targets, { username: u }, `Kill sessions for ${u}`)}>Kill Sessions</button>
+        <button className="btn sm" disabled={running} onClick={() => run("user_kill_sessions", targets, { username: u }, `Kill sessions for ${u}`, `Kill all active sessions for "${u}"`)}>Kill Sessions</button>
         <button className="btn sm danger" disabled={running} onClick={() => window.confirm(`Delete user ${u} on ${targets.length} host(s)?`) && run("user_delete", targets, { username: u }, `Delete ${u}`)}>Delete User</button>
         <button className="btn sm danger" disabled={running || allHostIds.length === 0}
                 onClick={() => window.confirm(`Terminate ${u} — remove from ALL ${allHostIds.length} managed hosts? This cannot be undone.`)
@@ -371,7 +387,7 @@ function Groups({ user, checked, viewTargets, run, running }) {
       <Field label="Group name" value={g} onChange={(e) => setG(e.target.value)} />
       <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 10 }}>
         <button className="btn sm" disabled={running || !g || checked.length === 0} onClick={() => run("group_create", checked, { name: g }, `Create group ${g}`)}>Create Group (checked hosts)</button>
-        <button className="btn sm danger" disabled={running || !g || checked.length === 0} onClick={() => run("group_delete", checked, { name: g }, `Delete group ${g}`)}>Delete Group</button>
+        <button className="btn sm danger" disabled={running || !g || checked.length === 0} onClick={() => run("group_delete", checked, { name: g }, `Delete group ${g}`, `Delete the group "${g}"`)}>Delete Group</button>
       </div>
       <div className="section-title">Membership for {user || "(select a user)"}</div>
       <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>

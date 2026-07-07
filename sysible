@@ -1,9 +1,0 @@
-#!/bin/bash
-# Replaced by the `sysible_controller` CLI (installed to /usr/local/bin by
-# install_sysible.sh) - Sysible Controller is one product under the
-# broader Sysible Enterprise Software suite, so the command line now
-# matches the product name instead of the shorter "sysible". Kept as a
-# thin redirect so old habits/automation pointed at this name still work.
-echo "The 'sysible' command has been renamed to 'sysible_controller'."
-echo "Running: sudo sysible_controller $*"
-exec sysible_controller "$@"

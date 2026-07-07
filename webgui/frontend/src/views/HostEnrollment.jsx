@@ -150,7 +150,7 @@ export default function HostEnrollment() {
 
   async function disenrollChecked() {
     if (checked.length === 0) { setErr("Check one or more hosts first."); return; }
-    if (!window.confirm(`Disenroll ${checked.length} host(s)? If a host is online its agent service is stopped and removed first; if it's offline the enrollment is dropped here and you'll need to run disenroll_agent.sh on it directly.`)) return;
+    if (!window.confirm(`Disenroll ${checked.length} host(s)? An online host's agent service is stopped and removed first; an offline or revoked host is dropped from the console immediately (run disenroll_agent.sh on it if it ever comes back).`)) return;
     await run(async () => {
       const warnings = [];
       for (const id of checked) {
@@ -161,6 +161,37 @@ export default function HostEnrollment() {
       setChecked([]);
       if (warnings.length) throw new Error("Disenrolled, but service teardown was not confirmed on:\n" + warnings.join("\n"));
     }, `Disenrolled ${checked.length} host(s).`);
+  }
+
+  async function forceDeleteChecked() {
+    if (checked.length === 0) { setErr("Check one or more hosts first."); return; }
+    if (!window.confirm(
+      `Force-delete ${checked.length} host(s) from the console?\n\n` +
+      "Use this for ZOMBIE agents — a broken build that keeps heartbeating but " +
+      "can't cleanly disenroll. This drops the controller record immediately " +
+      "WITHOUT waiting for the agent to tear itself down, and locks out its " +
+      "secret on the next heartbeat.\n\n" +
+      "The agent process may still be running on the host — stop it there with " +
+      "disenroll_agent.sh (or kill its service) afterwards. Continue?")) return;
+    await run(async () => {
+      for (const id of checked) await api.removeHost(id, true);
+      setChecked([]);
+    }, `Force-deleted ${checked.length} host(s) from the console.`);
+  }
+
+  async function revokeHost(a, e) {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    const name = a.hostname || a.host_id;
+    if (!window.confirm(`Revoke ${name}? Its agent is locked out — it can't heartbeat, poll, or report — until you re-enroll the host. Use this for a host you believe is compromised or tampered.`)) return;
+    await run(async () => { await api.revokeHost(idOf(a)); }, `Revoked ${name}. Re-enroll the host to restore it.`);
+    load();
+  }
+
+  async function resumeHost(a, e) {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    const name = a.hostname || a.host_id;
+    await run(async () => { await api.resumeHost(idOf(a)); }, `Cleared the integrity quarantine on ${name}; it re-seals on the next heartbeat.`);
+    load();
   }
 
   // curl one-liner (built from portal status + controller config)
@@ -213,9 +244,24 @@ export default function HostEnrollment() {
             {agents.length === 0 && <div className="faint" style={{ padding: 8 }}>No hosts enrolled yet — use the “Enroll a Host” tab.</div>}
             {groups.map(([env, list]) => {
               const open = !collapsed[env];
+              const groupIds = list.map((a) => idOf(a));
+              const allInGroup = groupIds.every((id) => checked.includes(id));
               return (
                 <div className="env-group" key={env}>
                   <div className="env-head" onClick={() => setCollapsed((c) => ({ ...c, [env]: open }))}>
+                    <input
+                      type="checkbox"
+                      className="env-check"
+                      title={`Select all in ${env}`}
+                      checked={allInGroup}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        setChecked((c) => allInGroup
+                          ? c.filter((id) => !groupIds.includes(id))
+                          : [...new Set([...c, ...groupIds])]);
+                      }}
+                    />
                     {open ? "▾" : "▸"} {env}
                   </div>
                   {open && list.map((a) => (
@@ -225,10 +271,19 @@ export default function HostEnrollment() {
                             title={a.online === false ? "Offline" : a.online === true ? "Online" : ""} />
                       <span className="he-host-body">
                         <span className="he-host-name">{a.hostname || a.host_id}
+                          {a.is_controller && <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "var(--accent, #3d7dd8)", color: "#fff" }} title="This host is the Sysible controller itself">controller</span>}
                           {a.requires_sudo_password && <span className="badge" style={{ marginLeft: 6, fontSize: 10 }}>pw-sudo</span>}
+                          {a.revoked && <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "var(--red, #e05656)", color: "#fff" }} title="Agent secret revoked — re-enroll to restore">revoked</span>}
+                          {!a.revoked && a.integrity_quarantined && <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "var(--amber, #e0a93c)", color: "#1a2744" }} title={(a.integrity_detail || []).join("\n") || "Integrity mismatch — dispatch paused"}>⚠ quarantined</span>}
                         </span>
                         <span className="he-host-meta">{a.address || a.ip || "—"}
                           {a.last_seen != null ? ` · seen ${fmtSeen(a.last_seen)}` : ""}</span>
+                      </span>
+                      <span className="he-host-actions" style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                        {!a.revoked && a.integrity_quarantined &&
+                          <button className="btn ghost sm" title="Rebaseline: clear the quarantine and resume dispatch (use after a legitimate change)" onClick={(e) => resumeHost(a, e)}>Resume</button>}
+                        {!a.revoked &&
+                          <button className="btn danger sm" title="Hard lock-out: revoke this agent's secret until re-enrolled" onClick={(e) => revokeHost(a, e)}>Revoke</button>}
                       </span>
                     </label>
                   ))}
@@ -236,8 +291,12 @@ export default function HostEnrollment() {
               );
             })}
           </div>
-          <div className="row" style={{ marginTop: 10 }}>
+          <div className="row" style={{ marginTop: 10, alignItems: "center", gap: 8 }}>
             <button className="btn danger sm" onClick={disenrollChecked}>Disenroll Host(s)</button>
+            <button className="btn ghost sm danger" onClick={forceDeleteChecked}
+                    title="Force-remove a zombie/broken-build host from the console without waiting for its agent to tear down">
+              Force Delete
+            </button>
             <span className="faint">{checked.length} checked</span>
           </div>
         </fieldset>
@@ -402,7 +461,7 @@ export default function HostEnrollment() {
                     <td className="faint mono">{fmtTime(s.created_at ?? s.logged_in ?? s.started_at)}</td>
                     <td className="faint">{s.ip || s.ip_address || ""}</td>
                     <td style={{ textAlign: "right" }}>
-                      <button className="btn ghost sm" onClick={() => revoke(s)}>Revoke</button>
+                      <button className="btn ghost sm danger" onClick={() => revoke(s)}>Revoke</button>
                     </td>
                   </tr>
                 ))}
@@ -441,7 +500,7 @@ export default function HostEnrollment() {
                     <td>{n}</td>
                     <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                       <a className="btn ghost sm" href={api.portalUploadUrl(n)}>Save</a>{" "}
-                      <button className="btn ghost sm" onClick={async () => { await api.portalUploadDelete(n); loadUploads(); }}>Delete</button>
+                      <button className="btn ghost sm danger" onClick={async () => { if (!window.confirm(`Delete the uploaded file "${n}"?`)) return; await api.portalUploadDelete(n); loadUploads(); }}>Delete</button>
                     </td>
                   </tr>
                 ); })}
@@ -463,7 +522,7 @@ export default function HostEnrollment() {
                   <tr key={n || i}>
                     <td>{n}</td>
                     <td style={{ textAlign: "right" }}>
-                      <button className="btn ghost sm" onClick={async () => { await api.portalDownloadDelete(n); loadDownloads(); }}>Delete</button>
+                      <button className="btn ghost sm danger" onClick={async () => { if (!window.confirm(`Delete the staged file "${n}"?`)) return; await api.portalDownloadDelete(n); loadDownloads(); }}>Delete</button>
                     </td>
                   </tr>
                 ); })}

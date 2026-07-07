@@ -49,7 +49,10 @@ def cmd_container_action(action: str, name: str) -> str:
     if not name:
         raise ValueError("Container name or ID is required.")
     qn = shlex.quote(name)
-    return _RT + f'"$rt" {action} {qn} && echo "{action} {name}: done."'
+    # Only the whitelisted `action` may appear in the echo. The container name
+    # goes solely into the shlex-quoted `{qn}` arg — putting the raw name in the
+    # double-quoted echo would let `$(...)`/backticks in it command-substitute.
+    return _RT + f'"$rt" {action} {qn} && echo "{action}: done."'
 
 
 def cmd_container_logs(name: str, lines: int = 200) -> str:
@@ -77,7 +80,9 @@ def cmd_vm_action(action: str, name: str) -> str:
     if not name:
         raise ValueError("VM (domain) name is required.")
     qn = shlex.quote(name)
-    return _VIRSH + f'virsh {action} {qn} 2>&1 && echo "{action} {name}: requested."'
+    # See cmd_container_action: keep the raw domain name out of the echo; it
+    # belongs only in the shlex-quoted `{qn}` virsh argument.
+    return _VIRSH + f'virsh {action} {qn} 2>&1 && echo "{action}: requested."'
 
 
 def cmd_vm_info(name: str) -> str:

@@ -14,7 +14,7 @@
   --border-strong: #3a3f49;
   --text: #e7e9ec;
   --text-dim: #9ba1aa;
-  --text-faint: #6c727b;
+  --text-faint: #8b9199;  /* was #6c727b (~3.6:1, below AA); ~4.6:1 on --bg */
   --btn: #3b4256;
   --btn-hover: #49516a;
   --btn-border: #4d556d;
@@ -55,7 +55,7 @@
   --border-strong: #c1c8d2;
   --text: #1f2430;
   --text-dim: #5b6472;
-  --text-faint: #8a93a0;
+  --text-faint: #6d7581;  /* was #8a93a0 (~3.0:1, below AA); ~4.6:1 on --bg */
   --btn: #3c4b64;
   --btn-hover: #4c6285;
   --btn-border: #506080;
@@ -90,6 +90,22 @@
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
+
+/* ---------- Visible keyboard focus (global) ----------
+   A keyboard user must always see where focus is. :focus-visible only shows the
+   ring for keyboard/AT navigation, not mouse clicks, so it doesn't add visual
+   noise for pointer users. Applies to every interactive element, including the
+   ones that opt out of the default outline (form fields, custom buttons). */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
 body {
   background: var(--bg);
   color: var(--text);
@@ -115,7 +131,17 @@ button { font-family: inherit; color: inherit; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
 .btn.ghost:hover { background: var(--panel); }
-.btn.danger { background: var(--red); border-color: var(--red); }
+/* `secondary` is an alias for `ghost` — some call sites use it; without this
+   rule they fell through to the solid primary look, inconsistent with the
+   ghost "select all"/secondary buttons elsewhere. */
+.btn.secondary { background: transparent; color: var(--text); border-color: var(--border-strong); }
+.btn.secondary:hover { background: var(--panel); }
+.btn.danger { background: var(--red); border-color: var(--red); color: #fff; }
+.btn.danger:hover { background: var(--red); filter: brightness(1.08); }
+/* A danger button that also carries `ghost` must stay red on hover — the plain
+   `.btn.ghost:hover` would otherwise flip it to the neutral panel colour. */
+.btn.ghost.danger { background: var(--red); border-color: var(--red); color: #fff; }
+.btn.ghost.danger:hover { background: var(--red); filter: brightness(1.08); }
 .btn.full { width: 100%; }
 .btn.sm { padding: 5px 11px; font-size: 12.5px; }
 .iconbtn {
@@ -132,10 +158,26 @@ input, select, textarea {
   border: 1px solid var(--field-border); border-radius: 5px; font-size: 14px; outline: none;
 }
 input:focus, select:focus, textarea:focus { border-color: var(--btn-border); }
+/* Placeholders often double as the field's only label, so keep them readable
+   (the UA default is well under WCAG AA on our field backgrounds). */
+::placeholder { color: var(--text-dim); opacity: 1; }
 input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 label.field { display: block; margin: 12px 0 0; }
 label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim); font-size: 13px; }
 .checkrow { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+
+/* Multi-select chip grid (day-of-week picker in ScheduleBuilder; the target
+   picker). These classes were referenced but never defined, so the chips
+   rendered as a plain stacked list of full-width checkboxes. */
+.targets-box { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-top: 8px; }
+.targets-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.target-chip {
+  display: inline-flex; align-items: center; gap: 7px; width: auto; margin: 0;
+  padding: 6px 11px; border: 1px solid var(--border-strong); border-radius: 999px;
+  background: var(--field); font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+.target-chip input { width: auto; margin: 0; }
+.target-chip:hover { background: var(--row-hover); }
 .error-box { background: rgba(229,83,75,0.12); border: 1px solid rgba(229,83,75,0.4);
   color: var(--error-text); padding: 9px 11px; border-radius: 6px; margin-top: 12px; font-size: 13px; }
 
@@ -171,6 +213,7 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
   border-left: 2px solid transparent;
 }
 .rail-item svg { flex-shrink: 0; opacity: 0.85; }
+.rail-item .rail-ext { margin-left: auto; font-size: 12px; opacity: 0.55; }
 .rail-item:hover { background: var(--row-hover); color: var(--text); }
 .rail-item.active {
   background: var(--accent-soft); color: var(--text);
@@ -279,12 +322,26 @@ tr:hover td { background: var(--row-hover); }
 
 /* ---------- Three-pane tool layout ---------- */
 .three-pane { display: grid; grid-template-columns: 250px 1fr; gap: 16px; height: 100%; }
+/* Collapse to a single column on narrow viewports so the fixed 250px host pane
+   can't push the page into horizontal scroll (mirrors .he-2col's behaviour). */
+@media (max-width: 720px) {
+  .three-pane { grid-template-columns: 1fr; height: auto; }
+  .three-pane > .host-pane { border-right: none; border-bottom: 1px solid var(--border);
+    padding-right: 0; padding-bottom: 12px; }
+}
 .host-pane { border-right: 1px solid var(--border); padding-right: 14px; display: flex; flex-direction: column; }
 .host-pane .ctl-row { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
 .host-tree { flex: 1; overflow-y: auto; margin-top: 8px; }
-.env-group > .env-head { font-weight: 700; color: var(--text); padding: 6px 4px; cursor: pointer; }
+.env-group > .env-head { font-weight: 700; color: var(--text); padding: 6px 4px; cursor: pointer;
+  display: flex; align-items: center; gap: 6px; }
+.env-group > .env-head .env-check { cursor: pointer; flex-shrink: 0; }
 .host-row { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 18px; font-size: 13px; }
-.host-row .meta { color: var(--text-faint); font-size: 12px; }
+/* The host name is the flexible part: it truncates with an ellipsis so the type
+   tag and the "critical" marker to its right are never clipped in the narrow
+   pane. */
+.host-row .host-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-row .meta { color: var(--text-faint); font-size: 12px; flex-shrink: 0; }
+.host-row .meta.crit { color: #e06c6c; font-weight: 600; margin-left: auto; }
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 14px; flex-wrap: wrap; }
 .tabs button { background: transparent; border: 1px solid transparent; border-bottom: none;
   color: var(--text-dim); padding: 7px 13px; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 13px; }
@@ -303,9 +360,18 @@ tr:hover td { background: var(--row-hover); }
 /* Cleaner enrolled-host rows: name on top, address/last-seen muted below. */
 .he-host { align-items: center; padding: 7px 4px 7px 8px; gap: 9px; }
 .he-host .dot { flex-shrink: 0; }
-.he-host-body { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
-.he-host-name { font-size: 13px; color: var(--text); display: flex; align-items: center; }
+/* Take the middle space and be allowed to shrink, so the badges never push into
+   the action buttons on the right. */
+.he-host-body { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; line-height: 1.3; }
+/* Name + status badges (pw-sudo, revoked, quarantined): wrap the badges onto a
+   second line when the pane is narrow instead of overrunning the Resume/Revoke
+   buttons. */
+.he-host-name { font-size: 13px; color: var(--text); display: flex; align-items: center;
+  flex-wrap: wrap; row-gap: 3px; min-width: 0; }
 .he-host-meta { font-size: 11.5px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Action buttons stay their natural size and pinned to the right — never shrunk
+   or overlapped by the badges. */
+.he-host-actions { flex-shrink: 0; }
 .linklike { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer;
   font: inherit; text-decoration: underline; }
 
@@ -366,7 +432,8 @@ tr:hover td { background: var(--row-hover); }
   background: var(--panel-2); max-width: 200px; }
 .result-tab.active { border-color: var(--btn-border); background: var(--panel); }
 .result-tab .rt-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.result-tab .x { color: var(--text-faint); }
+.result-tab .x { color: var(--text-faint); background: none; border: none; padding: 0 2px;
+  font: inherit; line-height: 1; cursor: pointer; }
 .result-tab .x:hover { color: var(--red); }
 
 /* ---------- Tool group boxes (desktop QGroupBox look) ---------- */
@@ -433,3 +500,56 @@ tr:hover td { background: var(--row-hover); }
 /* Indeterminate progress sweep (Settings → Software updates: controller restart). */
 @keyframes progIndef { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
 .prog-indef { animation: progIndef 1.1s ease-in-out infinite; }
+
+/* Dashboard emergency strip: controller down / nothing checking in. Pulses so a
+   dark fleet can't be mistaken for a calm one. */
+@keyframes alarmPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(224, 108, 108, 0.0); }
+  50%      { box-shadow: 0 0 0 4px rgba(224, 108, 108, 0.28); }
+}
+.alarm-strip { animation: alarmPulse 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .alarm-strip { animation: none; } }
+
+/* --- Toast notifications (host enrolled, etc.) --- */
+.toast-stack {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 60;               /* above the modal overlay (z-index:50) */
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 360px;
+  pointer-events: none;      /* let clicks through the empty gaps */
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  padding: 11px 12px 11px 13px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  animation: toastIn 0.22s ease-out;
+}
+.toast.success { border-left-color: var(--green); }
+.toast-body { flex: 1 1 auto; min-width: 0; }
+.toast-title { font-weight: 600; font-size: 13px; margin-bottom: 2px; color: var(--text); }
+.toast-msg { font-size: 12.5px; color: var(--text); opacity: 0.8; word-break: break-word; }
+.toast-x {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text);
+  opacity: 0.55;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.toast-x:hover { opacity: 1; }
+@keyframes toastIn { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .toast { animation: none; } }

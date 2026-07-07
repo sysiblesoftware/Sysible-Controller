@@ -1,34 +1,32 @@
 """
-Sysible Web GUI - a separate, browser-based front end to the Sysible
-Controller, intended for Windows (and any) machines that can't run the
-PySide6 desktop client but can reach the controller over the network.
+Sysible Web GUI - the browser-based front end to the Sysible Controller,
+reachable from any machine on the network, no local install required.
 
 Architecture (why it's shaped this way)
 ---------------------------------------
 This is a thin **backend-for-frontend (BFF)**. It does NOT re-implement
-any host-management logic. Instead it imports the desktop client's
-existing, battle-tested helpers:
+any host-management logic. Instead it imports the shared, battle-tested
+helpers under client/:
 
   * client.api               - admin login, agents, edition, base-URL/key
   * client._api_dispatch     - list_merged_hosts(), run_on_entry(),
                                poll_entry_result()  (agent-queue vs. SSH
                                dispatch hidden behind one call)
   * client._api_* (cmd_*)    - the hundreds of pure-Python shell-command
-                               builders the desktop tools already use
+                               builders the tool catalog uses
 
 The React SPA never builds shell commands and never sees the controller
 API key. It sends {action, params, targets}; this service looks the
 action up in webgui/actions.py, calls the matching cmd_* builder to get
-the exact same shell string the desktop app would run, dispatches it
-across the selected hosts, and returns per-host results. Reaching full
-desktop parity is therefore a matter of registering more actions, not
-re-writing dispatch logic per tool.
+the exact shell string to run, dispatches it across the selected hosts,
+and returns per-host results. Adding a tool is therefore a matter of
+registering more actions, not re-writing dispatch logic per tool.
 
-Auth: the browser logs in with the same administrator credentials the
-desktop app uses. We verify them against the controller's /admin/login
-(through client.api, which holds the API key server-side) and then set a
-signed, http-only session cookie via Starlette's SessionMiddleware. The
-API key stays on this server; it is never exposed to the browser.
+Auth: the browser logs in with a controller administrator's credentials.
+We verify them against the controller's /admin/login (through client.api,
+which holds the API key server-side) and then set a signed, http-only
+session cookie via Starlette's SessionMiddleware. The API key stays on
+this server; it is never exposed to the browser.
 
 Run:
     cd webgui
@@ -41,10 +39,13 @@ Serve the built SPA (frontend/dist) from the same service, or put both
 behind a TLS-terminating reverse proxy. See README.md.
 """
 import asyncio
+import json
 import os
+import re
 import secrets
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 # Make the repo root importable so `import client.*` works whether this
@@ -57,7 +58,7 @@ from fastapi import (
     FastAPI, HTTPException, Request, Depends, WebSocket, WebSocketDisconnect,
     UploadFile, File, Form,
 )
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
@@ -65,6 +66,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from client import api
 from client import _api_dispatch as dispatch
+from client import _api_users
 from webgui import actions
 
 
@@ -87,6 +89,15 @@ try:
     _SESSION_MAX_AGE = int(os.getenv("SYSIBLE_WEBGUI_SESSION_MAX_AGE", "43200"))
 except ValueError:
     _SESSION_MAX_AGE = 43200
+
+# Hard ceiling on how much of a file upload this BFF will buffer for a pure-SSH
+# host (agent hosts are separately capped far lower by the in-task transfer
+# limit). Prevents a single upload from OOM'ing the shared single-process BFF.
+# Default 100 MB; tune with SYSIBLE_MAX_SSH_UPLOAD_BYTES.
+try:
+    _MAX_SSH_UPLOAD_BYTES = int(os.getenv("SYSIBLE_MAX_SSH_UPLOAD_BYTES", str(100 * 1024 * 1024)))
+except ValueError:
+    _MAX_SSH_UPLOAD_BYTES = 100 * 1024 * 1024
 
 # Mark the cookie Secure when we're behind TLS (set by webgui_manager when the
 # controller has certs). same_site="strict" is right for an admin console:
@@ -345,6 +356,10 @@ def login(body: LoginRequest, request: Request):
     # a server-side key, so it's unreadable from the cookie and never echoed.
     if result.get("token"):
         request.session["token_enc"] = _encrypt_token(result["token"])
+    # Persist the forced-change flag in the session so it also survives a page
+    # reload (which restores auth via /api/me, not /api/login) — the frontend
+    # gate below must keep blocking until the password is actually rotated.
+    request.session["must_change_password"] = bool(result.get("must_change_password"))
     return {
         "username": body.username.strip(),
         "role": request.session["role"],
@@ -418,6 +433,7 @@ def me(request: Request):
         "username": user,
         "role": request.session.get("role") or "superuser",
         "sudo_connect": bool(request.session.get("sudo_connect")),
+        "must_change_password": bool(request.session.get("must_change_password")),
     }
 
 
@@ -429,8 +445,8 @@ class PathCriticalRequest(BaseModel):
 def path_critical(body: PathCriticalRequest, user: str = Depends(require_login)):
     """Classify whether any of `paths` is a system-critical file/mount, so the
     UI can warn (superuser) or block (sysadmin) before a delete/unmount/fstab
-    removal. Single source of truth = client/system_paths (shared with the
-    desktop GUI and the cmd_* builder backstop)."""
+    removal. Single source of truth = client/system_paths (also enforced by
+    the cmd_* builder backstop)."""
     from client import system_paths
     for p in body.paths:
         reason = system_paths.system_critical_reason(p)
@@ -471,6 +487,17 @@ def hosts(user: str = Depends(require_login)):
     except Exception:
         last_seen = {}
 
+    # Merge a read-only "critical" flag from the cached posture sweep so the host
+    # picker can flag hosts with an active sev-1 finding. Cache-only: we never
+    # force a sweep here, so a cold posture cache simply leaves `critical` null
+    # (no highlighting) until the dashboard or a posture_scan job warms it.
+    posture_by_id = {h.get("id"): h for h in (_POSTURE_CACHE["hosts"] or [])}
+    try:
+        from webgui import suppressions
+        supps = suppressions.list_all()
+    except Exception:
+        supps = []
+
     out = []
     for e in entries:
         agent_id = None
@@ -482,6 +509,10 @@ def hosts(user: str = Depends(require_login)):
         online = None
         if agent_id is not None:
             online = bool(ls and (now - ls) <= 20)
+        pc = posture_by_id.get(e["id"])
+        reasons = (_host_critical_reasons(pc.get("flags") or {}, e["label"],
+                                          e.get("environment") or "", supps)
+                   if pc else [])
         out.append({
             "id": e["id"],
             "label": e["label"],
@@ -492,6 +523,9 @@ def hosts(user: str = Depends(require_login)):
             "has_agent": e["kind"] in ("agent", "merged"),
             "last_seen": ls,
             "online": online,
+            # null when posture hasn't been gathered for this host yet.
+            "critical": (len(reasons) > 0) if pc else None,
+            "critical_reasons": reasons,
         })
     return {"hosts": out}
 
@@ -526,17 +560,52 @@ def _parse_sysmetrics(text):
     return None
 
 
+# Fleet-health cache, mirroring the posture cache above. Without it, EVERY
+# dashboard load re-probed every agent host live, and several admins loading the
+# dashboard at once each launched an independent fleet-wide sweep — at scale the
+# GET blocked on batches × per-host-timeout and starved the thread pool. A short
+# TTL coalesces a burst of loads into one sweep; ?refresh=1 forces a fresh one.
+_HEALTH_CACHE = {"ts": 0.0, "hosts": None}
+try:
+    _HEALTH_TTL = float(os.getenv("SYSIBLE_FLEET_HEALTH_TTL", "15"))
+except ValueError:
+    _HEALTH_TTL = 15.0
+_HEALTH_LOCK = threading.Lock()
+
+
 @app.get("/api/fleet-health")
-def fleet_health(user: str = Depends(require_login)):
+def fleet_health(refresh: int = 0, user: str = Depends(require_login)):
     """Snapshot health for the dashboard fleet overview: run the compact
     metrics command on every reachable host (in parallel) and return parsed
     per-host disk/mem/load/failed + a verdict. Offline agent hosts are reported
     without probing (so the sweep can't hang on them); read-only, dispatched
-    without an admin token so it isn't attributed/logged as an operator action."""
+    without an admin token so it isn't attributed/logged as an operator action.
+    Cached for a few seconds (shared across concurrent loads) unless ?refresh=1."""
+    import concurrent.futures
+    import time as _t
+
+    def _fresh():
+        return (not refresh) and _HEALTH_CACHE["hosts"] is not None \
+            and (_t.time() - _HEALTH_CACHE["ts"]) < _HEALTH_TTL
+
+    if _fresh():
+        return {"hosts": _HEALTH_CACHE["hosts"], "cached": True, "ts": _HEALTH_CACHE["ts"]}
+
+    with _HEALTH_LOCK:
+        # Another request may have completed the sweep while we waited on the
+        # lock — serve its result instead of re-sweeping.
+        if _fresh():
+            return {"hosts": _HEALTH_CACHE["hosts"], "cached": True, "ts": _HEALTH_CACHE["ts"]}
+        return _fleet_health_sweep()
+
+
+def _fleet_health_sweep():
     import concurrent.futures
     import time as _t
     try:
-        entries = dispatch.list_merged_hosts(agent_only=False)
+        # Dashboard fleet health is agent-only: SSH-only hosts are a Sysible
+        # Connect concept and don't belong in the fleet donut/health rollup.
+        entries = dispatch.list_merged_hosts(agent_only=True)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
 
@@ -555,8 +624,13 @@ def fleet_health(user: str = Depends(require_login)):
         return None
 
     def probe(e):
-        base = {"id": e.get("id"), "host": e.get("label"), "environment": e.get("environment") or "Unassigned"}
+        base = {"id": e.get("id"), "host": e.get("label"), "environment": e.get("environment") or "Unassigned",
+                "is_controller": bool(e.get("is_controller"))}
         aid = agent_id_of(e)
+        # Carry the agent host_id alongside the entry id: for a MERGED host the
+        # entry id is the label, so the dashboard needs the agent id to line this
+        # reading up with the agent inventory (agents are keyed by host_id).
+        base["agent_id"] = aid
         ls = last_seen.get(aid) if aid else None
         online = (bool(ls and (now - ls) <= 20)) if aid else None
         # Don't probe an agent host we already know is offline — avoids waiting
@@ -571,7 +645,12 @@ def fleet_health(user: str = Depends(require_login)):
         pe = {**e, "requires_sudo_password": False}
         if e.get("agent_entry"):
             pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
-        r = _dispatch_one(pe, cmd, "command", None, None, None)  # no token: read-only, unlogged
+        # Short poll cap: a health probe must never hold a worker for the full
+        # 60s action timeout. A host that's heartbeating but not answering tasks
+        # within ~8s is reported as an unreachable/timed-out probe, so the sweep
+        # can't stack up and starve the thread pool (which stalled everything).
+        r = _dispatch_one(pe, cmd, "command", None, None, None,  # no token: read-only, unlogged
+                          poll_timeout=float(os.getenv("SYSIBLE_HEALTH_PROBE_TIMEOUT", "8")))
         m = _parse_sysmetrics((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
         return {
             **base,
@@ -583,7 +662,9 @@ def fleet_health(user: str = Depends(require_login)):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
         hosts = list(ex.map(probe, entries)) if entries else []
-    return {"hosts": hosts}
+    _HEALTH_CACHE["hosts"] = hosts
+    _HEALTH_CACHE["ts"] = now
+    return {"hosts": hosts, "cached": False, "ts": now}
 
 
 @app.get("/api/fleet-metrics")
@@ -719,6 +800,36 @@ def _posture_flags(p):
     }
 
 
+# Posture signals that mark a host "critical" (severity 1 on the dashboard —
+# an active compromise vector or imminent outage). Mirrors the sev-1 posture
+# keys in the SPA's SIGNAL_SEV; disk_critical is a health signal (not a posture
+# flag) so it isn't included here.
+_CRITICAL_POSTURE_LABELS = {
+    "firewall_disabled": "Firewall disabled",
+    "ssh_root_login": "SSH root login enabled",
+    "risky_accounts": "UID-0 / empty-password accounts",
+    "eol_os": "EOL / unsupported OS",
+}
+
+
+def _host_critical_reasons(flags, host_name, env, supps):
+    """Sev-1 posture signals that are firing on this host and not silenced by a
+    host- or env-scoped suppression. Returns the list of human labels; an empty
+    list means the host isn't currently critical."""
+    reasons = []
+    for key, label in _CRITICAL_POSTURE_LABELS.items():
+        if flags.get(key) is not True:
+            continue
+        suppressed = any(
+            s.get("key") == key
+            and ((s.get("scope") == "host" and s.get("target") == host_name)
+                 or (s.get("scope") == "env" and s.get("target") == env))
+            for s in supps)
+        if not suppressed:
+            reasons.append(label)
+    return reasons
+
+
 def _posture_command():
     return api.cmd_posture_snapshot()
 
@@ -793,7 +904,9 @@ def fleet_posture(refresh: int = 0, user: str = Depends(require_login)):
         if _fresh():
             return {"hosts": _POSTURE_CACHE["hosts"], "cached": True, "ts": _POSTURE_CACHE["ts"]}
         try:
-            entries = dispatch.list_merged_hosts(agent_only=False)
+            # Dashboard Compliance strip is agent-only (SSH-only hosts live in
+            # Sysible Connect, not the fleet posture rollup).
+            entries = dispatch.list_merged_hosts(agent_only=True)
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
         try:
@@ -826,6 +939,588 @@ def host_posture(host_id: str, user: str = Depends(require_login)):
     except Exception:
         last_seen = {}
     return _probe_posture(entry, _posture_command(), last_seen, _t.time())
+
+
+# ----------------------------------------------------------------------
+# Fleet patch/update status (read-only sweep, same shape as posture)
+# ----------------------------------------------------------------------
+_UPDATES_CACHE = {"ts": 0.0, "hosts": None}
+_UPDATES_TTL = 900.0   # patch status changes slowly; the scan is heavier
+_UPDATES_LOCK = _posture_threading.Lock()
+
+
+def _parse_updates(text):
+    """Parse the `SYSUPDATES|k=v|...` line from cmd_update_status, or None."""
+    for line in (text or "").splitlines():
+        if line.startswith("SYSUPDATES|"):
+            d = {}
+            for kv in line.split("|")[1:]:
+                if "=" in kv:
+                    k, v = kv.split("=", 1)
+                    d[k] = v
+
+            def num(k):
+                try:
+                    return int(d.get(k, 0))
+                except (TypeError, ValueError):
+                    return 0
+            return {"mgr": d.get("mgr", "unknown"), "total": num("total"),
+                    "security": num("security"), "reboot": d.get("reboot") == "1"}
+    return None
+
+
+def _probe_updates(e, cmd, last_seen, now):
+    base = {"id": e.get("id"), "host": e.get("label"),
+            "environment": e.get("environment") or "Unassigned"}
+    aid = e["id"] if e["kind"] == "agent" else (e.get("agent_entry") or {}).get("id") if e["kind"] == "merged" else None
+    ls = last_seen.get(aid) if aid else None
+    online = (bool(ls and (now - ls) <= 20)) if aid else None
+    if aid is not None and not online:
+        return {**base, "online": False, "error": "offline", "mgr": None,
+                "total": None, "security": None, "reboot": None}
+    pe = {**e, "requires_sudo_password": False}
+    if e.get("agent_entry"):
+        pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+    r = _dispatch_one(pe, cmd, "command", None, None, None, needs_sudo=False)
+    u = _parse_updates((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
+    if not u:
+        return {**base, "online": True if r.get("ok") else online,
+                "error": r.get("error") or "no update data returned",
+                "mgr": None, "total": None, "security": None, "reboot": None}
+    return {**base, "online": True, "error": None, **u}
+
+
+@app.get("/api/fleet-updates")
+def fleet_updates(refresh: int = 0, live: int = 0, user: str = Depends(require_login)):
+    """On-demand fleet patch-status sweep: pending updates, security updates, and
+    reboot-required per host. Read-only, tokenless (auditor-visible), cached for
+    ~15 min unless ?refresh=1 (the per-host scan is heavier than posture).
+    ?live=1 forces a repo-metadata refresh on each host first for current counts
+    (slower); it always bypasses the cache."""
+    import concurrent.futures
+    import time as _t
+
+    def _fresh():
+        return (not refresh and not live) and _UPDATES_CACHE["hosts"] is not None \
+            and (_t.time() - _UPDATES_CACHE["ts"]) < _UPDATES_TTL
+
+    if _fresh():
+        return {"hosts": _UPDATES_CACHE["hosts"], "cached": True, "ts": _UPDATES_CACHE["ts"]}
+    with _UPDATES_LOCK:
+        if _fresh():
+            return {"hosts": _UPDATES_CACHE["hosts"], "cached": True, "ts": _UPDATES_CACHE["ts"]}
+        try:
+            # Dashboard patch rollup is agent-only (SSH-only hosts live in
+            # Sysible Connect, not the fleet updates rollup).
+            entries = dispatch.list_merged_hosts(agent_only=True)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        try:
+            last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+        except Exception:
+            last_seen = {}
+        now = _t.time()
+        cmd = api.cmd_update_status(refresh=bool(live))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
+            hosts = list(ex.map(lambda e: _probe_updates(e, cmd, last_seen, now), entries)) if entries else []
+        _UPDATES_CACHE["hosts"] = hosts
+        _UPDATES_CACHE["ts"] = now
+        return {"hosts": hosts, "cached": False, "ts": now}
+
+
+# ----------------------------------------------------------------------
+# Scheduled fleet jobs (recurring maintenance) — store in webgui/schedules.py,
+# runner thread + executor here (they need the dispatch/actions machinery).
+# Unattended jobs dispatch TOKENLESS (agent root, read-only override), so they
+# run without an operator's stored sudo password (mirrors posture/metrics).
+# ----------------------------------------------------------------------
+from webgui import schedules  # noqa: E402
+
+
+def _run_scheduled_job(job):
+    """Execute one scheduled job across its targets. Returns (status, detail)."""
+    import time as _t
+    action = job.get("action")
+    try:
+        all_entries = dispatch.list_merged_hosts(agent_only=False)
+    except Exception as e:
+        return "error", f"controller unreachable: {e}"
+    tgt = set(job.get("targets") or [])
+    entries = [e for e in all_entries if (not tgt or e.get("id") in tgt)]
+    if not entries:
+        return "error", "no matching target hosts"
+
+    # Scans just refresh the shared caches; no per-host action result.
+    if action == "patch_scan":
+        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+        now = _t.time(); cmd = api.cmd_update_status(refresh=True)
+        _UPDATES_CACHE["hosts"] = [_probe_updates(e, cmd, last_seen, now) for e in entries]
+        _UPDATES_CACHE["ts"] = now
+        return "ok", f"rescanned {len(entries)} host(s)"
+    if action == "posture_scan":
+        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+        now = _t.time(); cmd = _posture_command()
+        _POSTURE_CACHE["hosts"] = [_probe_posture(e, cmd, last_seen, now) for e in entries]
+        _POSTURE_CACHE["ts"] = now
+        return "ok", f"rescanned {len(entries)} host(s)"
+
+    arg = (job.get("arg") or "").strip()
+    if action == "security_updates":
+        cmd = actions.get("sec_install_updates").build({})
+    elif action == "all_updates":
+        cmd = actions.get("pkg_update").build({"names": ""})
+    elif action == "clean_pkg_cache":
+        cmd = api.cmd_clean_package_cache()
+    elif action == "vacuum_journal":
+        cmd = api.cmd_vacuum_journal(7)
+    elif action == "fstrim":
+        cmd = api.cmd_fstrim()
+    elif action == "clear_failed_units":
+        cmd = api.cmd_reset_failed_units()
+    elif action == "sync_time":
+        cmd = api.cmd_sync_time_now()
+    elif action == "restart_service":
+        if not arg:
+            return "error", "no service name configured"
+        cmd = api.cmd_service_restart(arg)
+    elif action == "run_command":
+        if not arg:
+            return "error", "no command configured"
+        cmd = arg
+    elif action == "reboot":
+        cmd = api.cmd_reboot_host()
+    else:
+        return "error", f"unknown action {action}"
+
+    label = schedules.ACTIONS.get(action, action)
+    desc = f"[scheduled by {job.get('created_by') or '?'}] {label}"
+    ok = 0
+    for e in entries:
+        # Tokenless (unattended root) + needs_sudo=False: no operator/become needed.
+        # The creator is named in the description so the activity log still
+        # attributes the (root) run to whoever set the schedule up.
+        r = _dispatch_one(e, cmd, "command", None, None, desc, needs_sudo=False)
+        if r.get("ok") or r.get("code") == 0 or (action == "reboot" and not r.get("error")):
+            ok += 1
+    status = "ok" if ok == len(entries) else "error"
+    return status, f"{ok}/{len(entries)} host(s) succeeded"
+
+
+_SCHED_STARTED = False
+
+
+def _scheduler_loop():
+    import time as _t
+    while True:
+        try:
+            for job in schedules.due_jobs():
+                # Advance + persist next_run BEFORE running. If the advance can't
+                # be recorded, skip the run — otherwise a persistent save failure
+                # leaves next_run in the past and the job re-fires every 30s
+                # (a fleet-wide dispatch storm).
+                try:
+                    if not schedules.advance_next_run(job["id"]):
+                        continue
+                except Exception:
+                    continue
+                try:
+                    st, detail = _run_scheduled_job(job)
+                except Exception as e:  # never let one job kill the loop
+                    st, detail = "error", str(e)
+                try:
+                    schedules.record_run(job["id"], st, detail)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        _t.sleep(30)
+
+
+def _start_scheduler():
+    global _SCHED_STARTED
+    if _SCHED_STARTED:
+        return
+    _SCHED_STARTED = True
+    import threading
+    threading.Thread(target=_scheduler_loop, name="sysible-scheduler", daemon=True).start()
+
+
+class ScheduleRequest(BaseModel):
+    name: str = ""
+    action: str
+    arg: str = ""
+    targets: list[str] = []
+    cadence: str = "daily"
+    at: str = "02:00"
+    weekday: int = 0
+    enabled: bool = True
+
+
+# Free-form scheduled actions run an operator-supplied command / service name as
+# ROOT (tokenless) on every target, which sidesteps the per-user sudo policy that
+# constrains a sysadmin everywhere else. Restrict CREATING / EDITING / RUNNING
+# these to superusers; the canned maintenance actions stay open to sysadmins.
+_FREEFORM_SCHED_ACTIONS = {"run_command", "restart_service"}
+
+
+def _guard_freeform_schedule(request: Request, *actions_):
+    if any(a in _FREEFORM_SCHED_ACTIONS for a in actions_ if a):
+        if request.session.get("role") != "superuser":
+            raise HTTPException(
+                status_code=403,
+                detail="Only a superuser can schedule free-form commands "
+                       "(run a command / restart a service) — they run as root on every host.")
+
+
+@app.get("/api/schedules")
+def schedules_list(user: str = Depends(require_operator)):
+    return {"schedules": schedules.list_jobs(), "actions": schedules.ACTIONS,
+            "arg_actions": schedules.ARG_ACTIONS, "cadences": list(schedules.CADENCES)}
+
+
+@app.post("/api/schedules")
+def schedules_create(body: ScheduleRequest, request: Request, user: str = Depends(require_operator)):
+    _guard_freeform_schedule(request, body.action)
+    try:
+        job = schedules.create_job(body.name, body.action, body.targets, body.cadence,
+                                   body.at, body.weekday, user, arg=body.arg)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return job
+
+
+@app.patch("/api/schedules/{job_id}")
+def schedules_update(job_id: str, body: ScheduleRequest, request: Request, user: str = Depends(require_operator)):
+    # Guard both the incoming action AND the existing one, so a sysadmin can't
+    # edit (or repoint) a superuser-owned free-form job either.
+    _guard_freeform_schedule(request, body.action, (schedules.get_job(job_id) or {}).get("action"))
+    try:
+        job = schedules.update_job(job_id, name=body.name, action=body.action, arg=body.arg,
+                                   targets=body.targets, cadence=body.cadence, at=body.at,
+                                   weekday=body.weekday, enabled=body.enabled)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not job:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return job
+
+
+@app.delete("/api/schedules/{job_id}")
+def schedules_delete(job_id: str, user: str = Depends(require_operator)):
+    if not schedules.delete_job(job_id):
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return {"deleted": True}
+
+
+@app.post("/api/schedules/{job_id}/run-now")
+def schedules_run_now(job_id: str, request: Request, user: str = Depends(require_operator)):
+    job = schedules.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    _guard_freeform_schedule(request, job.get("action"))
+    st, detail = _run_scheduled_job(job)
+    schedules.record_run(job_id, st, detail)
+    return {"status": st, "detail": detail}
+
+
+_start_scheduler()
+
+
+class InstallUpdatesRequest(BaseModel):
+    targets: list[str] = []       # host ids; empty = all
+    kind: str = "security"        # "security" | "all"
+    # Optional one-run sudo password for password-sudo hosts, for operators who
+    # don't keep one stored. Transient (RAM only), same handling as /api/fleet.
+    sudo_password: str = ""
+
+
+# In-memory registry of background install jobs -> per-host status + output, so
+# the UI can show live per-host progress and command output. Bounded (last N).
+_INSTALL_JOBS = {}
+_INSTALL_LOCK = _posture_threading.Lock()
+
+
+def _install_set(job_id, hid, status, code=None, output=None):
+    with _INSTALL_LOCK:
+        job = _INSTALL_JOBS.get(job_id)
+        if not job:
+            return
+        for h in job["hosts"]:
+            if h["id"] == hid:
+                h["status"] = status
+                if code is not None:
+                    h["code"] = code
+                if output is not None:
+                    h["output"] = output[:20000]
+                break
+
+
+def _install_one(entry, cmd, token=None, become_password=None, description=None):
+    """Run one host's install as the initiating operator (RBAC: runuser -u
+    <admin> under the host's sudo policy — same privilege path as every other
+    operator write action), polling the agent task up to ~15 min so the real
+    command output is captured (a big upgrade outlasts the normal 60s request
+    cap). `token` attributes/authorizes the run and derives the run-as user;
+    `become_password` is supplied to password-sudo hosts; `description` is the
+    activity-feed label. Returns {ok, code, output}."""
+    import time as _t
+    try:
+        out = _with_token(token, lambda: dispatch.run_on_entry(
+            entry, cmd, kind="command", become_password=become_password,
+            needs_sudo=True, description=description))
+    except Exception as e:
+        return {"ok": False, "code": None, "output": str(e)}
+    if out.get("error"):
+        return {"ok": False, "code": None, "output": out["error"]}
+    if out.get("sync"):
+        text = (out.get("stdout") or "") + (("\n" + out["stderr"]) if out.get("stderr") else "")
+        return {"ok": out.get("code") == 0, "code": out.get("code"), "output": text.strip()}
+    tid = out.get("task_id")
+    if tid is None:
+        return {"ok": False, "code": None, "output": "failed to queue task"}
+    deadline = _t.time() + 900
+    while _t.time() < deadline:
+        r = dispatch.poll_entry_result(entry, tid)
+        if r is not None:
+            text = (r.get("stdout") or "") + (("\n" + r["stderr"]) if r.get("stderr") else "")
+            return {"ok": r.get("code") == 0, "code": r.get("code"), "output": text.strip()}
+        _t.sleep(2.0)
+    return {"ok": False, "code": None, "output": "timed out waiting for host to finish"}
+
+
+@app.post("/api/fleet-updates/install")
+def fleet_updates_install(body: InstallUpdatesRequest, request: Request,
+                          user: str = Depends(require_operator)):
+    """Kick a fleet update install in the BACKGROUND (a package upgrade can run
+    for minutes — a synchronous call would just spin) and track per-host status +
+    output so the UI can show live progress. Runs as the initiating operator
+    (RBAC: runuser -u <admin> under the host's sudo policy), the same privilege
+    path as every other operator write action. Poll /api/fleet-updates/install-status."""
+    import time as _t
+    import uuid
+    action = "all_updates" if body.kind == "all" else "security_updates"
+    cmd = (actions.get("pkg_update").build({"names": ""}) if action == "all_updates"
+           else actions.get("sec_install_updates").build({}))
+    install_desc = "Install all updates" if action == "all_updates" else "Install security updates"
+    try:
+        all_entries = dispatch.list_merged_hosts(agent_only=False)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+    tgt = set(body.targets or [])
+    entries = [e for e in all_entries if (not tgt or e.get("id") in tgt)]
+    if not entries:
+        raise HTTPException(status_code=400, detail="No matching target hosts.")
+
+    # Capture the operator token + resolve each host's become-password NOW, at
+    # request time: the install runs later on a background thread, past the
+    # request's own token/scope. Become = this run's inline password (if any)
+    # over the operator's stored per-host/fleet default.
+    token = _session_token(request)
+    become_by_id = {e.get("id"): (body.sudo_password or sudo_store.resolve(user, e.get("label", "")))
+                    for e in entries}
+
+    job_id = uuid.uuid4().hex[:12]
+    hosts = [{"id": e.get("id"), "host": e.get("label"), "environment": e.get("environment") or "Unassigned",
+              "status": "queued", "code": None, "output": ""} for e in entries]
+    entry_by_id = {e.get("id"): e for e in entries}
+    with _INSTALL_LOCK:
+        # Prune to the most recent ~20 jobs.
+        for old in sorted(_INSTALL_JOBS.values(), key=lambda j: j["started"])[:-19]:
+            _INSTALL_JOBS.pop(old["id"], None)
+        _INSTALL_JOBS[job_id] = {"id": job_id, "kind": body.kind, "started": _t.time(),
+                                 "done": False, "hosts": hosts}
+
+    def work():
+        import concurrent.futures
+
+        def do(h):
+            _install_set(job_id, h["id"], "running")
+            res = _install_one(entry_by_id[h["id"]], cmd,
+                               token=token, become_password=become_by_id.get(h["id"]),
+                               description=install_desc)
+            _install_set(job_id, h["id"], "done" if res["ok"] else "failed", res["code"], res["output"])
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(entries))) as ex:
+                list(ex.map(do, list(hosts)))
+        finally:
+            with _INSTALL_LOCK:
+                if job_id in _INSTALL_JOBS:
+                    _INSTALL_JOBS[job_id]["done"] = True
+            _UPDATES_CACHE["ts"] = 0   # force a fresh count sweep next poll
+
+    import threading
+    threading.Thread(target=work, name="sysible-fleet-install", daemon=True).start()
+    return {"job_id": job_id, "kind": body.kind,
+            "hosts": [{"id": h["id"], "host": h["host"], "environment": h["environment"],
+                       "status": "queued"} for h in hosts]}
+
+
+@app.get("/api/fleet-updates/install-status/{job_id}")
+def fleet_updates_install_status(job_id: str, user: str = Depends(require_operator)):
+    import copy
+    with _INSTALL_LOCK:
+        job = _INSTALL_JOBS.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Install job not found (it may have expired).")
+        return copy.deepcopy(job)
+
+
+# ----------------------------------------------------------------------
+# Alerting: evaluate rules against the sweeps and notify on threshold crossings.
+# ----------------------------------------------------------------------
+from webgui import alerts  # noqa: E402
+
+
+def _alerts_gather_hosts():
+    """Merged per-host view for alert rules: online/disk/failed from a fresh
+    metrics sweep (cheap), + security/reboot from the updates cache and cert-days
+    from the posture cache (populated by the dashboard / scheduled scans)."""
+    import concurrent.futures
+    import time as _t
+    entries = dispatch.list_merged_hosts(agent_only=False)
+    try:
+        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+    except Exception:
+        last_seen = {}
+    now = _t.time()
+    cmd = api.cmd_metrics_snapshot()
+
+    def probe(e):
+        aid = e["id"] if e["kind"] == "agent" else (e.get("agent_entry") or {}).get("id") if e["kind"] == "merged" else None
+        ls = last_seen.get(aid) if aid else None
+        online = (bool(ls and (now - ls) <= 20)) if aid else None
+        base = {"id": e.get("id"), "host": e.get("label"), "online": online,
+                "disk": None, "failed": None, "mem": None, "load1": None, "oom": None}
+        if aid is not None and not online:
+            base["online"] = False
+            return base
+        pe = {**e, "requires_sudo_password": False}
+        if e.get("agent_entry"):
+            pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+        r = _dispatch_one(pe, cmd, "command", None, None, None, needs_sudo=False)
+        m = _parse_sysmetrics((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
+        if m:
+            base.update(online=True, disk=m.get("disk"), failed=m.get("failed"),
+                        mem=m.get("mem"), load1=m.get("load1"), oom=m.get("oom"))
+        return base
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
+        health = list(ex.map(probe, entries)) if entries else []
+    upd = {h.get("id"): h for h in (_UPDATES_CACHE["hosts"] or [])}
+    pos = {h.get("id"): h for h in (_POSTURE_CACHE["hosts"] or [])}
+    for h in health:
+        u = upd.get(h["id"]) or {}
+        h["security"], h["reboot"], h["total"] = u.get("security"), u.get("reboot"), u.get("total")
+        p = pos.get(h["id"]) or {}
+        flags = p.get("flags") or {}
+        for fl in ("firewall_disabled", "mac_not_enforcing", "ssh_root_login", "time_unsynced"):
+            h[fl] = flags.get(fl) is True
+        cd = ((p.get("posture") or {}).get("cert") or {}).get("nearest_days")
+        try:
+            h["cert_days"] = int(cd) if cd not in (None, "") else None
+        except (TypeError, ValueError):
+            h["cert_days"] = None
+    return health
+
+
+def _eval_custom_rules(cfg, firing):
+    """Run each enabled custom rule's command on every host and append firings
+    where the regex matches (or is absent, per mode). Appends to `firing`."""
+    import concurrent.futures
+    custom = [r for r in cfg.get("custom_rules", []) if r.get("enabled") and r.get("command") and r.get("regex")]
+    if not custom:
+        return
+    try:
+        entries = dispatch.list_merged_hosts(agent_only=False)
+    except Exception:
+        return
+    pairs = [(r, e) for r in custom for e in entries]
+
+    def check(pair):
+        r, e = pair
+        res = _dispatch_one(e, r["command"], "command", None, None, None, needs_sudo=False)
+        out = (res.get("stdout") or "") + "\n" + (res.get("stderr") or "")
+        why = alerts.custom_match(r, out)
+        if not why:
+            return None
+        return {"key": f"{e.get('id')}|custom:{r['id']}", "host_id": e.get("id"), "host": e.get("label"),
+                "rule": r.get("name") or "custom", "message": f"{e.get('label')}: {r.get('name') or 'custom'} — {why}"}
+
+    if pairs:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(pairs))) as ex:
+            firing.extend([f for f in ex.map(check, pairs) if f])
+
+
+def _alerts_loop():
+    import time as _t
+    _t.sleep(60)   # let caches warm on startup
+    while True:
+        try:
+            cfg = alerts.load()
+            ch = cfg["channels"]
+            enabled = ch["email"].get("enabled") or ch["webhook"].get("enabled")
+            has_builtin = any(r.get("enabled") for r in cfg["rules"].values())
+            has_custom = any(r.get("enabled") for r in cfg.get("custom_rules", []))
+            if enabled and (has_builtin or has_custom):
+                hosts = _alerts_gather_hosts() if has_builtin else []
+                firing = alerts.evaluate_rules(cfg, hosts)
+                _eval_custom_rules(cfg, firing)
+                newly, resolved = alerts.diff_state(cfg, firing)
+                lines = [f"NEW: {f['message']}" for f in newly] + \
+                        [f"RESOLVED: {r['message']}" for r in resolved]
+                if lines:
+                    subj = f"[Sysible] {len(newly)} new alert(s), {len(resolved)} resolved"
+                    alerts.notify(cfg, subj, "\n".join(lines))
+        except Exception:
+            pass
+        _t.sleep(300)
+
+
+_ALERTS_STARTED = False
+
+
+def _start_alerts():
+    global _ALERTS_STARTED
+    if _ALERTS_STARTED:
+        return
+    _ALERTS_STARTED = True
+    import threading
+    threading.Thread(target=_alerts_loop, name="sysible-alerts", daemon=True).start()
+
+
+@app.get("/api/alerts")
+def alerts_get(user: str = Depends(require_operator)):
+    return alerts.get_config_redacted()
+
+
+@app.post("/api/alerts")
+def alerts_set(body: dict, request: Request, user: str = Depends(require_operator)):
+    # Custom rules run an operator-supplied command as ROOT on every host each
+    # eval cycle. A sysadmin may configure channels + built-in thresholds and
+    # re-save custom rules UNCHANGED, but only a superuser may add / edit /
+    # enable / disable a custom command rule.
+    if request.session.get("role") != "superuser" and (body or {}).get("custom_rules") is not None:
+        incoming = alerts.norm_custom_rules(alerts._sanitize_custom((body or {}).get("custom_rules")))
+        current = alerts.norm_custom_rules(alerts.load().get("custom_rules", []))
+        if incoming != current:
+            raise HTTPException(
+                status_code=403,
+                detail="Only a superuser can define custom command rules — they run as root on every host.")
+    return alerts.set_config(body or {})
+
+
+@app.post("/api/alerts/test")
+def alerts_test(user: str = Depends(require_operator)):
+    cfg = alerts.load()
+    if not (cfg["channels"]["email"].get("enabled") or cfg["channels"]["webhook"].get("enabled")):
+        raise HTTPException(status_code=400, detail="Enable and save at least one channel first.")
+    results = alerts.notify(cfg, "[Sysible] Test alert",
+                            "This is a test alert from the Sysible controller.")
+    return {"results": {k: {"ok": v[0], "detail": v[1]} for k, v in results.items()}}
+
+
+_start_alerts()
 
 
 @app.get("/api/environments")
@@ -919,12 +1614,26 @@ def fleet(body: FleetRequest, request: Request, user: str = Depends(require_oper
     desc = {"reboot": "Reboot host", "poweroff": "Power off host",
             "restart_agent": "Restart agent", "script": "Ran fleet script"}.get(body.action, body.action)
     token = _session_token(request)
+    # An explicit selection is respected as-is; an empty target list means the
+    # "all hosts" shortcut, which is where a self-brick hides.
+    explicit = bool(body.targets)
     targets = body.targets or list(all_entries.keys())
     results = []
     for tid in targets:
         entry = all_entries.get(tid)
         if entry is None:
             results.append({"host": tid, "ok": False, "error": "host not found",
+                            "stdout": "", "stderr": "", "code": None})
+            continue
+        # Never let an "all hosts" reboot/power-off silently take down the
+        # controller's own self-enrolled host — a power-off is unrecoverable
+        # without physical/IPMI access to the control node, and a reboot drops
+        # the whole control plane at once. Skipped only for the "all" shortcut;
+        # if an operator explicitly selects the control node, honour it.
+        if (not explicit) and body.action in ("poweroff", "reboot") and entry.get("is_controller"):
+            results.append({"host": entry.get("label", tid), "ok": False,
+                            "error": "skipped — this is the control node; select it explicitly if you really mean to "
+                                     f"{body.action} the controller itself",
                             "stdout": "", "stderr": "", "code": None})
             continue
         # An inline password supplied for this run wins; otherwise fall back to
@@ -937,16 +1646,18 @@ def fleet(body: FleetRequest, request: Request, user: str = Depends(require_oper
 class RestartUnitRequest(BaseModel):
     unit: str
     sudo_password: str = ""
+    mode: str = "restart"   # "restart" | "reset-failed"
 
 
 @app.post("/api/host/{host_id}/restart-unit")
 def restart_unit(host_id: str, body: RestartUnitRequest, request: Request,
                  user: str = Depends(require_operator)):
-    """Restart one systemd unit on one host — the one-click 'fix it' behind a
-    failed unit on the dashboard. The command is built server-side from the unit
-    name (shlex-quoted by cmd_service_restart), so the only input is the unit;
-    dispatched as the operator (attributed/logged), so it's an ordinary write an
-    auditor can't perform."""
+    """Act on one systemd unit on one host — the one-click 'fix it' behind a
+    failed unit on the dashboard. mode="restart" restarts it; mode="reset-failed"
+    just clears its failed marker (for a unit that can't be made to run, e.g. a
+    VMware vmblock .mount). The command is built server-side from the unit name
+    (shlex-quoted), so the only input is the unit; dispatched as the operator
+    (attributed/logged), so it's an ordinary write an auditor can't perform."""
     unit = (body.unit or "").strip()
     if not unit:
         raise HTTPException(status_code=400, detail="A unit name is required.")
@@ -957,11 +1668,16 @@ def restart_unit(host_id: str, body: RestartUnitRequest, request: Request,
     entry = all_entries.get(host_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Host not found.")
-    command = api.cmd_service_restart(unit)
+    if body.mode == "reset-failed":
+        command = api.cmd_reset_failed_unit(unit)
+        desc = f"Clear failed state of {unit}"
+    else:
+        command = api.cmd_service_restart(unit)
+        desc = f"Restart unit {unit}"
     become = body.sudo_password or sudo_store.resolve(user, entry.get("label", ""))
     token = _session_token(request)
-    result = _dispatch_one(entry, command, "command", become, token, f"Restart unit {unit}")
-    return {"unit": unit, "host": entry.get("label"), "result": result}
+    result = _dispatch_one(entry, command, "command", become, token, desc)
+    return {"unit": unit, "host": entry.get("label"), "mode": body.mode, "result": result}
 
 
 class CheckinRequest(BaseModel):
@@ -1025,9 +1741,32 @@ def set_host_environment(host_id: str, body: HostEnvRequest, request: Request,
     return _wrap(lambda: _as_admin(request, lambda: api.set_agent_environment(host_id, body.environment)))
 
 
+@app.post("/api/host/{host_id}/revoke")
+def revoke_host(host_id: str, request: Request, user: str = Depends(require_superuser_session)):
+    """Hard lock-out a (possibly compromised/tampered) agent host: revoke its
+    secret so it can't heartbeat/poll/report until re-enrolled. Superuser-only at
+    both layers (require_superuser_session here + require_superuser on the
+    controller, via the caller's token in _as_admin)."""
+    return _wrap(lambda: _as_admin(request, lambda: api.revoke_agent(host_id)))
+
+
+@app.post("/api/host/{host_id}/resume")
+def resume_host(host_id: str, request: Request, user: str = Depends(require_superuser_session)):
+    """Clear an integrity quarantine (soft lockout): rebaseline the host so it
+    re-seals and dispatch resumes. Superuser-only (see revoke_host)."""
+    return _wrap(lambda: _as_admin(request, lambda: api.resume_agent(host_id)))
+
+
 @app.delete("/api/host/{host_id}")
-def remove_host(host_id: str, request: Request, user: str = Depends(require_login)):
-    """Disenroll an agent host. Matches the desktop Host Enrollment "Remove"
+def remove_host(host_id: str, request: Request, force: int = 0,
+                user: str = Depends(require_superuser_session)):
+    """Disenroll an agent host. Superuser-only: besides the controller-side
+    disenroll (itself superuser-gated), this route FIRST dispatches an agent
+    teardown (cmd_uninstall_agent_service) to the host. Gating the whole route on
+    superuser keeps a sysadmin/auditor from triggering that teardown dispatch
+    before the controller's own superuser check would reject the disenroll.
+
+    Matches the desktop Host Enrollment "Remove"
     flow (client/host_enrollment_page.py): first ask the host's agent to tear
     down its own systemd service + files (cmd_uninstall_agent_service), then
     drop the enrollment on the controller *regardless* of whether that teardown
@@ -1040,41 +1779,60 @@ def remove_host(host_id: str, request: Request, user: str = Depends(require_logi
     dropping the record and orphaning a still-running service."""
     token = _session_token(request)
 
-    # Find this host's agent dispatch entry so we can run the teardown on it.
-    # agent_only=True: the teardown is an agent-service action; an SSH-only
-    # "host" has no Sysible agent to uninstall.
+    # A REVOKED or OFFLINE agent can't run its own teardown: dispatching the
+    # uninstall to it would just hang out the full task timeout (the agent can't
+    # poll), which is exactly what leaves a revoked/dead host "stuck" in the
+    # list. For those, skip the teardown and remove the enrollment record
+    # directly — the record delete is what actually clears it from the console.
+    #
+    # force=1 is the "just delete it" escape hatch for a ZOMBIE agent — a broken
+    # build that keeps heartbeating (so it looks alive) but can't cleanly
+    # uninstall itself, which would otherwise stall the graceful teardown. Force
+    # skips the teardown entirely and drops the controller record now; deleting
+    # the record also invalidates the agent secret, so the zombie is locked out
+    # on its next heartbeat even though its process is still running. Clean it up
+    # on the host with disenroll_agent.sh (or kill the service) afterwards.
+    import time as _t
     try:
-        entry = next(
-            (e for e in dispatch.list_merged_hosts(agent_only=True)
-             if e.get("id") == host_id
-             or (e.get("agent_entry") or {}).get("id") == host_id),
-            None,
-        )
+        ag = next((a for a in api.get_agents() if a.get("host_id") == host_id), None)
     except Exception:
-        entry = None
+        ag = None
+    revoked = bool(ag and ag.get("revoked"))
+    ls = ag.get("last_seen") if ag else None
+    alive = bool(ls and (_t.time() - float(ls)) <= 30)
 
     teardown = None
-    if entry is not None:
-        agent_entry = entry.get("agent_entry") or entry
-        if agent_entry.get("requires_sudo_password") and not sudo_store.resolve(
-                user, entry.get("label", "")):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"'{entry.get('label', host_id)}' is set to require a sudo password, "
-                    "so tearing down its agent service needs your stored sudo password - "
-                    "but none is saved. Set it from the \"Sudo Password\" button in the "
-                    "header and disenroll again, or run disenroll_agent.sh on the host "
-                    "directly."
-                ),
+    if alive and not revoked and not force:
+        # Online, un-revoked host: gracefully tear the agent service down first.
+        # agent_only=True: an SSH-only "host" has no Sysible agent to uninstall.
+        try:
+            entry = next(
+                (e for e in dispatch.list_merged_hosts(agent_only=True)
+                 if e.get("id") == host_id
+                 or (e.get("agent_entry") or {}).get("id") == host_id),
+                None,
             )
-        become = sudo_store.resolve(user, entry.get("label", ""))
-        # Best-effort: a failed/timed-out teardown (e.g. the host is offline)
-        # must not block removing the enrollment record - mirror the desktop's
-        # "removed regardless" behaviour. Surface the outcome to the caller.
-        teardown = _dispatch_one(
-            agent_entry, api.cmd_uninstall_agent_service(), "command",
-            become, token, "Uninstall agent service (disenroll)")
+        except Exception:
+            entry = None
+        if entry is not None:
+            agent_entry = entry.get("agent_entry") or entry
+            if agent_entry.get("requires_sudo_password") and not sudo_store.resolve(
+                    user, entry.get("label", "")):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"'{entry.get('label', host_id)}' is set to require a sudo password, "
+                        "so tearing down its agent service needs your stored sudo password - "
+                        "but none is saved. Set it from the \"Sudo Password\" button in the "
+                        "header and disenroll again, or run disenroll_agent.sh on the host "
+                        "directly."
+                    ),
+                )
+            become = sudo_store.resolve(user, entry.get("label", ""))
+            # Best-effort: a failed teardown must not block removing the record.
+            teardown = _dispatch_one(
+                agent_entry, api.cmd_uninstall_agent_service(), "command",
+                become, token, "Uninstall agent service (disenroll)")
 
     result = _wrap(lambda: _as_admin(
         request, lambda: api.disenroll_agent(host_id) or {"removed": True}))
@@ -1123,13 +1881,28 @@ def _as_admin(request: Request, fn):
 
 
 def _wrap(fn):
-    """Run a controller call, turning any non-HTTP error into a 502 so a
-    controller hiccup surfaces cleanly instead of as an opaque 500."""
+    """Run a controller call and surface the outcome with the RIGHT status code.
+
+    The client raises requests.HTTPError with the response attached, so when the
+    controller itself answered (403 not-a-superuser, 400 bad input, 404 not
+    found, ...) propagate THAT status/detail. Only a genuine transport failure —
+    unreachable/timeout, which has no response — becomes a 502. Previously every
+    controller error collapsed to 502, so a permission denial read to the
+    operator as 'controller unreachable / Bad Gateway'."""
     try:
         return fn()
     except HTTPException:
         raise
     except Exception as e:
+        resp = getattr(e, "response", None)
+        code = getattr(resp, "status_code", None)
+        if isinstance(code, int) and 400 <= code < 600:
+            detail = None
+            try:
+                detail = resp.json().get("detail")
+            except Exception:
+                pass
+            raise HTTPException(status_code=code, detail=detail or str(e))
         raise HTTPException(status_code=502, detail=str(e))
 
 
@@ -1240,6 +2013,14 @@ def set_cfg(body: ControllerCfg, request: Request, user: str = Depends(require_l
         body.hostname, body.ip, body.address_mode, body.port)))
 
 
+@app.post("/api/controller-restart")
+def controller_restart(request: Request, user: str = Depends(require_superuser_session)):
+    """Restart the controller backend service (no update). Superuser-only. Only
+    the backend bounces — this web console stays up, so the session survives and
+    API calls just blip for a few seconds until the backend is back."""
+    return _wrap(lambda: _as_admin(request, lambda: api.controller_restart()))
+
+
 @app.post("/api/controller-update")
 def controller_update(request: Request, user: str = Depends(require_superuser_session)):
     """Trigger an in-place controller self-update (git pull + redeploy + restart).
@@ -1272,6 +2053,13 @@ def update_agents(request: Request, user: str = Depends(require_superuser_sessio
     return _wrap(lambda: _as_admin(request, lambda: api.update_agents()))
 
 
+@app.get("/api/update-status")
+def update_status(request: Request, user: str = Depends(require_superuser_session)):
+    """Is a software update available for the controller (git-behind) or agents
+    (build-hash mismatch)? Superuser-only; does a live git fetch, so on demand."""
+    return _wrap(lambda: _as_admin(request, lambda: api.get_update_status()))
+
+
 @app.get("/api/audit-log")
 def audit_log(limit: int = 200, request: Request = None, user: str = Depends(require_login)):
     # Superuser-gated on the controller — login attempts + admin changes.
@@ -1292,8 +2080,15 @@ class ChangeCreds(BaseModel):
 @app.post("/api/admin/change-credentials")
 def change_credentials(body: ChangeCreds, request: Request, user: str = Depends(require_login)):
     new_user = (body.new_username or "").strip() or user
-    return _wrap(lambda: _as_admin(request, lambda: api.change_admin_credentials(
+    result = _wrap(lambda: _as_admin(request, lambda: api.change_admin_credentials(
         user, body.current_password, new_user, body.new_password)))
+    # The change cleared must_change_password on the controller and (if renamed)
+    # moved the account — reflect both in the session so the forced-change gate
+    # releases and the session tracks the new username without a re-login.
+    request.session["must_change_password"] = False
+    if new_user != user:
+        request.session["user"] = new_user
+    return result
 
 
 @app.get("/api/local-ips")
@@ -1465,8 +2260,11 @@ def packages_list(body: PkgListRequest, request: Request, user: str = Depends(re
 async def packages_install_local(request: Request, file: UploadFile = File(...),
                                  targets: str = Form(""), user: str = Depends(require_operator)):
     import json as _json
-    tids = _json.loads(targets) if targets else []
-    if not tids:
+    try:
+        tids = _json.loads(targets) if targets else []
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Malformed target list.")
+    if not isinstance(tids, list) or not tids:
         raise HTTPException(status_code=400, detail="No target hosts selected.")
     tmp = Path(tempfile.mkdtemp(prefix="sysible-pkg-"))
     fname = _safe_upload_name(file.filename, "package.bin")
@@ -1626,7 +2424,21 @@ def portal_download_delete(filename: str, user: str = Depends(require_superuser_
 # ----------------------------------------------------------------------
 @app.get("/api/agents")
 def agents(user: str = Depends(require_login)):
-    return _wrap(lambda: {"agents": api.get_agents()})
+    # Attach an aged `online` flag using the SAME 20s-stale rule the fleet-health
+    # sweep uses (fleet_health / _probe_*), so the Host Enrollment status dot —
+    # which reads a.online — actually lights up and agrees with the dashboard.
+    # The raw controller record only carries a never-aged status string.
+    import time as _t
+
+    def _with_online():
+        now = _t.time()
+        rows = api.get_agents() or []
+        for a in rows:
+            ls = a.get("last_seen")
+            a["online"] = bool(ls and (now - ls) <= 20)
+        return {"agents": rows}
+
+    return _wrap(_with_online)
 
 
 @app.post("/api/enroll-token")
@@ -1635,13 +2447,16 @@ def enroll_token(request: Request, user: str = Depends(require_login)):
 
 
 @app.get("/api/agent-bundle")
-def agent_bundle(user: str = Depends(require_login)):
+def agent_bundle(request: Request, user: str = Depends(require_superuser_session)):
     """Download the ready-to-run agent bundle (tar.gz) the desktop's Host
-    Enrollment page hands out."""
+    Enrollment page hands out. Superuser-only: building a bundle mints a fresh
+    enrollment token (create_enroll_token), so it's a privileged host-onboarding
+    action, not a read. Forwarded with the caller's token so the controller's own
+    require_superuser gate on /controller-config/agent-bundle also holds."""
     tmpdir = Path(tempfile.mkdtemp(prefix="sysible-bundle-"))
     dest = tmpdir / "sysible-agent.tar.gz"
     try:
-        api.download_agent_bundle(str(dest))
+        _as_admin(request, lambda: api.download_agent_bundle(str(dest)))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Could not build bundle: {e}")
 
@@ -1673,7 +2488,7 @@ class RunRequest(BaseModel):
 
 @app.post("/api/tool/{action_name}")
 def run_tool(action_name: str, body: RunRequest, request: Request, user: str = Depends(require_operator)):
-    """Build the shell command for `action_name` via the desktop client's
+    """Build the shell command for `action_name` via the shared
     cmd_* builder, then dispatch it across every selected target and
     return per-host results. Synchronous: agent tasks are polled here up
     to a timeout so the browser gets one clean response."""
@@ -1713,6 +2528,7 @@ def run_tool(action_name: str, body: RunRequest, request: Request, user: str = D
 
     token = _session_token(request)
     results = []
+    ran_labels = []
     for target in body.targets:
         entry = all_entries.get(target)
         if entry is None:
@@ -1722,9 +2538,202 @@ def run_tool(action_name: str, body: RunRequest, request: Request, user: str = D
         # Resolve this admin's sudo password for the target (host scope wins
         # over fleet default); only used if the host is flagged sudo-required.
         become = sudo_store.resolve(user, entry.get("label", ""))
-        results.append(_dispatch_one(entry, command, spec.kind, become, token, desc))
+        # Per-host activity is suppressed (log=False) — one grouped summary is
+        # logged after the loop ("List disks · dev1, prod1, ...").
+        results.append(_dispatch_one(entry, command, spec.kind, become, token, desc,
+                                     log=False))
+        ran_labels.append(entry.get("label") or target)
+
+    # One attributed summary entry for the whole run, listing the hosts it ran on.
+    if ran_labels:
+        shown = ", ".join(ran_labels[:6]) + (f" +{len(ran_labels) - 6} more" if len(ran_labels) > 6 else "")
+        try:
+            _as_admin(request, lambda: api.log_action(shown, desc))
+        except Exception:
+            pass
 
     return {"action": action_name, "command": command, "results": results}
+
+
+# ----------------------------------------------------------------------
+# Fleet Query — ask one read-only question across the fleet, get a table.
+# Each query prints a single line `SYSQUERY <value>` (empty value = not
+# present). Args are charset-validated so embedding them in the shell command
+# is injection-safe. Read-only + tokenless (no operator sudo needed for these
+# reads); require_operator (dispatches, so auditor-blocked).
+# ----------------------------------------------------------------------
+_FQ_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+@:-]{0,127}$")
+_FQ_PATH_RE = re.compile(r"^/[A-Za-z0-9 ._/@:+-]{0,255}$")
+
+FLEET_QUERY_TYPES = {
+    "package": {"label": "Package installed", "arg": "Package name", "example": "nginx", "group": "env", "summary": "match"},
+    "service": {"label": "Service active", "arg": "Service name", "example": "sshd", "group": "env", "summary": "match"},
+    "user":    {"label": "User exists", "arg": "Username", "example": "deploy", "group": "env", "summary": "match"},
+    "file":    {"label": "File exists", "arg": "Path", "example": "/etc/nginx/nginx.conf", "group": "env", "summary": "match"},
+    "port":    {"label": "Listening on port", "arg": "Port", "example": "443", "group": "env", "summary": "match"},
+    "journal": {"label": "Journal matches (last 2000 lines)", "arg": "Pattern (regex)", "example": "error|failed|oom", "group": "env", "summary": "match"},
+    "kernel":  {"label": "Kernel version", "arg": "", "example": "", "group": "env", "summary": "count"},
+    "filehash": {"label": "File content — drift", "arg": "Path", "example": "/etc/ssh/sshd_config", "group": "value", "summary": "count"},
+}
+
+
+def _fq_matched(qtype, val):
+    """Whether a host 'matches' the query (drives the M-of-N summary + green)."""
+    if not val:
+        return False
+    if qtype == "journal":
+        return val != "0"
+    if qtype == "service":
+        return val == "active"
+    if qtype in ("kernel", "filehash"):
+        return False   # descriptive, not a yes/no match
+    return True         # package/user/file/port: a non-empty value = present
+
+
+def _fq_command(qtype, arg):
+    if qtype == "kernel":
+        return "printf 'SYSQUERY %s\\n' \"$(uname -r)\""
+    if qtype in ("package", "service", "user"):
+        if not _FQ_NAME_RE.match(arg):
+            raise ValueError(f"invalid {FLEET_QUERY_TYPES[qtype]['arg'].lower()}")
+    if qtype == "package":
+        return (f"v=''; if command -v dpkg-query >/dev/null 2>&1; then "
+                f"v=$(dpkg-query -W -f='${{Version}}' {arg} 2>/dev/null); "
+                f"elif command -v rpm >/dev/null 2>&1; then "
+                f"v=$(rpm -q --qf '%{{VERSION}}-%{{RELEASE}}' {arg} 2>/dev/null); "
+                f"case \"$v\" in *'is not installed'*) v='';; esac; fi; "
+                f"printf 'SYSQUERY %s\\n' \"$v\"")
+    if qtype == "service":
+        return f"printf 'SYSQUERY %s\\n' \"$(systemctl is-active {arg} 2>/dev/null || echo inactive)\""
+    if qtype == "user":
+        return (f"if id -u {arg} >/dev/null 2>&1; then printf 'SYSQUERY uid=%s\\n' "
+                f"\"$(id -u {arg})\"; else printf 'SYSQUERY \\n'; fi")
+    if qtype == "file":
+        if not _FQ_PATH_RE.match(arg):
+            raise ValueError("invalid path")
+        return f"if [ -e '{arg}' ]; then printf 'SYSQUERY yes\\n'; else printf 'SYSQUERY \\n'; fi"
+    if qtype == "port":
+        if not re.match(r"^[0-9]{1,5}$", arg) or not (1 <= int(arg) <= 65535):
+            raise ValueError("invalid port")
+        return (f"if ss -Hltn 2>/dev/null | awk '{{print $4}}' | grep -qE ':{arg}$'; "
+                f"then printf 'SYSQUERY yes\\n'; else printf 'SYSQUERY \\n'; fi")
+    if qtype == "journal":
+        # Pattern is single-quoted in the shell; reject a single quote so it
+        # can't break out. grep -E metachars are fine inside the quotes.
+        if not arg or "'" in arg or len(arg) > 200:
+            raise ValueError("invalid pattern")
+        return f"printf 'SYSQUERY %s\\n' \"$(journalctl --no-pager -n 2000 2>/dev/null | grep -icE '{arg}')\""
+    if qtype == "filehash":
+        if not _FQ_PATH_RE.match(arg):
+            raise ValueError("invalid path")
+        return (f"p='{arg}'; if [ ! -e \"$p\" ]; then printf 'SYSQUERY missing\\n'; "
+                f"elif [ -d \"$p\" ]; then printf 'SYSQUERY (dir)\\n'; "
+                f"elif h=$(sha256sum \"$p\" 2>/dev/null | cut -c1-12); [ -n \"$h\" ]; then "
+                f"printf 'SYSQUERY %s\\n' \"$h\"; else printf 'SYSQUERY unreadable\\n'; fi")
+    raise ValueError(f"unknown query type: {qtype}")
+
+
+class FleetQueryRequest(BaseModel):
+    qtype: str
+    arg: str = ""
+    targets: list[str] = []
+
+
+@app.get("/api/fleet-query/types")
+def fleet_query_types(user: str = Depends(require_operator)):
+    return {"types": FLEET_QUERY_TYPES}
+
+
+@app.post("/api/fleet-query")
+def fleet_query(body: FleetQueryRequest, user: str = Depends(require_operator)):
+    """Run one read-only structured query across hosts (all, or a target subset)
+    and return a table: host, environment, value, present."""
+    if body.qtype not in FLEET_QUERY_TYPES:
+        raise HTTPException(status_code=400, detail="Unknown query type.")
+    try:
+        cmd = _fq_command(body.qtype, (body.arg or "").strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    try:
+        all_entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+    tgt = set(body.targets or [])
+    entries = [e for e in all_entries.values() if (not tgt or e["id"] in tgt)]
+    if not entries:
+        raise HTTPException(status_code=400, detail="No matching target hosts.")
+
+    def probe(e):
+        r = _dispatch_one(e, cmd, "command", None, None, None, needs_sudo=False, log=False)
+        val = None
+        for line in (r.get("stdout") or "").splitlines():
+            if line.startswith("SYSQUERY "):
+                val = line[len("SYSQUERY "):].strip()
+                break
+        err = None if val is not None else (r.get("error") or (r.get("stderr") or "no result").strip()[:120] or "no result")
+        return {"host": e.get("label"), "env": e.get("environment") or "Unassigned",
+                "value": val, "present": _fq_matched(body.qtype, val), "error": err}
+
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
+        rows = list(ex.map(probe, entries))
+    rows.sort(key=lambda r: (r["env"], r["host"]))
+    return {"qtype": body.qtype, "arg": body.arg, "rows": rows,
+            "count": len(rows), "matched": sum(1 for r in rows if r["present"])}
+
+
+# ----------------------------------------------------------------------
+# Per-host operator metadata (tags / owner / notes / criticality). Read is
+# require_login (dashboards/host detail show it, incl. auditors); write is
+# require_operator. See webgui/host_meta.py.
+# ----------------------------------------------------------------------
+@app.get("/api/host-meta")
+def host_meta_all(user: str = Depends(require_login)):
+    from webgui import host_meta
+    return {"meta": host_meta.all_meta(), "criticality": list(host_meta.CRITICALITY)}
+
+
+@app.post("/api/host-meta/{name}")
+def host_meta_set(name: str, body: dict, user: str = Depends(require_operator)):
+    from webgui import host_meta
+    try:
+        return host_meta.set_meta(name, tags=body.get("tags"), owner=body.get("owner"),
+                                  notes=body.get("notes"), criticality=body.get("criticality"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ----------------------------------------------------------------------
+# Finding suppressions — silence a specific dashboard finding on a host or a
+# whole environment, with a reason + expiry policy. Viewable by any role
+# (require_login); creating/removing is a write (require_operator, so an auditor
+# can't). See webgui/suppressions.py. The finding<->suppression matching and the
+# reboot/expiry evaluation happen in the SPA where the live posture data lives.
+# ----------------------------------------------------------------------
+@app.get("/api/suppressions")
+def suppressions_list(user: str = Depends(require_login)):
+    from webgui import suppressions
+    return {"suppressions": suppressions.list_all(),
+            "types": list(suppressions.TYPES),
+            "snoozes": sorted(suppressions.SNOOZE_SECONDS)}
+
+
+@app.post("/api/suppressions")
+def suppressions_add(body: dict, user: str = Depends(require_operator)):
+    from webgui import suppressions
+    try:
+        return suppressions.add(
+            scope=body.get("scope"), target=body.get("target"), key=body.get("key"),
+            stype=body.get("type"), created_by=user, reason=body.get("reason", ""),
+            snooze=body.get("snooze"), boot_epoch=body.get("boot_epoch"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/suppressions/{supp_id}")
+def suppressions_remove(supp_id: str, user: str = Depends(require_operator)):
+    from webgui import suppressions
+    return {"removed": suppressions.remove(supp_id)}
 
 
 def _parse_filehash(text):
@@ -1803,10 +2812,15 @@ def files_compare(body: CompareRequest, request: Request, user: str = Depends(re
 
 
 def _dispatch_one(entry, command, kind, become_password=None, token=None, description=None,
-                  needs_sudo=True):
+                  needs_sudo=True, log=True, poll_timeout=None):
     """Run one command on one host and return a normalized result,
     polling agent tasks to completion (bounded) so the response is
     synchronous from the browser's point of view.
+
+    `poll_timeout` caps how long we wait for an agent to report a result
+    (seconds); default is SYSIBLE_WEBGUI_TASK_TIMEOUT (60). Read-only sweeps
+    like fleet-health pass a short one so a single unresponsive agent can't
+    stall the whole parallel sweep for a minute.
 
     The dispatch itself runs with the admin token set (token!=None) so the
     controller can derive the run-as user (runuser -u <admin>) and attribute
@@ -1818,7 +2832,7 @@ def _dispatch_one(entry, command, kind, become_password=None, token=None, descri
     try:
         outcome = _with_token(token, lambda: dispatch.run_on_entry(
             entry, command, kind=kind, become_password=become_password, description=description,
-            needs_sudo=needs_sudo))
+            needs_sudo=needs_sudo, log=log))
     except Exception as e:
         return {"host": label, "environment": env, "ok": False, "error": str(e),
                 "stdout": "", "stderr": "", "code": None}
@@ -1833,12 +2847,13 @@ def _dispatch_one(entry, command, kind, become_password=None, token=None, descri
     # Agent task: poll until the agent reports back, or time out.
     import time
     task_id = outcome.get("task_id")
-    deadline = time.time() + float(os.getenv("SYSIBLE_WEBGUI_TASK_TIMEOUT", "60"))
+    tmo = poll_timeout if poll_timeout is not None else float(os.getenv("SYSIBLE_WEBGUI_TASK_TIMEOUT", "60"))
+    deadline = time.time() + tmo
     while time.time() < deadline:
         polled = dispatch.poll_entry_result(entry, task_id)
         if polled is not None:
             return _normalize(label, polled, env)
-        time.sleep(1.0)
+        time.sleep(0.5)
     return {"host": label, "environment": env, "ok": False, "error": "timed out waiting for agent",
             "stdout": "", "stderr": "", "code": None}
 
@@ -1859,23 +2874,105 @@ def _normalize(label, r, env="Unassigned"):
 # ----------------------------------------------------------------------
 # File transfer (Sysible Connect) - browser <-> host over SSH
 # ----------------------------------------------------------------------
-# Reuses the desktop client's SSH transfer helpers. Upload: the browser's
-# multipart file is spooled to a temp file, pushed with upload_file_ssh,
-# then the temp file is removed. Download: download_file_ssh writes to a
-# temp file which is streamed back as an attachment and cleaned up after.
+# Two transports, chosen per host:
+#   * AGENT host (agent/merged entry) - the controller usually can't reach it
+#     over SSH (NAT / outbound-only agent), so transfer runs THROUGH the agent:
+#     a small base64 python snippet is dispatched as a normal task (same path
+#     the interactive terminal uses) and polled to completion. Bounded by
+#     AGENT_FILE_TRANSFER_LIMIT_BYTES since the payload rides inside a command.
+#   * pure SSH host - the standing controller-key SFTP path (no size limit).
+def _transfer_entry(host_id):
+    """Merged-host entry for `host_id`, or None if genuinely unknown. Used to
+    pick the agent-vs-SSH transfer transport (and, for merged hosts, to resolve
+    the real agent host_id, which differs from the entry id).
+
+    A lookup FAILURE (controller unreachable) raises 503 rather than returning
+    None: silently returning None would misclassify an agent host as pure-SSH,
+    flipping both the transport and the superuser-only authorization gate on a
+    transient hiccup."""
+    try:
+        entries = dispatch.list_merged_hosts(agent_only=False)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Controller unreachable: {e}")
+    for e in entries:
+        if e["id"] == host_id:
+            return e
+    return None
+
+
 @app.post("/api/files/upload")
 async def files_upload(
     host: str = Form(...),
     remote_path: str = Form(...),
     file: UploadFile = File(...),
+    request: Request = None,
     user: str = Depends(require_operator),
 ):
-    tmp = Path(tempfile.mkdtemp(prefix="sysible-up-")) / _safe_upload_name(file.filename, "upload.bin")
+    entry = _transfer_entry(host)
+    is_agent = entry is not None and entry.get("kind") in ("agent", "merged")
+    # Authorize BEFORE buffering the body: the pure-SSH path is superuser-only
+    # (SFTP as the SSH login user). Checking here — not after read() — stops an
+    # unauthorized sysadmin from making us buffer up to _MAX_SSH_UPLOAD_BYTES per
+    # request just to be told 403.
+    if not is_agent and request.session.get("role") != "superuser":
+        raise HTTPException(
+            status_code=403,
+            detail=("File transfer to a pure-SSH host uses the shared controller SSH "
+                    "credential and is limited to superusers. Agent-managed hosts "
+                    "transfer as your own account."))
+    # Cap how much we ever pull into memory. Agent hosts are hard-limited by the
+    # in-task transfer size; SSH hosts get a large-but-bounded ceiling so a
+    # single upload can't OOM this shared single-process BFF. Read only up to the
+    # cap+1 (UploadFile is spooled, so read(n) never buffers the whole body) and
+    # reject anything larger — and fail fast on an oversized Content-Length
+    # before touching the body at all.
+    limit = _api_users.AGENT_FILE_TRANSFER_LIMIT_BYTES if is_agent else _MAX_SSH_UPLOAD_BYTES
     try:
-        data = await file.read()
+        clen = int(request.headers.get("content-length") or 0)
+    except (ValueError, TypeError):
+        clen = 0
+    if clen and clen > limit + 4096:  # + small multipart framing allowance
+        raise HTTPException(status_code=413, detail=f"Upload exceeds the {limit}-byte limit for this host.")
+    data = await file.read(limit + 1)
+    if len(data) > limit:
+        raise HTTPException(
+            status_code=413,
+            detail=(f"This host is managed by its agent, so uploads ride inside a task "
+                    f"and are limited to {limit} bytes." if is_agent
+                    else f"Upload exceeds the {limit}-byte limit."))
+
+    if is_agent:
+        safe = _safe_upload_name(file.filename, "upload.bin")
+        token = _session_token(request)
+        become = sudo_store.resolve(user, entry.get("label", ""))
+
+        def _do():
+            script = _api_users._build_agent_upload_script(remote_path, safe, data)
+            cmd = _api_users._wrap_python_script(script)
+            return _dispatch_one(entry, cmd, kind="upload_file", become_password=become,
+                                 token=token, description=f"Upload {safe} → {remote_path}")
+
+        res = await asyncio.to_thread(_do)
+        if not res.get("ok"):
+            raise HTTPException(status_code=502,
+                                detail=f"Upload failed: {res.get('error') or res.get('stderr') or 'unknown error'}")
+        return {"host": host, "remote_path": (res.get("stdout") or remote_path).strip(),
+                "filename": file.filename, "bytes": len(data)}
+
+    # Pure-SSH host: SFTP runs as the host's SSH LOGIN user (often root) with the
+    # shared controller key — it does NOT drop to the operator's own account the
+    # way agent transfers, SSH exec, and the terminal do. The superuser gate for
+    # this path is enforced up top, before the body is buffered.
+    tmp = Path(tempfile.mkdtemp(prefix="sysible-up-")) / _safe_upload_name(file.filename, "upload.bin")
+    ssh_token = _session_token(request)
+    try:
         tmp.write_bytes(data)
         try:
-            result = await asyncio.to_thread(api.upload_file_ssh, host, str(tmp), remote_path)
+            # Pass the admin token so the controller attributes the SFTP transfer
+            # to this superuser in the activity feed (the agent path is logged via
+            # _dispatch_one; this path must be too — it's the more privileged one).
+            result = await asyncio.to_thread(
+                lambda: _with_token(ssh_token, lambda: api.upload_file_ssh(host, str(tmp), remote_path)))
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Upload failed: {e}")
         return {"host": host, "remote_path": remote_path,
@@ -1889,12 +2986,63 @@ async def files_upload(
 
 
 @app.get("/api/files/download")
-async def files_download(host: str, path: str, user: str = Depends(require_operator)):
+async def files_download(host: str, path: str, request: Request,
+                         user: str = Depends(require_operator)):
+    entry = _transfer_entry(host)
+    filename = (os.path.basename(path.rstrip("/")) or "download.bin").replace('"', "").replace("\n", "").replace("\r", "")
+
+    if entry is not None and entry.get("kind") in ("agent", "merged"):
+        token = _session_token(request)
+        become = sudo_store.resolve(user, entry.get("label", ""))
+
+        def _do():
+            script = _api_users._build_agent_download_script(path)
+            cmd = _api_users._wrap_python_script(script)
+            return _dispatch_one(entry, cmd, kind="download_file", become_password=become,
+                                 token=token, description=f"Download {path}")
+
+        res = await asyncio.to_thread(_do)
+        if not res.get("ok"):
+            stderr = res.get("stderr") or ""
+            # Map the agent script's known outcomes to accurate HTTP status:
+            # missing file → 404, over the transfer limit → 413, timeout → 504,
+            # anything else → 502. (The markers come from _build_agent_download_script
+            # / _dispatch_one; a wording change there falls back to 502, never a
+            # wrong 404/200.)
+            if "not a file or not found" in stderr:
+                code = 404
+            elif "too large for agent transfer" in stderr:
+                code = 413
+            elif "timed out" in (res.get("error") or ""):
+                code = 504
+            else:
+                code = 502
+            raise HTTPException(status_code=code,
+                                detail=f"Download failed: {stderr or res.get('error') or 'unknown error'}")
+        import base64 as _b64
+        try:
+            raw = _b64.b64decode((res.get("stdout") or "").strip())
+        except Exception:
+            raise HTTPException(status_code=502, detail="Download failed: could not decode file data from agent")
+        return Response(content=raw, media_type="application/octet-stream",
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+    # Pure-SSH host: SFTP reads as the host's SSH login user (often root) with the
+    # shared controller key, not the operator's own account — superuser-only, so a
+    # sysadmin can't read root-owned files here beyond their per-user rights.
+    if request.session.get("role") != "superuser":
+        raise HTTPException(
+            status_code=403,
+            detail=("File transfer to a pure-SSH host uses the shared controller SSH "
+                    "credential and is limited to superusers. Agent-managed hosts "
+                    "transfer as your own account."))
     tmpdir = Path(tempfile.mkdtemp(prefix="sysible-dn-"))
-    filename = os.path.basename(path.rstrip("/")) or "download.bin"
     dest = tmpdir / filename
+    ssh_token = _session_token(request)
     try:
-        await asyncio.to_thread(api.download_file_ssh, host, path, str(dest))
+        # Attribute the SFTP read to this superuser in the activity feed.
+        await asyncio.to_thread(
+            lambda: _with_token(ssh_token, lambda: api.download_file_ssh(host, path, str(dest))))
     except Exception as e:
         try:
             dest.unlink(missing_ok=True)
@@ -1981,6 +3129,18 @@ async def terminal_ws(ws: WebSocket):
             await ws.close()
             return
 
+        # Audit trail: an interactive shell is the single most privileged action
+        # in the product, so record that admin X opened one on host Y (attributed
+        # via the login token, refused for auditors). Best-effort — a logging
+        # failure must never stop the operator getting their terminal.
+        _open_label = first.get("label") or host
+        try:
+            await asyncio.to_thread(
+                lambda: _with_token(ws_token,
+                                    lambda: api.log_action(_open_label, "opened an interactive terminal")))
+        except Exception:
+            pass
+
         # Initial size, if provided.
         if first.get("cols") and first.get("rows"):
             try:
@@ -2062,6 +3222,15 @@ async def terminal_ws(ws: WebSocket):
         if session_id is not None:
             try:
                 await asyncio.to_thread(api.close_terminal, session_id)
+            except Exception:
+                pass
+            # Close the audit loop opened above so a session has a clear
+            # start/end pair in the feed. Best-effort.
+            try:
+                _close_label = first.get("label") or host
+                await asyncio.to_thread(
+                    lambda: _with_token(ws_token,
+                                        lambda: api.log_action(_close_label, "closed the interactive terminal")))
             except Exception:
                 pass
 

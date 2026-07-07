@@ -3,9 +3,8 @@ Single source of truth for **system-critical files and mounts** — the paths
 whose deletion (rm/rmdir), unmounting, or fstab-entry removal can break a host.
 
 Used to warn (and, for non-superusers, block) destructive File System
-Management operations in both front ends:
-  - the desktop GUI (client/file_system_management_page.py),
-  - the web console (webgui/server.py + webgui/frontend ToolPage),
+Management operations:
+  - in the web console (webgui/server.py + webgui/frontend ToolPage),
   - and as a backstop inside the cmd_* builders themselves
     (client/_api_filesystem*.py), so nothing slips through regardless of UI.
 

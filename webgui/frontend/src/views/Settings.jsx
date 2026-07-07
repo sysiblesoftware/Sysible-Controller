@@ -1,10 +1,10 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 
 // Sysible Controller Settings: administrators, password policy, controller
 // address/port, license, and the admin audit log.
-export default function Settings() {
-  const [tab, setTab] = useState("admins");
+export default function Settings({ initialTab }) {
+  const [tab, setTab] = useState(initialTab || "admins");
   return (
     <div>
       <div className="tabs" style={{ marginBottom: 16 }}>
@@ -129,7 +129,7 @@ function Admins() {
                   <button className="btn ghost sm" style={{ marginRight: 6 }}
                           onClick={() => { setMsg(""); setErr(""); setModal({ mode: "reset", username: a.username }); }}>
                     Reset password…</button>
-                  <button className="btn ghost sm" onClick={() => remove(a.username)}>Remove</button>
+                  <button className="btn ghost sm danger" onClick={() => remove(a.username)}>Remove</button>
                 </td>
               </tr>
             ))}
@@ -230,41 +230,50 @@ function AdminModal({ mode, username: fixedUser, onClose, onDone }) {
 
 function PasswordPolicy() {
   const [pol, setPol] = useState(null);
-  const [err, setErr] = useErr(); const [msg, setMsg] = useState("");
+  const [err, setErr] = useErr(); const [msg, setMsg] = useState(""); const [busy, setBusy] = useState(false);
   useEffect(() => { api.passwordPolicy().then(setPol).catch((e) => setErr(e.message)); }, []);
   if (!pol) return <div className="empty"><span className="spin" /></div>;
-  const set = (k) => (e) => setPol({ ...pol, [k]: e.target.type === "checkbox" ? e.target.checked : Number(e.target.value) });
-  async function save() { setErr(""); setMsg(""); try { await api.setPasswordPolicy(pol); setMsg("Saved."); } catch (e) { setErr(e.message); } }
+  // The backend policy is pam_pwquality-shaped: { minlen, dcredit, ucredit,
+  // lcredit, ocredit }. A NEGATIVE credit means "require at least one of that
+  // class"; 0 means no requirement. (The old form bound to min_length/require_*,
+  // keys the backend model doesn't have — so it loaded defaults and silently
+  // dropped every save. This mirrors generatePassword() and backend/policy.py.)
+  const CREDS = [["ucredit", "Require uppercase"], ["lcredit", "Require lowercase"],
+                 ["dcredit", "Require digit"], ["ocredit", "Require symbol"]];
+  async function save() { setErr(""); setMsg(""); setBusy(true); try { await api.setPasswordPolicy(pol); setMsg("Saved."); } catch (e) { setErr(e.message); } finally { setBusy(false); } }
   return (
     <div className="card" style={{ maxWidth: 460 }}>
       <label className="field"><span>Minimum length</span>
-        <input type="number" value={pol.min_length ?? 12} onChange={set("min_length")} /></label>
-      {["require_upper", "require_lower", "require_digit", "require_symbol"].map((k) => (
+        <input type="number" value={pol.minlen ?? 12}
+               onChange={(e) => setPol({ ...pol, minlen: Number(e.target.value) })} /></label>
+      {CREDS.map(([k, label]) => (
         <div className="checkrow" key={k}>
-          <input id={k} type="checkbox" checked={Boolean(pol[k])} onChange={set(k)} />
-          <label htmlFor={k}>{k.replace("require_", "Require ")}</label>
+          <input id={k} type="checkbox" checked={(pol[k] ?? 0) < 0}
+                 onChange={(e) => setPol({ ...pol, [k]: e.target.checked ? -1 : 0 })} />
+          <label htmlFor={k}>{label}</label>
         </div>
       ))}
-      <button className="btn" style={{ marginTop: 14 }} onClick={save}>Save policy</button>
+      <button className="btn" style={{ marginTop: 14 }} disabled={busy} onClick={save}>{busy ? <span className="spin" /> : "Save policy"}</button>
       {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
-      {err && <div className="error-box">{err}</div>}
+      {err && <div className="error-box" role="alert">{err}</div>}
     </div>
   );
 }
 
 function ControllerCfg() {
   const [cfg, setCfg] = useState(null);
-  const [err, setErr] = useErr(); const [msg, setMsg] = useState("");
+  const [err, setErr] = useErr(); const [msg, setMsg] = useState(""); const [busy, setBusy] = useState(false);
   useEffect(() => { api.controllerConfig().then(setCfg).catch((e) => setErr(e.message)); }, []);
   if (!cfg) return <div className="empty"><span className="spin" /></div>;
   const set = (k) => (e) => setCfg({ ...cfg, [k]: e.target.value });
   async function save() {
-    setErr(""); setMsg("");
+    setErr(""); setMsg(""); setBusy(true);
     try {
       await api.setControllerConfig({ hostname: cfg.hostname || "", ip: cfg.ip || "",
         address_mode: cfg.address_mode || "hostname", port: Number(cfg.port) || 9000 });
       setMsg("Saved. Existing agents keep their current address until updated.");
     } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
   }
   return (
     <div className="card" style={{ maxWidth: 460 }}>
@@ -280,9 +289,9 @@ function ControllerCfg() {
               if (ip) setCfg((c) => ({ ...c, ip })); } catch (e) { setErr(e.message); } }}>Detect Local IPs</button></div>
       </label>
       <label className="field"><span>Port</span><input type="number" value={cfg.port || 9000} onChange={set("port")} /></label>
-      <button className="btn" style={{ marginTop: 14 }} onClick={save}>Save</button>
+      <button className="btn" style={{ marginTop: 14 }} disabled={busy} onClick={save}>{busy ? <span className="spin" /> : "Save"}</button>
       {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
-      {err && <div className="error-box">{err}</div>}
+      {err && <div className="error-box" role="alert">{err}</div>}
     </div>
   );
 }
@@ -313,18 +322,44 @@ function SoftwareUpdate() {
   // ctrl: null | "restarting" | "success" | "failed" | "unconfirmed"
   const [ctrl, setCtrl] = useState(null);
   const [ctrlMsg, setCtrlMsg] = useState("");
+  const [restart, setRestart] = useState(null);  // null | "restarting" | "back" | "failed"
   const [agents, setAgents] = useState(null);   // null | {total, updated, ver, done, timedOut}
   const [ctrlLog, setCtrlLog] = useState("");   // live self-update output
   const [agentRows, setAgentRows] = useState(null); // per-host update status list
+  const [avail, setAvail] = useState(null);     // null | {controller, agents} from /update-status
+  const [checking, setChecking] = useState(false);
   const pollRef = useRef(null);
+  const agentPollRef = useRef(null);
   const logRef = useRef(null);
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+  // Coordinate "Update controller + agents": the controller update confirms
+  // success while agents are still applying on their own poll. agentsDoneRef
+  // flips true when the agent rollout finishes (or times out); ctrlWaitingRef
+  // marks that the controller finished and is HOLDING the sign-out until then.
+  const agentsDoneRef = useRef(false);
+  const ctrlWaitingRef = useRef(false);
+  useEffect(() => () => { [pollRef, agentPollRef].forEach((r) => r.current && clearInterval(r.current)); }, []);
   // Keep the console pinned to the newest output.
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [ctrlLog]);
 
-  async function startController() {
-    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setAgents(null); setAgentRows(null);
-    setCtrlMsg(""); setCtrlLog("");
+  const logoutReload = useCallback(async () => {
+    try { await api.logout(); } catch { /* ignore */ }
+    setTimeout(() => window.location.reload(), 900);
+  }, []);
+
+  // Check whether the controller (git-behind) or any agent (build-hash mismatch)
+  // has an update available. Does a live git fetch on the controller, so it's an
+  // on-demand check (auto once on mount, then via the Re-check button).
+  const checkUpdates = useCallback(async () => {
+    setChecking(true);
+    try { setAvail(await api.updateStatus()); } catch { /* leave last */ }
+    finally { setChecking(false); }
+  }, []);
+  useEffect(() => { checkUpdates(); }, [checkUpdates]);
+
+  async function startController({ keepAgents = false } = {}) {
+    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setCtrlMsg(""); setCtrlLog("");
+    ctrlWaitingRef.current = false;
+    if (!keepAgents) { setAgents(null); setAgentRows(null); agentsDoneRef.current = true; }
     // Baseline: only a status record written at/after we kicked this off counts
     // as THIS run's outcome (the updater writes run/last_update.json). Small
     // margin for clock skew between browser and server.
@@ -339,10 +374,16 @@ function SoftwareUpdate() {
         setCtrl(state); setCtrlMsg(detail || "");
         if (state === "success") {
           // Real success: the update ran and the code changed. A controller
-          // update ends your session — the cookie survives the restart, so log
-          // out explicitly, then reload to the sign-in screen.
-          try { await api.logout(); } catch { /* ignore */ }
-          setTimeout(() => window.location.reload(), 900);
+          // update ends your session. In "controller + agents" mode, HOLD the
+          // sign-out until the agent rollout finishes (or times out), so the
+          // operator can watch it complete instead of being kicked to the login
+          // screen mid-rollout. Otherwise sign out now.
+          if (keepAgents && !agentsDoneRef.current) {
+            ctrlWaitingRef.current = true;
+            setCtrlMsg((detail ? detail + " " : "") + "Waiting for the agent rollout to finish before signing you out…");
+            return;
+          }
+          await logoutReload();
         }
         // On failure/unconfirmed we deliberately DO NOT sign out — keep the
         // session so the operator can read the reason and retry.
@@ -380,36 +421,88 @@ function SoftwareUpdate() {
     finally { setBusy(false); }
   }
 
+  // Kick the agent update + N-of-M polling on its OWN interval (so it can run
+  // alongside the controller update). Doesn't reset controller state.
+  async function kickAgents() {
+    agentsDoneRef.current = false;
+    const r = await api.updateAgents();
+    const ver = r?.version, total = r?.queued || 0;
+    setMsg(r?.message || `Agent update queued for ${total} host(s).`);
+    if (!ver || !total) {
+      // Nothing to roll out — don't make a pending controller sign-out wait.
+      agentsDoneRef.current = true;
+      if (ctrlWaitingRef.current) { ctrlWaitingRef.current = false; logoutReload(); }
+      return;
+    }
+    setAgents({ total, updated: 0, ver, done: false, timedOut: false });
+    const t0 = Date.now();
+    if (agentPollRef.current) clearInterval(agentPollRef.current);
+    const tick = async () => {
+      try {
+        const d = await api.agents();
+        const list = (d.agents || []).map((a) => ({
+          host: a.hostname || a.host_id, env: a.environment || "",
+          updated: a.agent_version === ver,
+        })).sort((x, y) => (x.updated - y.updated) || x.host.localeCompare(y.host));
+        setAgentRows(list);
+        const updated = list.filter((a) => a.updated).length;
+        const done = updated >= total;
+        const timedOut = !done && Date.now() - t0 > 240000;
+        setAgents({ total, updated, ver, done, timedOut });
+        if (done || timedOut) {
+          clearInterval(agentPollRef.current);
+          agentsDoneRef.current = true;
+          // If the controller update already finished and is holding the
+          // sign-out for us, release it now.
+          if (ctrlWaitingRef.current) { ctrlWaitingRef.current = false; logoutReload(); }
+        }
+      } catch { /* transient — keep polling */ }
+    };
+    agentPollRef.current = setInterval(tick, 4000);
+    tick();
+  }
+
   async function startAgents() {
-    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setCtrl(null); setCtrlLog(""); setAgentRows(null);
+    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setCtrl(null); setCtrlLog(""); setAgentRows(null); setAgents(null);
+    try { await kickAgents(); } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+
+  // Combined: kick the agents first (their progress bar starts), then the
+  // controller update runs alongside it. The controller restart signs you out;
+  // agents keep applying in the background and finish on their own.
+  async function startBoth() {
+    setBusy(true); setErr(""); setMsg(""); setConfirm(null); setCtrl(null); setCtrlLog(""); setAgents(null); setAgentRows(null);
     try {
-      const r = await api.updateAgents();
-      const ver = r?.version, total = r?.queued || 0;
-      setMsg(r?.message || `Agent update queued for ${total} host(s).`);
-      if (!ver || !total) return;
-      setAgents({ total, updated: 0, ver, done: false, timedOut: false });
-      const t0 = Date.now();
-      if (pollRef.current) clearInterval(pollRef.current);
-      const tick = async () => {
-        try {
-          const d = await api.agents();
-          const list = (d.agents || []).map((a) => ({
-            host: a.hostname || a.host_id,
-            env: a.environment || "",
-            updated: a.agent_version === ver,
-          })).sort((x, y) => (x.updated - y.updated) || x.host.localeCompare(y.host));
-          setAgentRows(list);
-          const updated = list.filter((a) => a.updated).length;
-          const done = updated >= total;
-          const timedOut = !done && Date.now() - t0 > 240000;
-          setAgents({ total, updated, ver, done, timedOut });
-          if (done || timedOut) clearInterval(pollRef.current);
-        } catch { /* transient — keep polling */ }
-      };
-      pollRef.current = setInterval(tick, 4000);
-      tick();
+      await kickAgents();
+      await startController({ keepAgents: true });
     } catch (e) { setErr(e.message); }
     finally { setBusy(false); }
+  }
+
+  // Restart the controller backend only (no update). The backend bounces while
+  // this web console stays up, so the session survives — we just poll a
+  // backend-backed endpoint until it answers again, then report "back".
+  async function restartController() {
+    setConfirm(null); setErr(""); setMsg(""); setRestart("restarting");
+    try {
+      await api.controllerRestart();
+    } catch {
+      // The restart tears down the in-flight request path, so a network error
+      // here is expected, not a failure — fall through to polling.
+    }
+    const deadline = Date.now() + 60000;
+    const poll = async () => {
+      try {
+        await api.controllerUpdateStatus();   // proxied to the backend: resolves once it's up
+        setRestart("back");
+        setTimeout(() => setRestart((r) => (r === "back" ? null : r)), 6000);
+      } catch {
+        if (Date.now() < deadline) setTimeout(poll, 2000);
+        else setRestart("failed");
+      }
+    };
+    setTimeout(poll, 3000);   // give systemd a moment to bounce it before polling
   }
 
   async function downloadLog() {
@@ -445,13 +538,18 @@ function SoftwareUpdate() {
     <div className="card" style={{ maxWidth: 680, marginTop: 16 }}>
       <strong>Software updates</strong>
       <p className="faint" style={{ marginTop: 8 }}>
-        Update the controller in place (git pull → redeploy → restart), then push the
-        current agent to every managed host over its existing check-in — no SSH or
-        re-enrollment. Each restarts itself; a controller update signs you out briefly.
+        Update the controller in place (git pull → redeploy → restart) and push the current
+        agent to every managed host. "Update controller + agents" does both — the agents'
+        progress shows below while the controller updates. A controller update signs you out
+        briefly; agents keep applying in the background.
       </p>
 
+      <UpdatesAvailable avail={avail} checking={checking} onRecheck={checkUpdates} />
+
       <div className="row" style={{ gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-        <Button which="controller" label="Update controller" start={startController} />
+        <Button which="both" label="Update controller + agents" start={startBoth} />
+        <Button which="controller" label="Update controller only" start={startController} />
+        <Button which="agents" label="Update agents only" start={startAgents} />
       </div>
       {ctrl === "restarting" && (
         <div style={{ marginTop: 8 }}>
@@ -461,7 +559,8 @@ function SoftwareUpdate() {
       )}
       {ctrl === "success" && (
         <div style={{ marginTop: 8 }}>
-          <div className="ok-text" style={{ fontSize: 13 }}>✓ Controller updated{ctrlMsg ? ` — ${ctrlMsg}` : ""} Signing you out…</div>
+          <div className="ok-text" style={{ fontSize: 13 }}>✓ Controller updated{ctrlMsg ? ` — ${ctrlMsg}` : ""}
+            {!ctrlWaitingRef.current && " Signing you out…"}</div>
         </div>
       )}
       {ctrl === "failed" && (
@@ -496,11 +595,8 @@ function SoftwareUpdate() {
         </div>
       )}
 
-      <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-        <Button which="agents" label="Update agents" start={startAgents} />
-      </div>
       {agents && (
-        <div style={{ marginTop: 8 }}>
+        <div style={{ marginTop: 12 }}>
           <div className="spread" style={{ fontSize: 12 }}>
             <span className="faint">
               {agents.done ? "✓ all agents updated"
@@ -535,8 +631,100 @@ function SoftwareUpdate() {
       <p className="faint" style={{ marginTop: 10, marginBottom: 0 }}>
         Tip: update the controller first, then update agents so hosts report the latest metrics.
       </p>
+
+      <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+        <div className="spread" style={{ alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ minWidth: 0 }}>
+            <strong style={{ fontSize: 13 }}>Restart controller</strong>
+            <div className="faint" style={{ fontSize: 12 }}>
+              Bounce the backend service without updating — no shell needed. The console stays up;
+              actions blip for a few seconds while it comes back.
+            </div>
+          </div>
+          {restart !== "restarting" && (
+            <div className="row" style={{ gap: 8 }}>
+              <Button which="restart" label="Restart controller" start={restartController} />
+            </div>
+          )}
+        </div>
+        {restart === "restarting" && (
+          <div style={{ marginTop: 8 }}>
+            <div className="faint" style={{ fontSize: 12 }}>Restarting the controller… reconnecting.</div>
+            <ProgressBar indeterminate />
+          </div>
+        )}
+        {restart === "back" && <div className="ok-text" style={{ marginTop: 8, fontSize: 13 }}>✓ Controller is back.</div>}
+        {restart === "failed" && (
+          <div className="error-box" style={{ marginTop: 8, fontSize: 13 }}>
+            The controller didn't answer within 60&nbsp;s. Check it on the host:
+            <span className="mono"> systemctl status sysible-backend</span>.
+          </div>
+        )}
+      </div>
+
       {msg && <div className="ok-text" style={{ marginTop: 10 }}>{msg}</div>}
       {err && <div className="error-box" style={{ marginTop: 10 }}>{err}</div>}
+    </div>
+  );
+}
+
+// "Updates available" banner at the top of Software updates: a compact read-out
+// of whether the controller is behind its git remote and how many agents are on
+// an older build than the controller ships. Purely informational — the action
+// buttons below actually apply the updates.
+function UpdatesAvailable({ avail, checking, onRecheck }) {
+  const c = avail?.controller || {};
+  const a = avail?.agents || {};
+  const ctrlBehind = c.checked && c.available;
+  const agentsBehind = (a.outdated_count || 0) > 0;
+  const anything = ctrlBehind || agentsBehind;
+  // Colour the strip: green when confirmed all-current, amber when something's
+  // behind, neutral while we couldn't fully check.
+  const known = avail && (c.checked || a.current_version);
+  const bg = anything ? "rgba(224,168,58,0.10)" : known ? "rgba(78,192,122,0.10)" : "var(--panel-2, rgba(255,255,255,0.02))";
+  const border = anything ? "#e0a83a" : known ? "#4ec07a" : "var(--border)";
+
+  return (
+    <div style={{ marginTop: 12, marginBottom: 4, background: bg, border: `1px solid ${border}`,
+                  borderRadius: 8, padding: "8px 12px" }}>
+      <div className="spread" style={{ alignItems: "center" }}>
+        <strong style={{ fontSize: 13 }}>
+          {avail == null ? "Checking for updates…"
+            : anything ? "Updates available"
+            : known ? "✓ Up to date" : "Update status"}
+        </strong>
+        <button className="btn ghost sm" onClick={onRecheck} disabled={checking}>
+          {checking ? <span className="spin" /> : "Re-check"}
+        </button>
+      </div>
+      {avail != null && (
+        <div style={{ fontSize: 12, marginTop: 6, display: "grid", gap: 3 }}>
+          {/* Controller */}
+          {c.checked ? (
+            c.available
+              ? <span><span className="dot" style={{ background: "#e0a83a", marginRight: 6 }} />
+                  Controller is <strong>{c.behind}</strong> commit{c.behind === 1 ? "" : "s"} behind
+                  {c.branch ? ` on ${c.branch}` : ""}
+                  {c.current && c.latest ? <span className="faint"> ({c.current} → {c.latest})</span> : null}</span>
+              : <span><span className="dot" style={{ background: "#4ec07a", marginRight: 6 }} />
+                  Controller is current{c.current ? <span className="faint"> ({c.current})</span> : null}</span>
+          ) : (
+            <span className="faint"><span className="dot" style={{ background: "var(--text-faint)", marginRight: 6 }} />
+              Controller: couldn't check{c.reason ? ` — ${c.reason}` : ""}
+              {c.current ? ` (at ${c.current})` : ""}</span>
+          )}
+          {/* Agents */}
+          {agentsBehind
+            ? <span><span className="dot" style={{ background: "#e0a83a", marginRight: 6 }} />
+                <strong>{a.outdated_count}</strong> of {a.total} agent{a.total === 1 ? "" : "s"} on an older build</span>
+            : <span><span className="dot" style={{ background: "#4ec07a", marginRight: 6 }} />
+                {a.total ? `All ${a.total} agent${a.total === 1 ? "" : "s"} on the current build` : "No agents enrolled"}</span>}
+          {a.unknown_count ? (
+            <span className="faint" style={{ marginLeft: 18 }}>
+              {a.unknown_count} host{a.unknown_count === 1 ? " hasn't" : "s haven't"} reported a version yet</span>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }
@@ -573,8 +761,20 @@ function Tls() {
   function load() { api.tlsInfo().then(setInfo).catch((e) => setErr(e.message)); }
   useEffect(() => { load(); }, []);
   async function install(e) {
-    e.preventDefault(); setBusy(true); setErr(""); setMsg("");
-    try { await api.installCertificate(cert, key, chain); setMsg("Certificate installed. Restart the controller for it to take effect."); load(); }
+    e.preventDefault();
+    // Enrolled agents PIN the controller's current certificate. Replacing it and
+    // restarting will break TLS verification for every already-enrolled agent
+    // until the new trust bundle is redistributed to them out-of-band. Make the
+    // operator acknowledge that before proceeding — this is otherwise a silent
+    // fleet-wide outage.
+    if (!window.confirm(
+      "Replacing the controller certificate will break the connection for ALL " +
+      "already-enrolled agents until you redistribute the new trust bundle to them.\n\n" +
+      "After installing, download the Trust Certificate and push it to every host " +
+      "(e.g. re-run the agent bundle, or copy it to the pinned cert path), then restart " +
+      "the controller.\n\nContinue?")) return;
+    setBusy(true); setErr(""); setMsg("");
+    try { await api.installCertificate(cert, key, chain); setMsg("Certificate installed. Download the Trust Certificate above and redistribute it to every agent host, then restart the controller for it to take effect."); load(); }
     catch (e2) { setErr(e2.message); }
     finally { setBusy(false); }
   }
@@ -590,6 +790,11 @@ function Tls() {
       <form className="card" onSubmit={install}>
         <strong>Install Custom Certificate</strong>
         <p className="faint" style={{ marginTop: 4 }}>Upload a certificate + private key (and optional chain) to replace the self-signed cert.</p>
+        <div className="error-box" style={{ marginTop: 8 }} role="note">
+          ⚠ Enrolled agents pin the current certificate. After replacing it, download the
+          Trust Certificate and redistribute it to every host, then restart the controller —
+          otherwise agents will fail to connect until they have the new bundle.
+        </div>
         <label className="field"><span>Certificate (.crt/.pem) *</span><input type="file" onChange={(e) => setCert(e.target.files[0] || null)} /></label>
         <label className="field"><span>Private key (.key) *</span><input type="file" onChange={(e) => setKey(e.target.files[0] || null)} /></label>
         <label className="field"><span>Chain (optional)</span><input type="file" onChange={(e) => setChain(e.target.files[0] || null)} /></label>

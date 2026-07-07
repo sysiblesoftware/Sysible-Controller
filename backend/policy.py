@@ -1,12 +1,12 @@
 """Server-side password-policy enforcement for Sysible Controller admin
-accounts (the GUI's own login, not target-host Linux accounts - those
-are validated client-side in client/api.py against the same
+accounts (the web console's own login, not target-host Linux accounts -
+those are validated in client/api.py against the same
 environmental_policy shape, but pushed to hosts via pwquality.conf
 instead of checked in Python).
 
 Kept separate from client/api.py's check_password_strength because the
 admin account routes in backend/app.py must enforce this regardless of
-what client is talking to them - relying on the desktop GUI to have
+what client is talking to them - relying on the web console to have
 already checked would let anything bypass it.
 """
 

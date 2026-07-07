@@ -13,7 +13,7 @@ export default function Login({ onLoggedIn }) {
     setBusy(true);
     try {
       const r = await api.login(username.trim(), password);
-      onLoggedIn(r.username, r.role);
+      onLoggedIn(r.username, r.role, r.must_change_password);
     } catch (e2) {
       setErr(e2.message || "Login failed");
     } finally {
@@ -51,7 +51,7 @@ export default function Login({ onLoggedIn }) {
           />
         </label>
 
-        {err && <div className="error-box">{err}</div>}
+        {err && <div className="error-box" role="alert">{err}</div>}
 
         <button
           className="btn full"

@@ -172,13 +172,22 @@ fi
 # Management page - systemd start/stop/enable/etc, plus creating a
 # brand-new unit and configuring its dependencies.
 # ---------------------------------------------------------
+# Every systemd unit type, so a name that's already a full unit isn't mangled.
+# Without this, a ".mount"/".timer"/".socket" unit (e.g. a failed vmblock
+# "run-vmblock\x2dfuse.mount") gets ".service" appended -> a nonexistent unit,
+# so restart/reset silently target the wrong thing and never clear it.
+_UNIT_SUFFIXES = (".service", ".socket", ".target", ".mount", ".automount",
+                  ".timer", ".path", ".slice", ".scope", ".device", ".swap")
+
+
 def _service_unit(name: str) -> str:
     """Normalizes a user-typed service name to its full unit name
-    ("nginx" -> "nginx.service")."""
+    ("nginx" -> "nginx.service"), but leaves an already-qualified unit of any
+    type ("foo.mount", "bar.timer") untouched."""
     name = (name or "").strip()
     if not name:
         raise ValueError("Service name cannot be empty")
-    return name if name.endswith(".service") else f"{name}.service"
+    return name if name.endswith(_UNIT_SUFFIXES) else f"{name}.service"
 
 
 def cmd_list_usernames() -> str:
@@ -246,6 +255,21 @@ def cmd_service_restart(name: str) -> str:
 
 def cmd_service_reload(name: str) -> str:
     return _service_action_cmd("reload", name, "Reloaded")
+
+
+def cmd_reset_failed_unit(name: str) -> str:
+    """Clear the 'failed' state of ONE unit (systemctl reset-failed <unit>).
+    For a unit that keeps failing and can't be made to run — e.g. a VMware
+    "run-vmblock\\x2dfuse.mount" on a VM — restart won't help; this just wipes
+    the stale failure marker so it stops flagging. Cosmetic: starts nothing."""
+    q = shlex.quote(_service_unit(name))
+    return (
+        f"u={q}; "
+        "if ! command -v systemctl >/dev/null 2>&1; then echo 'systemctl not available on this host' >&2; exit 1; fi; "
+        f'systemctl reset-failed "$u"; rc=$?; '
+        f'if [ "$rc" -eq 0 ]; then echo "Cleared failed state of $u."; '
+        f'else echo "reset-failed $u exited $rc" >&2; fi; exit "$rc"'
+    )
 
 
 def cmd_service_enable(name: str) -> str:

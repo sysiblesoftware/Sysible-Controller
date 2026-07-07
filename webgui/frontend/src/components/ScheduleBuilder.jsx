@@ -19,24 +19,36 @@ export default function ScheduleBuilder({ mode = "cron", onChange }) {
 
   const freqs = ["Every N minutes", "Every N hours", "Daily", "Weekly", "Monthly", ...(mode === "cron" ? ["At system boot"] : [])];
 
+  // Clearing a number input makes +"" === 0 and typing junk makes it NaN; the
+  // HTML min/max attrs don't constrain typed/cleared values. Without clamping,
+  // "Every N minutes" could emit `*/0` or `*/NaN`, which installs into crontab
+  // and then silently never fires. Clamp every numeric field to its valid range
+  // at emit time so the builder can only ever produce a runnable expression.
+  const clamp = (v, lo, hi, def) => {
+    const n = Math.floor(Number(v));
+    if (!Number.isFinite(n)) return def;
+    return Math.min(hi, Math.max(lo, n));
+  };
   function toCron() {
     const [hh, mm] = time.split(":").map(Number);
+    const H = clamp(hh, 0, 23, 0), M = clamp(mm, 0, 59, 0);
     if (freq === "At system boot") return "@reboot";
-    if (freq === "Every N minutes") return `*/${nMin} * * * *`;
-    if (freq === "Every N hours") return `${atMinute} */${nHours} * * *`;
-    if (freq === "Daily") return `${mm} ${hh} * * *`;
-    if (freq === "Weekly") return `${mm} ${hh} * * ${days.map((d) => CRON_DAY[d]).join(",")}`;
-    if (freq === "Monthly") return `${mm} ${hh} ${monthDay} * *`;
+    if (freq === "Every N minutes") return `*/${clamp(nMin, 1, 59, 15)} * * * *`;
+    if (freq === "Every N hours") return `${clamp(atMinute, 0, 59, 0)} */${clamp(nHours, 1, 23, 1)} * * *`;
+    if (freq === "Daily") return `${M} ${H} * * *`;
+    if (freq === "Weekly") return `${M} ${H} * * ${(days.length ? days : ["Mon"]).map((d) => CRON_DAY[d]).join(",")}`;
+    if (freq === "Monthly") return `${M} ${H} ${clamp(monthDay, 1, 31, 1)} * *`;
     return "";
   }
   function toCalendar() {
     const [hh, mm] = time.split(":").map(Number);
-    const hm = `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00`;
-    if (freq === "Every N minutes") return `*-*-* *:0/${nMin}:00`;
-    if (freq === "Every N hours") return `*-*-* 0/${nHours}:${String(atMinute).padStart(2, "0")}:00`;
+    const H = clamp(hh, 0, 23, 0), M = clamp(mm, 0, 59, 0);
+    const hm = `${String(H).padStart(2, "0")}:${String(M).padStart(2, "0")}:00`;
+    if (freq === "Every N minutes") return `*-*-* *:0/${clamp(nMin, 1, 59, 15)}:00`;
+    if (freq === "Every N hours") return `*-*-* 0/${clamp(nHours, 1, 23, 1)}:${String(clamp(atMinute, 0, 59, 0)).padStart(2, "0")}:00`;
     if (freq === "Daily") return `*-*-* ${hm}`;
-    if (freq === "Weekly") return `${days.join(",")} *-*-* ${hm}`;
-    if (freq === "Monthly") return `*-*-${String(monthDay).padStart(2, "0")} ${hm}`;
+    if (freq === "Weekly") return `${(days.length ? days : ["Mon"]).join(",")} *-*-* ${hm}`;
+    if (freq === "Monthly") return `*-*-${String(clamp(monthDay, 1, 31, 1)).padStart(2, "0")} ${hm}`;
     return "";
   }
   const expr = advanced ? adv.trim() : (mode === "cron" ? toCron() : toCalendar());
@@ -88,6 +100,12 @@ export default function ScheduleBuilder({ mode = "cron", onChange }) {
       )}
       <div className="checkrow"><input id={`adv_${mode}`} type="checkbox" checked={advanced} onChange={(e) => setAdvanced(e.target.checked)} /><label htmlFor={`adv_${mode}`}>Advanced (type the expression)</label></div>
       <div className="cmd-preview" style={{ marginTop: 8 }}>{expr || "(empty)"}</div>
+      {freq !== "At system boot" && (
+        <p className="faint" style={{ marginTop: 6, fontSize: 12 }}>
+          Times run in the target host's local timezone (cron/systemd use the host clock),
+          not your browser's — set the host to the timezone you expect.
+        </p>
+      )}
     </div>
   );
 }

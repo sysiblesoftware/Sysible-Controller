@@ -44,29 +44,37 @@ export default function HostTree({ hosts, value, onChange, onRefresh, footer }) 
             <div className="env-group" key={env}>
               <div className="env-head" onClick={() =>
                 setCollapsed((c) => ({ ...c, [env]: isOpen }))}>
-                {isOpen ? "▾" : "▸"} {env}
-                <span
-                  className="faint"
-                  style={{ float: "right", fontSize: 11 }}
-                  onClick={(e) => {
+                <input
+                  type="checkbox"
+                  className="env-check"
+                  title={`Select all in ${env}`}
+                  checked={allInGroup}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => {
                     e.stopPropagation();
                     onChange(allInGroup
                       ? value.filter((id) => !groupIds.includes(id))
                       : [...new Set([...value, ...groupIds])]);
                   }}
-                >
-                  {allInGroup ? "clear" : "all"}
-                </span>
+                />
+                {isOpen ? "▾" : "▸"} {env}
               </div>
-              {isOpen && list.map((h) => (
+              {isOpen && list.map((h) => {
+                // The dot stays reachability (online/offline); a critical posture
+                // finding turns the host NAME red so the two signals don't collide.
+                const crit = h.critical === true;
+                const critTitle = crit ? "Critical: " + (h.critical_reasons || []).join(", ") : undefined;
+                return (
                 <label className="host-row" key={h.id}>
                   <input type="checkbox" checked={value.includes(h.id)} onChange={() => toggleHost(h.id)} />
                   <span className={"dot " + (h.online === true ? "ok" : h.online === false ? "bad" : "")}
                         title={h.online === false ? "Offline" : h.online === true ? "Online" : ""} />
-                  <span>{h.label}</span>
-                  <span className="meta">{h.has_agent ? "Agent+SSH" : "SSH"}{h.online === false ? " · offline" : ""}</span>
+                  <span className="host-name" style={crit ? { color: "#e06c6c", fontWeight: 600 } : undefined} title={critTitle}>{h.label}</span>
+                  <span className="meta">{h.has_agent ? "Agent" : "SSH"}{h.online === false ? " · offline" : ""}</span>
+                  {crit && <span className="meta crit" title={critTitle}>critical</span>}
                 </label>
-              ))}
+                );
+              })}
             </div>
           );
         })}

@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
-import TerminalDock from "../components/TerminalDock.jsx";
 import HostResults from "../components/HostResults.jsx";
+import FileTransfer from "../components/FileTransfer.jsx";
 
 // Sysible Connect — mirrors the desktop window: managed-hosts tree on the
 // left; selected-host panel, terminals, fleet actions, file transfer, and
@@ -14,7 +14,6 @@ export default function Connect() {
   const [collapsed, setCollapsed] = useState({});
   const [checkin, setCheckin] = useState(null);
   const [busy, setBusy] = useState("");
-  const dock = useRef(null);
 
   const toggleCheck = (id) =>
     setChecked((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]));
@@ -30,10 +29,44 @@ export default function Connect() {
     return Object.entries(m).sort(([a], [b]) => a.localeCompare(b));
   }, [hosts]);
 
-  function openTerm(h) { dock.current && dock.current.open(h.id, h.label); }
+  // Terminals pop out into their own external window,
+  // rather than docking inside this page. Same-origin, so the pop-out shares the
+  // session cookie. A per-host window name means re-opening the same host focuses
+  // its existing window instead of spawning duplicates.
+  function openTerm(h) {
+    return window.open(
+      `/?term=${encodeURIComponent(h.id)}&label=${encodeURIComponent(h.label)}`,
+      `sysible_term_${h.id}`, "width=960,height=640");
+  }
+
+  // Open a terminal window for every CHECKED host (or the selected one if none
+  // are checked) — no need to single-select first. Each host gets its own
+  // window; a per-host window name means re-opening focuses the existing one.
+  // Browsers block all but the first pop-up from a single click by default, so
+  // detect that and tell the operator how to allow it.
+  function openChecked() {
+    const ids = checked.length ? checked : (sel ? [sel.id] : []);
+    if (!ids.length) { setErr("Check one or more hosts (or select one) to open a terminal."); return; }
+    const byId = Object.fromEntries(hosts.map((h) => [h.id, h]));
+    let blocked = 0;
+    ids.forEach((id) => { const h = byId[id]; if (h && !openTerm(h)) blocked++; });
+    if (blocked > 0) {
+      setErr(`Your browser blocked ${blocked} of ${ids.length} terminal window(s). Allow pop-ups for this ` +
+        `site to open several at once (in Firefox, click “Preferences/Options” on the blocked-popup bar → ` +
+        `Allow), then click Open Terminal again.`);
+    } else {
+      setErr("");
+    }
+  }
 
   const [checkinAt, setCheckinAt] = useState(0);
   const [showCheckin, setShowCheckin] = useState(false);
+  useEffect(() => {
+    if (!showCheckin) return;
+    const onKey = (e) => { if (e.key === "Escape") setShowCheckin(false); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [showCheckin]);
   async function runCheckin(targets) {
     setBusy("checkin"); setErr("");
     try { setCheckin((await api.checkin(targets || [])).results); setCheckinAt(Date.now()); setShowCheckin(true); }
@@ -47,6 +80,11 @@ export default function Connect() {
       <div className="host-pane">
         <strong style={{ fontSize: 13 }}>Managed Hosts (agent + SSH)</strong>
         <div className="ctl-row" style={{ marginTop: 8 }}>
+          <button className="btn sm" disabled={!checked.length && !sel}
+                  title="Open a terminal window for each checked host"
+                  onClick={openChecked}>
+            {checked.length > 1 ? `Open ${checked.length} Terminals` : "Open Terminal"}
+          </button>
           <button className="btn ghost sm" onClick={loadHosts}>Refresh</button>
           <button className="btn ghost sm" disabled={busy === "checkin"}
                   title={checked.length ? "Ping the checked hosts" : "Ping all hosts (check some to ping just those)"}
@@ -68,9 +106,24 @@ export default function Connect() {
           {hosts.length === 0 && <div className="faint" style={{ padding: 8 }}>No hosts enrolled.</div>}
           {groups.map(([env, list]) => {
             const open = !collapsed[env];
+            const groupIds = list.map((h) => h.id);
+            const allInGroup = groupIds.every((id) => checked.includes(id));
             return (
               <div className="env-group" key={env}>
                 <div className="env-head" onClick={() => setCollapsed((c) => ({ ...c, [env]: open }))}>
+                  <input
+                    type="checkbox"
+                    className="env-check"
+                    title={`Select all in ${env}`}
+                    checked={allInGroup}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => {
+                      e.stopPropagation();
+                      setChecked((c) => allInGroup
+                        ? c.filter((id) => !groupIds.includes(id))
+                        : [...new Set([...c, ...groupIds])]);
+                    }}
+                  />
                   {open ? "▾" : "▸"} {env}
                 </div>
                 {open && list.map((h) => {
@@ -100,13 +153,13 @@ export default function Connect() {
           })}
         </div>
         <div className="faint" style={{ fontSize: 12, marginTop: 8 }}>
-          Double-click a host to open its terminal.
+          Check hosts and click “Open Terminal”, or double-click a single host — each opens in its own window.
         </div>
       </div>
 
       {/* RIGHT: selected host + collapsible actions on top, terminals below */}
       <div style={{ overflowY: "auto", paddingRight: 4 }}>
-        {err && <div className="error-box">{err}</div>}
+        {err && <div className="error-box" role="alert">{err}</div>}
 
         {sel && (
           <Section title="Selected Host">
@@ -118,13 +171,13 @@ export default function Connect() {
 
         <div className="connect-actions">
           <FleetActions hosts={hosts} checked={checked} onErr={setErr} />
-          {sel && <FileTransfer host={sel} onErr={setErr} />}
+          {sel && (
+            <Collapsible title={`File Transfer — ${sel.label}`}>
+              <FileTransfer host={sel} onErr={setErr} />
+            </Collapsible>
+          )}
           <SshEnroll onDone={loadHosts} onErr={setErr} />
         </div>
-
-        <Section title="Terminals">
-          <TerminalDock ref={dock} />
-        </Section>
       </div>
 
       {showCheckin && checkin && (
@@ -132,6 +185,7 @@ export default function Connect() {
              style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 50,
                       display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
           <div onClick={(e) => e.stopPropagation()} className="card"
+               role="dialog" aria-modal="true" aria-label="Check-in / ping results"
                style={{ width: "min(420px, 92vw)", maxHeight: "80vh", overflow: "auto" }}>
             <div className="spread" style={{ marginBottom: 8, alignItems: "center" }}>
               <strong>Check-In / Ping</strong>
@@ -239,7 +293,20 @@ function FleetActions({ hosts, checked, onErr }) {
   const scopeLabel = checked.length ? `${checked.length} checked` : `all ${hosts.length}`;
 
   async function act(action, confirmMsg, command) {
-    if (confirmMsg && !window.confirm(`${confirmMsg} (${scopeLabel} host${scopeN === 1 ? "" : "s"})`)) return;
+    // Rebooting or powering off the ENTIRE fleet is the highest-blast-radius
+    // action here — a plain OK is too easy to hit by accident. Require typing
+    // the word, matching the strong guard used for system-critical paths.
+    const critical = action === "reboot" || action === "poweroff";
+    if (critical && checked.length === 0) {
+      const word = action === "poweroff" ? "POWER OFF" : "REBOOT";
+      const typed = window.prompt(
+        `You are about to ${word} ALL ${hosts.length} hosts in the fleet. ` +
+        `Powered-off hosts will NOT come back until powered on out-of-band.\n\n` +
+        `Type "${word}" to confirm:`);
+      if ((typed || "").trim().toUpperCase() !== word) return;
+    } else if (confirmMsg && !window.confirm(`${confirmMsg} (${scopeLabel} host${scopeN === 1 ? "" : "s"})`)) {
+      return;
+    }
     setRunning(action); setResults(null); onErr("");
     // The inline sudo password only makes sense for the script action (the
     // others run as root via the agent); send it only there.
@@ -263,7 +330,7 @@ function FleetActions({ hosts, checked, onErr }) {
       </label>
       <div className="row" style={{ marginTop: 8, flexWrap: "wrap" }}>
         <button className="btn sm" disabled={running || !script.trim()}
-                onClick={() => act("script", null, script)}>
+                onClick={() => act("script", "Run this script as root on", script)}>
           {running === "script" ? <span className="spin" /> : "Run Script on All Hosts"}
         </button>
         <button className="btn sm" disabled={running}
@@ -279,118 +346,6 @@ function FleetActions({ hosts, checked, onErr }) {
         </div>
       )}
     </Collapsible>
-  );
-}
-
-function FileTransfer({ host, onErr }) {
-  const [remotePath, setRemotePath] = useState("");
-  const [file, setFile] = useState(null);
-  const [dnPath, setDnPath] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-
-  async function upload(e) {
-    e.preventDefault(); setBusy(true); setMsg(""); onErr("");
-    try {
-      const r = await api.uploadFile(host.id, remotePath.trim(), file);
-      setMsg(`Uploaded ${r.filename} (${r.bytes} bytes) → ${r.remote_path}`);
-      setFile(null); e.target.reset();
-    } catch (e2) { onErr(e2.message); }
-    finally { setBusy(false); }
-  }
-  function download(e) {
-    e.preventDefault();
-    window.location.href = api.downloadUrl(host.id, dnPath.trim());
-  }
-
-  const [browse, setBrowse] = useState(null); // "upload" | "download" target for the picker
-
-  return (
-    <Collapsible title={`File Transfer — ${host.label}`}>
-      <form onSubmit={upload} className="row" style={{ flexWrap: "wrap", gap: 8 }}>
-        <input style={{ flex: 2, minWidth: 160 }} placeholder="Remote destination path"
-               value={remotePath} onChange={(e) => setRemotePath(e.target.value)} />
-        <button type="button" className="btn sm ghost" onClick={() => setBrowse("upload")}>Browse…</button>
-        <input style={{ flex: 2, minWidth: 160 }} type="file"
-               onChange={(e) => setFile(e.target.files[0] || null)} />
-        <button className="btn sm" disabled={busy || !file || !remotePath.trim()}>Upload</button>
-      </form>
-      <form onSubmit={download} className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 8 }}>
-        <input style={{ flex: 3, minWidth: 200 }} placeholder="Remote file path to fetch"
-               value={dnPath} onChange={(e) => setDnPath(e.target.value)} />
-        <button type="button" className="btn sm ghost" onClick={() => setBrowse("download")}>Browse…</button>
-        <button className="btn sm" disabled={!dnPath.trim()}>Download</button>
-      </form>
-      {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
-      {browse && (
-        <RemoteBrowse host={host} mode={browse} onErr={onErr}
-          onClose={() => setBrowse(null)}
-          onPick={(path) => { (browse === "upload" ? setRemotePath : setDnPath)(path); setBrowse(null); }} />
-      )}
-    </Collapsible>
-  );
-}
-
-// Lightweight remote file/folder picker: lists a directory on the host (via a
-// one-off `ls` exec) and lets you click into folders or pick an entry, so you
-// don't have to remember and type the full remote path. In "upload" mode a
-// folder is the selection (destination dir); in "download" mode a file is.
-function RemoteBrowse({ host, mode, onPick, onClose, onErr }) {
-  const [dir, setDir] = useState(".");
-  const [entries, setEntries] = useState([]);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-
-  async function list(d) {
-    setBusy(true); setErr("");
-    const cmd = `cd '${d.replace(/'/g, "'\\''")}' 2>/dev/null && pwd && ls -1Ap`;
-    try {
-      const r = await api.fleet("script", [host.id], cmd);
-      const res = (r.results || [])[0] || {};
-      const out = (res.stdout || "");
-      const lines = out.split("\n").filter((l) => l !== "");
-      if (lines.length === 0) { setErr(res.stderr || "Could not read that directory."); return; }
-      const cwd = lines.shift();
-      setDir(cwd);
-      setEntries(lines);
-    } catch (e) { setErr(e.message); }
-    finally { setBusy(false); }
-  }
-  useEffect(() => { list("."); /* eslint-disable-next-line */ }, []);
-
-  const join = (name) => (dir.endsWith("/") ? dir + name : dir + "/" + name);
-
-  return (
-    <div className="modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal" style={{ maxWidth: 560, textAlign: "left" }}>
-        <h3 style={{ textAlign: "left", marginBottom: 4 }}>{mode === "upload" ? "Choose destination folder" : "Choose file to download"}</h3>
-        <div className="faint mono" style={{ fontSize: 12, marginBottom: 8, wordBreak: "break-all" }}>{host.label}:{dir}</div>
-        {err && <div className="error-box">{err}</div>}
-        <div style={{ maxHeight: "46vh", overflowY: "auto", border: "1px solid var(--border)", borderRadius: 6 }}>
-          {busy ? <div className="empty" style={{ padding: 20 }}><span className="spin" /></div>
-            : entries.map((name) => {
-                const isDir = name.endsWith("/");
-                const clean = isDir ? name.slice(0, -1) : name;
-                return (
-                  <div key={name} className="host-row" style={{ cursor: "pointer", justifyContent: "space-between" }}
-                       onClick={() => { if (isDir) list(name === "../" ? join("..") : join(clean)); else if (mode === "download") onPick(join(clean)); }}
-                       onDoubleClick={() => { if (isDir && mode === "upload") onPick(join(clean)); }}>
-                    <span>{isDir ? "📁 " : "📄 "}{clean}</span>
-                    {isDir && mode === "upload" &&
-                      <button type="button" className="btn ghost sm" onClick={(e) => { e.stopPropagation(); onPick(join(clean)); }}>Use this folder</button>}
-                  </div>
-                );
-              })}
-        </div>
-        <div className="row" style={{ justifyContent: "space-between", marginTop: 12 }}>
-          <span className="faint">{mode === "upload" ? "Click a folder to open it; use the button to pick it." : "Click a folder to open it; click a file to pick it."}</span>
-          <div className="row" style={{ gap: 8 }}>
-            {mode === "upload" && <button className="btn sm" onClick={() => onPick(dir)}>Use “{dir}”</button>}
-            <button className="btn ghost sm" onClick={onClose}>Cancel</button>
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -423,11 +378,11 @@ function SshEnroll({ onDone, onErr }) {
         Only needed once per host. The password installs the controller key, then is discarded.
       </p>
       <form onSubmit={connect} className="row" style={{ flexWrap: "wrap", gap: 8 }}>
-        <input style={{ flex: 1, minWidth: 120 }} placeholder="Host name" value={f.name} onChange={set("name")} />
-        <input style={{ flex: 1, minWidth: 120 }} placeholder="IP address" value={f.ip} onChange={set("ip")} />
-        <input style={{ flex: 1, minWidth: 120 }} placeholder="Username" value={f.username} onChange={set("username")} />
-        <input style={{ flex: 1, minWidth: 120 }} type="password" placeholder="SSH password" value={f.password} onChange={set("password")} />
-        <input style={{ flex: 1, minWidth: 100 }} placeholder="Environment" value={f.environment} onChange={set("environment")} />
+        <input style={{ flex: 1, minWidth: 120 }} aria-label="Host name" placeholder="Host name" value={f.name} onChange={set("name")} />
+        <input style={{ flex: 1, minWidth: 120 }} aria-label="IP address" placeholder="IP address" value={f.ip} onChange={set("ip")} />
+        <input style={{ flex: 1, minWidth: 120 }} aria-label="Username" placeholder="Username" value={f.username} onChange={set("username")} />
+        <input style={{ flex: 1, minWidth: 120 }} type="password" aria-label="SSH password" placeholder="SSH password" value={f.password} onChange={set("password")} />
+        <input style={{ flex: 1, minWidth: 100 }} aria-label="Environment" placeholder="Environment" value={f.environment} onChange={set("environment")} />
         <button className="btn sm" disabled={busy || !f.ip || !f.username}>
           {busy ? <span className="spin" /> : "Connect Host"}
         </button>

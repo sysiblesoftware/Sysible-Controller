@@ -20,8 +20,27 @@ export default function CronTimersPage({ hosts = [], onRefreshHosts }) {
   const [showCreate, setShowCreate] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
-  async function run(action, params, label) {
+  // A last-line validity check before a cron line is pushed to a host's crontab.
+  // The builder now clamps its numeric fields, but Advanced mode lets an
+  // operator type any string; a bad one (empty step `*/0`, `NaN`, wrong field
+  // count) installs and then silently never fires. Catch it here.
+  function cronValid(s) {
+    s = (s || "").trim();
+    if (!s) return false;
+    if (/^@(reboot|hourly|daily|weekly|monthly|yearly|annually|midnight)$/.test(s)) return true;
+    if (/NaN/i.test(s) || /\*\/0(\D|$)/.test(s)) return false;
+    const f = s.split(/\s+/);
+    if (f.length !== 5) return false;
+    return f.every((x) => /^[0-9*,/-]+$/.test(x));
+  }
+
+  async function run(action, params, label, confirmMsg) {
     if (targets.length === 0) { setErr("Check one or more hosts first."); return; }
+    if (action === "cron_add" && !cronValid(params.schedule)) {
+      setErr("That schedule isn't a valid cron expression — check the fields (a blank or 0 interval never runs).");
+      return;
+    }
+    if (confirmMsg && !window.confirm(`${confirmMsg} on ${targets.length} host${targets.length === 1 ? "" : "s"}?`)) return;
     setBusy(action); setErr("");
     try { const r = await api.runTool(action, targets, params); setResults((p) => [{ label, ...r, at: Date.now() }, ...p]); }
     catch (e) { setErr(e.message); }
@@ -47,7 +66,7 @@ export default function CronTimersPage({ hosts = [], onRefreshHosts }) {
                   onClick={() => run("cron_add", { schedule: cronSchedule, command: cronCommand, comment: cronComment }, "Add cron job")}>Add Cron Job</button>
           <div className="row" style={{ marginTop: 12, gap: 8 }}>
             <input style={{ flex: 1 }} value={cronMatch} onChange={(e) => setCronMatch(e.target.value)} placeholder="Text to match the job to remove" />
-            <button className="btn sm danger" disabled={busy || !cronMatch} onClick={() => run("cron_remove", { match_text: cronMatch }, "Remove cron job")}>Remove Cron Job</button>
+            <button className="btn sm danger" disabled={busy || !cronMatch} onClick={() => run("cron_remove", { match_text: cronMatch }, "Remove cron job", `Remove cron jobs matching "${cronMatch}"`)}>Remove Cron Job</button>
           </div>
         </fieldset>
 
@@ -61,7 +80,7 @@ export default function CronTimersPage({ hosts = [], onRefreshHosts }) {
             <button className="btn sm danger" disabled={busy || !timerName} onClick={() => run("timer_stop", { name: timerName }, `Stop ${timerName}`)}>Stop</button>
             <button className="btn sm" disabled={busy || !timerName} onClick={() => run("timer_enable", { name: timerName }, `Enable ${timerName}`)}>Enable At Boot</button>
             <button className="btn sm" disabled={busy || !timerName} onClick={() => run("timer_disable", { name: timerName }, `Disable ${timerName}`)}>Disable At Boot</button>
-            <button className="btn sm danger" disabled={busy || !timerName} onClick={() => run("timer_delete", { name: timerName, delete_service: true }, `Delete ${timerName}`)}>Delete Timer</button>
+            <button className="btn sm danger" disabled={busy || !timerName} onClick={() => run("timer_delete", { name: timerName, delete_service: true }, `Delete ${timerName}`, `Delete the timer "${timerName}" and its service unit`)}>Delete Timer</button>
           </div>
 
           <button className="btn ghost sm" style={{ marginTop: 12 }} onClick={() => setShowCreate((v) => !v)}>

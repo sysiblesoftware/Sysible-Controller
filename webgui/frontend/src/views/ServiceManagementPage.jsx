@@ -35,8 +35,9 @@ export default function ServiceManagementPage({ hosts = [], onRefreshHosts }) {
     finally { setBusy(""); }
   }
 
-  async function run(action, params, label) {
+  async function run(action, params, label, confirmMsg) {
     if (targets.length === 0) { setErr("Check one or more hosts first."); return; }
+    if (confirmMsg && !window.confirm(`${confirmMsg} on ${targets.length} host${targets.length === 1 ? "" : "s"}?`)) return;
     setErr(""); setBusy(action);
     try {
       const r = await api.runTool(action, targets, params);
@@ -44,7 +45,7 @@ export default function ServiceManagementPage({ hosts = [], onRefreshHosts }) {
     } catch (e) { setErr(e.message); }
     finally { setBusy(""); }
   }
-  const svc = (action, label) => run(action, { name }, label);
+  const svc = (action, label, confirmMsg) => run(action, { name }, label, confirmMsg);
 
   return (
     <div className="tool-flex">
@@ -76,7 +77,7 @@ export default function ServiceManagementPage({ hosts = [], onRefreshHosts }) {
         <fieldset className="tool-group-box" style={{ marginTop: 14 }}><legend>Service control</legend>
           <div className="group-buttons">
             <button className="btn sm" disabled={busy || !name} onClick={() => svc("svc_start", `Start ${name}`)}>Start</button>
-            <button className="btn sm danger" disabled={busy || !name} onClick={() => svc("svc_stop", `Stop ${name}`)}>Stop</button>
+            <button className="btn sm danger" disabled={busy || !name} onClick={() => svc("svc_stop", `Stop ${name}`, `Stop the service "${name}"`)}>Stop</button>
             <button className="btn sm" disabled={busy || !name} onClick={() => svc("svc_restart", `Restart ${name}`)}>Restart</button>
             <button className="btn sm" disabled={busy || !name} onClick={() => svc("svc_reload", `Reload ${name}`)}>Reload</button>
           </div>
@@ -84,7 +85,7 @@ export default function ServiceManagementPage({ hosts = [], onRefreshHosts }) {
         <fieldset className="tool-group-box"><legend>Boot & status</legend>
           <div className="group-buttons">
             <button className="btn sm" disabled={busy || !name} onClick={() => svc("svc_enable", `Enable ${name}`)}>Enable At Boot</button>
-            <button className="btn sm" disabled={busy || !name} onClick={() => svc("svc_disable", `Disable ${name}`)}>Disable At Boot</button>
+            <button className="btn sm" disabled={busy || !name} onClick={() => svc("svc_disable", `Disable ${name}`, `Disable at boot the service "${name}"`)}>Disable At Boot</button>
             <button className="btn sm" disabled={busy || !name} onClick={() => svc("svc_status", `Status ${name}`)}>Check Status</button>
             <button className="btn sm" disabled={busy || !name} onClick={() => run("svc_logs", { name, lines: 200 }, `Logs ${name}`)}>View Logs</button>
           </div>
@@ -113,6 +114,10 @@ export default function ServiceManagementPage({ hosts = [], onRefreshHosts }) {
               <label className="field" key={k}><span>{l}</span>
                 <input value={cs[k]} onChange={(e) => setCs({ ...cs, [k]: e.target.value })} /></label>
             ))}
+            <label className="field"><span>Restart policy</span>
+              <select value={cs.restart_policy} onChange={(e) => setCs({ ...cs, restart_policy: e.target.value })}>
+                {["on-failure", "always", "no", "on-abnormal"].map((o) => <option key={o} value={o}>{o}</option>)}
+              </select></label>
             <div className="checkrow"><input id="en" type="checkbox" checked={cs.enable_now}
               onChange={(e) => setCs({ ...cs, enable_now: e.target.checked })} /><label htmlFor="en">Enable now</label></div>
             <button className="btn" style={{ marginTop: 12 }} disabled={busy || !cs.name || !cs.exec_start}

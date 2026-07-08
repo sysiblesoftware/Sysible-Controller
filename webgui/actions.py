@@ -749,11 +749,13 @@ _register(Action(name="policy_sudo", tool="User & Group Administration",
         Param("timestamp_timeout", "Timestamp timeout (min)", type="number", required=False),
         Param("require_password", "Password requirement", type="select",
               options=["unchanged", "require", "nopasswd"], default="unchanged"),
-        Param("group", "Sudo group", default="sudo", required=False)],
+        Param("group", "Sudo group", default="", required=False,
+              help="Leave blank to auto-detect: 'sudo' on Debian/Ubuntu, 'wheel' on RHEL/SUSE.",
+              placeholder="auto-detect (sudo / wheel)")],
     build=lambda p: api.cmd_set_sudo_policy(_io(p, "timestamp_timeout"),
         (None if _s(p, "require_password", "unchanged") == "unchanged"
          else _s(p, "require_password") == "require"),
-        _s(p, "group", "sudo") or "sudo")))
+        _s(p, "group", ""))))
 
 # ---- Service Management (advanced + process control) -----------------
 for _tn, _fn, _lbl in [

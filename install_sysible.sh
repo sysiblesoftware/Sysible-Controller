@@ -63,7 +63,10 @@ case "$PKGMGR" in
     ;;
   zypper)
     zypper --non-interactive refresh
-    zypper --non-interactive install -y \
+    # --non-interactive already auto-confirms; do NOT add -y (an apt/dnf
+    # idiom). -y is only a zypper alias since the 1.14 line (SLE/Leap 15),
+    # so on older zypper it errors and, under `set -e`, aborts the install.
+    zypper --non-interactive install \
       python3 \
       python3-pip \
       python3-devel \
@@ -115,9 +118,9 @@ echo "Installing Node.js/npm for the web console front end..."
 if ! command -v npm >/dev/null 2>&1; then
   case "$PKGMGR" in
     dnf|yum)  "$PKGMGR" install -y nodejs npm || true ;;
-    zypper)   zypper --non-interactive install -y nodejs npm \
-                || zypper --non-interactive install -y nodejs20 npm20 \
-                || zypper --non-interactive install -y nodejs18 npm18 || true ;;
+    zypper)   zypper --non-interactive install nodejs npm \
+                || zypper --non-interactive install nodejs20 npm20 \
+                || zypper --non-interactive install nodejs18 npm18 || true ;;
     apt-get)  apt install -y nodejs npm || true ;;
   esac
 fi

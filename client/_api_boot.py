@@ -120,7 +120,15 @@ def cmd_regenerate_initramfs() -> str:
 def cmd_list_kernels() -> str:
     return (
         "echo \"Running kernel: $(uname -r)\"; echo; echo 'Installed kernels:'; "
-        "if command -v rpm >/dev/null 2>&1; then rpm -q kernel kernel-core 2>/dev/null | grep -v 'not installed'; "
+        # Enumerate kernel packages generically rather than by name: RHEL/Fedora
+        # ship 'kernel'/'kernel-core', but SUSE ships 'kernel-default'/'kernel-preempt'
+        # (there is no package literally named 'kernel'), so `rpm -q kernel kernel-core`
+        # returns empty on every SUSE host. `rpm -qa 'kernel*'` catches all families;
+        # filter out the non-kernel-image subpackages (devel/doc/source/etc.).
+        "if command -v rpm >/dev/null 2>&1; then "
+        "rpm -qa 'kernel*' 2>/dev/null "
+        "| grep -vE -- '-(devel|devel-base|doc|source|syms|macros|firmware|debug|debuginfo|debugsource|default-devel|preempt-devel)($|-)' "
+        "| sort -V; "
         "elif command -v dpkg-query >/dev/null 2>&1; then dpkg-query -W -f='${Package} ${Version}\\n' 'linux-image-*' 2>/dev/null | grep -v -- '-dbg'; "
         "else echo 'Neither rpm nor dpkg found.'; fi"
     )

@@ -241,6 +241,58 @@ def _find_agent(host_id):
     return None
 
 
+def _find_supersedable_agent(hostname, ip, exclude_host_id):
+    """An existing inventory entry that is the SAME machine now re-enrolling and is
+    safe to take over instead of creating a duplicate "zombie" record.
+
+    A host that reinstalls loses its agent_state.json and mints a brand-new random
+    host_id; if it also enrolls with a FRESH token (e.g. because its old one was
+    tied to a now-revoked host), the token carries no bound_host_id, so without this
+    the enroll would create a second record for the same box (same IP). Match on IP
+    plus either the same hostname or an existing revocation, and only when the old
+    record is NOT currently live (a live agent still holds that identity — never
+    hijack it). Returns the best candidate to adopt, or None."""
+    if not ip:
+        return None
+    now = time.time()
+    candidates = []
+    for a in list_agents():
+        if a.get("host_id") == exclude_host_id:
+            continue
+        if (a.get("ip") or "") != ip:
+            continue
+        same_host = bool(hostname) and a.get("hostname") == hostname
+        if not (same_host or a.get("revoked")):
+            continue
+        if now - (a.get("last_seen") or 0) < _REENROLL_LIVE_HOST_GRACE_S:
+            continue                      # a live agent still owns this identity
+        candidates.append(a)
+    if not candidates:
+        return None
+    # Prefer a revoked record (the deliberate re-enroll case), then most-recently seen.
+    candidates.sort(key=lambda a: (0 if a.get("revoked") else 1, -(a.get("last_seen") or 0)))
+    return candidates[0]
+
+
+def _forget_ssh_for_deleted_agent(deleted_host_id, agent):
+    """Remove the auto-created SSH record for a just-deleted agent — but do NOT
+    remove a sibling agent's record that merely shares the IP (forget_agent_ssh_host
+    matches by IP, so deleting a same-IP zombie would otherwise wipe the valid
+    host's SSH/merged entry). Forget by exact name; only also match by IP when no
+    other agent still lives at that IP."""
+    if not agent:
+        return
+    ip = agent.get("ip")
+    others_share_ip = bool(ip) and any(
+        (a.get("ip") or "") == ip and a.get("host_id") != deleted_host_id
+        for a in list_agents()
+    )
+    try:
+        forget_agent_ssh_host(agent.get("hostname"), None if others_share_ip else ip)
+    except Exception:
+        pass
+
+
 def _maybe_enroll_agent_ssh(host_id, hostname, ip, environment, force=False):
     """Queue the one-time SSH-enable command on an agent host, unless we
     already have an SSH connection for it or an attempt is already
@@ -334,12 +386,29 @@ def enroll(req: EnrollRequest):
         # resolve_enroll_token_host returns the ORIGINAL bound host_id, so this
         # is a re-bind of an existing inventory entry (a fresh first-ever enroll
         # instead lands on a brand-new random host_id with no existing record).
-        # Refuse the two dangerous re-binds a stolen token enables:
         existing = _find_agent(host_id)
+
+        # Duplicate reconciliation: if this looks like a brand-new host_id but the
+        # same machine already has a (stale/revoked) record — the classic "reinstall
+        # with a fresh token" case, which otherwise spawns a same-IP zombie — adopt
+        # that existing record instead of creating a duplicate. `adopted` marks that
+        # this is an admin-authorized re-enroll (fresh single-use token), so it may
+        # clear a prior revocation (create_or_update_agent sets revoked=0).
+        adopted = False
+        if not existing:
+            dup = _find_supersedable_agent(req.hostname, req.ip, exclude_host_id=host_id)
+            if dup:
+                host_id = dup["host_id"]
+                existing = dup
+                adopted = True
+
+        # Refuse the two dangerous re-binds a stolen token enables:
         if existing:
             # (a) An admin deliberately revoked this host — a replayed token
-            #     must not silently un-revoke and resurrect it.
-            if existing.get("revoked"):
+            #     must not silently un-revoke and resurrect it. (An adopted
+            #     re-enroll with a fresh admin-issued token IS authorized, so it
+            #     restores the host rather than being blocked.)
+            if existing.get("revoked") and not adopted:
                 raise HTTPException(
                     status_code=403,
                     detail="This host was revoked by an administrator; re-issue "
@@ -1053,11 +1122,9 @@ def remove_agent(host_id: str):
 
     delete_agent(host_id)
 
-    if agent:
-        try:
-            forget_agent_ssh_host(agent.get("hostname"), agent.get("ip"))
-        except Exception:
-            pass
+    # Clean up the auto-created SSH record without clobbering a sibling agent that
+    # shares this IP (e.g. a superseding re-enroll of the same box).
+    _forget_ssh_for_deleted_agent(host_id, agent)
 
     return {
         "status": "removed",
@@ -1133,11 +1200,7 @@ def self_disenroll(host_id: str, req: SelfDisenrollRequest):
 
     delete_agent(req.host_id)
 
-    if agent:
-        try:
-            forget_agent_ssh_host(agent.get("hostname"), agent.get("ip"))
-        except Exception:
-            pass
+    _forget_ssh_for_deleted_agent(req.host_id, agent)
 
     return {
         "status": "disenrolled",

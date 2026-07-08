@@ -69,6 +69,7 @@ export const api = {
   setPasswordPolicy: (policy) =>
     req("/api/password-policy", { method: "POST", body: policy }),
   controllerConfig: () => req("/api/controller-config"),
+  controllerVersion: () => req("/api/version"),
   setControllerConfig: (cfg) =>
     req("/api/controller-config", { method: "POST", body: cfg }),
   controllerRestart: () => req("/api/controller-restart", { method: "POST" }),

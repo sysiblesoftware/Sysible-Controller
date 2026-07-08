@@ -2157,6 +2157,13 @@ async def install_certificate(request: Request, cert: UploadFile = File(...),
         except Exception: pass
 
 
+@app.get("/api/version")
+def controller_version(request: Request, user: str = Depends(require_login)):
+    """Which directory + commit the live controller runs, for the deployment guard
+    shown in Controller Configuration."""
+    return _wrap(lambda: _as_admin(request, lambda: api.get_version()))
+
+
 @app.post("/api/tls-regenerate-self-signed")
 def regenerate_self_signed(request: Request, user: str = Depends(require_superuser_session)):
     """Regenerate the self-signed cert for the current controller address and

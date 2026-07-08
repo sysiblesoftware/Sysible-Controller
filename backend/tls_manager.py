@@ -353,13 +353,53 @@ def restart_backend(delay_seconds: float = 1.5):
     The backend runs as root (see install_sysible.sh's systemd unit,
     User=root) so it's allowed to call this on itself.
 
-    Runs in a background thread after a short delay so the HTTP
-    response for the request that triggered this (POST .../tls/install)
-    has a chance to flush back to the caller before the process serving
-    it gets killed."""
+    The restart is scheduled in a *transient* systemd unit via
+    systemd-run, NOT run directly from this process. That matters: a
+    plain `systemctl restart sysible-backend` spawned from here runs
+    inside sysible-backend's own cgroup, so when systemd tears the
+    service down (KillMode=control-group, the default) it kills the
+    restarter mid-flight along with everything else in the cgroup. That
+    can abort the restart before the start half completes, leaving the
+    controller stopped - and because a clean stop doesn't trip
+    Restart=always, it stays down (the 'HTTPSConnectionPool / failed to
+    establish a new connection' symptom after a cert regen). A
+    systemd-run timer fires from PID 1's own scope, outside our cgroup,
+    so it survives the teardown and always brings the service back.
+
+    Runs in a background thread after a short delay so the HTTP response
+    for the request that triggered this has a chance to flush back to
+    the caller before the process serving it gets killed."""
 
     def _do_restart():
         time.sleep(delay_seconds)
-        subprocess.Popen(["systemctl", "restart", SERVICE_NAME])
+        # Transient timer, detached from this service's cgroup, so the
+        # restart survives sysible-backend being killed. --collect reaps
+        # the unit once it's done; --on-active gives a beat for the
+        # response to flush even if delay_seconds was trimmed.
+        try:
+            rc = subprocess.call(
+                [
+                    "systemd-run",
+                    "--collect",
+                    "--on-active=1",
+                    "--timer-property=AccuracySec=100ms",
+                    "systemctl", "restart", SERVICE_NAME,
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if rc == 0:
+                return
+        except (FileNotFoundError, OSError):
+            pass
+        # Fallback for hosts without systemd-run: at least detach into a
+        # new session so the client isn't a direct child of uvicorn.
+        try:
+            subprocess.Popen(
+                ["systemctl", "restart", SERVICE_NAME],
+                start_new_session=True,
+            )
+        except OSError:
+            pass
 
     threading.Thread(target=_do_restart, daemon=True).start()

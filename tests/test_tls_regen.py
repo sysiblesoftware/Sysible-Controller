@@ -6,6 +6,8 @@ and agents that verify it hit a hostname mismatch. These tests lock in that the
 cert is regenerated with the new SAN — and that an imported PKI cert is never
 clobbered.
 """
+import threading
+
 import pytest
 from cryptography import x509
 
@@ -104,6 +106,61 @@ def test_regenerate_endpoint_refuses_pki(controller, superuser_headers, tmp_cert
     db.set_controller_config("x.example", "", "hostname", 9000)
     r = controller.post("/controller-config/tls/regenerate-self-signed", headers=superuser_headers)
     assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Restart must survive the backend's own cgroup teardown
+# ---------------------------------------------------------------------------
+def test_restart_backend_uses_detached_timer(monkeypatch):
+    # A cert regen is useless if the restart that picks it up runs inside
+    # sysible-backend's own cgroup — systemd kills the restarter along with
+    # the service and it never comes back. Lock in that we schedule the
+    # restart through a detached systemd-run timer instead.
+    calls = []
+    done = threading.Event()
+
+    def fake_call(args, **kw):
+        calls.append(list(args))
+        done.set()
+        return 0
+
+    def fake_popen(*a, **k):
+        calls.append(("POPEN", a, k))
+        done.set()
+
+    monkeypatch.setattr(tls_manager.subprocess, "call", fake_call)
+    monkeypatch.setattr(tls_manager.subprocess, "Popen", fake_popen)
+
+    tls_manager.restart_backend(delay_seconds=0)
+    assert done.wait(timeout=5), "restart thread never fired"
+    assert calls[0][0] == "systemd-run"
+    assert "systemctl" in calls[0] and "restart" in calls[0]
+    assert calls[0][-1] == tls_manager.SERVICE_NAME
+    # systemd-run succeeded, so the in-cgroup Popen fallback must NOT run.
+    assert not any(c[0] == "POPEN" for c in calls)
+
+
+def test_restart_backend_falls_back_without_systemd_run(monkeypatch):
+    # Hosts without systemd-run still get restarted, detached into a new
+    # session so the client isn't a direct child of the dying uvicorn.
+    calls = []
+    done = threading.Event()
+
+    def fake_call(args, **kw):
+        raise FileNotFoundError("systemd-run missing")
+
+    def fake_popen(args, **kw):
+        calls.append((list(args), kw))
+        done.set()
+
+    monkeypatch.setattr(tls_manager.subprocess, "call", fake_call)
+    monkeypatch.setattr(tls_manager.subprocess, "Popen", fake_popen)
+
+    tls_manager.restart_backend(delay_seconds=0)
+    assert done.wait(timeout=5), "fallback restart never fired"
+    args, kw = calls[0]
+    assert args == ["systemctl", "restart", tls_manager.SERVICE_NAME]
+    assert kw.get("start_new_session") is True
 
 
 def test_pki_cert_is_not_clobbered(controller, superuser_headers, tmp_certs, monkeypatch):

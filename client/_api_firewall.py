@@ -90,11 +90,15 @@ _FIREWALLD_MISSING = (
     "echo 'firewalld is not installed on this host (package: firewalld).' >&2; exit 1; fi; "
     # firewall-cmd is a Python program that imports the GObject bindings ('gi')
     # at startup. On minimal openSUSE/SUSE installs python3-gobject is absent, so
-    # every call dies with 'ModuleNotFoundError: No module named gi'. Probe once
-    # and turn that traceback into an actionable message. (`--version` still
-    # triggers the import, so a non-zero exit here reliably detects the break.)
-    "if ! firewall-cmd --version >/dev/null 2>&1; then "
-    "echo \"firewall-cmd is installed but not working - its Python GObject bindings ('gi') are missing.\" >&2; "
+    # every call dies with 'ModuleNotFoundError: No module named gi'. Detect THAT
+    # case specifically and turn the traceback into an actionable message - but
+    # ONLY that case: a non-zero exit for any other reason must not be mis-reported
+    # as a missing binding (which would wrongly block an otherwise-working host).
+    # If the probe fails for something else, fall through and let the real command
+    # run and surface its own error.
+    "_fwver=$(firewall-cmd --version 2>&1); _fwrc=$?; "
+    "if [ \"$_fwrc\" -ne 0 ] && printf '%s' \"$_fwver\" | grep -qiE \"gi\\.repository|no module named '?gi\"; then "
+    "echo \"firewall-cmd is installed but its Python GObject bindings ('gi') are missing.\" >&2; "
     "echo 'Install them - openSUSE/SUSE: sudo zypper install python3-gobject; "
     "Fedora/RHEL: sudo dnf install python3-gobject; Debian/Ubuntu: sudo apt install python3-gi' >&2; exit 1; fi; "
 )

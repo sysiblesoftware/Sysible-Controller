@@ -2157,6 +2157,13 @@ async def install_certificate(request: Request, cert: UploadFile = File(...),
         except Exception: pass
 
 
+@app.post("/api/tls-regenerate-self-signed")
+def regenerate_self_signed(request: Request, user: str = Depends(require_superuser_session)):
+    """Regenerate the self-signed cert for the current controller address and
+    restart the backend to serve it. Superuser-only."""
+    return _wrap(lambda: _as_admin(request, lambda: api.regenerate_self_signed_cert()))
+
+
 @app.get("/api/environmental-policy")
 def get_env_policy(user: str = Depends(require_login)):
     return _wrap(lambda: api.get_environmental_policy())

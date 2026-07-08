@@ -164,6 +164,20 @@ def validate_certificate_bundle(cert_pem: bytes, key_pem: bytes, chain_pem: byte
     return _cert_metadata(leaf, chain_length=len(chain_certs))
 
 
+def _write_key_file(path: Path, data: bytes):
+    """Write a private key so it is NEVER briefly world-readable. The old
+    pattern (write_bytes under the process umask, then chmod 0600 afterward)
+    leaves a window where server.key is 0644 with the real key material in it.
+    Create/truncate with a fd, fchmod to 0600 BEFORE the content is written
+    (covers a pre-existing file with looser mode too), then write."""
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+
+
 def _backup_if_exists(path: Path):
     """Mirrors install_sysible.sh / _api_storage.py's existing
     `cp file file.bak.$(date +%s)` convention - timestamped, never
@@ -196,8 +210,7 @@ def install_certificate(cert_pem: bytes, key_pem: bytes, chain_pem: bytes = None
     CERT_FILE.write_bytes(fullchain)
     os.chmod(CERT_FILE, 0o644)
 
-    KEY_FILE.write_bytes(key_pem)
-    os.chmod(KEY_FILE, 0o600)
+    _write_key_file(KEY_FILE, key_pem)
 
     # trust.crt = what clients/agents should pin going forward - the
     # issuing CA chain for a PKI cert, or the leaf itself when no chain
@@ -224,7 +237,11 @@ def current_is_self_signed() -> bool:
         leaf = _load_cert(CERT_FILE.read_bytes())
         return leaf.subject == leaf.issuer
     except Exception:
-        return True
+        # Fail CLOSED: an unreadable/corrupt cert must NOT be treated as
+        # self-signed, or a transiently-corrupt admin-installed PKI cert could
+        # be silently regenerated over on the next address change / regen press.
+        # Better to refuse to regenerate than to clobber a PKI cert we can't read.
+        return False
 
 
 def regenerate_self_signed(hostnames=None, ips=None, days=3650) -> dict:
@@ -290,8 +307,7 @@ def regenerate_self_signed(hostnames=None, ips=None, days=3650) -> dict:
     _backup_if_exists(TRUST_FILE)
     CERT_FILE.write_bytes(cert_pem)
     os.chmod(CERT_FILE, 0o644)
-    KEY_FILE.write_bytes(key_pem)
-    os.chmod(KEY_FILE, 0o600)
+    _write_key_file(KEY_FILE, key_pem)
     TRUST_FILE.write_bytes(cert_pem)     # self-signed: trust bundle IS the leaf
     os.chmod(TRUST_FILE, 0o644)
     return _cert_metadata(cert)

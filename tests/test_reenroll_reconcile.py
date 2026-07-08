@@ -1,11 +1,16 @@
 """
 Re-enrollment duplicate reconciliation + safe SSH cleanup.
 
-Reproduces the reported bug: a host that is revoked and then re-enrolled with a
-FRESH token used to spawn a second "zombie" record at the same IP, and deleting
-that zombie wiped the valid host's SSH record (matched by IP). These tests lock in
-the fix — re-enroll adopts the existing record, and delete only forgets a shared-IP
-SSH record when no sibling still uses it.
+Reproduces the reported bug: a host re-enrolled with a FRESH token used to spawn a
+second "zombie" record at the same IP, and deleting that zombie wiped the valid
+host's SSH record (matched by IP). These tests lock in the fix — re-enroll adopts a
+stale, SAME-hostname record, and delete forgets an SSH record only when hostname
+AND IP both match the deleted agent.
+
+Security: adoption is deliberately narrow. `ip`/`hostname` are unauthenticated
+request-body fields, so a REVOKED record is never adopted/un-revoked by re-enroll
+(that would be a revocation bypass), and adoption requires the hostname to match,
+never IP alone.
 """
 import time
 
@@ -28,30 +33,68 @@ def _agents_at_ip(ip):
 
 
 # ---------------------------------------------------------------------------
-# Reconciliation: re-enroll with a fresh token adopts the existing record
+# Reconciliation: re-enroll with a fresh token adopts a stale SAME-hostname record
 # ---------------------------------------------------------------------------
-def test_revoked_host_reenroll_with_new_token_adopts_not_duplicates(controller, enroll_token):
+def test_stale_same_host_reenroll_with_new_token_adopts_not_duplicates(controller, enroll_token):
     ip = "192.168.100.23"
     # First enrollment.
     r1 = _enroll(controller, enroll_token(), "rocky-old-id", "rocky-030", ip)
     assert r1.status_code == 200
     old_id = r1.json()["host_id"]
 
-    # Admin revokes it, and it goes stale (no longer heartbeating).
-    db.revoke_agent(old_id)
+    # It goes stale (no longer heartbeating) — NOT revoked.
     conn = db._connect(); conn.execute(
         "UPDATE agents SET last_seen=? WHERE host_id=?", (time.time() - 10_000, old_id))
     conn.commit(); conn.close()
 
-    # The box reinstalls: brand-new random host_id, a FRESH token, same IP.
-    r2 = _enroll(controller, enroll_token(), "rocky-new-random-id", "rocky-0300", ip)
+    # The box re-enrolls: brand-new random host_id, a FRESH token, SAME hostname+IP.
+    r2 = _enroll(controller, enroll_token(), "rocky-new-random-id", "rocky-030", ip)
     assert r2.status_code == 200
     # It adopted the ORIGINAL record instead of creating a zombie.
     assert r2.json()["host_id"] == old_id
     at_ip = _agents_at_ip(ip)
     assert len(at_ip) == 1                       # exactly one record, no zombie
-    assert not at_ip[0].get("revoked")           # revocation cleared by the re-enroll
-    assert at_ip[0]["hostname"] == "rocky-0300"  # updated to the new reported name
+
+
+def test_revoked_host_is_not_resurrected_by_fresh_token_reenroll(controller, enroll_token):
+    # SECURITY: a revoked host must NOT be silently un-revoked by anyone who holds a
+    # fresh enroll token and claims its hostname/IP — that would defeat revocation.
+    ip = "192.168.100.99"
+    r1 = _enroll(controller, enroll_token(), "rev-old-id", "revhost", ip)
+    assert r1.status_code == 200
+    old_id = r1.json()["host_id"]
+
+    db.revoke_agent(old_id)
+    conn = db._connect(); conn.execute(
+        "UPDATE agents SET last_seen=? WHERE host_id=?", (time.time() - 10_000, old_id))
+    conn.commit(); conn.close()
+
+    # Fresh token, same hostname+IP — the revoked record is NOT adopted.
+    r2 = _enroll(controller, enroll_token(), "rev-new-id", "revhost", ip)
+    assert r2.status_code == 200
+    # A distinct new record was created; the original stays revoked (not hijacked).
+    assert r2.json()["host_id"] != old_id
+    old = db.get_agent(old_id) if hasattr(db, "get_agent") else next(
+        (a for a in db.list_agents() if a["host_id"] == old_id), None)
+    assert old is not None and old.get("revoked")        # revocation preserved
+
+
+def test_bound_token_reenroll_of_revoked_host_is_blocked(controller, enroll_token):
+    # Re-enrolling a revoked host with its OWN bound token (reuse window) is refused
+    # with a clear "re-issue from console" 403 — the admin must deliberately restore it.
+    ip = "192.168.100.77"
+    tok = enroll_token()
+    r1 = _enroll(controller, tok, "bt-id", "bthost", ip)
+    assert r1.status_code == 200
+    hid = r1.json()["host_id"]
+
+    db.revoke_agent(hid)
+    conn = db._connect(); conn.execute(
+        "UPDATE agents SET last_seen=? WHERE host_id=?", (time.time() - 10_000, hid))
+    conn.commit(); conn.close()
+
+    again = _enroll(controller, tok, "bt-id", "bthost", ip)   # same bound token
+    assert again.status_code == 403
 
 
 def test_live_host_is_not_hijacked_by_same_ip_enroll(controller, enroll_token):

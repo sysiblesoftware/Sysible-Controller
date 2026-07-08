@@ -82,6 +82,12 @@ def cmd_prepare_ad_join(domain: str = "") -> str:
         "elif command -v pam-auth-update >/dev/null 2>&1; then "
         "pam-auth-update --enable mkhomedir 2>/dev/null && echo 'mkhomedir enabled (pam-auth-update).' "
         "|| echo 'Enable \"Create home directory on login\" via pam-auth-update.'; "
+        # SUSE/openSUSE has neither authselect (RHEL) nor pam-auth-update (Debian);
+        # its native PAM configurator is pam-config. Without this branch the SUSE
+        # host silently falls through and mkhomedir is never enabled.
+        "elif command -v pam-config >/dev/null 2>&1; then "
+        "pam-config --add --mkhomedir 2>&1 && echo 'mkhomedir enabled (pam-config).' "
+        "|| echo 'Enable pam_mkhomedir via pam-config on this host.'; "
         "else echo 'oddjobd started; enable pam_mkhomedir in your PAM stack if home dirs are needed.'; fi; "
         "echo; echo '== 5/5 Readiness check =='; "
         "for t in realm adcli klist; do if command -v \"$t\" >/dev/null 2>&1; then echo \"  $t: present\"; "
@@ -274,6 +280,11 @@ def cmd_enable_mkhomedir() -> str:
         "elif command -v pam-auth-update >/dev/null 2>&1; then "
         "pam-auth-update --enable mkhomedir 2>/dev/null && echo 'Enabled home-dir creation (pam-auth-update mkhomedir).' "
         "|| echo 'Run pam-auth-update on the host and enable \"Create home directory on login\".'; "
+        # SUSE/openSUSE: pam-config is the native PAM configurator (no authselect,
+        # no pam-auth-update), so without this the action is a silent no-op there.
+        "elif command -v pam-config >/dev/null 2>&1; then "
+        "pam-config --add --mkhomedir 2>&1 && echo 'Enabled home-dir creation (pam-config --mkhomedir).' "
+        "|| echo 'Run pam-config --add --mkhomedir on this host.'; "
         "else echo 'Could not auto-configure mkhomedir; oddjobd was started - enable pam_mkhomedir for your PAM stack.'; fi"
     )
 

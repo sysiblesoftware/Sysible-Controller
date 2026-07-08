@@ -542,33 +542,57 @@ def cmd_set_umask_policy(value: str) -> str:
     return _set_security_conf_keys("/etc/login.defs", {"UMASK": value}, sep=" ")
 
 
-def cmd_set_sudo_policy(timestamp_timeout=None, require_password=None, group: str = "sudo") -> str:
-    # Empty group (the web Environmental Policies form sends "") would produce a
-    # malformed "% ALL=..." sudoers line; default it to the conventional sudo
-    # group. Validate the charset since it's written into a sudoers file.
-    group = (group or "").strip() or "sudo"
-    if not all(c.isalnum() or c in "_-" for c in group):
+def cmd_set_sudo_policy(timestamp_timeout=None, require_password=None, group: str = "") -> str:
+    # The sudo-granting group differs by distro: 'sudo' on Debian/Ubuntu, 'wheel'
+    # on RHEL/Fedora/SUSE. A hard-coded "%sudo ..." line passes `visudo -c` but is
+    # silently ineffective on SUSE/RHEL, where no 'sudo' group exists — no admin is
+    # in it, so the require-password / NOPASSWD rule never applies. So when the
+    # caller doesn't name a group (the web form sends ""), detect it at runtime the
+    # same way cmd_set_sudo does, and build the %group line from the detected value
+    # rather than baking a literal into the sudoers heredoc.
+    group = (group or "").strip()
+    if group and not all(c.isalnum() or c in "_-" for c in group):
         raise ValueError("Sudo group may only contain letters, numbers, dashes, and underscores.")
-    lines = []
+
+    static_lines = []
     if timestamp_timeout is not None:
-        lines.append(f"Defaults timestamp_timeout={int(timestamp_timeout)}")
-    if require_password is not None:
-        rule = "ALL=(ALL:ALL) ALL" if require_password else "ALL=(ALL:ALL) NOPASSWD: ALL"
-        lines.append(f"%{group} {rule}")
-    if not lines:
+        static_lines.append(f"Defaults timestamp_timeout={int(timestamp_timeout)}")
+    need_group_rule = require_password is not None
+    if not static_lines and not need_group_rule:
         raise ValueError("Specify at least one of timestamp_timeout / require_password")
-    body = "\n".join(lines) + "\n"
+
     tmp = "/tmp/.sysible_sudoers_policy"
     dest = "/etc/sudoers.d/sysible-policy"
     quoted_tmp = shlex.quote(tmp)
     quoted_dest = shlex.quote(dest)
-    # The heredoc must be wrapped in a { ...; } group: a bare "&&" on the line
-    # after the heredoc terminator is a bash syntax error, which previously made
-    # this whole command fail to run. Grouping lets the &&-chain gate on the
-    # cat succeeding.
+
+    # Runtime group detection + existence gate, only when we're writing a %group rule.
+    prefix = ""
+    append_rule = ""
+    if need_group_rule:
+        if group:
+            prefix = f"grp={shlex.quote(group)}; "
+        else:
+            prefix = "if command -v apt-get >/dev/null 2>&1; then grp=sudo; else grp=wheel; fi; "
+        prefix += (
+            'if ! getent group "$grp" >/dev/null 2>&1; then '
+            "echo \"sudo group '$grp' does not exist on this host.\" >&2; exit 1; fi; "
+        )
+        # `rule` is a fixed, shell-safe literal; only $grp is a shell variable, and
+        # it's a validated/detected group name. Appended after the heredoc so the
+        # detected group lands in the file.
+        rule = "ALL=(ALL:ALL) ALL" if require_password else "ALL=(ALL:ALL) NOPASSWD: ALL"
+        append_rule = f'&& echo "%$grp {rule}" >> {quoted_tmp} '
+
+    # Static Defaults line(s) go in the heredoc; the %group rule (if any) is
+    # appended at runtime above. The heredoc is wrapped in a { ...; } group so the
+    # &&-chain can gate on the cat succeeding (a bare "&&" after the heredoc
+    # terminator is a syntax error).
+    body = ("\n".join(static_lines) + "\n") if static_lines else ""
     return (
+        prefix +
         f"{{ cat > {quoted_tmp} <<'SYSIBLE_EOF'\n{body}SYSIBLE_EOF\n"
-        f"}} && chmod 440 {quoted_tmp} "
+        f"}} {append_rule}&& chmod 440 {quoted_tmp} "
         f"&& visudo -c -f {quoted_tmp} "
         f"&& mv {quoted_tmp} {quoted_dest} "
         f"&& chown root:root {quoted_dest} "

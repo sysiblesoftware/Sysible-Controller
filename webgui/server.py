@@ -2479,8 +2479,13 @@ def agent_bundle(request: Request, user: str = Depends(require_superuser_session
             dest.unlink(missing_ok=True); tmpdir.rmdir()
         except Exception:
             pass
+    # no-store: the bundle is rebuilt from the CURRENT controller config on every
+    # request (and mints a fresh token). Without this the browser can serve a
+    # cached download, so a hostname/IP change wouldn't show up in the file the
+    # admin gets. FileResponse otherwise sets ETag/Last-Modified and no cache policy.
     return FileResponse(str(dest), filename="sysible-agent.tar.gz",
-                        media_type="application/gzip", background=BackgroundTask(_cleanup))
+                        media_type="application/gzip", background=BackgroundTask(_cleanup),
+                        headers={"Cache-Control": "no-store"})
 
 
 # ----------------------------------------------------------------------

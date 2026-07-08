@@ -1367,9 +1367,45 @@ def set_controller_config_route(body: SetControllerConfigRequest):
     if not (1 <= body.port <= 65535):
         raise HTTPException(status_code=400, detail="Port must be between 1 and 65535")
 
-    set_controller_config(hostname, ip, address_mode, body.port)
+    # Capture the address set BEFORE saving, so we can tell whether the controller's
+    # address actually changed (and thus whether the self-signed cert's SAN is now
+    # stale) rather than regenerating on every unrelated save.
+    try:
+        old_addrs = set(resolve_controller_addresses(get_controller_config()))
+    except Exception:
+        old_addrs = set()
 
-    return get_controller_config()
+    set_controller_config(hostname, ip, address_mode, body.port)
+    result = get_controller_config()
+
+    # When the address changes, the default self-signed cert's SAN no longer matches,
+    # so agents/clients that verify the pinned cert would hit a hostname mismatch.
+    # Regenerate it to cover the new address. NEVER regenerate over an imported PKI
+    # cert — the admin owns that one (and its SAN); just flag that it may need
+    # reissuing. uvicorn reads the cert once at startup, so a restart is required to
+    # actually serve the new cert (surfaced to the UI, not forced here).
+    try:
+        from backend import tls_manager
+        new_addrs = set(resolve_controller_addresses(result))
+        if new_addrs and new_addrs != old_addrs:
+            if tls_manager.current_is_self_signed():
+                tls_manager.regenerate_self_signed(hostnames=sorted(new_addrs))
+                result["cert_regenerated"] = True
+                result["cert_note"] = (
+                    "Self-signed TLS certificate regenerated for the new address. "
+                    "Restart the controller to serve it, then redistribute the trust "
+                    "bundle / re-download the agent bundle so hosts trust and reach it."
+                )
+            else:
+                result["cert_note"] = (
+                    "The controller address changed, but a custom (PKI) certificate is "
+                    "installed and was left untouched — make sure its SAN covers the new "
+                    "address, or import an updated certificate."
+                )
+    except Exception as e:
+        result["cert_warning"] = f"Could not regenerate the self-signed certificate: {e}"
+
+    return result
 
 
 @app.get("/license-config", dependencies=[Depends(require_api_key)])
@@ -1418,7 +1454,11 @@ def download_agent_bundle_route():
     return Response(
         content=zip_bytes,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            # Rebuilt from current config each call — never let a client cache it.
+            "Cache-Control": "no-store",
+        },
     )
 
 

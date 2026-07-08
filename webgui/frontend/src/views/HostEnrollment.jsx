@@ -30,6 +30,7 @@ export default function HostEnrollment() {
   const [assignEnv, setAssignEnv] = useState("");
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState("");   // in-progress label for host actions
   const [copied, setCopied] = useState(false);
   const [portPort, setPortPort] = useState("");
   const [portalBusy, setPortalBusy] = useState("");
@@ -108,10 +109,11 @@ export default function HostEnrollment() {
   const idOf = (a) => a.host_id || a.id;
   const toggle = (id) => setChecked((c) => c.includes(id) ? c.filter((x) => x !== id) : [...c, id]);
 
-  async function run(fn, okMsg) {
-    setErr(""); setMsg("");
+  async function run(fn, okMsg, busyLabel) {
+    setErr(""); setMsg(""); setBusy(busyLabel || "");
     try { await fn(); if (okMsg) setMsg(okMsg); load(); }
     catch (e) { setErr(e.message); }
+    finally { setBusy(""); }
   }
 
 
@@ -160,7 +162,8 @@ export default function HostEnrollment() {
       }
       setChecked([]);
       if (warnings.length) throw new Error("Disenrolled, but service teardown was not confirmed on:\n" + warnings.join("\n"));
-    }, `Disenrolled ${checked.length} host(s).`);
+    }, `Disenrolled ${checked.length} host(s).`,
+      `Disenrolling ${checked.length} host(s)… online hosts stop their agent service first, which can take a few seconds.`);
   }
 
   async function forceDeleteChecked() {
@@ -176,14 +179,16 @@ export default function HostEnrollment() {
     await run(async () => {
       for (const id of checked) await api.removeHost(id, true);
       setChecked([]);
-    }, `Force-deleted ${checked.length} host(s) from the console.`);
+    }, `Force-deleted ${checked.length} host(s) from the console.`,
+      `Force-deleting ${checked.length} host(s)…`);
   }
 
   async function revokeHost(a, e) {
     if (e) { e.preventDefault(); e.stopPropagation(); }
     const name = a.hostname || a.host_id;
     if (!window.confirm(`Revoke ${name}? Its agent is locked out — it can't heartbeat, poll, or report — until you re-enroll the host. Use this for a host you believe is compromised or tampered.`)) return;
-    await run(async () => { await api.revokeHost(idOf(a)); }, `Revoked ${name}. Re-enroll the host to restore it.`);
+    await run(async () => { await api.revokeHost(idOf(a)); }, `Revoked ${name}. Re-enroll the host to restore it.`,
+      `Revoking ${name}…`);
     load();
   }
 
@@ -292,13 +297,19 @@ export default function HostEnrollment() {
             })}
           </div>
           <div className="row" style={{ marginTop: 10, alignItems: "center", gap: 8 }}>
-            <button className="btn danger sm" onClick={disenrollChecked}>Disenroll Host(s)</button>
-            <button className="btn ghost sm danger" onClick={forceDeleteChecked}
+            <button className="btn danger sm" onClick={disenrollChecked} disabled={!!busy}>Disenroll Host(s)</button>
+            <button className="btn ghost sm danger" onClick={forceDeleteChecked} disabled={!!busy}
                     title="Force-remove a zombie/broken-build host from the console without waiting for its agent to tear down">
               Force Delete
             </button>
             <span className="faint">{checked.length} checked</span>
           </div>
+          {busy && (
+            <div className="ok-text" role="status" aria-live="polite"
+                 style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
+              <span className="spin" aria-hidden="true" />{busy}
+            </div>
+          )}
         </fieldset>
 
         <div className="he-actions">

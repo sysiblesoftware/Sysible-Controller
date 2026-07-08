@@ -269,9 +269,14 @@ function ControllerCfg() {
   async function save() {
     setErr(""); setMsg(""); setBusy(true);
     try {
-      await api.setControllerConfig({ hostname: cfg.hostname || "", ip: cfg.ip || "",
+      const res = await api.setControllerConfig({ hostname: cfg.hostname || "", ip: cfg.ip || "",
         address_mode: cfg.address_mode || "hostname", port: Number(cfg.port) || 9000 });
-      setMsg("Saved. Existing agents keep their current address until updated.");
+      let m = "Saved. Existing agents keep their current address until updated.";
+      // The controller regenerates the self-signed cert when the address changes;
+      // surface that so the admin knows to restart + redistribute trust.
+      if (res && (res.cert_regenerated || res.cert_note)) m += " " + (res.cert_note || "");
+      if (res && res.cert_warning) setErr(res.cert_warning);
+      setMsg(m);
     } catch (e) { setErr(e.message); }
     finally { setBusy(false); }
   }

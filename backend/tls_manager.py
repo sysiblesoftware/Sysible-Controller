@@ -213,6 +213,90 @@ def install_certificate(cert_pem: bytes, key_pem: bytes, chain_pem: bytes = None
     return info
 
 
+def current_is_self_signed() -> bool:
+    """True if the cert currently in front of uvicorn is self-signed (the default),
+    False if it's an imported PKI cert — so callers can regenerate the self-signed
+    cert on an address change WITHOUT ever clobbering an admin-installed PKI cert.
+    Absent cert counts as 'self-signed' (nothing to protect)."""
+    if not CERT_FILE.exists():
+        return True
+    try:
+        leaf = _load_cert(CERT_FILE.read_bytes())
+        return leaf.subject == leaf.issuer
+    except Exception:
+        return True
+
+
+def regenerate_self_signed(hostnames=None, ips=None, days=3650) -> dict:
+    """Generate a fresh self-signed cert+key (RSA-2048, SHA-256) whose SAN covers
+    the given hostnames/IPs plus localhost/127.0.0.1, and install it as the
+    controller's TLS identity — mirrors install_sysible.sh's openssl cert.
+
+    Call after the controller's hostname/IP changes so TLS hostname verification
+    keeps working for agents/clients that verify against the pinned cert. Backs up
+    the previous cert/key/trust; sets trust.crt = the new self-signed leaf (agents
+    must re-pin / have the refreshed trust bundle redistributed). Does NOT restart
+    uvicorn — the caller does that once files are in place."""
+    import ipaddress
+    from datetime import timedelta
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.x509.oid import NameOID
+
+    san, seen = [], set()
+
+    def _add(value):
+        value = (value or "").strip()
+        if not value or value in seen:
+            return
+        seen.add(value)
+        try:
+            san.append(x509.IPAddress(ipaddress.ip_address(value)))
+        except ValueError:
+            san.append(x509.DNSName(value))
+
+    # Always keep localhost reachable, then the configured names/IPs.
+    _add("localhost")
+    _add("127.0.0.1")
+    for h in (hostnames or []):
+        _add(h)
+    for i in (ips or []):
+        _add(i)
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "sysible-controller")])
+    now = _utcnow()
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name).issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=days))
+        .add_extension(x509.SubjectAlternativeName(san), critical=False)
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    key_pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    )
+
+    CERT_DIR.mkdir(parents=True, exist_ok=True)
+    _backup_if_exists(CERT_FILE)
+    _backup_if_exists(KEY_FILE)
+    _backup_if_exists(TRUST_FILE)
+    CERT_FILE.write_bytes(cert_pem)
+    os.chmod(CERT_FILE, 0o644)
+    KEY_FILE.write_bytes(key_pem)
+    os.chmod(KEY_FILE, 0o600)
+    TRUST_FILE.write_bytes(cert_pem)     # self-signed: trust bundle IS the leaf
+    os.chmod(TRUST_FILE, 0o644)
+    return _cert_metadata(cert)
+
+
 def ensure_trust_file_exists() -> bool:
     """Upgrade path for controllers set up before trust.crt existed
     (anything installed before this feature shipped): if server.crt is

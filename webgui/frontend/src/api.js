@@ -123,7 +123,9 @@ export const api = {
   resumeHost: (hostId) =>
     req(`/api/host/${encodeURIComponent(hostId)}/resume`, { method: "POST" }),
   enrollToken: () => req("/api/enroll-token", { method: "POST" }),
-  agentBundleUrl: () => "/api/agent-bundle",
+  // Cache-buster so a repeat download after a controller hostname/IP change
+  // can't be served from the browser cache (server also sends no-store).
+  agentBundleUrl: () => `/api/agent-bundle?t=${Date.now()}`,
   // Sudo (become) password — encrypted at rest on the controller, per admin.
   sudoStatus: () => req("/api/sudo"),
   setSudo: (password, scope) =>

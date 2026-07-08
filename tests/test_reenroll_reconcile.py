@@ -91,6 +91,22 @@ def test_deleting_same_ip_zombie_keeps_valid_hosts_ssh_record(controller, superu
     assert "rocky-0300" in hosts           # the VALID host's SSH record survives the zombie delete
 
 
+def test_revoked_host_deletes_via_endpoint(controller, superuser_headers, agent):
+    # The reported symptom: a revoked, stale host won't delete. Confirm the DELETE
+    # endpoint removes it outright (no teardown wait, no revoked-guard blocking it).
+    import time
+    hid, _ = agent(host_id="rev-id", secret="s", hostname="rocky-030", ip="192.168.100.23")
+    import backend.db as _db
+    _db.revoke_agent(hid)
+    conn = _db._connect(); conn.execute(
+        "UPDATE agents SET last_seen=? WHERE host_id=?", (time.time() - 9000, hid))
+    conn.commit(); conn.close()
+
+    r = controller.delete(f"/agents/{hid}", headers=superuser_headers)
+    assert r.status_code == 200 and r.json()["status"] == "removed"
+    assert all(a["host_id"] != hid for a in _db.list_agents())   # actually gone
+
+
 def test_deleting_sole_host_at_ip_forgets_its_ssh_record(controller, superuser_headers, agent):
     ip = "10.0.0.99"
     agent(host_id="only-id", secret="s", hostname="onlyhost", ip=ip)

@@ -294,7 +294,19 @@ function ControllerCfg() {
               if (ip) setCfg((c) => ({ ...c, ip })); } catch (e) { setErr(e.message); } }}>Detect Local IPs</button></div>
       </label>
       <label className="field"><span>Port</span><input type="number" value={cfg.port || 9000} onChange={set("port")} /></label>
-      <button className="btn" style={{ marginTop: 14 }} disabled={busy} onClick={save}>{busy ? <span className="spin" /> : "Save"}</button>
+      <div className="row" style={{ marginTop: 14, gap: 8 }}>
+        <button className="btn" disabled={busy} onClick={save}>{busy ? <span className="spin" /> : "Save"}</button>
+        <button className="btn ghost" disabled={busy} title="Rebuild the self-signed TLS certificate so its SAN matches the current hostname/IP, then restart the backend to serve it. Use after changing the address."
+          onClick={async () => {
+            if (!window.confirm("Regenerate the self-signed TLS certificate for the current address and restart the controller backend? Agents must then trust the new certificate (redistribute trust.crt / re-download the agent bundle).")) return;
+            setErr(""); setMsg(""); setBusy(true);
+            try {
+              const r = await api.regenerateSelfSignedCert();
+              setMsg((r && r.message) || "Certificate regenerated; backend restarting.");
+            } catch (e) { setErr(e.message); }
+            finally { setBusy(false); }
+          }}>Regenerate self-signed cert</button>
+      </div>
       {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
       {err && <div className="error-box" role="alert">{err}</div>}
     </div>

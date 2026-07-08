@@ -347,6 +347,13 @@ def install_tls_certificate(cert_path, key_path, chain_path=None):
         return _request("POST", "/controller-config/tls/install", files=files, timeout=30)
 
 
+def regenerate_self_signed_cert():
+    """Ask the controller to regenerate its self-signed cert for the CURRENT
+    hostname/IP and restart to serve it (the backend bounces itself right after,
+    same as install_tls_certificate)."""
+    return _request("POST", "/controller-config/tls/regenerate-self-signed", timeout=30)
+
+
 def download_trust_certificate(save_path):
     data = _download_binary("/controller-config/tls/trust-bundle")
     Path(save_path).write_bytes(data)

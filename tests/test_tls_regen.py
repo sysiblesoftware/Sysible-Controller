@@ -85,6 +85,27 @@ def test_unchanged_address_does_not_regenerate(controller, superuser_headers, tm
     assert "cert_regenerated" not in r.json()   # address didn't change
 
 
+def test_regenerate_endpoint_on_demand(controller, superuser_headers, tmp_certs, monkeypatch):
+    # The on-demand button: regenerate for the CURRENT address even though the
+    # config was already saved at that value (the auto-on-change path wouldn't fire).
+    monkeypatch.setattr(tls_manager, "restart_backend", lambda *a, **k: None)
+    cert, _, _ = tmp_certs
+    tls_manager.regenerate_self_signed(hostnames=["stale.example"])
+    db.set_controller_config("ondemand.example", "", "hostname", 9000)
+    r = controller.post("/controller-config/tls/regenerate-self-signed", headers=superuser_headers)
+    assert r.status_code == 200 and r.json().get("restarting") is True
+    dns, _ = _san(cert)
+    assert "ondemand.example" in dns and "stale.example" not in dns
+
+
+def test_regenerate_endpoint_refuses_pki(controller, superuser_headers, tmp_certs, monkeypatch):
+    monkeypatch.setattr(tls_manager, "restart_backend", lambda *a, **k: None)
+    monkeypatch.setattr(tls_manager, "current_is_self_signed", lambda: False)
+    db.set_controller_config("x.example", "", "hostname", 9000)
+    r = controller.post("/controller-config/tls/regenerate-self-signed", headers=superuser_headers)
+    assert r.status_code == 400
+
+
 def test_pki_cert_is_not_clobbered(controller, superuser_headers, tmp_certs, monkeypatch):
     # If a custom (non-self-signed) cert is installed, an address change must NOT
     # regenerate over it — only surface a note.

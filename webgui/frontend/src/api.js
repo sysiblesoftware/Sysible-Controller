@@ -84,6 +84,7 @@ export const api = {
   localIps: () => req("/api/local-ips"),
   tlsInfo: () => req("/api/tls-info"),
   trustCertUrl: () => "/api/trust-certificate",
+  regenerateSelfSignedCert: () => req("/api/tls-regenerate-self-signed", { method: "POST" }),
   installCertificate: (certFile, keyFile, chainFile) => {
     const fd = new FormData();
     fd.append("cert", certFile);

@@ -1523,6 +1523,39 @@ async def install_tls_certificate_route(
     }
 
 
+@app.post("/controller-config/tls/regenerate-self-signed",
+          dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def regenerate_self_signed_route():
+    """Regenerate the self-signed TLS certificate ON DEMAND so its SAN matches the
+    controller's CURRENT hostname/IP, then restart the backend to serve it. Use this
+    when the address was changed (so agents that verify the pinned cert stop hitting
+    a hostname mismatch) — unlike the automatic regen on an address change, this
+    works even when the config is already saved at the new value. Refuses to clobber
+    an imported PKI certificate (regenerate that from your CA instead)."""
+    if not tls_manager.current_is_self_signed():
+        raise HTTPException(
+            status_code=400,
+            detail="A custom (PKI) certificate is installed — regenerating a self-signed "
+                   "cert would replace it. Import an updated PKI cert instead.",
+        )
+    addresses = resolve_controller_addresses(get_controller_config())
+    if not addresses:
+        raise HTTPException(
+            status_code=400,
+            detail="Set the controller Hostname/IP first so the certificate can cover it.",
+        )
+    info = tls_manager.regenerate_self_signed(hostnames=addresses)
+    tls_manager.restart_backend()
+    return {
+        **info,
+        "restarting": True,
+        "addresses": addresses,
+        "message": ("Self-signed certificate regenerated for the current address. The "
+                    "backend is restarting to serve it — then redistribute the trust "
+                    "bundle / re-download the agent bundle so hosts trust and reach it."),
+    }
+
+
 @app.post("/controller/restart", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def controller_restart_route():
     """Restart the controller backend service (systemctl restart sysible-backend)

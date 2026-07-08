@@ -447,21 +447,32 @@ def register_agent_ssh_host(name: str, ip: str, environment: str = ""):
         return True
 
 
-def forget_agent_ssh_host(name: str = None, ip: str = None):
+def forget_agent_ssh_host(name: str = None, ip: str = None, match_all: bool = False):
     """Remove the auto-created SSH record for an agent host (and forget its
     pinned host key) when that agent is disenrolled. Without this the SSH
     record register_agent_ssh_host() created lingers in hosts.json as an
     orphan — showing up as a separate, usually 'Unassigned' host everywhere
-    that lists merged hosts (fleet health, Sysible Connect, the tools). Matches
-    by record name first, then by IP, so it cleans up even if the host was
-    renamed after auto-enrollment. Returns the number of records removed."""
+    that lists merged hosts (fleet health, Sysible Connect, the tools).
+
+    match_all=False (default) matches by record name OR IP — a lenient cleanup
+    that also catches a host renamed after auto-enrollment. match_all=True
+    requires BOTH name AND IP to match, for the security-sensitive
+    delete-a-specific-agent path: a rogue agent that reused a valid host's
+    hostname at a different IP must not be able to wipe the valid host's SSH
+    record / un-pin its known_hosts key. Returns the number of records removed."""
     with _HOSTS_LOCK:
         hosts = load_hosts()
         ip_n = _norm_ip(ip) if ip else ""
-        victims = [
-            n for n, h in hosts.items()
-            if (name and n == name) or (ip_n and _norm_ip(h.get("ip")) == ip_n)
-        ]
+        if match_all:
+            victims = [
+                n for n, h in hosts.items()
+                if name and n == name and ip_n and _norm_ip(h.get("ip")) == ip_n
+            ]
+        else:
+            victims = [
+                n for n, h in hosts.items()
+                if (name and n == name) or (ip_n and _norm_ip(h.get("ip")) == ip_n)
+            ]
         for n in victims:
             removed = hosts.pop(n, None)
             if removed and removed.get("ip"):

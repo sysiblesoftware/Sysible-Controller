@@ -256,11 +256,19 @@ def _find_supersedable_agent(hostname, ip, exclude_host_id):
     A host that reinstalls loses its agent_state.json and mints a brand-new random
     host_id; if it also enrolls with a FRESH token (e.g. because its old one was
     tied to a now-revoked host), the token carries no bound_host_id, so without this
-    the enroll would create a second record for the same box (same IP). Match on IP
-    plus either the same hostname or an existing revocation, and only when the old
-    record is NOT currently live (a live agent still holds that identity — never
-    hijack it). Returns the best candidate to adopt, or None."""
-    if not ip:
+    the enroll would create a second record for the same box. Match on IP AND the
+    same hostname, and only when the old record is NOT currently live (a live agent
+    still holds that identity — never hijack it). Returns the best candidate to
+    adopt, or None.
+
+    SECURITY: `ip` and `hostname` are unauthenticated request-body fields, so
+    adoption is deliberately narrow. A REVOKED record is never adopted here:
+    adopting-by-address would let anyone holding a fresh enroll token resurrect an
+    admin-revoked host just by claiming its hostname/IP (revocation bypass /
+    identity takeover). A revoked host must be re-issued from the console instead
+    (the enroll revoked-guard enforces that). We also require the hostname to
+    match, not IP alone, so a bare IP claim can't seize an unrelated record."""
+    if not ip or not hostname:
         return None
     now = time.time()
     candidates = []
@@ -269,34 +277,33 @@ def _find_supersedable_agent(hostname, ip, exclude_host_id):
             continue
         if (a.get("ip") or "") != ip:
             continue
-        same_host = bool(hostname) and a.get("hostname") == hostname
-        if not (same_host or a.get("revoked")):
+        if a.get("hostname") != hostname:      # same box only — never IP alone
+            continue
+        if a.get("revoked"):                   # never resurrect a revoked host
             continue
         if now - (a.get("last_seen") or 0) < _REENROLL_LIVE_HOST_GRACE_S:
             continue                      # a live agent still owns this identity
         candidates.append(a)
     if not candidates:
         return None
-    # Prefer a revoked record (the deliberate re-enroll case), then most-recently seen.
-    candidates.sort(key=lambda a: (0 if a.get("revoked") else 1, -(a.get("last_seen") or 0)))
+    candidates.sort(key=lambda a: -(a.get("last_seen") or 0))   # most-recently seen
     return candidates[0]
 
 
 def _forget_ssh_for_deleted_agent(deleted_host_id, agent):
-    """Remove the auto-created SSH record for a just-deleted agent — but do NOT
-    remove a sibling agent's record that merely shares the IP (forget_agent_ssh_host
-    matches by IP, so deleting a same-IP zombie would otherwise wipe the valid
-    host's SSH/merged entry). Forget by exact name; only also match by IP when no
-    other agent still lives at that IP."""
+    """Remove the auto-created SSH record for a just-deleted agent — matching on
+    BOTH the agent's hostname AND its IP (match_all), so we only ever forget the
+    record that genuinely belongs to this agent.
+
+    SECURITY: forgetting by hostname (or IP) alone let a rogue agent that reused a
+    still-valid host's hostname (at a different IP) trigger deletion of the VALID
+    host's SSH record and un-pin its known_hosts key on disenroll — a TOFU MITM /
+    DoS. Requiring hostname AND IP to match the deleted agent closes that: a
+    rogue at a different IP can't match the victim's record."""
     if not agent:
         return
-    ip = agent.get("ip")
-    others_share_ip = bool(ip) and any(
-        (a.get("ip") or "") == ip and a.get("host_id") != deleted_host_id
-        for a in list_agents()
-    )
     try:
-        forget_agent_ssh_host(agent.get("hostname"), None if others_share_ip else ip)
+        forget_agent_ssh_host(agent.get("hostname"), agent.get("ip"), match_all=True)
     except Exception:
         pass
 
@@ -397,26 +404,24 @@ def enroll(req: EnrollRequest):
         existing = _find_agent(host_id)
 
         # Duplicate reconciliation: if this looks like a brand-new host_id but the
-        # same machine already has a (stale/revoked) record — the classic "reinstall
-        # with a fresh token" case, which otherwise spawns a same-IP zombie — adopt
-        # that existing record instead of creating a duplicate. `adopted` marks that
-        # this is an admin-authorized re-enroll (fresh single-use token), so it may
-        # clear a prior revocation (create_or_update_agent sets revoked=0).
-        adopted = False
+        # same machine (same hostname AND IP) already has a stale, NON-revoked
+        # record — the classic "reinstall with a fresh token" case, which otherwise
+        # spawns a same-IP zombie — adopt that record instead of creating a
+        # duplicate. _find_supersedable_agent deliberately never returns a revoked
+        # record, so adoption can never silently un-revoke a host.
         if not existing:
             dup = _find_supersedable_agent(req.hostname, req.ip, exclude_host_id=host_id)
             if dup:
                 host_id = dup["host_id"]
                 existing = dup
-                adopted = True
 
         # Refuse the two dangerous re-binds a stolen token enables:
         if existing:
-            # (a) An admin deliberately revoked this host — a replayed token
-            #     must not silently un-revoke and resurrect it. (An adopted
-            #     re-enroll with a fresh admin-issued token IS authorized, so it
-            #     restores the host rather than being blocked.)
-            if existing.get("revoked") and not adopted:
+            # (a) An admin deliberately revoked this host — a replayed/fresh token
+            #     must never silently un-revoke and resurrect it. The admin has to
+            #     re-issue enrollment from the console (which mints a fresh secret
+            #     and clears revocation deliberately).
+            if existing.get("revoked"):
                 raise HTTPException(
                     status_code=403,
                     detail="This host was revoked by an administrator; re-issue "
@@ -1132,16 +1137,20 @@ def remove_agent(host_id: str, purge_token: int = 0):
     # linger in hosts.json as an orphan "Unassigned" host.
     agent = _find_agent(host_id)
 
-    delete_agent(host_id)
-
-    # Clean up the auto-created SSH record without clobbering a sibling agent that
-    # shares this IP (e.g. a superseding re-enroll of the same box).
-    _forget_ssh_for_deleted_agent(host_id, agent)
-
+    # Serialize delete + token purge against the enroll critical section
+    # (_ENROLL_LOCK). Otherwise a zombie agent re-enrolling with the bound token
+    # can interleave — validating the token and recreating the record AFTER
+    # delete_agent runs — defeating the Force Delete it raced.
     tokens_purged = 0
-    if purge_token:
-        from backend.db import invalidate_enroll_tokens_for_host
-        tokens_purged = invalidate_enroll_tokens_for_host(host_id)
+    with _ENROLL_LOCK:
+        delete_agent(host_id)
+        if purge_token:
+            from backend.db import invalidate_enroll_tokens_for_host
+            tokens_purged = invalidate_enroll_tokens_for_host(host_id)
+
+    # Clean up the auto-created SSH record (matching hostname AND IP) — outside the
+    # enroll lock since it only touches hosts.json, not the agent/token tables.
+    _forget_ssh_for_deleted_agent(host_id, agent)
 
     return {
         "status": "removed",
@@ -1351,12 +1360,16 @@ def remove_environment(name: str, force: int = 0):
 # The hostname/port baked into agent bundles the Webserver Portal
 # hands out - see backend/agent_bundle.py.
 # =========================================================
-@app.get("/version", dependencies=[Depends(require_api_key)])
+@app.get("/version", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def version_route():
     """Which directory + git commit the live controller is actually running, and
     whether code on disk changed since start (pulled-but-not-restarted). Lets an
     operator confirm they're updating the directory the service really loads —
-    the guard against silently updating a different checkout than the one running."""
+    the guard against silently updating a different checkout than the one running.
+
+    Superuser-only: it discloses the absolute install path, exact commit, and PID —
+    deployment internals that low-privilege (auditor/sysadmin) roles don't need and
+    that would aid targeting."""
     from backend import build_info
     return build_info.info()
 

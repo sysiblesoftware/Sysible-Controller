@@ -54,11 +54,15 @@ def cmd_set_grub_default(entry: str) -> str:
     if not entry:
         raise ValueError("Default entry (index or title) is required.")
     q = shlex.quote(entry)
+    # Use the shlex-quoted value everywhere and keep the RAW entry out of the
+    # shell string — the success banner must NOT concatenate `entry`, or an entry
+    # like  x'; <cmd>; echo '  would close the quote and run <cmd> as root. printf
+    # with a %s arg passes the value as data, not shell syntax.
     return (
         "if command -v grub2-set-default >/dev/null 2>&1; then grub2-set-default " + q + "; "
         "elif command -v grub-set-default >/dev/null 2>&1; then grub-set-default " + q + "; "
         "else echo 'grub-set-default not found.' >&2; exit 1; fi && "
-        "echo 'Default boot entry set to " + entry + ".'"
+        "printf 'Default boot entry set to %s.\\n' " + q
     )
 
 

@@ -1500,7 +1500,7 @@ def _resolve_remote_upload_path(sftp, remote_path: str, filename: str) -> str:
     return remote_path
 
 
-@router.post("/hosts/{name}/files/upload")
+@router.post("/hosts/{name}/files/upload", dependencies=[Depends(require_superuser)])
 async def upload_file(
     name: str,
     request: Request,
@@ -1537,7 +1537,7 @@ async def upload_file(
     return {"host": name, "uploaded": True, "remote_path": full_path, "size": len(data)}
 
 
-@router.get("/hosts/{name}/files/download")
+@router.get("/hosts/{name}/files/download", dependencies=[Depends(require_superuser)])
 def download_file(name: str, path: str, request: Request):
     """Download one file from an SSH-enrolled host over SFTP. Returns
     the raw bytes with a Content-Disposition header, same convention

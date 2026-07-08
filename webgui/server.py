@@ -1848,8 +1848,10 @@ def remove_host(host_id: str, request: Request, force: int = 0,
                 agent_entry, api.cmd_uninstall_agent_service(), "command",
                 become, token, "Uninstall agent service (disenroll)")
 
+    # Force Delete also purges the bound enrollment token so a still-running zombie
+    # agent can't re-enroll and resurrect the record.
     result = _wrap(lambda: _as_admin(
-        request, lambda: api.disenroll_agent(host_id) or {"removed": True}))
+        request, lambda: api.disenroll_agent(host_id, purge_token=bool(force)) or {"removed": True}))
     if isinstance(result, dict):
         result["teardown"] = teardown
     return result

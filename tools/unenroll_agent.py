@@ -104,10 +104,14 @@ def main():
         total += _safe(cur, "DELETE FROM agents WHERE host_id = ?", (hid,))
         for t in _CLEANUP_TABLES:
             _safe(cur, f"DELETE FROM {t} WHERE host_id = ?", (hid,))
+        # Also kill any enrollment token bound to this host, so a still-running
+        # zombie agent can't re-enroll and resurrect the record.
+        _safe(cur, "DELETE FROM enroll_tokens WHERE bound_host_id = ?", (hid,))
     conn.commit()
     conn.close()
-    print(f"Removed {total} agent record(s). If a host's agent is still running, "
-          "run disenroll_agent.sh on it (or stop its service) so it doesn't retry.")
+    print(f"Removed {total} agent record(s) and purged their enrollment tokens. If a "
+          "host's agent is still running, stop it (disenroll_agent.sh or "
+          "'systemctl disable --now sysible-agent') so it doesn't keep retrying.")
     return 0
 
 

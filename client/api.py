@@ -174,8 +174,11 @@ def get_edition():
         return {}
 
 
-def disenroll_agent(host_id: str):
-    return _request("DELETE", f"/agents/{host_id}")
+def disenroll_agent(host_id: str, purge_token: bool = False):
+    # purge_token=True (Force Delete) also kills the bound enrollment token so a
+    # zombie agent can't re-enroll onto the same host_id and resurrect the record.
+    path = f"/agents/{host_id}" + ("?purge_token=1" if purge_token else "")
+    return _request("DELETE", path)
 
 
 def revoke_agent(host_id: str):

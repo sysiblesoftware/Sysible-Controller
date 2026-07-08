@@ -1113,7 +1113,11 @@ def get_agents():
 # DISENROLL
 # =========================================================
 @app.delete("/agents/{host_id}", dependencies=[Depends(require_api_key), Depends(require_superuser)])
-def remove_agent(host_id: str):
+def remove_agent(host_id: str, purge_token: int = 0):
+    """Remove an enrolled host from the controller. `purge_token=1` (Force Delete)
+    also invalidates the enrollment token bound to this host, so a still-running
+    zombie agent — whose token is baked into its sysible_agent.env — can't just
+    re-enroll onto the same host_id and resurrect the record you just deleted."""
 
     # Look up the agent's identity BEFORE deleting it, so we can also clean up
     # the auto-created SSH record (register_agent_ssh_host) that would otherwise
@@ -1126,9 +1130,15 @@ def remove_agent(host_id: str):
     # shares this IP (e.g. a superseding re-enroll of the same box).
     _forget_ssh_for_deleted_agent(host_id, agent)
 
+    tokens_purged = 0
+    if purge_token:
+        from backend.db import invalidate_enroll_tokens_for_host
+        tokens_purged = invalidate_enroll_tokens_for_host(host_id)
+
     return {
         "status": "removed",
-        "host_id": host_id
+        "host_id": host_id,
+        "tokens_purged": tokens_purged,
     }
 
 

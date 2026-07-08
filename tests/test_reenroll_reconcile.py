@@ -107,6 +107,35 @@ def test_revoked_host_deletes_via_endpoint(controller, superuser_headers, agent)
     assert all(a["host_id"] != hid for a in _db.list_agents())   # actually gone
 
 
+def test_force_delete_purges_token_so_zombie_cant_resurrect(controller, superuser_headers, enroll_token):
+    # A zombie agent whose token is still baked into sysible_agent.env would
+    # re-enroll onto the same host_id after deletion. Force Delete purges that
+    # bound token so re-enrollment is refused and the record stays gone.
+    tok = enroll_token()
+    r = _enroll(controller, tok, "zh1", "zhost", "10.9.9.9")
+    assert r.status_code == 200
+    hid = r.json()["host_id"]
+
+    d = controller.delete(f"/agents/{hid}?purge_token=1", headers=superuser_headers)
+    assert d.status_code == 200 and d.json()["tokens_purged"] >= 1
+
+    # The same token can no longer re-enroll (would-be resurrection is refused).
+    again = _enroll(controller, tok, "zh1-new", "zhost", "10.9.9.9")
+    assert again.status_code == 403
+
+
+def test_normal_delete_preserves_token_reuse(controller, superuser_headers, enroll_token):
+    # A normal (non-force) disenroll keeps the 7-day token-reuse convenience.
+    tok = enroll_token()
+    r = _enroll(controller, tok, "nh1", "nhost", "10.9.9.10")
+    hid = r.json()["host_id"]
+    d = controller.delete(f"/agents/{hid}", headers=superuser_headers)
+    assert d.status_code == 200 and d.json().get("tokens_purged", 0) == 0
+    # Token still valid → the host can come back without a fresh bundle.
+    again = _enroll(controller, tok, "nh1-new", "nhost", "10.9.9.10")
+    assert again.status_code == 200
+
+
 def test_deleting_sole_host_at_ip_forgets_its_ssh_record(controller, superuser_headers, agent):
     ip = "10.0.0.99"
     agent(host_id="only-id", secret="s", hostname="onlyhost", ip=ip)

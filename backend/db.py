@@ -1139,6 +1139,23 @@ def resolve_enroll_token_host(token, requested_host_id):
     return requested_host_id
 
 
+def invalidate_enroll_tokens_for_host(host_id):
+    """Delete every enrollment token bound to this host_id so it can't be reused to
+    re-enroll (within the 7-day reuse window). Called on a FORCE removal, which is
+    the "make this host gone for good" action: without this, a still-running zombie
+    agent whose token is baked into sysible_agent.env just re-enrolls onto the same
+    host_id and the record you deleted reappears. Returns the number removed."""
+    if not host_id:
+        return 0
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM enroll_tokens WHERE bound_host_id=?", (host_id,))
+    n = cur.rowcount
+    conn.commit()
+    conn.close()
+    return n
+
+
 def consume_enroll_token(token, host_id):
     conn = _connect()
     cur = conn.cursor()

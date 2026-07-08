@@ -262,8 +262,10 @@ function PasswordPolicy() {
 
 function ControllerCfg() {
   const [cfg, setCfg] = useState(null);
+  const [ver, setVer] = useState(null);
   const [err, setErr] = useErr(); const [msg, setMsg] = useState(""); const [busy, setBusy] = useState(false);
   useEffect(() => { api.controllerConfig().then(setCfg).catch((e) => setErr(e.message)); }, []);
+  useEffect(() => { api.controllerVersion().then(setVer).catch(() => {}); }, []);
   if (!cfg) return <div className="empty"><span className="spin" /></div>;
   const set = (k) => (e) => setCfg({ ...cfg, [k]: e.target.value });
   async function save() {
@@ -282,6 +284,21 @@ function ControllerCfg() {
   }
   return (
     <div className="card" style={{ maxWidth: 460 }}>
+      {ver && (
+        <div style={{ marginBottom: 12, fontSize: 12 }}>
+          <div className="faint">
+            Running from <code>{ver.running_dir}</code>
+            {ver.commit_short ? <> @ <code>{ver.commit_short}</code></> : null}
+            {ver.branch ? ` (${ver.branch})` : ""}{ver.dirty ? " · uncommitted changes" : ""}
+          </div>
+          {ver.restart_needed && (
+            <div className="error-box" role="alert" style={{ marginTop: 6 }}>
+              Code in this directory was updated but the controller hasn’t been restarted —
+              restart <code>sysible-backend</code> to load it.
+            </div>
+          )}
+        </div>
+      )}
       <label className="field"><span>Address mode</span>
         <select value={cfg.address_mode || "hostname"} onChange={set("address_mode")}>
           <option value="hostname">hostname</option><option value="ip">ip</option>

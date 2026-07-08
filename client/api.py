@@ -263,6 +263,11 @@ def set_controller_config(hostname: str, ip: str, address_mode: str, port: int):
     )
 
 
+def get_version():
+    """Which directory + commit the live controller is running (deployment guard)."""
+    return _request("GET", "/version")
+
+
 def controller_restart():
     """Restart the controller backend service (no update). Returns immediately;
     systemd bounces sysible-backend and it comes back on its own. The web console

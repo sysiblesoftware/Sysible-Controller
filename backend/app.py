@@ -135,6 +135,14 @@ from backend.remote_routes import (
 # confirm the running process is current code.
 app = FastAPI(title="Sysible Controller", docs_url=None, redoc_url=None)
 
+# Log which directory + commit is actually running, so a wrong-directory deploy is
+# obvious in `journalctl -u sysible-backend` (see backend/build_info.py).
+try:
+    from backend import build_info as _build_info
+    _build_info.log_startup()
+except Exception:
+    pass
+
 
 @app.middleware("http")
 async def _security_headers(request, call_next):
@@ -1343,6 +1351,16 @@ def remove_environment(name: str, force: int = 0):
 # The hostname/port baked into agent bundles the Webserver Portal
 # hands out - see backend/agent_bundle.py.
 # =========================================================
+@app.get("/version", dependencies=[Depends(require_api_key)])
+def version_route():
+    """Which directory + git commit the live controller is actually running, and
+    whether code on disk changed since start (pulled-but-not-restarted). Lets an
+    operator confirm they're updating the directory the service really loads —
+    the guard against silently updating a different checkout than the one running."""
+    from backend import build_info
+    return build_info.info()
+
+
 @app.get("/controller-config", dependencies=[Depends(require_api_key)])
 def get_controller_config_route():
 

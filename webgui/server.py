@@ -346,7 +346,10 @@ def login(body: LoginRequest, request: Request):
     # carried into the authenticated session (session-fixation hardening).
     request.session.clear()
     request.session["user"] = body.username.strip()
-    request.session["role"] = result.get("role") or "superuser"
+    # Fail CLOSED on a missing role: default to the least-privileged 'auditor', not
+    # 'superuser'. The controller always returns a role today, so this only matters
+    # as defense-in-depth against an unexpected/degraded response.
+    request.session["role"] = result.get("role") or "auditor"
     # Per-admin opt-in for the Sysible Connect terminal's "Send sudo password"
     # button (granted by a superuser). Enforced server-side in the terminal ws
     # sudo handler below.
@@ -420,6 +423,17 @@ def sudo_clear(body: SudoRequest, user: str = Depends(require_operator)):
 
 @app.post("/api/logout")
 def logout(request: Request):
+    # Revoke the controller-side admin token too, not just the local session. A
+    # Starlette session is a stateless signed cookie that can't be server-
+    # invalidated, so without this the underlying admin token would linger valid
+    # (up to its 12h expiry) after "logout" — a captured token/cookie would still
+    # work. Best-effort: clear the session regardless of the revoke call's outcome.
+    token = _session_token(request)
+    if token:
+        try:
+            _with_token(token, api.admin_logout)
+        except Exception:
+            pass
     request.session.clear()
     return {"status": "ok"}
 

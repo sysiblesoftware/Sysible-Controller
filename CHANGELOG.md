@@ -5,6 +5,11 @@ All notable changes to the Sysible Controller are recorded here.
 ## Unreleased
 
 ### Fixed
+- **Lock / Unlock / Delete user now confirm what happened** instead of showing a
+  bare "exit 0." The `usermod -L`/`-U` and `userdel` commands emit nothing on
+  success, so the console couldn't tell you the account was actually locked; they
+  now append a clear confirmation message (value-free, so the username is never
+  interpolated into the echo).
 - **Host updates no longer fail on hosts that are far behind.** The agent capped
   every command at 5 minutes, so a real `dnf`/`apt`/`zypper` upgrade on a
   months-behind host was SIGKILLed mid-transaction and reported "failed" (and

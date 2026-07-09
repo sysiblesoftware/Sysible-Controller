@@ -732,7 +732,11 @@ def _ssh_argv(key_path, target, remote_cmd):
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", f"UserKnownHostsFile={KNOWN_HOSTS_PATH}",
         "-o", "HashKnownHosts=no", "-o", "ConnectTimeout=10",
-        target, remote_cmd,
+        # "--" ends option parsing so a `target` like "-oProxyCommand=..." can't be
+        # read as an ssh option (which would run code on THIS controller as root).
+        # Defence-in-depth behind the charset validation on user/ip at ingest — the
+        # host record's user@ip flows straight into `target` here.
+        "--", target, remote_cmd,
     ]
 
 

@@ -476,6 +476,18 @@ def enroll(req: EnrollRequest):
 
         consume_enroll_token(req.token, host_id)
 
+        # Re-seal the integrity baseline for this (re-)enrollment. The baseline is
+        # keyed by host_id and SURVIVES disenroll, but a re-enroll reuses the same
+        # host_id with a freshly-installed agent whose self-measurement legitimately
+        # differs (the bundle patches the controller address into agent.py at build
+        # time, and the agent may be a newer build). Without dropping the stale
+        # baseline the very next heartbeat compares against it and quarantines a
+        # perfectly healthy re-enrolled host. Dropping it now makes the next
+        # heartbeat re-seal from the current measurement — exactly what an admin
+        # Rebaseline/Restore does. Harmless no-op on a brand-new host_id.
+        from backend import agent_integrity as _agent_integrity
+        _agent_integrity.rebaseline(host_id)
+
     # Give this agent host a real SSH terminal automatically: queue the
     # controller's key-install + sshd-check command. force=True so a
     # re-enroll retries even if a previous attempt found sshd missing.
@@ -1190,6 +1202,11 @@ def remove_agent(host_id: str, purge_token: int = 0):
         if purge_token:
             from backend.db import invalidate_enroll_tokens_for_host
             tokens_purged = invalidate_enroll_tokens_for_host(host_id)
+    # Forget the integrity baseline too — it's keyed by host_id and would
+    # otherwise outlive the host, quarantining a future re-enroll on the same id.
+    # (Enroll also re-seals, so this is belt-and-suspenders + state hygiene.)
+    from backend import agent_integrity as _agent_integrity
+    _agent_integrity.rebaseline(host_id)
 
     # Clean up the auto-created SSH record (matching hostname AND IP) — outside the
     # enroll lock since it only touches hosts.json, not the agent/token tables.
@@ -1296,6 +1313,11 @@ def self_disenroll(host_id: str, req: SelfDisenrollRequest):
     delete_agent(req.host_id)
 
     _forget_ssh_for_deleted_agent(req.host_id, agent)
+
+    # Forget the integrity baseline (keyed by host_id) so it can't quarantine a
+    # future re-enroll on the same id. Enroll also re-seals — belt-and-suspenders.
+    from backend import agent_integrity as _agent_integrity
+    _agent_integrity.rebaseline(req.host_id)
 
     return {
         "status": "disenrolled",

@@ -28,6 +28,27 @@ All notable changes to the Sysible Controller are recorded here.
   downloads it, with a confirmation, instead of a passive download link.
 
 ### Fixed
+- **Re-enrolling a host no longer auto-quarantines it.** The agent integrity
+  baseline is keyed by host_id and deliberately survives disenroll — but a
+  re-enroll reuses the same host_id with a freshly-installed agent whose
+  self-measurement legitimately differs (the enrollment bundle patches the
+  controller address into `agent.py` at build time, and the agent may be a newer
+  build). The next heartbeat then compared the new measurement against the STALE
+  baseline and quarantined a perfectly healthy host. Enrollment now drops the old
+  baseline so the next heartbeat re-seals from the current measurement (exactly
+  what an admin Rebaseline/Restore does), and both disenroll paths forget the
+  baseline too, so nothing lingers to quarantine a future re-enroll.
+- **"Set Environment" no longer times out with `read timeout=15` (and the label
+  updates promptly).** Two causes: (1) several hot enroll/disenroll DB writes
+  (`set_agent_environment`, `delete_agent`, `consume_enroll_token`) used a bare
+  connection with no `try/finally`, so a transient "database is locked" leaked the
+  single SQLite WAL writer and stalled every later write on the single-process
+  controller — they now release the connection even if a write raises. (2) The
+  console's write timeout (15s) was *shorter* than the controller's DB
+  `busy_timeout` (30s), so a legitimately-contended assignment surfaced as a
+  spurious timeout before it committed; the idempotent environment write now
+  allows 35s. The unassigned→environment label was only ever "slow" because the
+  write was stalling — fixing the write fixes the label.
 - **Self-update no longer wedges on a stale git lock (root cause of "reference
   already exists").** The update-check endpoint used to run a live `git fetch` in
   the deployment repo; when that fetch was killed (client timeout, cancelled

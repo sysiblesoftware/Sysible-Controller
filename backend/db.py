@@ -751,28 +751,31 @@ def set_agent_sudo_password_required(host_id, required):
 
 
 def delete_agent(host_id):
-    conn = _connect()
-    cur = conn.cursor()
+    # closing(): four writes under the single WAL writer during the busy
+    # enroll/disenroll path — release the connection even if one raises "database
+    # is locked", so a leaked writer can't stall every later write (see the
+    # set_agent_environment/heartbeat fixes).
+    with contextlib.closing(_connect()) as conn:
+        cur = conn.cursor()
 
-    cur.execute(
-        "DELETE FROM agents WHERE host_id=?",
-        (host_id,)
-    )
-    cur.execute(
-        "DELETE FROM agent_tasks WHERE host_id=?",
-        (host_id,)
-    )
-    cur.execute(
-        "DELETE FROM agent_results WHERE host_id=?",
-        (host_id,)
-    )
-    cur.execute(
-        "DELETE FROM metric_samples WHERE host_id=?",
-        (host_id,)
-    )
+        cur.execute(
+            "DELETE FROM agents WHERE host_id=?",
+            (host_id,)
+        )
+        cur.execute(
+            "DELETE FROM agent_tasks WHERE host_id=?",
+            (host_id,)
+        )
+        cur.execute(
+            "DELETE FROM agent_results WHERE host_id=?",
+            (host_id,)
+        )
+        cur.execute(
+            "DELETE FROM metric_samples WHERE host_id=?",
+            (host_id,)
+        )
 
-    conn.commit()
-    conn.close()
+        conn.commit()
 
 
 # =========================================================
@@ -954,29 +957,34 @@ def agent_exists(host_id):
 
 
 def set_agent_environment(host_id, environment):
-    conn = _connect()
-    cur = conn.cursor()
+    # closing(): release the connection (and its single WAL writer reservation)
+    # even if a write raises "database is locked". A bare _connect()/close()
+    # here leaks the writer on any exception, which then blocks EVERY later write
+    # on the single-process controller — surfacing to the operator as the console
+    # giving up at its 15s read timeout when they Set Environment. See the same
+    # fix on update_agent_heartbeat.
+    with contextlib.closing(_connect()) as conn:
+        cur = conn.cursor()
 
-    cur.execute(
-        "UPDATE agents SET environment=? WHERE host_id=?",
-        (environment, host_id)
-    )
+        cur.execute(
+            "UPDATE agents SET environment=? WHERE host_id=?",
+            (environment, host_id)
+        )
 
-    updated = cur.rowcount > 0
+        updated = cur.rowcount > 0
 
-    # Inherit the environment's sudo default: assigning a host to an
-    # environment applies that environment's requires_sudo_password so new
-    # hosts dropped into a password-sudo environment pick it up automatically.
-    # (Per-host can still be overridden afterward.)
-    if environment:
-        cur.execute("SELECT requires_sudo_password FROM environments WHERE name=?", (environment,))
-        row = cur.fetchone()
-        if row is not None:
-            cur.execute("UPDATE agents SET requires_sudo_password=? WHERE host_id=?",
-                        (1 if row[0] else 0, host_id))
+        # Inherit the environment's sudo default: assigning a host to an
+        # environment applies that environment's requires_sudo_password so new
+        # hosts dropped into a password-sudo environment pick it up automatically.
+        # (Per-host can still be overridden afterward.)
+        if environment:
+            cur.execute("SELECT requires_sudo_password FROM environments WHERE name=?", (environment,))
+            row = cur.fetchone()
+            if row is not None:
+                cur.execute("UPDATE agents SET requires_sudo_password=? WHERE host_id=?",
+                            (1 if row[0] else 0, host_id))
 
-    conn.commit()
-    conn.close()
+        conn.commit()
 
     return updated
 
@@ -1171,18 +1179,19 @@ def invalidate_enroll_tokens_for_host(host_id):
 
 
 def consume_enroll_token(token, host_id):
-    conn = _connect()
-    cur = conn.cursor()
+    # closing(): release the writer even if the UPDATE raises, so a locked-DB
+    # error on the enroll path can't leak the single WAL writer.
+    with contextlib.closing(_connect()) as conn:
+        cur = conn.cursor()
 
-    cur.execute("""
-    UPDATE enroll_tokens
-    SET used=1, bound_host_id=?, last_used=?
-    WHERE token=?
-    """,
-    (host_id, time.time(), token))
+        cur.execute("""
+        UPDATE enroll_tokens
+        SET used=1, bound_host_id=?, last_used=?
+        WHERE token=?
+        """,
+        (host_id, time.time(), token))
 
-    conn.commit()
-    conn.close()
+        conn.commit()
 
 
 # =========================================================

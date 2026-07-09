@@ -867,10 +867,13 @@ export default function Dashboard({ role, edition, onOpen }) {
       )}
 
       <div className="metric-row">
-        {/* Deduped host_count: a host enrolled twice (re-enroll dupe, or
-            agent+SSH) counts once. The edition is uncapped, so there's no
-            usage-vs-limit — just the number of hosts under management. */}
-        <MetricCard label="Hosts enrolled" value={edition?.host_count ?? m.total}
+        {/* All four top-strip counts come from the SAME live fleet-health sweep
+            (`m`) so they always agree with each other and with Host Enrollment:
+            enrolled = online + offline (+ SSH-unknown), and the number can never
+            be a stale login-time value. (It used to prefer edition.host_count,
+            fetched once at login and never refreshed, so a just-disenrolled host
+            lingered as "1 enrolled" while Online/Offline correctly showed 0.) */}
+        <MetricCard label="Hosts enrolled" value={m.total}
           hosts={hostLists.all} onOpenHost={openHost} />
         <MetricCard label="Online" value={m.online}
           accent={m.total > 0 && m.online === 0 ? VERDICT_COLOR.CRITICAL : undefined}

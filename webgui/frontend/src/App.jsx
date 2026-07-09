@@ -98,6 +98,33 @@ function NavIcon({ name }) {
 
 function applyTheme(t) { document.documentElement.setAttribute("data-theme", t); }
 
+// --- URL-addressable views ------------------------------------------------
+// Nav items are real links (?view=<key>) so they can be opened in a new tab,
+// bookmarked, and shared — not just JS buttons. Excludes the dashboard
+// (null → ?view=dashboard), Sysible Connect (opens its own window), and the
+// docs download link.
+const VIEW_KEYS = new Set(
+  NAV.filter((n) => n.key && n.key !== "connect" && !n.download).map((n) => n.key),
+);
+function hrefForView(key) { return "?view=" + (key || "dashboard"); }
+function viewFromSearch() {
+  try {
+    const v = new URLSearchParams(window.location.search).get("view");
+    if (v && VIEW_KEYS.has(v)) return v;
+  } catch { /* ignore */ }
+  return null; // dashboard
+}
+function setSearchView(v) {
+  // Keep the address bar in sync with the current top-level view via
+  // replaceState — no new history entries (the in-app "← Back" owns view
+  // history), just a shareable/refresh-safe URL.
+  try {
+    const u = new URL(window.location.href);
+    u.searchParams.set("view", v || "dashboard");
+    window.history.replaceState(null, "", u.pathname + u.search);
+  } catch { /* ignore */ }
+}
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [role, setRole] = useState("");
@@ -106,7 +133,7 @@ export default function App() {
   // Bumped on every nav click so a stateful view (e.g. the tools grid) can reset
   // its own sub-page when its nav item is clicked again — see ToolRunner.
   const [navTick, setNavTick] = useState(0);
-  const [view, setView] = useState(null); // null = dashboard
+  const [view, setView] = useState(viewFromSearch); // null = dashboard; seeded from ?view=
   const [target, setTarget] = useState(null);
   const [history, setHistory] = useState([]); // breadcrumb stack of {view,target}
   const [edition, setEdition] = useState(null);
@@ -184,12 +211,17 @@ export default function App() {
     if (v === view && JSON.stringify(t) === JSON.stringify(target)) return;
     setHistory((h) => [...h, { view, target }]);
     setView(v); setTarget(t);
+    // Keep the URL in sync for top-level views (dashboard or a nav key); leave it
+    // untouched for in-app drill-ins (e.g. a specific host), which aren't
+    // deep-linkable on their own.
+    if (v === null || VIEW_KEYS.has(v)) setSearchView(v);
   }, [view, target]);
   const goBack = useCallback(() => {
     setHistory((h) => {
       if (!h.length) return h;
       const prev = h[h.length - 1];
       setView(prev.view); setTarget(prev.target || null);
+      if (prev.view === null || VIEW_KEYS.has(prev.view)) setSearchView(prev.view);
       return h.slice(0, -1);
     });
   }, []);
@@ -272,13 +304,20 @@ export default function App() {
                 <span className="rail-ext" aria-hidden="true">↓</span>
               </a>
             ) : (
-              <button key={n.key ?? "dash"}
-                      className={"rail-item" + (view === n.key ? " active" : "")}
-                      title={n.key === "connect" ? "Opens in a new tab" : undefined}
-                      onClick={() => { setNavTick((t) => t + 1); go(n.key, null); }}>
+              <a key={n.key ?? "dash"} href={hrefForView(n.key)}
+                 className={"rail-item" + (view === n.key ? " active" : "")}
+                 title={n.key === "connect" ? "Opens in a new tab" : undefined}
+                 onClick={(e) => {
+                   // Let the browser handle modifier-clicks (⌘/Ctrl/Shift/Alt) so
+                   // "open in new tab/window" works; otherwise navigate in-app.
+                   if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                   e.preventDefault();
+                   setNavTick((t) => t + 1);
+                   go(n.key, null);
+                 }}>
                 <NavIcon name={n.icon} /><span>{n.label}</span>
                 {n.key === "connect" && <span className="rail-ext" aria-hidden="true">↗</span>}
-              </button>
+              </a>
             )
           ))}
         </div>

@@ -211,7 +211,11 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
   padding: 9px 11px; border-radius: 8px; cursor: pointer; font-size: 13.5px;
   background: transparent; border: none; color: var(--text-dim);
   border-left: 2px solid transparent;
+  /* nav items are <a> links now (openable in a new tab): kill the anchor
+     underline and keep padding inside the fixed rail width. */
+  text-decoration: none; box-sizing: border-box;
 }
+.rail-item:hover, .rail-item.active { text-decoration: none; }
 .rail-item svg { flex-shrink: 0; opacity: 0.85; }
 .rail-item .rail-ext { margin-left: auto; font-size: 12px; opacity: 0.55; }
 .rail-item:hover { background: var(--row-hover); color: var(--text); }

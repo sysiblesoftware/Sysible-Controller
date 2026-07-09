@@ -13,6 +13,16 @@ All notable changes to the Sysible Controller are recorded here.
   in far fewer waves.
 
 ### Web console
+- **Left-rail nav items are real links now** — each view has a URL (`?view=<key>`),
+  so you can right-click → open in a new tab, ⌘/Ctrl-click, middle-click, and
+  bookmark/share a view. Plain click still navigates instantly in-app. Opening
+  `?view=…` in a fresh tab lands on that view.
+- **All host counts share one live source.** The Dashboard "Hosts enrolled" tile
+  used `edition.host_count`, which is fetched once at login and never refreshed —
+  so a just-disenrolled host lingered as "1 enrolled" while Online/Offline (from
+  the live fleet-health sweep) correctly showed 0. It now uses the same live
+  sweep, so enrolled/online/offline always agree with each other and with Host
+  Enrollment.
 - **Regenerate agent bundle** — the Settings button now re-mints a fresh bundle
   for the current controller address (with a new single-use enrollment token) and
   downloads it, with a confirmation, instead of a passive download link.

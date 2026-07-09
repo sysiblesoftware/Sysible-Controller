@@ -384,16 +384,21 @@ def cmd_create_user(username: str, password: str = "", shell: str = "/bin/bash")
     return cmd
 
 
+# These low-level account commands emit nothing on success, so the console just
+# showed a bare "exit 0" with no confirmation of what happened. Append a
+# VALUE-FREE confirmation echo (never interpolate the username — a value like
+# `$(id)` would command-substitute inside the double-quoted string, exactly the
+# injection cmd_set_sudo's comment warns about; the caller already knows the user).
 def cmd_delete_user(username: str) -> str:
-    return f"userdel -r {shlex.quote(username)}"
+    return f'userdel -r {shlex.quote(username)} && echo "User deleted (home directory removed)."'
 
 
 def cmd_lock_user(username: str) -> str:
-    return f"usermod -L {shlex.quote(username)}"
+    return f'usermod -L {shlex.quote(username)} && echo "User locked — password authentication is now disabled."'
 
 
 def cmd_unlock_user(username: str) -> str:
-    return f"usermod -U {shlex.quote(username)}"
+    return f'usermod -U {shlex.quote(username)} && echo "User unlocked — password authentication is re-enabled."'
 
 
 def cmd_set_sudo(username: str, enable: bool) -> str:

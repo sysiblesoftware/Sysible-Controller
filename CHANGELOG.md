@@ -4,6 +4,17 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Added
+- **The controller enrolls itself as a managed host.** On first start
+  (`sysible_controller start`) the controller now installs a privileged local
+  agent pointed at loopback and enrolls itself, so it appears in the fleet like
+  any other box — patch it, run scripts on it, open a terminal into it. It's
+  idempotent (skips if already enrolled), best-effort (never fails the
+  controller start), and opt-out via `SYSIBLE_NO_SELF_ENROLL=1`. Run it on demand
+  with `sudo sysible_controller self-enroll`. Backed by a new loopback bundle
+  endpoint (`GET /self-enroll-bundle`) that works even before any LAN
+  hostname/IP is configured.
+
 ### Performance
 - **Posture / fleet-health sweeps are much faster.** The posture scan's three
   full-filesystem `find /` integrity walks were capped at 20s each — the dominant

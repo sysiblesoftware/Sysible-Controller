@@ -100,6 +100,77 @@ cmd_start() {
   echo "started on its own:"
   echo "   Web console : sudo sysible_controller webgui start"
   echo "'sysible_controller status' to check, 'sysible_controller logs' to tail the backend."
+
+  # Auto-enroll the controller itself as a managed host on first start, so it
+  # appears in the fleet like any other box (privileged agent). Idempotent and
+  # strictly best-effort — a failure here must NEVER fail the controller start.
+  # Opt out with SYSIBLE_NO_SELF_ENROLL=1.
+  if [[ "${SYSIBLE_NO_SELF_ENROLL:-0}" != "1" ]]; then
+    cmd_self_enroll || echo "(controller self-enroll skipped — run 'sudo sysible_controller self-enroll' to add it to the fleet later)"
+  fi
+}
+
+# Enroll THIS controller as a managed host (privileged root agent), so it shows
+# up in the fleet and you can patch/script/terminal into it like any other box.
+# Idempotent (skips if the local agent is already installed) and safe to re-run.
+cmd_self_enroll() {
+  _require_root self-enroll
+  local agent_dir="/opt/sysible-agent"
+
+  if systemctl is-enabled sysible-agent >/dev/null 2>&1 || [[ -f "$agent_dir/agent.py" ]]; then
+    echo "Controller is already enrolled as a managed host (agent at $agent_dir)."
+    return 0
+  fi
+  if [[ ! -f "$CERT_FILE" ]]; then
+    echo "ERROR: TLS certificate not found at $CERT_FILE - run the installer first." >&2
+    return 1
+  fi
+  local key
+  key="$(cat "$BASE/api_key.txt" 2>/dev/null)"
+  if [[ -z "$key" ]]; then
+    echo "ERROR: admin API key not found at $BASE/api_key.txt." >&2
+    return 1
+  fi
+  # The controller mints the single-use enrollment token, so it must be up.
+  if ! curl -s --cacert "$CERT_FILE" "https://127.0.0.1:$PORT/" >/dev/null 2>&1; then
+    echo "Controller isn't responding on https://127.0.0.1:$PORT - start it first, then re-run: sudo sysible_controller self-enroll" >&2
+    return 1
+  fi
+  if ! command -v unzip >/dev/null 2>&1; then
+    echo "ERROR: 'unzip' is required to unpack the agent bundle - install it, then re-run: sudo sysible_controller self-enroll" >&2
+    return 1
+  fi
+
+  echo "Enrolling this controller as a managed host (privileged agent) ..."
+  local tmp; tmp="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" RETURN
+
+  # Loopback bundle: the controller's own agent connects over 127.0.0.1, which
+  # the self-signed cert always covers and which works even before any LAN
+  # hostname/IP is configured.
+  if ! curl -fsS --cacert "$CERT_FILE" -H "X-API-Key: $key" \
+        "https://127.0.0.1:$PORT/self-enroll-bundle" -o "$tmp/bundle.zip"; then
+    echo "ERROR: could not download the self-enroll bundle from the controller (is the host cap reached?)." >&2
+    return 1
+  fi
+  if ! ( cd "$tmp" && unzip -qo bundle.zip ); then
+    echo "ERROR: could not unpack the agent bundle." >&2
+    return 1
+  fi
+  if [[ ! -f "$tmp/run_agent.sh" ]]; then
+    echo "ERROR: agent bundle is missing run_agent.sh." >&2
+    return 1
+  fi
+  chmod +x "$tmp/run_agent.sh"
+  # run_agent.sh installs to /opt/sysible-agent as a privileged (root) agent by
+  # default, sets up the systemd unit, starts it, and the agent enrolls on its
+  # first poll a moment later.
+  if ! ( cd "$tmp" && ./run_agent.sh ); then
+    echo "ERROR: agent install failed." >&2
+    return 1
+  fi
+  echo "Controller self-enrolled — it will appear in the fleet shortly (Host Enrollment)."
 }
 
 cmd_stop() {
@@ -530,9 +601,10 @@ case "$1" in
   logs)    cmd_logs ;;
   webgui)  cmd_webgui "$@" ;;
   reset-admin) cmd_reset_admin "$@" ;;
+  self-enroll) cmd_self_enroll ;;
   destroy) cmd_destroy ;;
   *)
-    echo "Usage: sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|destroy}"
+    echo "Usage: sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|self-enroll|destroy}"
     exit 1
     ;;
 esac

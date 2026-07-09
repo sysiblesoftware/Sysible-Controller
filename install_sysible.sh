@@ -445,3 +445,7 @@ else
   echo ""
 fi
 echo "Run: sudo sysible_controller start  &&  sudo sysible_controller webgui start"
+echo ""
+echo "On first start the controller enrolls ITSELF as a managed host (a privileged"
+echo "local agent), so it appears in the fleet like any other box. Opt out with"
+echo "SYSIBLE_NO_SELF_ENROLL=1, or add it later with: sudo sysible_controller self-enroll"

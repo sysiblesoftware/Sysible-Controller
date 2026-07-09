@@ -129,10 +129,7 @@ def cmd_set_firewalld_enabled(enabled: bool) -> str:
     """Starts/enables or stops/disables the firewalld service (both
     the running state and whether it comes up at boot)."""
     if enabled:
-        return (
-            "systemctl enable --now firewalld 2>&1 "
-            "&& echo 'firewalld enabled and started.'"
-        )
+        return "systemctl enable --now firewalld 2>&1; " + _FW_START_DIAG
     return (
         "systemctl disable --now firewalld 2>&1 "
         "&& echo 'firewalld stopped and disabled.'"
@@ -495,6 +492,22 @@ _PKG_DETECT = (
     "else echo 'No supported package manager found (dnf/yum/zypper/apt).' >&2; exit 1; fi; "
 )
 
+# After a start attempt, `systemctl enable --now` only reports "status=1/FAILURE"
+# when firewalld's daemon dies — the actual reason (a missing backend, a Python
+# traceback) lives in the journal. Surface it so the operator sees the real cause
+# instead of a bare failure, and exit non-zero so the console flags it.
+_FW_START_DIAG = (
+    "if systemctl is-active --quiet firewalld; then "
+    "echo 'firewalld enabled and started.'; "
+    "else "
+    "echo 'firewalld did NOT start — usually a missing backend (nftables/iptables) "
+    "or Python binding on this host. Detail:'; "
+    "systemctl status firewalld --no-pager -l 2>&1 | tail -n 12; "
+    "echo '--- journal (firewalld) ---'; "
+    "journalctl -xeu firewalld --no-pager -n 40 2>&1 | tail -n 40; "
+    "exit 1; fi"
+)
+
 
 def cmd_install_firewalld() -> str:
     """Install firewalld via the host's package manager, then enable+start it.
@@ -506,16 +519,23 @@ def cmd_install_firewalld() -> str:
     Install button leaves a working firewall-cmd, not just a running daemon."""
     return (
         _PKG_DETECT
-        + "DEBIAN_FRONTEND=noninteractive $PM firewalld 2>&1 && "
-        # openSUSE/SLES: ensure firewall-cmd's Python GObject bindings are present.
+        + "DEBIAN_FRONTEND=noninteractive $PM firewalld 2>&1 "
+        "|| { echo 'Could not install the firewalld package.' >&2; exit 1; }; "
+        # openSUSE/SLES: BOTH the firewalld daemon and firewall-cmd are Python
+        # and need the GObject ('gi') bindings; the daemon also needs a working
+        # backend (nftables by default, iptables as a fallback). Minimal openSUSE
+        # images ship firewalld without these, so the daemon exits 1 at start
+        # ("status=1/FAILURE"). Pull them in best-effort so the daemon actually
+        # comes up — install each separately so one missing package name doesn't
+        # abort the whole transaction.
         "if command -v zypper >/dev/null 2>&1; then "
-        "if ! firewall-cmd --version >/dev/null 2>&1; then "
-        "echo 'openSUSE detected - installing firewall-cmd Python (gi) bindings (python3-gobject)...'; "
-        "zypper --non-interactive install python3-gobject 2>&1 "
-        "|| echo 'Warning: could not install python3-gobject; firewall-cmd may not work until it is installed.' >&2; "
-        "fi; fi; "
-        "systemctl enable --now firewalld 2>&1 && "
-        "echo 'firewalld installed and started.'"
+        "  for _p in python3-gobject nftables iptables; do "
+        "    rpm -q \"$_p\" >/dev/null 2>&1 || zypper --non-interactive install \"$_p\" 2>&1 || "
+        "      echo \"Warning: could not install $_p; firewalld may not start until it is present.\" >&2; "
+        "  done; "
+        "fi; "
+        "systemctl enable --now firewalld 2>&1; "
+        + _FW_START_DIAG
     )
 
 

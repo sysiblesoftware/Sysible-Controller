@@ -168,6 +168,15 @@ def require_operator(request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
     if request.session.get("role") == "auditor":
         raise HTTPException(status_code=403, detail="Auditor accounts are read-only.")
+    # Forced first-login password change: gate every write/dispatch route until the
+    # operator actually rotates the temporary password. The frontend shows a modal,
+    # but that's cosmetic — without this server-side gate an operator could skip it
+    # and drive the API directly on a known/shared initial credential. The
+    # change-credentials route itself is require_login (not require_operator), so it
+    # stays reachable to clear the flag.
+    if request.session.get("must_change_password"):
+        raise HTTPException(status_code=403,
+                            detail="You must change your temporary password before performing this action.")
     return user
 
 

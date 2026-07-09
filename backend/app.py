@@ -1470,12 +1470,24 @@ def set_controller_config_route(body: SetControllerConfigRequest):
         new_addrs = set(resolve_controller_addresses(result))
         if new_addrs and new_addrs != old_addrs:
             if tls_manager.current_is_self_signed():
-                tls_manager.regenerate_self_signed(hostnames=sorted(new_addrs))
-                result["cert_regenerated"] = True
+                # Do NOT regenerate the live cert here. uvicorn only rereads its
+                # cert on restart, so overwriting the served cert/trust now —
+                # while the OLD cert is still being served — leaves every TLS
+                # client (including this console over loopback, and the client
+                # that pins server.crt) verifying the still-served OLD cert
+                # against the just-written NEW one. That fails the handshake
+                # (HTTPSConnectionPool / SSL error) and the controller becomes
+                # unreachable until a manual restart. Instead just flag it: the
+                # "Regenerate self-signed cert" action reissues for the new
+                # address AND restarts atomically, so the served cert and the
+                # pinned trust move together.
+                result["cert_stale"] = True
                 result["cert_note"] = (
-                    "Self-signed TLS certificate regenerated for the new address. "
-                    "Restart the controller to serve it, then redistribute the trust "
-                    "bundle / re-download the agent bundle so hosts trust and reach it."
+                    "The controller address changed, so the self-signed TLS certificate "
+                    "no longer matches it. Click “Regenerate self-signed cert” to "
+                    "reissue it for the new address and restart the controller, then "
+                    "redistribute the trust bundle / re-download the agent bundle so "
+                    "hosts trust and reach it."
                 )
             else:
                 result["cert_note"] = (
@@ -1484,7 +1496,7 @@ def set_controller_config_route(body: SetControllerConfigRequest):
                     "address, or import an updated certificate."
                 )
     except Exception as e:
-        result["cert_warning"] = f"Could not regenerate the self-signed certificate: {e}"
+        result["cert_warning"] = f"Could not evaluate the TLS certificate: {e}"
 
     return result
 

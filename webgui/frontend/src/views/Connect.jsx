@@ -293,6 +293,14 @@ function FleetActions({ hosts, checked, onErr }) {
   const scopeLabel = checked.length ? `${checked.length} checked` : `all ${hosts.length}`;
 
   async function act(action, confirmMsg, command) {
+    // Guard the script action with a clear message rather than a silently
+    // disabled button: an operator who clicks "Run Script" before typing
+    // anything should be told what's missing, not left wondering why nothing
+    // happened.
+    if (action === "script" && !(command || "").trim()) {
+      onErr("Enter a script to run in the box above first.");
+      return;
+    }
     // Rebooting or powering off the ENTIRE fleet is the highest-blast-radius
     // action here — a plain OK is too easy to hit by accident. Require typing
     // the word, matching the strong guard used for system-critical paths.
@@ -329,7 +337,7 @@ function FleetActions({ hosts, checked, onErr }) {
                placeholder="Leave blank to use your stored sudo password" />
       </label>
       <div className="row" style={{ marginTop: 8, flexWrap: "wrap" }}>
-        <button className="btn sm" disabled={running || !script.trim()}
+        <button className="btn sm" disabled={!!running}
                 onClick={() => act("script", "Run this script as root on", script)}>
           {running === "script" ? <span className="spin" /> : "Run Script on All Hosts"}
         </button>

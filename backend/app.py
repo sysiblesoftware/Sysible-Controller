@@ -859,13 +859,22 @@ def _controller_update_available():
     if not src or not _os.path.isdir(_os.path.join(src, ".git")):
         return {"checked": False, "reason": "install source is not a git checkout"}
 
-    def _git(*args, timeout=25):
+    # Keep the git ops tightly bounded: /update-status also carries the (instant)
+    # agent build counts, and the whole endpoint is fetched by the console with a
+    # 15s read timeout. A slow `git fetch` used to blow past that, the console
+    # caught the timeout and kept its LAST result — so a just-disenrolled host
+    # kept showing as "1 agent" until a fetch happened to be fast. Bounding the
+    # fetch means the endpoint returns quickly with fresh agent counts; a slow
+    # network just degrades the controller check to checked=false.
+    _fetch_tmo = float(os.getenv("SYSIBLE_UPDATE_FETCH_TIMEOUT", "8"))
+
+    def _git(*args, timeout=8):
         return _sp.run(["git", "-C", src, "-c", f"safe.directory={src}", *args],
                        capture_output=True, text=True, timeout=timeout)
     try:
         cur = _git("rev-parse", "--short", "HEAD").stdout.strip()
         branch = _git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
-        if _git("fetch", "--quiet", timeout=35).returncode != 0:
+        if _git("fetch", "--quiet", timeout=_fetch_tmo).returncode != 0:
             return {"checked": False, "reason": "git fetch failed (network or auth)",
                     "current": cur, "branch": branch}
         n = int((_git("rev-list", "--count", "HEAD..@{u}").stdout.strip() or "0"))

@@ -195,6 +195,7 @@ and manage its credentials and sessions from Settings.</p>
 <tr><td><code>webgui {start|stop|restart|status|logs}</code></td><td>Yes*</td><td>Control the web console service; builds the front end on start.</td></tr>
 <tr><td><code>update</code></td><td>Yes</td><td>Pull latest code, redeploy, and restart in place.</td></tr>
 <tr><td><code>reset-admin [user] [pass]</code></td><td>Yes</td><td>Set/create a web-console admin password (printed once).</td></tr>
+<tr><td><code>self-enroll</code></td><td>Yes</td><td>Enroll this controller as a managed host (privileged local agent). Idempotent; runs automatically on first <code>start</code> unless <code>SYSIBLE_NO_SELF_ENROLL=1</code>.</td></tr>
 <tr><td><code>destroy</code></td><td>Yes</td><td>Remove the deployment.</td></tr>
 </table>
 

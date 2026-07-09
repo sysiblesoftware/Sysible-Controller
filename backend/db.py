@@ -915,6 +915,20 @@ def revoke_agent(host_id):
     return changed > 0
 
 
+def unrevoke_agent(host_id):
+    """Undo a revocation, KEEPING the existing agent secret so a still-installed
+    agent resumes talking to the controller immediately (no re-enroll needed). The
+    deliberate inverse of revoke_agent, for a superuser who revoked a host in error
+    or has cleared whatever prompted the lock-out. Returns True if a row changed."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("UPDATE agents SET revoked=0 WHERE host_id=?", (host_id,))
+    conn.commit()
+    changed = cur.rowcount
+    conn.close()
+    return changed > 0
+
+
 def is_agent_revoked(host_id):
     conn = _connect()
     cur = conn.cursor()

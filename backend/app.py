@@ -379,10 +379,23 @@ def _consume_ssh_enable_result(host_id, result_str):
         set_agent_ssh_state(host_id, {"status": "error"})
 
 
+# host_id values reserved for internal meaning that must never be a real host.
+_RESERVED_HOST_IDS = {"*"}
+
+
 @app.post("/agents/enroll")
 def enroll(req: EnrollRequest):
     # Plain `def` (threadpooled) for the same reason as heartbeat below: the
     # body is all blocking DB/token work and shouldn't occupy the event loop.
+
+    # host_id is client-supplied and used verbatim on a first enroll, so it must
+    # be a safe token — no shell/path metacharacters, and never a reserved
+    # sentinel. Rejecting it outright (rather than relying on parameterized
+    # queries to render it inert) closes injection and reserved-id abuse.
+    hid_in = (req.host_id or "").strip()
+    if hid_in and (hid_in in _RESERVED_HOST_IDS or
+                   not all(c.isalnum() or c in "._-" for c in hid_in)):
+        raise HTTPException(status_code=400, detail="Invalid host_id.")
 
     # Hold the enroll lock across validate→consume so a single-use token can't
     # be claimed by two concurrent requests (TOCTOU). enforce_host_limit's
@@ -424,8 +437,10 @@ def enroll(req: EnrollRequest):
             if existing.get("revoked"):
                 raise HTTPException(
                     status_code=403,
-                    detail="This host was revoked by an administrator; re-issue "
-                           "enrollment from the console to restore it.",
+                    detail="This host was revoked by an administrator. A superuser "
+                           "can Restore it in place (POST /agents/{host_id}/restore) "
+                           "if the agent is still installed; a reimaged host must be "
+                           "Force-Deleted and enrolled fresh.",
                 )
             # (b) The bound host is still actively heartbeating — a live agent
             #     already holds this identity and has no reason to re-enroll, so
@@ -1206,6 +1221,31 @@ def resume_agent_route(host_id: str,
     log_admin_audit("agent_integrity_resumed", actor or "superuser", f"host {host_id}")
 
     return {"status": "resumed", "host_id": host_id}
+
+
+@app.post("/agents/{host_id}/restore", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def restore_agent_route(host_id: str,
+                        x_admin_token: str = Header(default=None, alias="X-Sysible-Admin-Token")):
+    """Undo a hard REVOCATION in place, keeping the existing agent secret so a
+    still-installed agent resumes immediately — no re-enroll, host_id/history
+    preserved. For a superuser who revoked a host by mistake (or has cleared
+    whatever prompted it). Re-enrollment is only needed for a host that was
+    reimaged and lost its secret."""
+    if not agent_exists(host_id):
+        raise HTTPException(status_code=404, detail="Unknown host_id")
+
+    from backend.db import unrevoke_agent
+    if not unrevoke_agent(host_id):
+        raise HTTPException(status_code=404, detail="Unknown host_id")
+
+    actor = None
+    if x_admin_token:
+        from backend.db import resolve_admin_token
+        admin = resolve_admin_token(x_admin_token)
+        actor = admin["username"] if admin else None
+    log_admin_audit("agent_secret_restored", actor or "superuser", f"host {host_id}")
+
+    return {"status": "restored", "host_id": host_id}
 
 
 # =========================================================

@@ -613,6 +613,18 @@ def fleet_health(refresh: int = 0, user: str = Depends(require_login)):
         return _fleet_health_sweep()
 
 
+def _sweep_workers(n):
+    """Concurrency for fleet sweeps (health / posture / metrics). Higher than the
+    old fixed 12 so a 20+ host fleet completes in far fewer waves — each worker
+    is I/O-bound (waiting on an agent round-trip, not CPU), so a larger pool
+    scales cheaply. Overridable via SYSIBLE_SWEEP_CONCURRENCY."""
+    try:
+        cap = int(os.getenv("SYSIBLE_SWEEP_CONCURRENCY", "32"))
+    except ValueError:
+        cap = 32
+    return min(max(1, cap), max(1, n))
+
+
 def _fleet_health_sweep():
     import concurrent.futures
     import time as _t
@@ -674,7 +686,7 @@ def _fleet_health_sweep():
             **(m or {}),
         }
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_sweep_workers(len(entries))) as ex:
         hosts = list(ex.map(probe, entries)) if entries else []
     _HEALTH_CACHE["hosts"] = hosts
     _HEALTH_CACHE["ts"] = now
@@ -929,7 +941,7 @@ def fleet_posture(refresh: int = 0, user: str = Depends(require_login)):
             last_seen = {}
         now = _t.time()
         cmd = _posture_command()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_sweep_workers(len(entries))) as ex:
             hosts = list(ex.map(lambda e: _probe_posture(e, cmd, last_seen, now), entries)) if entries else []
         _POSTURE_CACHE["hosts"] = hosts
         _POSTURE_CACHE["ts"] = now
@@ -1035,7 +1047,7 @@ def fleet_updates(refresh: int = 0, live: int = 0, user: str = Depends(require_l
             last_seen = {}
         now = _t.time()
         cmd = api.cmd_update_status(refresh=bool(live))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_sweep_workers(len(entries))) as ex:
             hosts = list(ex.map(lambda e: _probe_updates(e, cmd, last_seen, now), entries)) if entries else []
         _UPDATES_CACHE["hosts"] = hosts
         _UPDATES_CACHE["ts"] = now
@@ -1355,7 +1367,7 @@ def fleet_updates_install(body: InstallUpdatesRequest, request: Request,
             _install_set(job_id, h["id"], "done" if res["ok"] else "failed", res["code"], res["output"])
 
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(entries))) as ex:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=_sweep_workers(len(entries))) as ex:
                 list(ex.map(do, list(hosts)))
         finally:
             with _INSTALL_LOCK:
@@ -1419,7 +1431,7 @@ def _alerts_gather_hosts():
                         mem=m.get("mem"), load1=m.get("load1"), oom=m.get("oom"))
         return base
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_sweep_workers(len(entries))) as ex:
         health = list(ex.map(probe, entries)) if entries else []
     upd = {h.get("id"): h for h in (_UPDATES_CACHE["hosts"] or [])}
     pos = {h.get("id"): h for h in (_POSTURE_CACHE["hosts"] or [])}
@@ -1462,7 +1474,7 @@ def _eval_custom_rules(cfg, firing):
                 "rule": r.get("name") or "custom", "message": f"{e.get('label')}: {r.get('name') or 'custom'} — {why}"}
 
     if pairs:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(pairs))) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_sweep_workers(len(pairs))) as ex:
             firing.extend([f for f in ex.map(check, pairs) if f])
 
 
@@ -2737,7 +2749,7 @@ def fleet_query(body: FleetQueryRequest, user: str = Depends(require_operator)):
                 "value": val, "present": _fq_matched(body.qtype, val), "error": err}
 
     import concurrent.futures
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(12, max(1, len(entries)))) as ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_sweep_workers(len(entries))) as ex:
         rows = list(ex.map(probe, entries))
     rows.sort(key=lambda r: (r["env"], r["host"]))
     return {"qtype": body.qtype, "arg": body.arg, "rows": rows,

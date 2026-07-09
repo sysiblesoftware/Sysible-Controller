@@ -4,6 +4,19 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Performance
+- **Posture / fleet-health sweeps are much faster.** The posture scan's three
+  full-filesystem `find /` integrity walks were capped at 20s each — the dominant
+  per-host cost, so a sweep felt slow even with a handful of hosts. The cap is now
+  8s (overridable via `SYSIBLE_POSTURE_FIND_TMO`), and the sweeps run with more
+  concurrency (up to 32, `SYSIBLE_SWEEP_CONCURRENCY`) so a 20+ host fleet finishes
+  in far fewer waves.
+
+### Web console
+- **Regenerate agent bundle** — the Settings button now re-mints a fresh bundle
+  for the current controller address (with a new single-use enrollment token) and
+  downloads it, with a confirmation, instead of a passive download link.
+
 ### Fixed
 - **"Update agents" no longer targets disenrolled/revoked hosts.** A revoked host
   keeps its DB row (for history / re-enroll) but its agent secret is revoked, so

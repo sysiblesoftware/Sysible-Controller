@@ -2,6 +2,17 @@
 
 All notable changes to the Sysible Controller are recorded here.
 
+## Unreleased
+
+### Web console
+- **New Environment button** in Host Enrollment: create an empty environment on
+  its own, without first checking hosts. (Previously an environment could only be
+  made as a side effect of assigning checked hosts via the "+ New environment…"
+  option, so creating one standalone appeared to do nothing.)
+- **Offline documentation download**: a "Documentation" item in the left rail
+  downloads the bundled, self-contained HTML manual (`GET /api/docs/download`,
+  login-gated) so it can be read without network access.
+
 ## 3.0.0 — 2026-07-07
 
 First official tagged release. Highlights of the hardening and cleanup that

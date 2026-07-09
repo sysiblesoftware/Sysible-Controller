@@ -1563,6 +1563,33 @@ def delete_environment(name: str, request: Request, user: str = Depends(require_
 
 
 # ----------------------------------------------------------------------
+# Offline documentation — the bundled, self-contained HTML manual so an
+# operator can save it and read it without network access. Served from the
+# console (auth-gated) as a download; the left-rail "Documentation" item links
+# here. The full manual and the shorter quickstart both ship at the repo root.
+# ----------------------------------------------------------------------
+_DOC_FILES = {
+    "full": ("Sysible_Controller_Documentation.html", "Sysible_Controller_Documentation.html"),
+    "quickstart": ("Sysible_Controller_Quickstart.html", "Sysible_Controller_Quickstart.html"),
+}
+
+
+@app.get("/api/docs/download")
+def download_docs(which: str = "full", user: str = Depends(require_login)):
+    """Download the bundled offline HTML documentation (full manual by default,
+    or the quickstart with ?which=quickstart). Self-contained, so it opens with
+    no network access."""
+    entry = _DOC_FILES.get(which)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Unknown documentation file.")
+    filename, disk_name = entry
+    path = _REPO_ROOT / disk_name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Documentation file is not bundled with this install.")
+    return FileResponse(str(path), media_type="text/html", filename=filename)
+
+
+# ----------------------------------------------------------------------
 # Sysible Connect — fleet actions, check-in, SSH enrollment, host admin
 # ----------------------------------------------------------------------
 def _superuser_request(method, path, request: Request, **kw):

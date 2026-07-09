@@ -592,7 +592,11 @@ def cmd_install_security_updates() -> str:
             'if [ "$PKGMGR" = "dnf" ]; then dnf upgrade --security -y 2>&1; '
             "else (yum --security update -y 2>&1 || echo 'yum-plugin-security may be required for security-only updates.' >&2); fi"
         ),
-        zypper_cmd="zypper --non-interactive patch --category security 2>&1",
+        # --auto-agree-with-licenses: without it, zypper in non-interactive mode
+        # auto-DECLINES (and silently skips) any security patch that needs a
+        # license acceptance, so "install security updates" would report success
+        # while leaving those patches uninstalled.
+        zypper_cmd="zypper --non-interactive patch --auto-agree-with-licenses --category security 2>&1",
         apt_cmd=(
             "DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null 2>&1 && "
             "DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades 2>&1 && "

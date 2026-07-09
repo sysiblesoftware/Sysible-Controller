@@ -1039,7 +1039,13 @@ def _reap_pty_sessions():
             s = _PTY[sid]
             if s["ended"] or (now - s["last"]) > TERMINAL_IDLE_TIMEOUT_S:
                 s["closed"] = True   # signal the agent to stop
-                if s["ended"] and (now - s["last"]) > 30:
+                # Drop the session (and its buffered output). Fast path: a cleanly
+                # ended session goes 30s after it ended. Staleness path: a session
+                # whose agent went offline BEFORE POSTing ended=True (it never
+                # does) previously leaked forever — `closed` got set but the entry
+                # was never popped. Now anything idle past the timeout + grace is
+                # reaped regardless of `ended`, so a dead session can't accumulate.
+                if (s["ended"] and (now - s["last"]) > 30) or (now - s["last"]) > TERMINAL_IDLE_TIMEOUT_S + 30:
                     _PTY.pop(sid, None)
 
 
@@ -1207,8 +1213,21 @@ def open_terminal(name: str, request: Request):
     # outbound channel (no inbound SSH to the host at all). Create the bridge
     # session, ask the agent to attach, and return immediately — output starts
     # flowing as soon as the agent's next poll picks up the pty_open task.
-    if _resolve_agent_target(name):
-        host_id = _resolve_agent_target(name)[0]
+    _agent_tgt = _resolve_agent_target(name)
+    if _agent_tgt:
+        host_id = _agent_tgt[0]
+        # Reject the open if the agent isn't currently polling. Otherwise the
+        # pty_open task queues, the offline agent never picks it up, and the
+        # browser shows "Connected." then a dead cursor for minutes until the idle
+        # reaper closes it — with no error. Fail fast with a clear reason instead.
+        from backend.db import list_agents as _list_agents
+        _rec = next((a for a in _list_agents() if a.get("host_id") == host_id), None)
+        _ls = (_rec or {}).get("last_seen") or 0
+        if time.time() - _ls > float(os.getenv("SYSIBLE_TERMINAL_ONLINE_WINDOW", "30")):
+            raise HTTPException(
+                status_code=503,
+                detail="This host's agent isn't checking in right now, so an interactive "
+                       "terminal can't attach. Try again once it's back online.")
         from backend.db import queue_task
         # Run the shell as the operator (their token identifies them), not root;
         # the agent falls back to a root shell only if that user doesn't exist.

@@ -445,7 +445,11 @@ def me(request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
     return {
         "username": user,
-        "role": request.session.get("role") or "superuser",
+        # Fail CLOSED on a missing role, matching the login handler: default to the
+        # least-privileged 'auditor', never 'superuser'. /api/me restores auth on
+        # every page reload, so a fail-open default here would silently hand full
+        # admin powers to any session that somehow lost its role.
+        "role": request.session.get("role") or "auditor",
         "sudo_connect": bool(request.session.get("sudo_connect")),
         "must_change_password": bool(request.session.get("must_change_password")),
     }
@@ -876,10 +880,15 @@ def _probe_posture(e, cmd, last_seen, now):
     if aid is not None and not online:
         return {**base, "online": False, "ok": False, "error": "offline",
                 "posture": None, "flags": {}, "limited": False}
+    # Quarantined agents get no tasks — fail fast so one can't stall the sweep.
+    if e.get("integrity_quarantined"):
+        return {**base, "online": True, "ok": False, "error": "integrity-quarantined",
+                "posture": None, "flags": {}, "limited": False}
     pe = {**e, "requires_sudo_password": False}
     if e.get("agent_entry"):
         pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
-    r = _dispatch_one(pe, cmd, "command", None, None, None)  # no token: read-only, unlogged
+    r = _dispatch_one(pe, cmd, "command", None, None, None,  # no token: read-only, unlogged
+                      poll_timeout=float(os.getenv("SYSIBLE_POSTURE_PROBE_TIMEOUT", "30")))
     p = _parse_posture((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
     # "limited": the probe ran but NOT as root (e.g. an SSH host whose login user
     # isn't root) - root-only checks (shadow, sshd -T, SUID scans) read blank, so
@@ -995,7 +1004,7 @@ def _parse_updates(text):
     return None
 
 
-def _probe_updates(e, cmd, last_seen, now):
+def _probe_updates(e, cmd, last_seen, now, poll_timeout=60):
     base = {"id": e.get("id"), "host": e.get("label"),
             "environment": e.get("environment") or "Unassigned"}
     aid = e["id"] if e["kind"] == "agent" else (e.get("agent_entry") or {}).get("id") if e["kind"] == "merged" else None
@@ -1004,10 +1013,17 @@ def _probe_updates(e, cmd, last_seen, now):
     if aid is not None and not online:
         return {**base, "online": False, "error": "offline", "mgr": None,
                 "total": None, "security": None, "reboot": None}
+    # A quarantined agent is handed no tasks, so probing it just spins to the
+    # poll deadline (60s+ per host) — fail fast so one quarantined host can't
+    # stall the whole patch sweep.
+    if e.get("integrity_quarantined"):
+        return {**base, "online": True, "error": "integrity-quarantined", "mgr": None,
+                "total": None, "security": None, "reboot": None}
     pe = {**e, "requires_sudo_password": False}
     if e.get("agent_entry"):
         pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
-    r = _dispatch_one(pe, cmd, "command", None, None, None, needs_sudo=False)
+    r = _dispatch_one(pe, cmd, "command", None, None, None, needs_sudo=False,
+                      poll_timeout=poll_timeout)
     u = _parse_updates((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
     if not u:
         return {**base, "online": True if r.get("ok") else online,
@@ -1047,8 +1063,12 @@ def fleet_updates(refresh: int = 0, live: int = 0, user: str = Depends(require_l
             last_seen = {}
         now = _t.time()
         cmd = api.cmd_update_status(refresh=bool(live))
+        # A live refresh runs `dnf makecache` / `apt-get update` / `zypper refresh`
+        # first, which alone can exceed the default 60s on a slow mirror — give the
+        # live path a longer poll so it returns real counts instead of "timed out".
+        ptmo = int(os.getenv("SYSIBLE_UPDATE_PROBE_TIMEOUT", "180")) if live else 60
         with concurrent.futures.ThreadPoolExecutor(max_workers=_sweep_workers(len(entries))) as ex:
-            hosts = list(ex.map(lambda e: _probe_updates(e, cmd, last_seen, now), entries)) if entries else []
+            hosts = list(ex.map(lambda e: _probe_updates(e, cmd, last_seen, now, ptmo), entries)) if entries else []
         _UPDATES_CACHE["hosts"] = hosts
         _UPDATES_CACHE["ts"] = now
         return {"hosts": hosts, "cached": False, "ts": now}
@@ -1284,9 +1304,11 @@ def _install_set(job_id, hid, status, code=None, output=None):
 def _install_one(entry, cmd, token=None, become_password=None, description=None):
     """Run one host's install as the initiating operator (RBAC: runuser -u
     <admin> under the host's sudo policy — same privilege path as every other
-    operator write action), polling the agent task up to ~15 min so the real
+    operator write action), polling the agent task up to ~30 min so the real
     command output is captured (a big upgrade outlasts the normal 60s request
-    cap). `token` attributes/authorizes the run and derives the run-as user;
+    cap; the deadline matches the agent's own command timeout so a long upgrade
+    isn't abandoned here while it's still applying on the host —
+    SYSIBLE_FLEET_INSTALL_TIMEOUT). `token` attributes/authorizes the run and derives the run-as user;
     `become_password` is supplied to password-sudo hosts; `description` is the
     activity-feed label. Returns {ok, code, output}."""
     import time as _t
@@ -1314,7 +1336,7 @@ def _install_one(entry, cmd, token=None, become_password=None, description=None)
     tid = out.get("task_id")
     if tid is None:
         return {"ok": False, "code": None, "output": "failed to queue task"}
-    deadline = _t.time() + 900
+    deadline = _t.time() + int(os.getenv("SYSIBLE_FLEET_INSTALL_TIMEOUT", "1800"))
     while _t.time() < deadline:
         r = dispatch.poll_entry_result(entry, tid)
         if r is not None:
@@ -1818,6 +1840,13 @@ def resume_host(host_id: str, request: Request, user: str = Depends(require_supe
     """Clear an integrity quarantine (soft lockout): rebaseline the host so it
     re-seals and dispatch resumes. Superuser-only (see revoke_host)."""
     return _wrap(lambda: _as_admin(request, lambda: api.resume_agent(host_id)))
+
+
+@app.post("/api/host/{host_id}/restore")
+def restore_host(host_id: str, request: Request, user: str = Depends(require_superuser_session)):
+    """Undo a hard REVOCATION in place (keep the existing secret, no re-enroll) so
+    a still-installed agent resumes immediately. Superuser-only (see revoke_host)."""
+    return _wrap(lambda: _as_admin(request, lambda: api.restore_agent(host_id)))
 
 
 @app.delete("/api/host/{host_id}")
@@ -2357,6 +2386,9 @@ async def packages_install_local(request: Request, file: UploadFile = File(...),
         entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+    data = local.read_bytes()
+    is_super = request.session.get("role") == "superuser"
+    agent_limit = _api_users.AGENT_FILE_TRANSFER_LIMIT_BYTES
     results = []
     for tid in tids:
         entry = entries.get(tid)
@@ -2364,13 +2396,45 @@ async def packages_install_local(request: Request, file: UploadFile = File(...),
             results.append({"host": tid, "ok": False, "error": "host not found",
                             "stdout": "", "stderr": "", "code": None})
             continue
+        label = entry.get("label", tid)
+        become = sudo_store.resolve(user, entry.get("label", ""))
+        is_agent = entry.get("kind") in ("agent", "merged")
+        # Get the package onto the host BEFORE installing it — through the AGENT
+        # for agent hosts (they're outbound-only / NAT'd; SFTP to them fails,
+        # which was the whole bug), or SFTP for pure-SSH hosts. SFTP uses the
+        # shared controller SSH credential, so that path is superuser-only, the
+        # same gate as /api/files/upload.
         try:
-            await asyncio.to_thread(api.upload_file_ssh, tid, str(local), remote)
+            if is_agent:
+                if len(data) > agent_limit:
+                    results.append({"host": label, "ok": False,
+                                    "error": (f"Package is {len(data)} bytes; agent-managed hosts transfer files "
+                                              f"inside a task, capped at {agent_limit} bytes. Stage larger packages "
+                                              f"via the Webserver Portal, or install from a repo."),
+                                    "stdout": "", "stderr": "", "code": None})
+                    continue
+                script = _api_users._build_agent_upload_script(remote, fname, data)
+                up_cmd = _api_users._wrap_python_script(script)
+                up = await asyncio.to_thread(
+                    lambda: _dispatch_one(entry, up_cmd, "upload_file", become, token,
+                                          f"Upload {fname} → {remote}"))
+                if not up.get("ok"):
+                    results.append({"host": label, "ok": False,
+                                    "error": f"upload failed: {up.get('error') or up.get('stderr') or 'unknown error'}",
+                                    "stdout": "", "stderr": "", "code": None})
+                    continue
+            else:
+                if not is_super:
+                    results.append({"host": label, "ok": False,
+                                    "error": ("Uploading to a pure-SSH host uses the shared controller SSH "
+                                              "credential and is limited to superusers."),
+                                    "stdout": "", "stderr": "", "code": None})
+                    continue
+                await asyncio.to_thread(api.upload_file_ssh, tid, str(local), remote)
         except Exception as e:
-            results.append({"host": entry["label"], "ok": False, "error": f"upload failed: {e}",
+            results.append({"host": label, "ok": False, "error": f"upload failed: {e}",
                             "stdout": "", "stderr": "", "code": None})
             continue
-        become = sudo_store.resolve(user, entry.get("label", ""))
         results.append(_dispatch_one(entry, cmd, "command", become, token, f"Install local package {fname}"))
     try:
         local.unlink(missing_ok=True); tmp.rmdir()
@@ -2747,8 +2811,27 @@ def fleet_query(body: FleetQueryRequest, user: str = Depends(require_operator)):
     if not entries:
         raise HTTPException(status_code=400, detail="No matching target hosts.")
 
+    # Short-circuit offline and quarantined agent hosts instead of dispatching to
+    # them and spinning the poll deadline (~60s each) — one unreachable host must
+    # not stall the whole query or amber-inflate the "matched" denominator.
+    import time as _t
+    try:
+        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+    except Exception:
+        last_seen = {}
+    now = _t.time()
+
     def probe(e):
-        r = _dispatch_one(e, cmd, "command", None, None, None, needs_sudo=False, log=False)
+        base = {"host": e.get("label"), "env": e.get("environment") or "Unassigned",
+                "value": None, "present": False}
+        aid = e["id"] if e["kind"] == "agent" else (e.get("agent_entry") or {}).get("id") if e["kind"] == "merged" else None
+        ls = last_seen.get(aid) if aid else None
+        if aid is not None and not (ls and (now - ls) <= 20):
+            return {**base, "error": "offline"}
+        if e.get("integrity_quarantined"):
+            return {**base, "error": "integrity-quarantined"}
+        r = _dispatch_one(e, cmd, "command", None, None, None, needs_sudo=False, log=False,
+                          poll_timeout=float(os.getenv("SYSIBLE_QUERY_PROBE_TIMEOUT", "20")))
         val = None
         for line in (r.get("stdout") or "").splitlines():
             if line.startswith("SYSQUERY "):

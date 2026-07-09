@@ -136,7 +136,7 @@ function normalize(p) {
   return {
     minlen: p.minlen ?? 12, retry: p.retry ?? 3,
     require_upper: (p.ucredit ?? -1) < 0, require_lower: (p.lcredit ?? -1) < 0,
-    require_digit: (p.dcredit ?? -1) < 0, require_symbol: (p.ocredit ?? 0) < 0,
+    require_digit: (p.dcredit ?? -1) < 0, require_symbol: (p.ocredit ?? -1) < 0,
     deny: p.deny ?? 5, unlock_time: p.unlock_time ?? 900,
     sudo_timeout: p.sudo_timeout ?? 15, sudo_require_password: p.sudo_require_password ?? true,
     umask: p.umask ?? "027",

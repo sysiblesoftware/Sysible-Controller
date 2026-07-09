@@ -5,6 +5,55 @@ All notable changes to the Sysible Controller are recorded here.
 ## Unreleased
 
 ### Fixed
+- **Host updates no longer fail on hosts that are far behind.** The agent capped
+  every command at 5 minutes, so a real `dnf`/`apt`/`zypper` upgrade on a
+  months-behind host was SIGKILLed mid-transaction and reported "failed" (and
+  could leave a half-configured package state) — exactly the hosts most in need.
+  The cap is now 30 minutes (`SYSIBLE_AGENT_CMD_TIMEOUT`) and the console's
+  install poll matches it (`SYSIBLE_FLEET_INSTALL_TIMEOUT`).
+- **"Refresh metadata & rescan" no longer times out.** A live update rescan runs
+  `dnf makecache` / `apt-get update` / `zypper refresh` first, which alone can
+  exceed the old 60s probe deadline on a slow mirror; the live path now allows
+  180s (`SYSIBLE_UPDATE_PROBE_TIMEOUT`).
+- **zypper "install security updates" no longer silently skips license-gated
+  patches** — added `--auto-agree-with-licenses`.
+- **A quarantined host no longer stalls the whole posture / patch / fleet-query
+  sweep.** All three now fail that host fast (like the install path already did),
+  and fleet-query also skips offline agents instead of spinning 60s each.
+- **A revoked host can be Restored from the console.** The controller always had
+  `POST /agents/{id}/restore` (un-revoke in place, keep the secret, no re-enroll),
+  but it had no BFF route, API method, or button — a revoked host's only path back
+  was disenroll + full re-enroll. There's now a **Restore** button in Host
+  Enrollment.
+- **"Upload & install a local package" works on agent-managed hosts.** It
+  unconditionally used SFTP, which can't reach an outbound-only/NAT'd agent host
+  (upload failed). It now pushes through the agent (SFTP reserved for pure-SSH
+  hosts, superuser-only, matching file upload), with a clear message when a
+  package exceeds the agent transfer limit.
+- **Self-service username change works without also changing the password.** The
+  "(optional)" New username / New password fields rejected an empty password, so a
+  username-only rename was impossible; either (or both) can now be changed.
+- **A failed fleet-health probe no longer shows a host as green/OK.** A host that
+  heartbeats but whose metrics probe fails/times out (or is quarantined) is now
+  flagged in "Needs attention" instead of grading as healthy on zeroed metrics.
+- **Security-posture chips no longer vanish when the health sweep is empty.** They
+  now key off the posture sweep's own liveness, so findings stay visible when the
+  fleet is degraded.
+- **Revoked hosts no longer skew the fleet donut / environment rollup.** They were
+  excluded from the top-strip counts but still filled the donut as permanent
+  OFFLINE rows; they're now excluded from the fleet-action host set too (still
+  shown in Host Enrollment with Restore/Force-Delete).
+- **Disenroll refreshes the host list even when a teardown warning is shown** (the
+  removed hosts used to linger, making a successful disenroll look like a failure);
+  the **"Needs patching"** tile refreshes on the dashboard cadence instead of
+  freezing at page-load; the service/package **List** button lists the currently
+  checked host instead of the previously listed one.
+- **Terminal to an offline agent fails fast** with a clear reason instead of
+  showing "Connected." then a dead cursor for ~3 minutes; abandoned agent-terminal
+  sessions no longer leak in controller memory.
+- **`/api/me` fails closed to `auditor`** on a missing role (was fail-open to
+  superuser), matching the login handler's documented hardening.
+
 - **Dashboard "Hosts enrolled" no longer drops to 0 while the fleet-health sweep
   runs.** The top-strip counts (enrolled / online / offline) were derived from the
   fleet-health *probe* sweep result, so a slow or integrity-quarantined host being

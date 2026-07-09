@@ -194,6 +194,12 @@ def resume_agent(host_id: str):
     return _request("POST", f"/agents/{host_id}/resume")
 
 
+def restore_agent(host_id: str):
+    """Undo a hard REVOCATION in place, keeping the existing agent secret so a
+    still-installed agent resumes immediately — no re-enroll. Superuser-only."""
+    return _request("POST", f"/agents/{host_id}/restore")
+
+
 def set_agent_environment(host_id: str, environment: str):
     # Idempotent DB-only write. Allow a longer read timeout than the 15s default:
     # the controller's SQLite busy_timeout is 30s, so under write contention a

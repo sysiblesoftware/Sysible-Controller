@@ -2354,27 +2354,31 @@ def change_admin_credentials(body: ChangeAdminCredentialsRequest):
     ):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
 
-    new_username = body.new_username.strip()
+    # Both fields are optional (the UI labels them so): a blank new username keeps
+    # the current one, a blank new password keeps the current one. This lets an
+    # admin rename WITHOUT also setting a new password (which used to be rejected
+    # with "Password cannot be empty", making a username-only change impossible).
+    new_username = body.new_username.strip() or body.username
 
-    if not new_username:
-        raise HTTPException(status_code=400, detail="Username cannot be empty")
-
-    if not body.new_password:
-        raise HTTPException(status_code=400, detail="Password cannot be empty")
-
-    ok, message = validate_password_against_policy(body.new_password, get_admin_password_policy())
-    if not ok:
-        raise HTTPException(status_code=400, detail=message)
-
+    changed = False
     if new_username != body.username:
         renamed = update_administrator_username(body.username, new_username)
         if not renamed:
             raise HTTPException(status_code=409, detail="An administrator with that username already exists")
+        changed = True
 
-    salt, password_hash = portal_auth.hash_password(body.new_password)
-    update_administrator_password(new_username, password_hash, salt, must_change_password=0)
+    if body.new_password:
+        ok, message = validate_password_against_policy(body.new_password, get_admin_password_policy())
+        if not ok:
+            raise HTTPException(status_code=400, detail=message)
+        salt, password_hash = portal_auth.hash_password(body.new_password)
+        update_administrator_password(new_username, password_hash, salt, must_change_password=0)
+        changed = True
 
-    log_admin_audit("password_changed", new_username, "")
+    if not changed:
+        raise HTTPException(status_code=400, detail="Enter a new username or a new password to change.")
+
+    log_admin_audit("credentials_changed", new_username, "self-service username/password change")
 
     return {"username": new_username, "status": "updated"}
 

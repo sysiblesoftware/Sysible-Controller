@@ -371,10 +371,19 @@ def _local_user_exists(user):
         return False
 
 
-def _exec(argv, shell=False, input_data=None):
+# Hard cap on a single task command. It must comfortably exceed a real package
+# upgrade on a months-behind host (dnf/apt/zypper transactions routinely run many
+# minutes) — the old 300s (5 min) SIGKILLed those mid-transaction, so patching
+# "failed" for exactly the hosts most in need and could leave a half-configured
+# rpm/dpkg state. The controller's fleet-install poll uses a matching window.
+# Overridable for unusually slow mirrors / huge transactions.
+_CMD_TIMEOUT = int(os.getenv("SYSIBLE_AGENT_CMD_TIMEOUT", "1800"))
+
+
+def _exec(argv, shell=False, input_data=None, timeout=None):
     try:
         proc = subprocess.run(argv, shell=shell, capture_output=True, text=True,
-                              timeout=300, input=input_data)
+                              timeout=timeout or _CMD_TIMEOUT, input=input_data)
         return {
             "stdout": _truncate(proc.stdout),
             "stderr": _truncate(proc.stderr),

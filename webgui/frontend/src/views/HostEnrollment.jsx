@@ -123,9 +123,13 @@ export default function HostEnrollment() {
 
   async function run(fn, okMsg, busyLabel) {
     setErr(""); setMsg(""); setBusy(busyLabel || "");
-    try { await fn(); if (okMsg) setMsg(okMsg); load(); }
+    try { await fn(); if (okMsg) setMsg(okMsg); }
     catch (e) { setErr(e.message); }
-    finally { setBusy(""); }
+    // Refresh regardless of outcome: some actions (e.g. Disenroll) commit the
+    // server-side change and THEN throw to carry a warning (agent teardown not
+    // confirmed). Refreshing only on success left the just-removed hosts sitting
+    // in the list, so a successful disenroll looked like it failed.
+    finally { setBusy(""); load(); }
   }
 
 
@@ -221,6 +225,13 @@ export default function HostEnrollment() {
     load();
   }
 
+  async function restoreHost(a, e) {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    const name = a.hostname || a.host_id;
+    if (!window.confirm(`Restore ${name}? Un-revoke it in place, keeping its existing agent secret so a still-installed agent resumes immediately — no re-enroll needed.`)) return;
+    await run(async () => { await api.restoreHost(idOf(a)); }, `Restored ${name}; its agent resumes on the next heartbeat.`, `Restoring ${name}…`);
+  }
+
   // curl one-liner (built from portal status + controller config)
   const curlHost = cfg.address || "<this machine's address>";
   const curlPort = portPort || portal.configured_port || portal.port || 8090;
@@ -307,6 +318,8 @@ export default function HostEnrollment() {
                           {a.last_seen != null ? ` · seen ${fmtSeen(a.last_seen)}` : ""}</span>
                       </span>
                       <span className="he-host-actions" style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                        {a.revoked &&
+                          <button className="btn ghost sm" title="Un-revoke in place, keeping the existing secret — the still-installed agent resumes immediately (no re-enroll)" onClick={(e) => restoreHost(a, e)}>Restore</button>}
                         {!a.revoked && a.integrity_quarantined &&
                           <button className="btn ghost sm" title="Rebaseline: clear the quarantine and resume dispatch (use after a legitimate change)" onClick={(e) => resumeHost(a, e)}>Resume</button>}
                         {!a.revoked &&

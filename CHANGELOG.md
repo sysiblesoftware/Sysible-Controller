@@ -4,11 +4,28 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Fixed
+- **Changing the controller address no longer bricks the console's connection.**
+  Saving a new hostname/IP used to immediately regenerate the self-signed cert
+  and overwrite the pinned trust file, but the running server keeps serving the
+  old cert until a restart — so every TLS client (the console over loopback,
+  agents pinning `server.crt`) then failed verification with an
+  `HTTPSConnectionPool`/SSL error until a manual restart. The address change now
+  only flags the cert as stale; the **Regenerate self-signed cert** action
+  reissues for the new address and restarts atomically, so the served cert and
+  the pinned trust move together.
+
 ### Web console
 - **New Environment button** in Host Enrollment: create an empty environment on
   its own, without first checking hosts. (Previously an environment could only be
   made as a side effect of assigning checked hosts via the "+ New environment…"
   option, so creating one standalone appeared to do nothing.)
+- **"Run Script on All Hosts" gives feedback instead of a dead button.** The
+  button is no longer disabled when the script box is empty; clicking it with no
+  script now shows "Enter a script to run…" rather than silently doing nothing.
+- **Download agent bundle** button (+ a step-by-step note) in Settings next to
+  the controller address, so after a hostname/IP change you can grab a fresh
+  bundle reflecting the new address and re-run it on hosts.
 - **Offline documentation download**: a "Documentation" item in the left rail
   downloads the bundled, self-contained HTML manual (`GET /api/docs/download`,
   login-gated) so it can be read without network access.

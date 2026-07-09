@@ -323,7 +323,15 @@ function ControllerCfg() {
             } catch (e) { setErr(e.message); }
             finally { setBusy(false); }
           }}>Regenerate self-signed cert</button>
+        <a className="btn ghost" href={api.agentBundleUrl()} download
+           title="Download a fresh agent bundle reflecting the CURRENT controller address/port. Re-run it on hosts (or copy it to the pinned cert path) after changing the controller hostname/IP or regenerating the cert.">
+          Download agent bundle
+        </a>
       </div>
+      <p className="faint" style={{ marginTop: 6 }}>
+        After changing the controller hostname/IP: Save, then <b>Regenerate self-signed cert</b> (reissues for the
+        new address and restarts), then <b>Download agent bundle</b> and re-run it on your hosts so they trust and reach the new address.
+      </p>
       {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
       {err && <div className="error-box" role="alert">{err}</div>}
     </div>

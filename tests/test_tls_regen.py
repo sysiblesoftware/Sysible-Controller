@@ -63,7 +63,7 @@ def test_regenerate_classifies_numeric_as_ip_not_dns(tmp_certs):
 # ---------------------------------------------------------------------------
 # Config-change endpoint triggers regeneration
 # ---------------------------------------------------------------------------
-def test_config_change_regenerates_cert(controller, superuser_headers, tmp_certs):
+def test_config_change_flags_cert_stale_without_touching_live_cert(controller, superuser_headers, tmp_certs):
     cert, _, _ = tmp_certs
     # Seed a starting self-signed cert for a known address.
     tls_manager.regenerate_self_signed(hostnames=["old.example"])
@@ -72,9 +72,16 @@ def test_config_change_regenerates_cert(controller, superuser_headers, tmp_certs
     })
     assert r.status_code == 200
     body = r.json()
-    assert body.get("cert_regenerated") is True
+    # An address change must NOT rewrite the LIVE cert: uvicorn keeps serving the
+    # old cert until a restart, so overwriting the served/pinned file now would
+    # leave every TLS client (the console over loopback, agents pinning
+    # server.crt) verifying the still-served old cert against the new one and
+    # failing the handshake (the HTTPSConnectionPool bug). It just flags staleness;
+    # the restart-bearing regenerate action applies the new cert.
+    assert body.get("cert_regenerated") is not True
+    assert body.get("cert_stale") is True and body.get("cert_note")
     dns, _ = _san(cert)
-    assert "new.example" in dns and "old.example" not in dns
+    assert "old.example" in dns and "new.example" not in dns   # live cert untouched
 
 
 def test_unchanged_address_does_not_regenerate(controller, superuser_headers, tmp_certs):

@@ -28,6 +28,13 @@ All notable changes to the Sysible Controller are recorded here.
   downloads it, with a confirmation, instead of a passive download link.
 
 ### Fixed
+- **Self-update auto-repairs a corrupted git ref store.** `sysible_controller
+  update` could dead-end on `fetching ref refs/remotes/origin/... failed:
+  reference already exists` — a loose remote-tracking ref colliding with
+  packed-refs (typically left by a previously interrupted update), not a code
+  problem. The updater now attempts a safe automatic repair (rebuilds only the
+  origin/* remote-tracking cache — no local commits or working-tree changes are
+  touched) and retries the pull, instead of failing outright.
 - **Software-updates panel no longer shows a phantom agent after removal.** The
   `/update-status` check bundles the (instant) agent counts with a live
   `git fetch` that could take up to 35s — past the console's 15s read timeout, at

@@ -211,10 +211,26 @@ cmd_update() {
   #    path inline (no global git config change) so the update actually applies.
   if [[ -d "$SRC/.git" ]] && command -v git >/dev/null 2>&1; then
     echo "Pulling latest code (git) ..."
-    if ! git -C "$SRC" -c safe.directory="$SRC" pull --ff-only 2>&1; then
-      echo "ERROR: 'git pull' failed in $SRC - resolve it there, then re-run update."
-      _write_update_status failed "'git pull --ff-only' failed in $SRC (local changes, a diverged branch, or no upstream). Resolve it on the host, then retry."
-      exit 1
+    _git() { git -C "$SRC" -c safe.directory="$SRC" "$@"; }
+    if ! _git pull --ff-only 2>&1; then
+      # A common, non-fatal failure is a corrupted ref store — e.g.
+      #   "fetching ref refs/remotes/origin/main failed: reference already exists"
+      # — a loose remote-tracking ref colliding with packed-refs, usually left by
+      # a previously interrupted update. Remote-tracking refs are just a cache of
+      # origin, so repairing/rebuilding them is SAFE (it touches no local commits
+      # or working-tree changes). Try that once, then retry the pull.
+      echo "git pull failed — attempting an automatic ref-store repair (safe: only rebuilds the origin/* cache) ..."
+      _git pack-refs --all --prune 2>&1 || true
+      _git remote prune origin 2>&1 || true
+      _git for-each-ref --format='%(refname)' refs/remotes/origin 2>/dev/null \
+        | while read -r _r; do _git update-ref -d "$_r" 2>/dev/null || true; done
+      _git fetch --prune origin 2>&1 || true
+      if ! _git pull --ff-only 2>&1; then
+        echo "ERROR: 'git pull' still failed in $SRC after a ref-store repair - resolve it there, then re-run update."
+        _write_update_status failed "'git pull --ff-only' failed in $SRC even after an automatic ref-store repair (likely local changes or a diverged branch). On the host: cd $SRC && sudo git -c safe.directory=\$PWD status — commit/stash/discard local changes or reset to origin, then retry."
+        exit 1
+      fi
+      echo "Ref-store repair succeeded; update continues."
     fi
   else
     echo "NOTE: $SRC is not a git checkout - redeploying whatever code is there now."

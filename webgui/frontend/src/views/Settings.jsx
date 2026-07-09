@@ -323,14 +323,35 @@ function ControllerCfg() {
             } catch (e) { setErr(e.message); }
             finally { setBusy(false); }
           }}>Regenerate self-signed cert</button>
-        <a className="btn ghost" href={api.agentBundleUrl()} download
-           title="Download a fresh agent bundle reflecting the CURRENT controller address/port. Re-run it on hosts (or copy it to the pinned cert path) after changing the controller hostname/IP or regenerating the cert.">
-          Download agent bundle
-        </a>
+        <button className="btn ghost" disabled={busy}
+          title="Re-mint a fresh agent bundle for the CURRENT controller address/port with a new single-use enrollment token, and download it. Use after changing the controller hostname/IP or regenerating the cert."
+          onClick={async () => {
+            setErr(""); setMsg(""); setBusy(true);
+            try {
+              const res = await fetch(api.agentBundleUrl(), { credentials: "include" });
+              if (!res.ok) {
+                let d = ""; try { d = (await res.json()).detail || ""; } catch { /* not JSON */ }
+                throw new Error(d || `Bundle regeneration failed (HTTP ${res.status}).`);
+              }
+              const blob = await res.blob();
+              const cd = res.headers.get("Content-Disposition") || "";
+              const m = /filename="?([^"]+)"?/.exec(cd);
+              const name = (m && m[1]) || "sysible-agent-bundle.zip";
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url; a.download = name; document.body.appendChild(a); a.click();
+              a.remove(); URL.revokeObjectURL(url);
+              setMsg("Agent bundle regenerated for the current controller address (a fresh single-use enrollment token was issued). Re-run it on your hosts to enroll or re-point them.");
+            } catch (e) { setErr(e.message); }
+            finally { setBusy(false); }
+          }}>
+          {busy ? <span className="spin" /> : "Regenerate agent bundle"}
+        </button>
       </div>
       <p className="faint" style={{ marginTop: 6 }}>
         After changing the controller hostname/IP: Save, then <b>Regenerate self-signed cert</b> (reissues for the
-        new address and restarts), then <b>Download agent bundle</b> and re-run it on your hosts so they trust and reach the new address.
+        new address and restarts), then <b>Regenerate agent bundle</b> and re-run it on your hosts so they trust and reach the new address.
+        (Every bundle is freshly built for the current address with a new single-use enrollment token.)
       </p>
       {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
       {err && <div className="error-box" role="alert">{err}</div>}

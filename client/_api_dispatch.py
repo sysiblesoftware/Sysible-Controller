@@ -694,7 +694,14 @@ def cmd_metrics_snapshot() -> str:
 # external scanners (CIS/STIG/OpenSCAP/Lynis), NOT vendor/cloud/EDR/backup.
 _POSTURE_SH = r"""
 p(){ printf 'POSTURE|%s=%s\n' "$1" "$(printf '%s' "$2" | tr '\r\n\t' '   ' | cut -c1-400)"; }
-TMO=""; command -v timeout >/dev/null 2>&1 && TMO="timeout 20"
+# The three full-filesystem `find /` integrity walks are by far the slowest part
+# of posture and dominate the per-host scan time (hence a whole fleet sweep feels
+# slow even with few hosts). Cap them tightly: on a normal root filesystem
+# (-xdev keeps each walk on one mount) they finish in a couple of seconds, so 8s
+# is ample headroom; a host large/slow enough to exceed it would have produced an
+# unreliable partial count at 20s anyway. Overridable via SYSIBLE_POSTURE_FIND_TMO.
+_pt="${SYSIBLE_POSTURE_FIND_TMO:-8}"
+TMO=""; command -v timeout >/dev/null 2>&1 && TMO="timeout $_pt"
 
 # --- Operating system -------------------------------------------------------
 . /etc/os-release 2>/dev/null

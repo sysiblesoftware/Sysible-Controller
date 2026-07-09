@@ -1120,19 +1120,31 @@ def get_metrics_snapshot_route(host_id: str):
     return {"host_id": host_id, "ts": snap.get("ts"), "snapshot": data}
 
 
+_CTRL_IDENTITY_CACHE = {"ts": 0.0, "val": None}
+_CTRL_IDENTITY_TTL = float(os.getenv("SYSIBLE_CONTROLLER_IDENTITY_TTL", "300"))
+
+
 def _controller_identity():
     """This controller host's own names + IPs, so an enrolled host that IS the
-    controller can be labelled as such. Best-effort; empty sets never match."""
+    controller can be labelled as such. Best-effort; empty sets never match.
+
+    DNS-FREE and cached: it must NOT do a reverse-DNS lookup. `socket.getfqdn()`
+    (used here originally) can block for SECONDS on a LAN without reverse records,
+    and this runs on every GET /agents call — so it stalled every host-list
+    refresh (the Set-Environment "took 5s to show up" regression). We use only the
+    local hostname (a syscall, no DNS) plus NIC addresses, and cache the result
+    for a TTL so repeated refreshes cost nothing. An enrolled controller still
+    matches by IP even if only its short name is known."""
+    now = time.time()
+    cached = _CTRL_IDENTITY_CACHE["val"]
+    if cached is not None and (now - _CTRL_IDENTITY_CACHE["ts"]) < _CTRL_IDENTITY_TTL:
+        return cached
     import socket as _s
     names = set()
     try:
-        hn = _s.gethostname() or ""
+        hn = _s.gethostname() or ""      # local syscall — never a DNS lookup
         if hn:
             names.add(hn.lower()); names.add(hn.split(".")[0].lower())
-        try:
-            names.add((_s.getfqdn() or "").lower())
-        except Exception:
-            pass
     except Exception:
         pass
     names.discard("")
@@ -1141,7 +1153,10 @@ def _controller_identity():
         ips.update(detect_local_ips())
     except Exception:
         pass
-    return names, ips
+    val = (names, ips)
+    _CTRL_IDENTITY_CACHE["val"] = val
+    _CTRL_IDENTITY_CACHE["ts"] = now
+    return val
 
 
 def _is_controller_host(hostname, ip, names, ips):

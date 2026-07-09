@@ -27,6 +27,19 @@ def test_self_enroll_bundle_is_loopback_zip(controller):
     assert "https://127.0.0.1:9000" in env      # loopback, not the configured LAN addr
 
 
+def test_controller_identity_never_does_reverse_dns(controller, monkeypatch):
+    # Regression: _controller_identity() (used to label the self-enrolled
+    # controller in GET /agents) must NOT call socket.getfqdn() — a blocking
+    # reverse-DNS lookup that hung the host-list refresh ~5s on a LAN. Make
+    # getfqdn explode; GET /agents must still succeed.
+    import socket
+    import backend.app as app
+    monkeypatch.setattr(socket, "getfqdn", lambda *a, **k: (_ for _ in ()).throw(AssertionError("getfqdn called")))
+    app._CTRL_IDENTITY_CACHE["val"] = None  # bust the cache so the helper recomputes
+    r = controller.get("/agents", headers=key_headers())
+    assert r.status_code == 200
+
+
 def test_self_enroll_bundle_mints_a_usable_token(controller):
     import backend.db as db
     before = len(db.list_enroll_tokens()) if hasattr(db, "list_enroll_tokens") else None

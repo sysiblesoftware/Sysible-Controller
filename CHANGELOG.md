@@ -4,6 +4,14 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Fixed
+- **Host-list refresh no longer stalls ~5s (Set-Environment "slow to show up").**
+  The controller-self label added to `GET /agents` computed the controller's own
+  identity with `socket.getfqdn()` — a blocking **reverse-DNS** lookup that hangs
+  for seconds on a LAN without reverse records — on *every* host-list refresh.
+  It's now DNS-free (local hostname + NIC addresses only) and cached, so refreshes
+  are instant again. A controller enrolled as a host still matches by IP.
+
 ### Added
 - **The controller enrolls itself as a managed host.** On first start
   (`sysible_controller start`) the controller now installs a privileged local

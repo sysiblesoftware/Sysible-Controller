@@ -24,6 +24,13 @@ All notable changes to the Sysible Controller are recorded here.
   reachable to clear it).
 
 ### Fixed
+- **Webserver Portal tab timestamps render correctly.** A full click-path audit of
+  every console button found two display-only response-shape mismatches: the
+  "last login" line showed `[object Object]` (the status returns a
+  `{timestamp,…}` object, not a scalar) and every Active Session's "Logged In"
+  column was blank (the row's timestamp column is `created`, which the cell didn't
+  read). Both now render the real time. The audit found no broken buttons
+  elsewhere — every other control traces end-to-end.
 - **Environmental Policies "Save Policy Defaults" now actually persists your
   edits.** The editor read and wrote a flat field shape while the controller
   stores/returns a nested one (`password`/`lockout`/`sudo`/`umask`), so loading

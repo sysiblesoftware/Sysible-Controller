@@ -1060,6 +1060,27 @@ def _pty_child_exec(user, info, default_shell):
                 pass
         if ushell:
             sh = ushell
+    elif os.geteuid() == 0:
+        # No operator account was mapped and we're root: present a clean ROOT
+        # login shell rather than inheriting the agent's service context
+        # (WorkingDirectory=/opt/sysible-agent and its env), which otherwise
+        # drops the operator into /opt/sysible-agent looking like the "sysible"
+        # service account instead of a normal root login.
+        env["HOME"] = "/root"
+        env["USER"] = "root"
+        env["LOGNAME"] = "root"
+        env["PWD"] = "/root"
+        # Don't leak the agent's own config into the operator's shell.
+        for _k in list(env):
+            if _k.startswith("SYSIBLE_"):
+                env.pop(_k, None)
+        try:
+            os.chdir("/root")
+        except Exception:
+            try:
+                os.chdir("/")
+            except Exception:
+                pass
     if not sh or not os.path.exists(sh):
         sh = "/bin/bash" if os.path.exists("/bin/bash") else "/bin/sh"
     # argv[0] with a leading '-' makes it a login shell (sources profile);

@@ -476,7 +476,7 @@ export default function HostEnrollment() {
         <fieldset className="tool-group-box" style={{ marginTop: 0 }}><legend>Portal login</legend>
           <div className="muted" style={{ fontSize: 13, marginBottom: 10 }}>
             {portal.credentials_configured
-              ? <>Current user: <strong>{portal.username}</strong> · last login {fmtTime(portal.last_login)}</>
+              ? <>Current user: <strong>{portal.username}</strong> · last login {fmtTime(portal.last_login?.timestamp ?? portal.last_login)}</>
               : <span className="faint">No portal login set yet.</span>}
           </div>
           <div className="group-fields">
@@ -506,7 +506,7 @@ export default function HostEnrollment() {
               <tbody>
                 {sessions.map((s, i) => (
                   <tr key={s.id ?? s.session_id ?? i}>
-                    <td className="faint mono">{fmtTime(s.created_at ?? s.logged_in ?? s.started_at)}</td>
+                    <td className="faint mono">{fmtTime(s.created ?? s.created_at ?? s.logged_in ?? s.started_at)}</td>
                     <td className="faint">{s.ip || s.ip_address || ""}</td>
                     <td style={{ textAlign: "right" }}>
                       <button className="btn ghost sm danger" onClick={() => revoke(s)}>Revoke</button>

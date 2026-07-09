@@ -5,6 +5,11 @@ All notable changes to the Sysible Controller are recorded here.
 ## Unreleased
 
 ### Fixed
+- **"Update agents" no longer targets disenrolled/revoked hosts.** A revoked host
+  keeps its DB row (for history / re-enroll) but its agent secret is revoked, so
+  it can never poll a task — yet it still showed up as an outdated host to update
+  and got an update task queued. `GET /update-status` and `POST /agents/update`
+  now exclude revoked hosts from the outdated count, the fleet total, and the push.
 - **Host Enrollment refreshes are lighter and faster.** Every action on the page
   used to refetch the Webserver Portal's login history, sessions, uploads, and
   downloads too — ~4 extra controller calls per action that only matter on the

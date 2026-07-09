@@ -55,15 +55,27 @@ export default function HostEnrollment() {
   function loadSessions() { api.portalSessions().then((d) => setSessions(d.sessions || [])).catch(() => {}); }
   function loadUploads() { api.portalUploads().then((d) => setUploads(d.files || [])).catch(() => {}); }
   function loadDownloads() { api.portalDownloads().then((d) => setDownloads(d.files || [])).catch(() => {}); }
-  function load() {
-    api.agents().then((d) => setAgents(d.agents || [])).catch((e) => setErr(e.message));
+  function load(surfaceErr = false) {
+    // surfaceErr only on the first load: a transient timeout during the
+    // post-action refresh shouldn't paint a red error over an action that
+    // actually succeeded (you'd see the green "done" and a scary timeout at once).
+    api.agents().then((d) => setAgents(d.agents || [])).catch((e) => { if (surfaceErr) setErr(e.message); });
     api.environments().then((d) => setEnvs(d.environments || [])).catch(() => {});
     api.envSudoDefaults().then((d) => setSudoDefaults(d || {})).catch(() => {});
     api.edition().then(setEdition).catch(() => {});
     api.controllerConfig().then((c) => setCfg(c || {})).catch(() => {});
-    loadPortal(); loadHistory(); loadSessions(); loadUploads(); loadDownloads();
+    // Portal STATUS is lightweight and the "Enroll a Host" tab shows it, so keep
+    // it here. The heavier portal admin data (login history, sessions, uploads,
+    // downloads) is only shown on the Portal tab — loading it on every host
+    // action piled ~4 extra controller calls onto each refresh, contending with
+    // the essential ones on the single-process controller (which could then
+    // read-timeout). It's loaded lazily when the Portal tab opens instead.
+    loadPortal();
   }
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(true); }, []);
+  useEffect(() => {
+    if (tab === "portal") { loadPortal(); loadHistory(); loadSessions(); loadUploads(); loadDownloads(); }
+  }, [tab]);
 
   async function portalAct(key, fn, okMsg) {
     setPortalBusy(key); setErr(""); setMsg("");

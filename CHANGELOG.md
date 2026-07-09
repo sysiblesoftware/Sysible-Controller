@@ -5,6 +5,12 @@ All notable changes to the Sysible Controller are recorded here.
 ## Unreleased
 
 ### Fixed
+- **Host Enrollment refreshes are lighter and faster.** Every action on the page
+  used to refetch the Webserver Portal's login history, sessions, uploads, and
+  downloads too — ~4 extra controller calls per action that only matter on the
+  Portal tab. Those now load lazily when the Portal tab opens, and a transient
+  timeout during a post-action refresh no longer paints a red error over an
+  action that actually succeeded.
 - **Changing the controller address no longer bricks the console's connection.**
   Saving a new hostname/IP used to immediately regenerate the self-signed cert
   and overwrite the pinned trust file, but the running server keeps serving the

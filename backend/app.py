@@ -796,6 +796,11 @@ def update_agents_route(request: Request):
         hid = a.get("host_id")
         if not hid:
             continue
+        # A disenrolled/revoked host keeps its row (for history / re-enroll), but
+        # its agent_secret is revoked so it can never poll this task, and it is no
+        # longer a managed host — don't queue an update it would never apply.
+        if a.get("revoked"):
+            continue
         try:
             queue_task(hid, cmd, kind="agent-update", run_as=None)
             # The agent's own files (and reported version) will change once it
@@ -876,7 +881,9 @@ def update_status_route():
     software update available. Superuser-only. The git check does a live fetch, so
     call it on demand, not on a poll."""
     cur_ver = _current_agent_version()
-    agents = list_agents()
+    # Exclude revoked/disenrolled hosts: they keep their row but aren't managed
+    # agents anymore, so they must not count as "outdated" or in the fleet total.
+    agents = [a for a in list_agents() if not a.get("revoked")]
     outdated = [{"host_id": a.get("host_id"), "hostname": a.get("hostname"),
                  "agent_version": a.get("agent_version")}
                 for a in agents if cur_ver and a.get("agent_version") and a.get("agent_version") != cur_ver]

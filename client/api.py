@@ -195,7 +195,13 @@ def resume_agent(host_id: str):
 
 
 def set_agent_environment(host_id: str, environment: str):
-    return _request("POST", f"/agents/{host_id}/environment", json={"environment": environment})
+    # Idempotent DB-only write. Allow a longer read timeout than the 15s default:
+    # the controller's SQLite busy_timeout is 30s, so under write contention a
+    # legitimate write can take up to ~30s — with the default 15s the console
+    # would give up first and surface a spurious "read timeout=15" for an
+    # assignment that actually succeeds a moment later. 35s clears busy_timeout.
+    return _request("POST", f"/agents/{host_id}/environment",
+                    json={"environment": environment}, timeout=35)
 
 
 _AGENT_SERVICE_NAME = "sysible-agent"

@@ -18,6 +18,14 @@ All notable changes to the Sysible Controller are recorded here.
   downloads it, with a confirmation, instead of a passive download link.
 
 ### Fixed
+- **Software-updates panel no longer shows a phantom agent after removal.** The
+  `/update-status` check bundles the (instant) agent counts with a live
+  `git fetch` that could take up to 35s — past the console's 15s read timeout, at
+  which point the console kept its *last* result and a just-disenrolled host kept
+  showing as "1 agent." The git fetch is now bounded to 8s
+  (`SYSIBLE_UPDATE_FETCH_TIMEOUT`), so the endpoint returns quickly with fresh
+  counts; a slow network merely degrades the controller-update check to
+  "couldn't check."
 - **"Update agents" no longer targets disenrolled/revoked hosts.** A revoked host
   keeps its DB row (for history / re-enroll) but its agent secret is revoked, so
   it can never poll a task — yet it still showed up as an outdated host to update

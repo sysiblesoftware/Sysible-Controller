@@ -338,12 +338,15 @@ fi
 # =========================================================
 DEFAULT_ADMIN_USER="admin"
 DEFAULT_ADMIN_PASS="$($VENV/bin/python -c 'from backend.policy import generate_compliant_password; from backend.db import get_admin_password_policy; print(generate_compliant_password(get_admin_password_policy()))')"
-SEEDED_ADMIN="$($VENV/bin/python - "$DEFAULT_ADMIN_USER" "$DEFAULT_ADMIN_PASS" <<'PY'
+# Pass the generated password via the ENV (/proc/<pid>/environ is owner-only),
+# not argv (/proc/<pid>/cmdline is world-readable), so it isn't exposed in `ps`.
+SEEDED_ADMIN="$(SYSIBLE_SEED_PASS="$DEFAULT_ADMIN_PASS" $VENV/bin/python - "$DEFAULT_ADMIN_USER" <<'PY'
+import os
 import sys
 from backend.db import count_administrators, add_administrator
 from backend import portal_auth
 if count_administrators() == 0:
-    salt, h = portal_auth.hash_password(sys.argv[2])
+    salt, h = portal_auth.hash_password(os.environ["SYSIBLE_SEED_PASS"])
     add_administrator(sys.argv[1], h, salt, must_change_password=1,
                       created_by="installer", role="superuser")
     print("created")

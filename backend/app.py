@@ -859,27 +859,39 @@ def _controller_update_available():
     if not src or not _os.path.isdir(_os.path.join(src, ".git")):
         return {"checked": False, "reason": "install source is not a git checkout"}
 
-    # Keep the git ops tightly bounded: /update-status also carries the (instant)
-    # agent build counts, and the whole endpoint is fetched by the console with a
-    # 15s read timeout. A slow `git fetch` used to blow past that, the console
-    # caught the timeout and kept its LAST result — so a just-disenrolled host
-    # kept showing as "1 agent" until a fetch happened to be fast. Bounding the
-    # fetch means the endpoint returns quickly with fresh agent counts; a slow
-    # network just degrades the controller check to checked=false.
-    _fetch_tmo = float(os.getenv("SYSIBLE_UPDATE_FETCH_TIMEOUT", "8"))
+    # Use `git ls-remote` — a READ-ONLY remote query that writes no refs and
+    # fetches no objects — instead of `git fetch`. A `git fetch` in the live
+    # deployment repo (a) collides with the self-update pull and (b), when killed
+    # (timeout / cancelled request / restart), strands *.lock files under
+    # .git/refs that then break every later ref update ("cannot lock ref ...
+    # .lock: File exists" → "reference already exists"), wedging self-update.
+    # ls-remote can't do either, so the periodic check is safe. Bounded so the
+    # endpoint (which also carries the instant agent counts) returns promptly.
+    tmo = float(os.getenv("SYSIBLE_UPDATE_FETCH_TIMEOUT", "8"))
 
     def _git(*args, timeout=8):
         return _sp.run(["git", "-C", src, "-c", f"safe.directory={src}", *args],
                        capture_output=True, text=True, timeout=timeout)
     try:
-        cur = _git("rev-parse", "--short", "HEAD").stdout.strip()
+        cur_full = _git("rev-parse", "HEAD").stdout.strip()
+        cur = cur_full[:7]
         branch = _git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
-        if _git("fetch", "--quiet", timeout=_fetch_tmo).returncode != 0:
-            return {"checked": False, "reason": "git fetch failed (network or auth)",
+        up = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}").stdout.strip()
+        if not up or "/" not in up:
+            return {"checked": False, "reason": "no upstream branch configured",
                     "current": cur, "branch": branch}
-        n = int((_git("rev-list", "--count", "HEAD..@{u}").stdout.strip() or "0"))
-        return {"checked": True, "available": n > 0, "behind": n, "current": cur,
-                "latest": _git("rev-parse", "--short", "@{u}").stdout.strip(), "branch": branch}
+        remote, rbranch = up.split("/", 1)
+        ls = _git("ls-remote", remote, rbranch, timeout=tmo)
+        if ls.returncode != 0:
+            return {"checked": False, "reason": "git ls-remote failed (network or auth)",
+                    "current": cur, "branch": branch}
+        remote_sha = (ls.stdout.split() or [""])[0].strip()
+        if not remote_sha:
+            return {"checked": False, "reason": "remote branch not found on origin",
+                    "current": cur, "branch": branch}
+        available = bool(cur_full) and remote_sha != cur_full
+        return {"checked": True, "available": available, "current": cur,
+                "latest": remote_sha[:7], "branch": branch}
     except Exception as e:
         return {"checked": False, "reason": str(e)[:120]}
 

@@ -220,6 +220,11 @@ cmd_update() {
       # origin, so repairing/rebuilding them is SAFE (it touches no local commits
       # or working-tree changes). Try that once, then retry the pull.
       echo "git pull failed — attempting an automatic ref-store repair (safe: only rebuilds the origin/* cache) ..."
+      # Remove stale git lock files first — a git process killed/crashed mid-fetch
+      # (e.g. a timed-out update-check) leaves *.lock files that block every later
+      # ref update ("cannot lock ref ... .lock: File exists", surfacing as
+      # "reference already exists"). These are transient locks, not data.
+      find "$SRC/.git" -name '*.lock' -type f -delete 2>/dev/null || true
       _git pack-refs --all --prune 2>&1 || true
       _git remote prune origin 2>&1 || true
       _git for-each-ref --format='%(refname)' refs/remotes/origin 2>/dev/null \

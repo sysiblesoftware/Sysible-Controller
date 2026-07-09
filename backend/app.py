@@ -1605,6 +1605,27 @@ def download_agent_bundle_route():
     )
 
 
+@app.get("/self-enroll-bundle", dependencies=[Depends(require_api_key)])
+def self_enroll_bundle_route():
+    """Bundle for enrolling the CONTROLLER ITSELF as a managed host, always built
+    against loopback (127.0.0.1) rather than the configured LAN address. The
+    controller's own agent runs on the same box, so loopback is the most reliable
+    target and — crucially — works on a fresh install BEFORE any hostname/IP has
+    been configured (the self-signed cert is always scoped to 127.0.0.1). Used by
+    `sysible_controller self-enroll`. Same single-use-token minting and host-cap
+    enforcement as every other bundle (mint_agent_bundle)."""
+    port = (get_controller_config() or {}).get("port") or 9000
+    filename, zip_bytes = mint_agent_bundle(["127.0.0.1"], port)
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 # =========================================================
 # TLS CERTIFICATE (admin-only)
 # Lets an admin swap the controller's self-signed cert for one issued

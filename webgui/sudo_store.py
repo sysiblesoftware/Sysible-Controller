@@ -44,9 +44,19 @@ def _get_key():
             return _KEY_FILE.read_bytes().strip()
         _RUN_DIR.mkdir(parents=True, exist_ok=True)
         key = Fernet.generate_key()
-        _KEY_FILE.write_bytes(key)
-        os.chmod(_KEY_FILE, 0o600)
+        # Create the key file 0600 FROM THE START. The old write_bytes()+chmod
+        # left a brief window where the key (which decrypts every stored sudo
+        # password AND the admin bearer-token cookie) was world-readable at the
+        # umask default. O_EXCL|O_NOFOLLOW also refuses a pre-planted symlink.
+        fd = os.open(str(_KEY_FILE), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(fd, key)
+        finally:
+            os.close(fd)
         return key
+    except FileExistsError:
+        # Another process created it in the race — read theirs.
+        return _KEY_FILE.read_bytes().strip()
     except OSError:
         return None
 

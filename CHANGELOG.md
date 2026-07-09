@@ -4,6 +4,19 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Security
+- **SSH argument injection → controller root code execution (fixed).** A stored
+  SSH host's `user`/`ip` flow into the `ssh` command line as the `user@ip`
+  destination; a value like `-oProxyCommand=…` was parsed by ssh as an option and
+  ran on the controller as root (and could be triggered automatically by the
+  read-only fleet sweeps). Host `user`/`username`/`ip`/`name` are now charset-
+  validated at ingest (no leading `-`, no shell metacharacters) and the ssh argv
+  carries an explicit `--` before the destination.
+- **Sudo-store key no longer has a world-readable creation window.** The Fernet
+  key that decrypts stored sudo passwords and the admin token cookie was written
+  at the umask default and `chmod`ed afterward; it's now created `0600` atomically
+  (`O_EXCL|O_NOFOLLOW`).
+
 ### Fixed
 - **Lock / Unlock / Delete user now confirm what happened** instead of showing a
   bare "exit 0." The `usermod -L`/`-U` and `userdel` commands emit nothing on

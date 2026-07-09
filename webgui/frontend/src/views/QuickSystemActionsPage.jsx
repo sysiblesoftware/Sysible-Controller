@@ -30,6 +30,8 @@ export default function QuickSystemActionsPage({ hosts = [], onRefreshHosts, pre
   const [results, setResults] = useState([]);
   const [err, setErr] = useState("");
   const [expanded, setExpanded] = useState(false);
+  const [script, setScript] = useState("");
+  const [scriptSudo, setScriptSudo] = useState("");
 
   const filtered = useMemo(() => {
     const f = name.trim().toLowerCase();
@@ -56,6 +58,20 @@ export default function QuickSystemActionsPage({ hosts = [], onRefreshHosts, pre
   }
   const svc = (action, label) => run(action, { name }, label);
   const confirmRun = (action, label, prompt) => { if (window.confirm(prompt)) run(action, {}, label); };
+
+  async function runScript() {
+    if (targets.length === 0) { setErr("Check one or more target hosts first."); return; }
+    if (!script.trim()) { setErr("Enter a script to run first."); return; }
+    if (!window.confirm(`Run this script as root on the ${targets.length} checked host(s)?`)) return;
+    setErr(""); setBusy("script");
+    try {
+      // Reuse the fleet dispatch with an EXPLICIT target list (the checked
+      // hosts), so this runs on exactly the hosts you chose — not the whole fleet.
+      const r = await api.fleet("script", targets, script, scriptSudo);
+      setResults((prev) => [{ label: "Run script", ...r, at: Date.now() }, ...prev]);
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(""); }
+  }
 
   // One-click groups → [action name, button label, danger?]
   const COMMON = [
@@ -91,6 +107,25 @@ export default function QuickSystemActionsPage({ hosts = [], onRefreshHosts, pre
           </div>
           <div className="group-buttons">
             <button className="btn sm" disabled={busy} onClick={() => run("qsa_ping", {}, "Ping (reachability)")}>Ping</button>
+          </div>
+        </fieldset>
+
+        <fieldset className="tool-group-box"><legend>Run a script (on the checked hosts)</legend>
+          <label className="field" style={{ marginTop: 0 }}>
+            <span>Shell script — runs as root on each checked host</span>
+            <textarea rows={3} value={script} onChange={(e) => setScript(e.target.value)}
+                      placeholder="e.g. uname -a && uptime" />
+          </label>
+          <label className="field" style={{ marginTop: 8 }}>
+            <span>Sudo password <span className="faint">(optional — only for hosts that require one this run)</span></span>
+            <input type="password" autoComplete="off" value={scriptSudo}
+                   onChange={(e) => setScriptSudo(e.target.value)}
+                   placeholder="Leave blank to use your stored sudo password" />
+          </label>
+          <div className="group-buttons" style={{ marginTop: 10 }}>
+            <button className="btn sm" disabled={busy} onClick={runScript}>
+              {busy === "script" ? <span className="spin" /> : `Run Script on ${targets.length || "checked"} host(s)`}
+            </button>
           </div>
         </fieldset>
 

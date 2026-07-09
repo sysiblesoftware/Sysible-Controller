@@ -20,9 +20,12 @@ All notable changes to the Sysible Controller are recorded here.
   its own, without first checking hosts. (Previously an environment could only be
   made as a side effect of assigning checked hosts via the "+ New environment…"
   option, so creating one standalone appeared to do nothing.)
-- **"Run Script on All Hosts" gives feedback instead of a dead button.** The
-  button is no longer disabled when the script box is empty; clicking it with no
-  script now shows "Enter a script to run…" rather than silently doing nothing.
+- **Run a script across the hosts you choose.** The fleet script in Sysible
+  Connect now makes it clear it runs on the *checked* hosts (or all if none are
+  checked) — the label and button reflect the current selection — and the same
+  capability is now available in **Quick System Actions** (a "Run a script"
+  panel that runs on the checked hosts). The "Run Script" button also gives
+  feedback ("Enter a script to run…") instead of being a dead, disabled button.
 - **Download agent bundle** button (+ a step-by-step note) in Settings next to
   the controller address, so after a hostname/IP change you can grab a fresh
   bundle reflecting the new address and re-run it on hosts.

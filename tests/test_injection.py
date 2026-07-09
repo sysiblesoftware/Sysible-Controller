@@ -47,13 +47,15 @@ class TestSqlInjection:
                                 json={"username": payload, "password": "anything"})
             assert r.status_code == 401  # never authenticates
 
-    def test_enroll_host_id_injection_is_inert(self, controller, enroll_token):
+    def test_enroll_host_id_injection_is_rejected(self, controller, enroll_token):
+        # host_id is now charset-validated at enrollment: an injection payload
+        # (spaces, quotes, ';') is rejected outright (400), not merely rendered
+        # inert by parameterized queries. Also blocks the reserved "*" sentinel.
         payload = "h1'; DELETE FROM agents; --"
         r = controller.post("/agents/enroll",
                             json={"token": enroll_token(), "host_id": payload, "hostname": "x"})
-        assert r.status_code == 200
-        # agents table intact and the row is keyed by the literal string.
-        assert db.agent_exists(payload)
+        assert r.status_code == 400
+        assert not db.agent_exists(payload)
 
     def test_activity_description_injection_is_inert(self, controller, superuser_headers):
         payload = "ran'; DROP TABLE activity_log; --"

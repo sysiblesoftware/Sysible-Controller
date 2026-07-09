@@ -436,7 +436,16 @@ export default function Dashboard({ role, edition, onOpen }) {
   const [fleetErr, setFleetErr] = useState("");
   const [fleetAuto, setFleetAuto] = useState(true);   // on by default; refreshes every 10s
   const [updates, setUpdates] = useState([]);         // cached patch status for the summary tile
-  useEffect(() => { api.fleetUpdates(0, 0).then((d) => setUpdates(d.hosts || [])).catch(() => {}); }, []);
+  const loadUpdates = useCallback(() => { api.fleetUpdates(0, 0).then((d) => setUpdates(d.hosts || [])).catch(() => {}); }, []);
+  useEffect(() => { loadUpdates(); }, [loadUpdates]);
+  // Refresh the "Needs patching" tile on the same cadence as the rest of the
+  // dashboard — it used to fetch once on mount and then freeze, so after hosts
+  // were patched (or new updates appeared) the tile stayed stale until a reload.
+  useEffect(() => {
+    if (!fleetAuto) return undefined;
+    const t = setInterval(loadUpdates, 30000);
+    return () => clearInterval(t);
+  }, [fleetAuto, loadUpdates]);
   const [hostMetaMap, setHostMetaMap] = useState({}); // name -> {criticality, owner, tags, ...}
   useEffect(() => { api.hostMeta().then((d) => setHostMetaMap(d.meta || {})).catch(() => {}); }, []);
   const [tagFilter, setTagFilter] = useState(null);  // service-group (tag) focus for the fleet view
@@ -619,6 +628,11 @@ export default function Dashboard({ role, edition, onOpen }) {
       if (h.online === false) {
         verdict = "OFFLINE";
       } else {
+        // The probe ran but returned no metrics (timed out, errored, or the host
+        // is integrity-quarantined): don't silently grade it OK/green — every
+        // metric would default to 0 and the host would look healthy. Surface the
+        // probe failure as a warning so it lands in "Needs attention".
+        if (h.ok === false) add(h.error || "health check failed", 2);
         if ((h.disk ?? 0) >= 90) add(`disk ${h.disk}%`, 1, "disk_critical");
         else if ((h.disk ?? 0) >= 80) add(`disk ${h.disk}%`, 2);            // warn, not a named signal
         if ((h.mem ?? 0) >= 90) add(`mem ${h.mem}%`, 1);
@@ -666,9 +680,15 @@ export default function Dashboard({ role, edition, onOpen }) {
     // offline host's stale cached flags — contradicting the donut/env cards,
     // which run over filteredFleet and grade offline hosts as OFFLINE (not a
     // live exposure). This aligns the chips with the per-host `analysis`.
-    const eligible = new Set(filteredFleet.filter((h) => h.online !== false).map((h) => h.id));
+    // Eligibility comes from the POSTURE sweep's OWN online flag, not the health
+    // sweep — otherwise the security chips vanished whenever the health sweep was
+    // empty or errored (it never set `fleet`), hiding real findings exactly when
+    // the fleet was degraded. An active service-group (tag) filter still scopes
+    // the chips, via the health-derived filteredFleet set.
+    const tagScoped = tagFilter ? new Set(filteredFleet.map((h) => h.id)) : null;
     for (const p of posture) {
-      if (!p.flags || !eligible.has(p.id)) continue;
+      if (!p.flags || p.online === false) continue;
+      if (tagScoped && !tagScoped.has(p.id)) continue;
       for (const key of POSTURE_SIGNAL_KEYS) if (p.flags[key] === true) place(key, p.id, p.host);
     }
     for (const h of filteredFleet) {
@@ -678,7 +698,7 @@ export default function Dashboard({ role, edition, onOpen }) {
     }
     return keys.map((k) => ({ key: k, label: SIGNAL_LABEL[k], hosts: acc[k].active, suppressed: acc[k].suppressed }))
       .sort((a, b) => b.hosts.length - a.hosts.length);
-  }, [posture, filteredFleet, suppFor, hostCtx]);
+  }, [posture, filteredFleet, tagFilter, suppFor, hostCtx]);
 
   // The strip shows CRITICAL signals only — the login view is "what's on fire",
   // not every hardening nit. (Warnings still show on each host's detail page.)

@@ -39,7 +39,8 @@ export default function QuickSystemActionsPage({ hosts = [], onRefreshHosts, pre
   }, [services, name]);
 
   async function listServices(running) {
-    const host = listHost || targets[0];
+    // Prefer the currently-checked host over the last-listed one (stale-host fix).
+    const host = targets[0] || listHost;
     if (!host) { setErr("Check a host first — services are read from one host."); return; }
     setBusy(running ? "running" : "installed"); setErr("");
     try { const d = await api.servicesList(host, running); setServices(d.services || []); setListHost(host); }

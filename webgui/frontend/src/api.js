@@ -124,6 +124,8 @@ export const api = {
     req(`/api/host/${encodeURIComponent(hostId)}/revoke`, { method: "POST" }),
   resumeHost: (hostId) =>
     req(`/api/host/${encodeURIComponent(hostId)}/resume`, { method: "POST" }),
+  restoreHost: (hostId) =>
+    req(`/api/host/${encodeURIComponent(hostId)}/restore`, { method: "POST" }),
   enrollToken: () => req("/api/enroll-token", { method: "POST" }),
   // Cache-buster so a repeat download after a controller hostname/IP change
   // can't be served from the browser cache (server also sends no-store).

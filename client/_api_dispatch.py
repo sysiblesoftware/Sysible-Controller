@@ -111,6 +111,15 @@ def list_merged_hosts(agent_only=True):
         agents = []
 
     for a in agents:
+        # A revoked host can't run tasks (its secret is dead), so it has no place
+        # in the fleet-action host set — dispatching, sweeping (health/posture/
+        # updates), or querying it is pointless and it would otherwise show up in
+        # the fleet donut / env rollup as a permanent OFFLINE row while the
+        # top-strip counts (which already filter revoked) exclude it, so the two
+        # disagreed. Host Enrollment lists revoked hosts via GET /agents directly,
+        # so they're still visible there (with Restore/Force-Delete).
+        if a.get("revoked"):
+            continue
         host_id = a.get("host_id")
         entries.append({
             "kind": "agent",

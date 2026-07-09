@@ -27,7 +27,9 @@ export default function ServiceManagementPage({ hosts = [], onRefreshHosts }) {
   }, [services, name]);
 
   async function listServices(running) {
-    const host = listHost || targets[0];
+    // Prefer the currently-checked host over the last-listed one, so after you
+    // list host A then check host B and click List, it lists B (not stale A).
+    const host = targets[0] || listHost;
     if (!host) { setErr("Check a host first (services are listed from one host)."); return; }
     setBusy(running ? "running" : "installed"); setErr("");
     try { const d = await api.servicesList(host, running); setServices(d.services || []); setListHost(host); }

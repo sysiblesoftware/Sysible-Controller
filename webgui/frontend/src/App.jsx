@@ -66,6 +66,10 @@ const NAV = [
   // Oversee
   { key: "live", label: "Activity & Logs", icon: "activity", su: true, aud: true },
   { key: "settings", label: "Settings", icon: "cog", su: true },
+  // Reference — download the bundled, self-contained offline manual. `download`
+  // makes this a file link (not a view switch); available to every role.
+  { key: "docs", label: "Documentation", icon: "book", su: false, aud: true,
+    download: "/api/docs/download" },
 ];
 
 const ICONS = {
@@ -82,6 +86,7 @@ const ICONS = {
   bell: <><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 0 0 4 0"/></>,
   search: <><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.8-3.8"/></>,
   share: <><circle cx="6" cy="12" r="2.4"/><circle cx="18" cy="5.5" r="2.4"/><circle cx="18" cy="18.5" r="2.4"/><path d="M8.2 10.9l7.6-4M8.2 13.1l7.6 4"/></>,
+  book: <><path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H19v15H6a2 2 0 0 0-2 2z"/><path d="M4 19.5A1.5 1.5 0 0 0 5.5 21H19"/></>,
 };
 
 function NavIcon({ name }) {
@@ -260,13 +265,21 @@ export default function App() {
 
         <div className="rail-nav">
           {nav.map((n) => (
-            <button key={n.key ?? "dash"}
-                    className={"rail-item" + (view === n.key ? " active" : "")}
-                    title={n.key === "connect" ? "Opens in a new tab" : undefined}
-                    onClick={() => { setNavTick((t) => t + 1); go(n.key, null); }}>
-              <NavIcon name={n.icon} /><span>{n.label}</span>
-              {n.key === "connect" && <span className="rail-ext" aria-hidden="true">↗</span>}
-            </button>
+            n.download ? (
+              <a key={n.key ?? "dash"} className="rail-item" href={n.download} download
+                 title="Download the offline documentation">
+                <NavIcon name={n.icon} /><span>{n.label}</span>
+                <span className="rail-ext" aria-hidden="true">↓</span>
+              </a>
+            ) : (
+              <button key={n.key ?? "dash"}
+                      className={"rail-item" + (view === n.key ? " active" : "")}
+                      title={n.key === "connect" ? "Opens in a new tab" : undefined}
+                      onClick={() => { setNavTick((t) => t + 1); go(n.key, null); }}>
+                <NavIcon name={n.icon} /><span>{n.label}</span>
+                {n.key === "connect" && <span className="rail-ext" aria-hidden="true">↗</span>}
+              </button>
+            )
           ))}
         </div>
 

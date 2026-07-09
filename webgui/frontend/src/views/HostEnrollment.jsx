@@ -117,6 +117,16 @@ export default function HostEnrollment() {
   }
 
 
+  async function newEnvironment() {
+    // Create an environment on its own — no hosts need be checked. (Set
+    // Environment still creates-and-assigns via the "+ New environment…" option,
+    // but that requires selecting hosts; this button is the standalone create.)
+    const name = (window.prompt("New environment name:") || "").trim();
+    if (!name) return;
+    await run(async () => { await api.createEnvironment(name); setAssignEnv(name); },
+      `Created environment '${name}'.`, "Creating environment…");
+  }
+
   async function assignEnvironment() {
     if (checked.length === 0) { setErr("Check one or more hosts first."); return; }
     let env = assignEnv;
@@ -315,6 +325,8 @@ export default function HostEnrollment() {
         <div className="he-actions">
           <fieldset className="tool-group-box"><legend>Environment</legend>
             <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
+              <button className="btn sm" onClick={newEnvironment}
+                      title="Create a new, empty environment (no hosts need be selected)">New Environment</button>
               <select value={assignEnv} onChange={(e) => setAssignEnv(e.target.value)} style={{ maxWidth: 220 }}>
                 <option value="">(unassigned)</option>
                 {envs.map((e) => <option key={e} value={e}>{e}</option>)}
@@ -324,7 +336,7 @@ export default function HostEnrollment() {
               <button className="btn ghost sm" onClick={removeEnvironment}
                       disabled={!assignEnv || assignEnv === NEW_ENV}
                       title="Delete the selected environment (must have no hosts assigned)">Remove environment</button>
-              <span className="faint">Applies to {checked.length} checked host(s).</span>
+              <span className="faint">Set Environment applies to {checked.length} checked host(s).</span>
             </div>
           </fieldset>
 

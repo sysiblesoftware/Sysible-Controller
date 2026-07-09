@@ -326,9 +326,10 @@ function FleetActions({ hosts, checked, onErr }) {
   return (
     <Collapsible title={`Fleet Actions (${scopeLabel} host${scopeN === 1 ? "" : "s"})`}>
       <label className="field" style={{ marginTop: 0 }}>
-        <span>Run a script on all hosts</span>
+        <span>Run a script on {checked.length ? `the ${checked.length} checked host(s)` : "all hosts"}</span>
         <textarea rows={2} value={script} onChange={(e) => setScript(e.target.value)}
                   placeholder="e.g. uname -a && uptime" />
+        <span className="faint" style={{ fontSize: 12 }}>Tip: check hosts in the list to run on just those; with none checked it runs on all {hosts.length}.</span>
       </label>
       <label className="field" style={{ marginTop: 8 }}>
         <span>Sudo password <span className="faint">(optional — only for hosts that require one this run)</span></span>
@@ -339,7 +340,7 @@ function FleetActions({ hosts, checked, onErr }) {
       <div className="row" style={{ marginTop: 8, flexWrap: "wrap" }}>
         <button className="btn sm" disabled={!!running}
                 onClick={() => act("script", "Run this script as root on", script)}>
-          {running === "script" ? <span className="spin" /> : "Run Script on All Hosts"}
+          {running === "script" ? <span className="spin" /> : `Run Script on ${scopeLabel} host${scopeN === 1 ? "" : "s"}`}
         </button>
         <button className="btn sm" disabled={running}
                 onClick={() => act("restart_agent", "Restart the agent on all hosts?")}>Restart Agent on All</button>

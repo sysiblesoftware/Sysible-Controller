@@ -28,20 +28,33 @@ All notable changes to the Sysible Controller are recorded here.
   downloads it, with a confirmation, instead of a passive download link.
 
 ### Fixed
+- **Self-update no longer wedges on a stale git lock (root cause of "reference
+  already exists").** The update-check endpoint used to run a live `git fetch` in
+  the deployment repo; when that fetch was killed (client timeout, cancelled
+  request, or a restart mid-fetch) it stranded `*.lock` files under `.git/refs`,
+  and every subsequent ref update then failed with `cannot lock ref ... .lock:
+  File exists`, surfacing to `sysible_controller update` as `reference already
+  exists` and dead-ending self-update. Two fixes: the periodic update-check now
+  uses `git ls-remote` (a read-only remote query that writes no refs and fetches
+  no objects, so it can neither collide with the self-update pull nor leave
+  locks); and `sysible_controller update`'s automatic ref-store repair now clears
+  stale `*.lock` files first, so a repo already wedged by an older build heals on
+  the next update.
 - **Self-update auto-repairs a corrupted git ref store.** `sysible_controller
   update` could dead-end on `fetching ref refs/remotes/origin/... failed:
   reference already exists` — a loose remote-tracking ref colliding with
   packed-refs (typically left by a previously interrupted update), not a code
-  problem. The updater now attempts a safe automatic repair (rebuilds only the
-  origin/* remote-tracking cache — no local commits or working-tree changes are
-  touched) and retries the pull, instead of failing outright.
+  problem. The updater now attempts a safe automatic repair (clears stale locks,
+  then rebuilds only the origin/* remote-tracking cache — no local commits or
+  working-tree changes are touched) and retries the pull, instead of failing
+  outright.
 - **Software-updates panel no longer shows a phantom agent after removal.** The
-  `/update-status` check bundles the (instant) agent counts with a live
-  `git fetch` that could take up to 35s — past the console's 15s read timeout, at
+  `/update-status` check bundles the (instant) agent counts with a live remote
+  update-check that could take up to 35s — past the console's 15s read timeout, at
   which point the console kept its *last* result and a just-disenrolled host kept
-  showing as "1 agent." The git fetch is now bounded to 8s
-  (`SYSIBLE_UPDATE_FETCH_TIMEOUT`), so the endpoint returns quickly with fresh
-  counts; a slow network merely degrades the controller-update check to
+  showing as "1 agent." The check now uses a fast, bounded `git ls-remote`
+  (`SYSIBLE_UPDATE_FETCH_TIMEOUT`, default 8s), so the endpoint returns quickly
+  with fresh counts; a slow network merely degrades the controller-update check to
   "couldn't check."
 - **"Update agents" no longer targets disenrolled/revoked hosts.** A revoked host
   keeps its DB row (for history / re-enroll) but its agent secret is revoked, so

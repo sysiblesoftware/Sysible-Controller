@@ -27,7 +27,7 @@ export default function UpdatesBadge({ onOpen }) {
   if (!ctrlBehind && !agentsBehind) return null;
 
   const bits = [];
-  if (ctrlBehind) bits.push(`controller ${c.behind} commit${c.behind === 1 ? "" : "s"} behind`);
+  if (ctrlBehind) bits.push("controller update available");
   if (agentsBehind) bits.push(`${a.outdated_count} agent${a.outdated_count === 1 ? "" : "s"} on an older build`);
 
   return (

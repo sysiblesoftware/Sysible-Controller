@@ -766,8 +766,7 @@ function UpdatesAvailable({ avail, checking, onRecheck }) {
           {c.checked ? (
             c.available
               ? <span><span className="dot" style={{ background: "#e0a83a", marginRight: 6 }} />
-                  Controller is <strong>{c.behind}</strong> commit{c.behind === 1 ? "" : "s"} behind
-                  {c.branch ? ` on ${c.branch}` : ""}
+                  A controller update is available{c.branch ? ` on ${c.branch}` : ""}
                   {c.current && c.latest ? <span className="faint"> ({c.current} → {c.latest})</span> : null}</span>
               : <span><span className="dot" style={{ background: "#4ec07a", marginRight: 6 }} />
                   Controller is current{c.current ? <span className="faint"> ({c.current})</span> : null}</span>

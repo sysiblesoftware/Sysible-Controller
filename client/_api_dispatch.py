@@ -130,6 +130,10 @@ def list_merged_hosts(agent_only=True):
             "requires_sudo_password": bool(a.get("requires_sudo_password")),
             # This enrolled host IS the controller itself (self-managed).
             "is_controller": bool(a.get("is_controller")),
+            # Host is integrity-quarantined: the controller hands its agent NO
+            # tasks (soft lockout), so any dispatch to it would queue but never
+            # run. Callers use this to fail fast instead of polling to a deadline.
+            "integrity_quarantined": bool(a.get("integrity_quarantined")),
         })
 
     try:

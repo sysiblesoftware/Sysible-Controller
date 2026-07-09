@@ -441,6 +441,25 @@ export default function Dashboard({ role, edition, onOpen }) {
   useEffect(() => { api.hostMeta().then((d) => setHostMetaMap(d.meta || {})).catch(() => {}); }, []);
   const [tagFilter, setTagFilter] = useState(null);  // service-group (tag) focus for the fleet view
 
+  // Instant agent inventory for the top-strip counts. Enrolled/online/offline are
+  // inventory + liveness facts (from heartbeat last_seen), so they must NOT wait on
+  // the fleet-health PROBE sweep. A slow or integrity-quarantined host being probed
+  // could otherwise drag the sweep out for minutes, and because the counts were
+  // derived from the sweep result, "Hosts enrolled" dropped to 0 until it finished
+  // — the host appeared to "fall off," then came back. This fetch does no probing
+  // (just the agent list), so the counts are immediate and stable; the sweep still
+  // powers the detailed health donut / metrics / triage below.
+  const [inventory, setInventory] = useState(null);
+  const loadInventory = useCallback(() => {
+    api.agents().then((d) => setInventory(d.agents || [])).catch(() => {});
+  }, []);
+  useEffect(() => { loadInventory(); }, [loadInventory]);
+  useEffect(() => {
+    if (!fleetAuto) return undefined;
+    const t = setInterval(loadInventory, 10000);
+    return () => clearInterval(t);
+  }, [fleetAuto, loadInventory]);
+
   // All tags in use = the fleet's "service groups". Filtering the fleet-health
   // views (donut/env cards/triage) to a tag lets you focus on one service.
   const allTags = useMemo(() => {
@@ -485,16 +504,21 @@ export default function Dashboard({ role, edition, onOpen }) {
   // (they can't be passively judged): they count toward the total but as neither
   // online nor offline.
   const m = useMemo(() => {
-    const hosts = fleet.filter(Boolean);
-    const total = hosts.length;
-    const online = hosts.filter((h) => h.online === true).length;
-    const offline = hosts.filter((h) => h.online === false).length;
-    const envs = new Set(hosts.map((h) => h.environment || "Unassigned")).size;
-    // Only agent hosts that actually answered (online true/false) count toward
-    // the "nothing is checking in" alarm — an all-SSH fleet (online unknown)
-    // must not trip it.
-    return { total, online, offline, envs, judgeable: online + offline };
-  }, [fleet]);
+    // Counts come from the INSTANT inventory (heartbeat last_seen), never the
+    // probe sweep — so a slow/quarantined host being probed can't make the
+    // enrolled count drop to 0 while the sweep runs. Revoked hosts aren't
+    // "enrolled". Online = heartbeat within the stale window (the same 20s the
+    // sweep uses); a quarantined host still heartbeats, so it stays online/
+    // enrolled instead of vanishing.
+    const inv = (inventory || []).filter((a) => !a.revoked);
+    const now = Date.now() / 1000;
+    const STALE = 20;
+    const total = inv.length;
+    const online = inv.filter((a) => a.last_seen && (now - a.last_seen) <= STALE).length;
+    const offline = total - online;
+    const envs = new Set(inv.map((a) => a.environment || "Unassigned")).size;
+    return { total, online, offline, envs, judgeable: total };
+  }, [inventory]);
 
   // Emergency state for the dashboard: either the controller isn't answering the
   // health sweep at all, or a completed sweep shows nothing is checking in. Only
@@ -507,14 +531,19 @@ export default function Dashboard({ role, edition, onOpen }) {
   // Host lists behind the top-strip counts, so each count can drop down the
   // specific hosts (id → drill-down, hostname + environment shown).
   const hostLists = useMemo(() => {
-    // Drill-downs open by agent host_id when present (merged/agent hosts), else
-    // the entry id (SSH-only). Same deduped set as the counts above.
-    const mk = (h) => ({ id: h.agent_id || h.id, host: h.host, env: h.environment || "Unassigned", ctrl: !!h.is_controller });
-    const hosts = fleet.filter(Boolean);
+    // Same instant inventory as the counts above, so a drill-down always matches
+    // its tile (online/offline by heartbeat last_seen, not the probe sweep).
+    const inv = (inventory || []).filter((a) => !a.revoked);
+    const now = Date.now() / 1000;
+    const STALE = 20;
+    const mk = (a) => ({ id: a.host_id, host: a.hostname || a.host_id, env: a.environment || "Unassigned", ctrl: !!a.is_controller });
     const online = [], offline = [];
-    for (const h of hosts) { if (h.online === true) online.push(mk(h)); else if (h.online === false) offline.push(mk(h)); }
-    return { all: hosts.map(mk), online, offline };
-  }, [fleet]);
+    for (const a of inv) {
+      if (a.last_seen && (now - a.last_seen) <= STALE) online.push(mk(a));
+      else offline.push(mk(a));
+    }
+    return { all: inv.map(mk), online, offline };
+  }, [inventory]);
 
   const openHost = useCallback((h) => onOpen("host", { id: h.id, label: h.host }), [onOpen]);
 

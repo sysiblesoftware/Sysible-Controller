@@ -5,6 +5,21 @@ All notable changes to the Sysible Controller are recorded here.
 ## Unreleased
 
 ### Fixed
+- **Dashboard "Hosts enrolled" no longer drops to 0 while the fleet-health sweep
+  runs.** The top-strip counts (enrolled / online / offline) were derived from the
+  fleet-health *probe* sweep result, so a slow or integrity-quarantined host being
+  probed could drag the sweep out for minutes and the enrolled count would read 0
+  until it finished — a host appeared to "fall off" and come back. The counts now
+  come from the instant agent inventory (heartbeat `last_seen`): enrolled is a live
+  DB fact, online/offline use the same 20s staleness rule, and a quarantined host
+  (which still heartbeats) stays counted. The probe sweep now powers only the
+  detailed health donut / metrics / triage.
+- **Installing updates on a quarantined host fails fast instead of hanging 15
+  minutes.** A dispatch to an integrity-quarantined host queues a task the
+  controller never hands out (soft lockout), so the console's per-host poll spun
+  the full 900s deadline showing a silent spinner. The install now detects the
+  quarantine up front and reports it immediately with an actionable reason
+  (rebaseline/resume the host).
 - **Host-list refresh no longer stalls ~5s (Set-Environment "slow to show up").**
   The controller-self label added to `GET /agents` computed the controller's own
   identity with `socket.getfqdn()` — a blocking **reverse-DNS** lookup that hangs

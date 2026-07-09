@@ -164,18 +164,29 @@ def validate_certificate_bundle(cert_pem: bytes, key_pem: bytes, chain_pem: byte
     return _cert_metadata(leaf, chain_length=len(chain_certs))
 
 
-def _write_key_file(path: Path, data: bytes):
-    """Write a private key so it is NEVER briefly world-readable. The old
-    pattern (write_bytes under the process umask, then chmod 0600 afterward)
-    leaves a window where server.key is 0644 with the real key material in it.
-    Create/truncate with a fd, fchmod to 0600 BEFORE the content is written
-    (covers a pre-existing file with looser mode too), then write."""
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+def _atomic_write(path: Path, data: bytes, mode: int):
+    """Write `data` to `path` atomically at the given mode: fill a temp file
+    (fchmod BEFORE writing so a private key is never briefly world-readable),
+    fsync it, then os.replace() into place. os.replace is atomic, so a reader
+    (uvicorn at startup) sees either the whole old file or the whole new one —
+    never a half-written/truncated file. Writing the cert and key this way means
+    a crash / ENOSPC mid-op can't leave a truncated server.crt/server.key that
+    wedges the controller's next TLS restart. O_NOFOLLOW: don't follow a symlink
+    planted at the temp path."""
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
     try:
-        os.fchmod(fd, 0o600)
+        os.fchmod(fd, mode)
         os.write(fd, data)
+        os.fsync(fd)
     finally:
         os.close(fd)
+    os.replace(str(tmp), str(path))
+
+
+def _write_key_file(path: Path, data: bytes):
+    """Atomically write a private key at 0600 (see _atomic_write)."""
+    _atomic_write(path, data, 0o600)
 
 
 def _backup_if_exists(path: Path):
@@ -207,10 +218,10 @@ def install_certificate(cert_pem: bytes, key_pem: bytes, chain_pem: bytes = None
     fullchain = cert_pem.rstrip(b"\n") + b"\n"
     if chain_pem:
         fullchain += chain_pem.rstrip(b"\n") + b"\n"
-    CERT_FILE.write_bytes(fullchain)
-    os.chmod(CERT_FILE, 0o644)
-
+    # Key first, then cert — each written atomically (temp+fsync+replace) so a
+    # crash/ENOSPC can't leave a truncated file that wedges the TLS restart.
     _write_key_file(KEY_FILE, key_pem)
+    _atomic_write(CERT_FILE, fullchain, 0o644)
 
     # trust.crt = what clients/agents should pin going forward - the
     # issuing CA chain for a PKI cert, or the leaf itself when no chain
@@ -220,8 +231,7 @@ def install_certificate(cert_pem: bytes, key_pem: bytes, chain_pem: bytes = None
     # the existing default-to-system-trust-store fallback in
     # client/api.py / host_agent/agent.py take over).
     trust_pem = chain_pem if chain_pem else cert_pem
-    TRUST_FILE.write_bytes(trust_pem.rstrip(b"\n") + b"\n")
-    os.chmod(TRUST_FILE, 0o644)
+    _atomic_write(TRUST_FILE, trust_pem.rstrip(b"\n") + b"\n", 0o644)
 
     return info
 
@@ -305,11 +315,11 @@ def regenerate_self_signed(hostnames=None, ips=None, days=3650) -> dict:
     _backup_if_exists(CERT_FILE)
     _backup_if_exists(KEY_FILE)
     _backup_if_exists(TRUST_FILE)
-    CERT_FILE.write_bytes(cert_pem)
-    os.chmod(CERT_FILE, 0o644)
+    # Key first, then cert/trust — each atomic (temp+fsync+replace), so a crash
+    # mid-regenerate can't leave a truncated pair that fails the TLS restart.
     _write_key_file(KEY_FILE, key_pem)
-    TRUST_FILE.write_bytes(cert_pem)     # self-signed: trust bundle IS the leaf
-    os.chmod(TRUST_FILE, 0o644)
+    _atomic_write(CERT_FILE, cert_pem, 0o644)
+    _atomic_write(TRUST_FILE, cert_pem, 0o644)   # self-signed: trust bundle IS the leaf
     return _cert_metadata(cert)
 
 

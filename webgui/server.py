@@ -1290,6 +1290,16 @@ def _install_one(entry, cmd, token=None, become_password=None, description=None)
     `become_password` is supplied to password-sudo hosts; `description` is the
     activity-feed label. Returns {ok, code, output}."""
     import time as _t
+    # Fail fast on an integrity-quarantined host. The controller hands a
+    # quarantined agent NO tasks (a soft lockout), so a dispatch here would queue
+    # a task_id that is never picked up — and the poll loop below would then spin
+    # the full 900s deadline, showing the operator a silent 15-minute spinner with
+    # no output. Surface it immediately with an actionable reason instead.
+    if entry.get("integrity_quarantined"):
+        return {"ok": False, "code": None,
+                "output": ("Host is integrity-quarantined — the controller isn't dispatching "
+                           "tasks to it. Review the mismatch and Rebaseline/Resume the host "
+                           "(Host Enrollment) to restore updates.")}
     try:
         out = _with_token(token, lambda: dispatch.run_on_entry(
             entry, cmd, kind="command", become_password=become_password,

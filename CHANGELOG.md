@@ -16,8 +16,33 @@ All notable changes to the Sysible Controller are recorded here.
   key that decrypts stored sudo passwords and the admin token cookie was written
   at the umask default and `chmod`ed afterward; it's now created `0600` atomically
   (`O_EXCL|O_NOFOLLOW`).
+- **Forced first-login password change is now enforced server-side.** The
+  "you must change your temporary password" state was only a frontend modal; an
+  operator could skip it and drive the API directly on the known initial
+  credential. Every write/dispatch route (`require_operator`) now returns 403
+  until the password is actually rotated (the change-credentials route stays
+  reachable to clear it).
 
 ### Fixed
+- **Webserver Portal tab timestamps render correctly.** A full click-path audit of
+  every console button found two display-only response-shape mismatches: the
+  "last login" line showed `[object Object]` (the status returns a
+  `{timestamp,…}` object, not a scalar) and every Active Session's "Logged In"
+  column was blank (the row's timestamp column is `created`, which the cell didn't
+  read). Both now render the real time. The audit found no broken buttons
+  elsewhere — every other control traces end-to-end.
+- **Environmental Policies "Save Policy Defaults" now actually persists your
+  edits.** The editor read and wrote a flat field shape while the controller
+  stores/returns a nested one (`password`/`lockout`/`sudo`/`umask`), so loading
+  always fell back to hardcoded defaults and every Save quietly reset the policy
+  to defaults regardless of what you typed. The form now round-trips the nested
+  shape.
+- **Self-disenroll now serializes against enrollment** (`_ENROLL_LOCK`), matching
+  the admin Force-Delete path, so a zombie agent re-enrolling with the same token
+  can't interleave and recreate the record right after the delete.
+- **Performance charts no longer skew their edge buckets when zoomed.** Samples
+  outside the visible time window were clamped onto the first/last bucket instead
+  of being skipped, distorting the boundary averages.
 - **Lock / Unlock / Delete user now confirm what happened** instead of showing a
   bare "exit 0." The `usermod -L`/`-U` and `userdel` commands emit nothing on
   success, so the console couldn't tell you the account was actually locked; they

@@ -131,23 +131,31 @@ export default function EnvironmentalPolicies({ hosts = [], onRefreshHosts, pref
   );
 }
 
-// Map the stored credit-based policy <-> friendly require-checkboxes.
+// Map the stored NESTED policy ({password:{...}, lockout:{...}, sudo:{...}, umask})
+// <-> the flat, friendly require-checkbox shape this form edits. The controller
+// persists and returns the nested shape (backend DEFAULT_ENVIRONMENTAL_POLICY);
+// reading/writing flat keys here made load fall back to hardcoded defaults (never
+// showing the saved policy) and Save overwrite the row with an unusable flat dict.
 function normalize(p) {
+  const pw = p.password || {}, lk = p.lockout || {}, su = p.sudo || {};
   return {
-    minlen: p.minlen ?? 12, retry: p.retry ?? 3,
-    require_upper: (p.ucredit ?? -1) < 0, require_lower: (p.lcredit ?? -1) < 0,
-    require_digit: (p.dcredit ?? -1) < 0, require_symbol: (p.ocredit ?? -1) < 0,
-    deny: p.deny ?? 5, unlock_time: p.unlock_time ?? 900,
-    sudo_timeout: p.sudo_timeout ?? 15, sudo_require_password: p.sudo_require_password ?? true,
+    minlen: pw.minlen ?? 12, retry: pw.retry ?? 3,
+    require_upper: (pw.ucredit ?? -1) < 0, require_lower: (pw.lcredit ?? -1) < 0,
+    require_digit: (pw.dcredit ?? -1) < 0, require_symbol: (pw.ocredit ?? -1) < 0,
+    deny: lk.deny ?? 5, unlock_time: lk.unlock_time ?? 900,
+    sudo_timeout: su.timestamp_timeout ?? 15, sudo_require_password: su.require_password ?? true,
     umask: p.umask ?? "027",
   };
 }
 function denormalize(p) {
   return {
-    minlen: p.minlen, retry: p.retry,
-    ucredit: p.require_upper ? -1 : 0, lcredit: p.require_lower ? -1 : 0,
-    dcredit: p.require_digit ? -1 : 0, ocredit: p.require_symbol ? -1 : 0,
-    deny: p.deny, unlock_time: p.unlock_time,
-    sudo_timeout: p.sudo_timeout, sudo_require_password: p.sudo_require_password, umask: p.umask,
+    password: {
+      minlen: p.minlen, retry: p.retry,
+      ucredit: p.require_upper ? -1 : 0, lcredit: p.require_lower ? -1 : 0,
+      dcredit: p.require_digit ? -1 : 0, ocredit: p.require_symbol ? -1 : 0,
+    },
+    lockout: { deny: p.deny, unlock_time: p.unlock_time },
+    sudo: { timestamp_timeout: p.sudo_timeout, require_password: p.sudo_require_password },
+    umask: p.umask,
   };
 }

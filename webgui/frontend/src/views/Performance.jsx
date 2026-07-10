@@ -76,8 +76,11 @@ function bucketAverage(samples, valueOf, t0, t1, buckets = 80) {
   for (const s of samples) {
     const v = valueOf(s);
     if (v == null || !isFinite(v)) continue;
-    let i = Math.floor((s.t - t0) / w);
-    if (i < 0) i = 0; if (i >= buckets) i = buckets - 1;
+    const i = Math.floor((s.t - t0) / w);
+    // Skip samples outside the [t0, t1] window rather than clamping them into
+    // the edge bucket — when zoomed into a sub-window, clamping dumped every
+    // older/newer sample onto the first/last bucket and skewed those averages.
+    if (i < 0 || i >= buckets) continue;
     sum[i] += v; cnt[i] += 1;
   }
   const pts = [];

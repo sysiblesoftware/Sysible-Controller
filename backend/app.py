@@ -1325,7 +1325,12 @@ def self_disenroll(host_id: str, req: SelfDisenrollRequest):
 
     agent = _find_agent(req.host_id)
 
-    delete_agent(req.host_id)
+    # Serialize the delete against the enroll critical section (_ENROLL_LOCK),
+    # same as the admin Force-Delete path: without it a zombie agent re-enrolling
+    # with the same token can interleave and recreate the record right after
+    # delete_agent runs, defeating the disenroll it raced.
+    with _ENROLL_LOCK:
+        delete_agent(req.host_id)
 
     _forget_ssh_for_deleted_agent(req.host_id, agent)
 

@@ -23,6 +23,24 @@ def _int_env(name, default):
         return default
 
 
+import re as _re
+# An agent-reported `ip` becomes the SSH target of the auto-registered SSH mirror
+# host. It's already placed after `--` in the ssh argv (so it can't be read as an
+# option) and stored via parameterized SQL, but validate at ingest as defence in
+# depth so an option-looking value (`-oProxyCommand=…`) can never be persisted.
+# Lenient: any real IPv4/IPv6/hostname passes; only a leading '-' or shell/space/
+# control character is rejected. Empty/None is allowed (older agents omit it).
+_AGENT_ADDR_RE = _re.compile(r"^[A-Za-z0-9]([A-Za-z0-9._:-]*)?$")
+
+
+def _validate_agent_addr(cls, v):
+    if v is None or v == "":
+        return v
+    if not _AGENT_ADDR_RE.match(v):
+        raise ValueError("ip must be a plain host address (no leading '-' or metacharacters)")
+    return v
+
+
 _METRICS_MAX = _int_env("SYSIBLE_MAX_METRICS_BYTES", 64 * 1024)
 _SNAPSHOT_MAX = _int_env("SYSIBLE_MAX_SNAPSHOT_BYTES", 512 * 1024)
 _MEASUREMENTS_MAX = _int_env("SYSIBLE_MAX_MEASUREMENTS_BYTES", 512 * 1024)
@@ -52,12 +70,16 @@ class EnrollRequest(BaseModel):
     kernel: Optional[str] = Field(default=None, max_length=_SHORT_MAX)
     ip: Optional[str] = Field(default=None, max_length=_HOSTNAME_MAX)
 
+    _v_ip = field_validator("ip")(classmethod(_validate_agent_addr))
+
 
 class HeartbeatRequest(BaseModel):
     host_id: str = Field(max_length=_ID_MAX)
     agent_secret: str = Field(max_length=_ID_MAX)
     ip: Optional[str] = Field(default=None, max_length=_HOSTNAME_MAX)
     hostname: Optional[str] = Field(default=None, max_length=_HOSTNAME_MAX)
+
+    _v_ip = field_validator("ip")(classmethod(_validate_agent_addr))
     # Short hash of the agent's own agent.py, so the controller knows which hosts
     # run the current agent (drives the web console's Update-agents progress).
     # Older agents omit it.

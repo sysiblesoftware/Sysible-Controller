@@ -80,8 +80,30 @@ def cmd_remove_cron_job(match_text: str) -> str:
     )
 
 
+def _reject_newlines(value: str, field: str) -> str:
+    """A stored systemd/unit field is written into a heredoc-delimited file
+    (`cat > unit <<'SYSIBLE_EOF'`). An embedded newline — a body line that is
+    exactly `SYSIBLE_EOF`, or an injected `ExecStart=`/extra directive — would
+    break out of the heredoc and run as shell at the task's privilege. Reject
+    CR/LF at ingest (mirrors the guard _api_repo.py already applies)."""
+    v = value or ""
+    if "\n" in v or "\r" in v:
+        raise ValueError(f"{field} may not contain newlines")
+    return v
+
+
+def _safe_unit_base(name: str) -> str:
+    """A unit basename joined into /etc/systemd/system/<name>. Reject path
+    separators and traversal so the write can't be redirected to another file
+    (e.g. `../../etc/cron.d/x`) — shlex.quote blocks shell injection but not '/'."""
+    n = (name or "").strip()
+    if "/" in n or "\\" in n or ".." in n:
+        raise ValueError("Unit name may not contain '/', '\\' or '..'")
+    return n
+
+
 def _timer_unit(name: str) -> str:
-    name = (name or "").strip()
+    name = _safe_unit_base(name)
     if not name:
         raise ValueError("Timer name cannot be empty")
     return name if name.endswith(".timer") else f"{name}.timer"
@@ -127,7 +149,7 @@ def cmd_create_systemd_timer(
     """Writes a paired oneshot .service (the thing that actually runs
     exec_start) and .timer (the schedule) in one action. At least one
     of on_calendar / on_boot_sec / on_unit_active_sec must be set."""
-    base = (name or "").strip()
+    base = _safe_unit_base(name)
     if base.endswith(".timer"):
         base = base[: -len(".timer")]
     if base.endswith(".service"):
@@ -136,6 +158,11 @@ def cmd_create_systemd_timer(
         raise ValueError("Timer name cannot be empty")
     if not exec_start.strip():
         raise ValueError("ExecStart command cannot be empty")
+    # These all flow into the unit-file heredoc body — reject newline breakout.
+    for _fld, _val in (("ExecStart", exec_start), ("Description", description),
+                       ("User", run_as_user), ("OnCalendar", on_calendar),
+                       ("OnBootSec", on_boot_sec), ("OnUnitActiveSec", on_unit_active_sec)):
+        _reject_newlines(_val, _fld)
 
     timer_lines = ["[Timer]"]
     have_schedule = False

@@ -2112,6 +2112,12 @@ _ADMIN_LOGIN_LOCKOUT_S = 10 * 60
 _admin_login_state = {}
 _admin_login_lock = threading.Lock()
 
+# Decoy credential: when the submitted username doesn't exist we still run a full
+# PBKDF2 verify against this fixed hash so the response time is the same as for a
+# real account — otherwise the short-circuited (fast) miss is a username-enumeration
+# timing oracle. Generated once per process from a random password (never matches).
+_DECOY_SALT, _DECOY_HASH = portal_auth.hash_password(secrets.token_hex(16))
+
 
 def _admin_login_locked_for(ip):
     if not ip:
@@ -2146,29 +2152,41 @@ def _admin_login_clear(ip):
 @app.post("/admin/login", dependencies=[Depends(require_api_key)])
 def admin_login(body: AdminLoginRequest, request: Request):
 
-    ip = request.client.host if request.client else ""
+    username = body.username.strip()
 
-    locked = _admin_login_locked_for(ip)
+    # Throttle per USERNAME, not per client IP. Every console login reaches the
+    # controller from the single BFF process, so an IP key lumped all admins into
+    # one bucket — 10 failures locked out the whole console, and one account's
+    # failures locked others. Per-username gives each account its own lockout;
+    # volumetric abuse is separately bounded by the BFF's per-real-client-IP
+    # throttle (webgui/server.py) and the root-only API key.
+    throttle_key = username or "(empty)"
+
+    locked = _admin_login_locked_for(throttle_key)
     if locked:
-        log_admin_audit("login_throttled", body.username.strip(), f"locked {locked}s")
+        log_admin_audit("login_throttled", username, f"locked {locked}s")
         raise HTTPException(
             status_code=429,
             detail=f"Too many failed attempts. Try again in about {max(1, locked // 60)} minute(s).",
         )
 
-    username = body.username.strip()
     admin = get_administrator(username)
 
-    valid = admin is not None and portal_auth.verify_password(
-        body.password, admin["password_salt"], admin["password_hash"]
-    )
+    if admin is not None:
+        valid = portal_auth.verify_password(
+            body.password, admin["password_salt"], admin["password_hash"])
+    else:
+        # Decoy verify so a nonexistent username costs the same PBKDF2 time as a
+        # real one (closes the username-enumeration timing oracle).
+        portal_auth.verify_password(body.password, _DECOY_SALT, _DECOY_HASH)
+        valid = False
 
     if not valid:
-        _admin_login_record_failure(ip)
+        _admin_login_record_failure(throttle_key)
         log_admin_audit("login_failed", username, "Invalid username or password")
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    _admin_login_clear(ip)
+    _admin_login_clear(throttle_key)
     record_administrator_login(username)
     log_admin_audit("login_success", username, "")
 
@@ -2189,6 +2207,20 @@ def admin_login(body: AdminLoginRequest, request: Request):
         # password" button (granted by a superuser). Both front ends read this.
         "sudo_connect": bool(admin.get("sudo_connect")),
     }
+
+
+@app.get("/admin/whoami", dependencies=[Depends(require_api_key)])
+def admin_whoami(request: Request):
+    """Resolve the caller's admin token to its LIVE identity/role, or 401 if the
+    token has been revoked (account removed, role changed, expired). The web
+    console calls this periodically so a demoted or removed admin's session is
+    dropped promptly instead of coasting on a still-signed cookie until the 12h
+    token expiry. resolve_admin_token does the live-account cross-check."""
+    token = request.headers.get("X-Sysible-Admin-Token")
+    admin = resolve_admin_token(token) if token else None
+    if not admin:
+        raise HTTPException(status_code=401, detail="Invalid or expired admin token")
+    return {"username": admin["username"], "role": admin["role"]}
 
 
 @app.post("/admin/logout", dependencies=[Depends(require_api_key)])

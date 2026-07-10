@@ -40,6 +40,28 @@ All notable changes to the Sysible Controller are recorded here.
   were written then `chmod`ed, leaving a world-readable umask window a local user
   could race to read the API key or forge admin session cookies. Now created with
   `O_EXCL|O_NOFOLLOW` like the sudo-store key.
+- **The console session is revalidated against the live account.** The signed
+  session cookie froze identity/role at login, so a demoted or removed admin kept
+  BFF-gated powers (fleet reads, superuser-only portal-file control) until the 12h
+  token expiry. Each request now re-checks the underlying admin token against the
+  controller (new `GET /admin/whoami`), TTL-cached to one call/minute/session, and
+  drops the session the moment the token is revoked (`SYSIBLE_SESSION_REVALIDATE_TTL`).
+- **Admin-login throttle is keyed per username, and login is constant-time.** The
+  controller lockout was keyed on the caller's IP — which for every console login
+  is the single BFF, so ten failures locked out *all* admins. It's now per-account.
+  A decoy PBKDF2 verify also runs when the username doesn't exist (admin and portal
+  logins), closing a username-enumeration timing oracle.
+- **Alert webhook delivery is pinned to the verified IP.** The SSRF guard resolved
+  the webhook host and checked it was public, but `urlopen` re-resolved it — a
+  hostile DNS server could answer the check public and the request internal (DNS
+  rebinding). The request now connects to the exact IP that passed the check (TLS
+  cert/SNI still validated against the hostname).
+- **Defense-in-depth on the unit/mount builders.** The systemd service/timer
+  builders reject newline breakout of the unit-file heredoc and `/`/`..` in a unit
+  name (no redirecting the write); the mount builder rejects newlines in a mount
+  point (no extra `/etc/fstab` line); and an agent-reported `ip` is charset-validated
+  at ingest. All were already contained (argv-quoted, behind `--`, parameterized
+  SQL) — these close the gaps at the source.
 
 ### Fixed
 - **Webserver Portal tab timestamps render correctly.** A full click-path audit of

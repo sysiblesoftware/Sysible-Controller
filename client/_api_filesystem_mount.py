@@ -20,7 +20,10 @@ def _validate_path(path: str, label: str = "Path") -> str:
     path = (path or "").strip()
     if not path:
         raise ValueError(f"{label} is required.")
-    if "\x00" in path:
+    # Reject NUL and CR/LF: a mount point / device flows into an /etc/fstab line
+    # (written with printf), so an embedded newline would append an extra fstab
+    # entry — a distinct filesystem mounted at boot the operator didn't intend.
+    if "\x00" in path or "\n" in path or "\r" in path:
         raise ValueError(f"{label} contains an invalid character.")
     return path
 

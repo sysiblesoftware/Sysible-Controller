@@ -152,6 +152,11 @@ def require_login(request: Request):
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    # Drop the session promptly if the underlying admin token was revoked
+    # (account removed / role changed) — otherwise the signed cookie coasts until
+    # its 12h expiry. TTL-cached, so this is at most one controller call per minute
+    # per session.
+    _revalidate_session(request)
     return user
 
 
@@ -166,6 +171,7 @@ def require_operator(request: Request):
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    _revalidate_session(request)  # drop a revoked/demoted admin before any write
     if request.session.get("role") == "auditor":
         raise HTTPException(status_code=403, detail="Auditor accounts are read-only.")
     # Forced first-login password change: gate every write/dispatch route until the
@@ -192,6 +198,9 @@ def require_superuser_session(request: Request):
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    # Revalidate FIRST so a just-demoted superuser is caught here (their token is
+    # invalid → session cleared → 401) rather than passing on a stale session role.
+    _revalidate_session(request)
     if request.session.get("role") != "superuser":
         raise HTTPException(status_code=403, detail="This action requires a superuser account.")
     return user
@@ -281,6 +290,45 @@ def _with_token(token, fn):
         return fn()
     finally:
         api.clear_admin_token_override()
+
+
+_SESSION_REVAL_TTL = float(os.getenv("SYSIBLE_SESSION_REVALIDATE_TTL", "60"))
+
+
+def _revalidate_session(request: "Request"):
+    """Periodically re-check the session's admin token against the controller so a
+    DEMOTED or REMOVED admin's still-signed cookie stops working within
+    _SESSION_REVAL_TTL instead of coasting until the 12h token expiry. The Starlette
+    session is a stateless signed cookie the server can't invalidate, and several
+    routes are gated only by this BFF session (fleet reads, superuser-only portal
+    file ops), so without a live re-check a revoked admin keeps those powers.
+
+    resolve_admin_token on the controller rejects a token whose account was removed
+    or whose role changed, so a 401 here means 'revoked' → clear the session. A
+    transport error (controller blip) leaves the session intact — fail open on an
+    outage, closed on a real revocation. Cached per-session to one call / TTL."""
+    import time as _t
+    sess = request.session
+    tok = _token_from_session(sess)
+    if not tok:
+        return  # no token to validate (shouldn't happen for a console session)
+    now = _t.time()
+    if now - (sess.get("_reval_at") or 0) < _SESSION_REVAL_TTL:
+        return
+    try:
+        who = _with_token(tok, api.whoami)
+    except Exception as e:
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if status in (401, 403):
+            sess.clear()
+            raise HTTPException(status_code=401,
+                                detail="Your session is no longer valid. Please log in again.")
+        return  # transport/other error → keep the session (fail open on a blip)
+    sess["_reval_at"] = now
+    # Keep the session role in lockstep with the live account (belt-and-suspenders;
+    # a role change already invalidates the token above, forcing a re-login).
+    if who and who.get("role"):
+        sess["role"] = who["role"]
 
 
 def _client_ip(request: Request) -> str:

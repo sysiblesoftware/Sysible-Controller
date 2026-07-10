@@ -247,6 +247,12 @@ def _login_locked_for(ip):
         return int(remaining) if remaining > 0 else 0
 
 
+# Decoy credential for constant-time login (see the login handler): a full PBKDF2
+# verify runs against this even when the username is wrong, so timing can't reveal
+# the configured portal username. Random per process, never matches.
+_PORTAL_DECOY_SALT, _PORTAL_DECOY_HASH = portal_auth.hash_password(secrets.token_hex(16))
+
+
 def _record_login_failure(ip):
     if not ip:
         return
@@ -299,9 +305,14 @@ async def login(request: Request, username: str = Form(...), password: str = For
             )
         return RedirectResponse("/?error=notconfigured", status_code=303)
 
-    valid = secrets.compare_digest(username, creds["username"]) and portal_auth.verify_password(
-        password, creds.get("password_salt"), creds.get("password_hash")
-    )
+    if secrets.compare_digest(username, creds["username"]):
+        valid = portal_auth.verify_password(
+            password, creds.get("password_salt"), creds.get("password_hash"))
+    else:
+        # Decoy verify so a wrong username costs the same PBKDF2 time as a right one
+        # (don't leak the configured portal username via a fast short-circuit).
+        portal_auth.verify_password(password, _PORTAL_DECOY_SALT, _PORTAL_DECOY_HASH)
+        valid = False
 
     if not valid:
         _record_login_failure(ip)

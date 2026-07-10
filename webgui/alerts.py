@@ -291,47 +291,79 @@ def _webhook_url_safe(url):
     public addresses. Blocks loopback/private/link-local (incl. the
     169.254.169.254 cloud-metadata address), reserved, multicast and
     unspecified targets so an operator can't point the controller at internal
-    services. Returns (ok, reason).
+    services. Returns (ok, reason, pinned_ip).
 
-    Residual: this is a resolve-time check, so a hostile DNS answer could still
-    rebind between here and the request (DNS rebinding). Given the webhook is
-    superuser/sysadmin-configured, this proportionally raises the bar; pinning
-    the resolved IP for the connection would close the rebinding gap fully."""
+    The resolved public IP is returned so the caller can CONNECT to that exact
+    address rather than re-resolving the hostname — otherwise a hostile DNS server
+    could answer the check with a public IP and the real request with an internal
+    one (DNS rebinding). Pinning here closes that gap."""
     import ipaddress
     import socket
     from urllib.parse import urlparse
     p = urlparse(url)
     if p.scheme not in ("http", "https"):
-        return False, "webhook URL must be http(s)"
+        return False, "webhook URL must be http(s)", None
     host = p.hostname
     if not host:
-        return False, "invalid webhook URL"
+        return False, "invalid webhook URL", None
     try:
         infos = socket.getaddrinfo(host, p.port or (443 if p.scheme == "https" else 80),
                                    proto=socket.IPPROTO_TCP)
     except socket.gaierror as ex:
-        return False, f"cannot resolve webhook host: {ex}"
+        return False, f"cannot resolve webhook host: {ex}", None
+    pinned = None
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
         if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
                 or ip.is_multicast or ip.is_unspecified):
-            return False, "webhook host resolves to a non-public address (blocked)"
-    return True, "ok"
+            return False, "webhook host resolves to a non-public address (blocked)", None
+        if pinned is None:
+            pinned = info[4][0]
+    return True, "ok", pinned
 
 
 def _send_webhook(cfg, subject, body):
+    import http.client
+    import socket
+    import ssl
+    from urllib.parse import urlparse
     w = cfg["channels"]["webhook"]
     if not w.get("enabled") or not w.get("url"):
         return False, "webhook not configured"
-    ok, why = _webhook_url_safe(w["url"])
+    ok, why, pinned_ip = _webhook_url_safe(w["url"])
     if not ok:
         return False, why
+
+    # Connect to the VERIFIED public IP (pinned_ip), not by re-resolving the host —
+    # this is what closes the DNS-rebinding window. SNI and cert verification still
+    # use the original hostname (a mismatched cert fails, as it should).
+    class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+        def connect(self):
+            sock = socket.create_connection((pinned_ip, self.port), self.timeout)
+            self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+    class _PinnedHTTPConnection(http.client.HTTPConnection):
+        def connect(self):
+            self.sock = socket.create_connection((pinned_ip, self.port), self.timeout)
+
     try:
-        import urllib.request
+        p = urlparse(w["url"])
+        port = p.port or (443 if p.scheme == "https" else 80)
         payload = json.dumps({"text": f"*{subject}*\n{body}"}).encode()
-        req = urllib.request.Request(w["url"], data=payload,
-                                     headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=15).read()
+        path = p.path or "/"
+        if p.query:
+            path += "?" + p.query
+        if p.scheme == "https":
+            conn = _PinnedHTTPSConnection(p.hostname, port=port, timeout=15,
+                                          context=ssl.create_default_context())
+        else:
+            conn = _PinnedHTTPConnection(p.hostname, port=port, timeout=15)
+        try:
+            conn.request("POST", path, body=payload,
+                         headers={"Content-Type": "application/json", "Host": p.hostname})
+            conn.getresponse().read()
+        finally:
+            conn.close()
         return True, "sent"
     except Exception as ex:
         return False, str(ex)

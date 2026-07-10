@@ -496,6 +496,14 @@ def admin_logout():
         set_admin_token(None)
 
 
+def whoami():
+    """Resolve this session's admin token to its LIVE {username, role}, or raise
+    if the controller rejects it (account removed, role changed, expired). The
+    console uses this to drop a stale session promptly instead of trusting the
+    signed cookie until token expiry."""
+    return _request("GET", "/admin/whoami")
+
+
 def list_administrators():
     return _request("GET", "/admin/administrators").get("administrators", [])
 

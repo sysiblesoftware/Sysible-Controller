@@ -187,7 +187,20 @@ def _service_unit(name: str) -> str:
     name = (name or "").strip()
     if not name:
         raise ValueError("Service name cannot be empty")
+    # Reject path separators / traversal: the name is joined into
+    # /etc/systemd/system/<unit>, so '/' or '..' could redirect the write.
+    if "/" in name or "\\" in name or ".." in name:
+        raise ValueError("Service name may not contain '/', '\\' or '..'")
     return name if name.endswith(_UNIT_SUFFIXES) else f"{name}.service"
+
+
+def _reject_newlines(value: str, field: str) -> str:
+    """Reject CR/LF in a value that flows into a unit-file heredoc body — a newline
+    (or a lone `SYSIBLE_EOF` line) would break out of the heredoc and run as shell."""
+    v = value or ""
+    if "\n" in v or "\r" in v:
+        raise ValueError(f"{field} may not contain newlines")
+    return v
 
 
 def cmd_list_usernames() -> str:
@@ -326,6 +339,8 @@ def cmd_set_service_dependencies(name: str, after: str = "", requires: str = "",
     /etc/systemd/system/<unit>.d/override.conf rather than editing the
     original unit file directly."""
     unit = _service_unit(name)
+    for _fld, _val in (("After", after), ("Requires", requires), ("Wants", wants)):
+        _reject_newlines(_val, _fld)
     body_lines = ["[Unit]"]
     if after.strip():
         body_lines.append(f"After={after.strip()}")
@@ -365,6 +380,10 @@ def cmd_create_systemd_service(
     unit = _service_unit(name)
     if not exec_start.strip():
         raise ValueError("ExecStart command cannot be empty")
+    for _fld, _val in (("Description", description), ("ExecStart", exec_start),
+                       ("WorkingDirectory", working_directory), ("User", run_as_user),
+                       ("Restart", restart_policy), ("After", after)):
+        _reject_newlines(_val, _fld)
 
     body_lines = [
         "[Unit]",

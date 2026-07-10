@@ -4,7 +4,7 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
-## 3.1.0 — 2026-07-10
+## 3.0.1 — 2026-07-10
 
 A large security-hardening and reliability release on top of 3.0.0, plus new
 fleet-management conveniences. Every managed-host command path, the

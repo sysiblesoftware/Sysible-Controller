@@ -2185,10 +2185,12 @@ def change_credentials(body: ChangeCreds, request: Request, user: str = Depends(
     new_user = (body.new_username or "").strip() or user
     result = _wrap(lambda: _as_admin(request, lambda: api.change_admin_credentials(
         user, body.current_password, new_user, body.new_password)))
-    # The change cleared must_change_password on the controller and (if renamed)
-    # moved the account — reflect both in the session so the forced-change gate
-    # releases and the session tracks the new username without a re-login.
-    request.session["must_change_password"] = False
+    # Release the forced-change gate ONLY when a new password was actually set —
+    # the controller clears the DB flag only inside `if body.new_password`, so a
+    # username-only rename must NOT lift the session gate (that would leave the
+    # temporary password in place with the gate released: DB=1, session=0).
+    if body.new_password:
+        request.session["must_change_password"] = False
     if new_user != user:
         request.session["user"] = new_user
     return result
@@ -3279,6 +3281,14 @@ async def terminal_ws(ws: WebSocket):
         return
     # Read-only 'auditor' accounts cannot open an interactive terminal.
     if _sess.get("role") == "auditor":
+        await ws.close(code=1008)
+        return
+    # Forced first-login password change gates the HTTP write/dispatch routes
+    # (require_operator); this WS does its own inline auth, so it must apply the
+    # same gate — otherwise an operator on a temporary/shared credential could
+    # open a fully interactive shell (the most privileged action) without ever
+    # rotating it.
+    if _sess.get("must_change_password"):
         await ws.close(code=1008)
         return
     await ws.accept()

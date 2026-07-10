@@ -98,8 +98,21 @@ def _get_or_create_secret():
     secret = secrets.token_hex(32)
     try:
         RUN_DIR.mkdir(parents=True, exist_ok=True)
-        WEBGUI_SECRET_FILE.write_text(secret + "\n")
-        os.chmod(WEBGUI_SECRET_FILE, 0o600)
+        # Create 0600 atomically (O_EXCL|O_NOFOLLOW) — this secret signs the admin
+        # session cookie, so a world-readable umask window between write and chmod
+        # would let a local user forge admin sessions. Lose the race safely.
+        fd = os.open(str(WEBGUI_SECRET_FILE), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(fd, (secret + "\n").encode())
+        finally:
+            os.close(fd)
+    except FileExistsError:
+        try:
+            s = WEBGUI_SECRET_FILE.read_text().strip()
+            if s:
+                return s
+        except OSError:
+            pass
     except OSError:
         pass
     return secret

@@ -21,16 +21,27 @@ _API_KEY_FILE = Path(os.getenv("SYSIBLE_API_KEY_FILE", "/opt/sysible/api_key.txt
 
 _CA_CERT_FILE = os.getenv("SYSIBLE_CA_CERT", "/opt/sysible/certs/server.crt")
 
+# TLS trust is PINNED to the controller's cert. If the pin file is missing on an
+# https:// endpoint we FAIL CLOSED — falling back to system-CA verification would
+# silently drop pinning, so on a PKI-cert deployment any CA in the store could MITM
+# the controller channel (which carries the admin API key and operator tokens). An
+# operator who intends to trust the public store opts in with SYSIBLE_ALLOW_SYSTEM_CA=1.
+_ALLOW_SYSTEM_CA = os.getenv("SYSIBLE_ALLOW_SYSTEM_CA", "0").strip().lower() in ("1", "true", "yes", "on")
 if BASE_URL.startswith("https://"):
     if os.path.exists(_CA_CERT_FILE):
         _VERIFY = _CA_CERT_FILE
-    else:
+    elif _ALLOW_SYSTEM_CA:
         print(
-            f"[api] warning: no pinned CA cert found at {_CA_CERT_FILE} - "
-            "set SYSIBLE_CA_CERT to a local copy of the controller's "
-            "certs/server.crt. TLS verification will likely fail until then."
+            f"[api] warning: no pinned CA cert at {_CA_CERT_FILE}; "
+            "SYSIBLE_ALLOW_SYSTEM_CA=1 set, verifying against the SYSTEM trust store "
+            "(NOT pinned)."
         )
         _VERIFY = True
+    else:
+        # FAIL CLOSED: point verify at the (missing) pin path so requests refuses
+        # to connect rather than silently downgrading to system-CA verification.
+        # Import stays safe (no crash); only a real HTTPS call without a pin fails.
+        _VERIFY = _CA_CERT_FILE
 else:
     _VERIFY = True
 

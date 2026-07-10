@@ -22,6 +22,24 @@ All notable changes to the Sysible Controller are recorded here.
   credential. Every write/dispatch route (`require_operator`) now returns 403
   until the password is actually rotated (the change-credentials route stays
   reachable to clear it).
+- **The forced-password gate now also covers the interactive terminal.** The
+  terminal WebSocket does its own inline auth and skipped the `must_change_password`
+  check, so an operator on a temporary credential could open a full shell (the most
+  privileged action) without rotating it. The WS now applies the same gate, and a
+  username-only credential change no longer lifts the gate without a password reset.
+- **The agent no longer puts its secret in a URL.** The interactive-terminal
+  long-poll sent the agent secret as a query parameter, so uvicorn's access log
+  recorded a live agent credential every ~25s for the whole session. It now uses
+  the `X-Agent-Secret` header like every other agent call.
+- **TLS pinning is fail-closed.** On an `https://` controller a missing pin file
+  used to fall back to system-CA verification, silently dropping pinning (any CA in
+  the store could MITM the agent/BFF→controller channel). It now refuses to connect
+  without the pin; set `SYSIBLE_ALLOW_SYSTEM_CA=1` to deliberately use the system
+  trust store.
+- **Admin API key and cookie-signing secret are created `0600` atomically.** Both
+  were written then `chmod`ed, leaving a world-readable umask window a local user
+  could race to read the API key or forge admin session cookies. Now created with
+  `O_EXCL|O_NOFOLLOW` like the sudo-store key.
 
 ### Fixed
 - **Webserver Portal tab timestamps render correctly.** A full click-path audit of

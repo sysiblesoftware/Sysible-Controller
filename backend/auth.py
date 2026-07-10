@@ -46,8 +46,20 @@ def get_or_create_api_key():
 
     try:
         API_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        API_KEY_FILE.write_text(key + "\n")
-        os.chmod(API_KEY_FILE, 0o600)
+        # Create 0600 atomically (O_EXCL|O_NOFOLLOW) instead of write_text()+chmod:
+        # the old pattern left the admin API key world-readable at the umask
+        # default between create and chmod, so a local unprivileged user racing
+        # first-run could read it. O_EXCL also loses the race safely if another
+        # process created it first (we re-read theirs below).
+        fd = os.open(str(API_KEY_FILE), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(fd, (key + "\n").encode())
+        finally:
+            os.close(fd)
+    except FileExistsError:
+        existing = _read_existing_key()
+        if existing:
+            return existing
     except OSError:
         # Couldn't persist (e.g. no permission to /opt/sysible outside
         # a real install). Still usable for this process's lifetime.

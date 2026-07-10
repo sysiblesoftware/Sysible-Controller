@@ -107,15 +107,35 @@ METRICS_INTERVAL = float(os.getenv("SYSIBLE_METRICS_INTERVAL", "60"))
 # =========================================================
 _CA_CERT_FILE = os.getenv("SYSIBLE_CA_CERT", "/etc/sysible/controller.crt")
 
+# TLS trust is PINNED to the controller's cert (shipped in the enrollment bundle):
+# the agent verifies against that exact cert, not the system trust store. If the
+# pin file is missing on an https:// controller we FAIL CLOSED — falling back to
+# system-CA verification (the old behavior) silently removes pinning, so on a
+# PKI-cert deployment any cert from any CA in the store could MITM the channel.
+# An operator who *intends* to rely on the public trust store can opt in explicitly
+# with SYSIBLE_ALLOW_SYSTEM_CA=1.
+_ALLOW_SYSTEM_CA = os.getenv("SYSIBLE_ALLOW_SYSTEM_CA", "0").strip().lower() in ("1", "true", "yes", "on")
 if CONTROLLER.startswith("https://") and os.path.exists(_CA_CERT_FILE):
     _VERIFY = _CA_CERT_FILE
-elif CONTROLLER.startswith("https://"):
+elif CONTROLLER.startswith("https://") and _ALLOW_SYSTEM_CA:
     print(
-        f"[agent] warning: no pinned CA cert found at {_CA_CERT_FILE} - "
-        "copy the controller's certs/server.crt here or set SYSIBLE_CA_CERT. "
-        "TLS verification will likely fail until then."
+        f"[agent] warning: no pinned CA cert at {_CA_CERT_FILE}; "
+        "SYSIBLE_ALLOW_SYSTEM_CA=1 set, so verifying against the SYSTEM trust "
+        "store (NOT pinned). Any CA in the store can authenticate the controller."
     )
     _VERIFY = True
+elif CONTROLLER.startswith("https://"):
+    # FAIL CLOSED: point verify at the (missing) pin path so requests refuses to
+    # connect rather than silently falling back to system-CA verification, which
+    # would drop pinning and let any CA in the store MITM the channel. The agent
+    # keeps retrying, so it recovers as soon as the cert is delivered (bundle/scp).
+    print(
+        f"[agent] no pinned controller cert at {_CA_CERT_FILE} - refusing to connect "
+        "without pinning. Copy the controller's certs/server.crt there (it ships in "
+        "the enrollment bundle) or set SYSIBLE_CA_CERT; set SYSIBLE_ALLOW_SYSTEM_CA=1 "
+        "only if you deliberately trust the system CA store."
+    )
+    _VERIFY = _CA_CERT_FILE
 else:
     _VERIFY = True
 
@@ -1027,8 +1047,12 @@ def _pty_poll_io(state, sid):
     """Long-poll the controller for queued input/resize/close. Returns
     (messages, closed)."""
     try:
+        # Send the secret in a header, NOT a query param: uvicorn's access log
+        # records the full path+query on every ~25s poll, so a query-string secret
+        # would write a live agent credential to the controller logs for the whole
+        # terminal session. Every other agent call already uses this header.
         r = _request("GET", f"/agents/{state['host_id']}/pty/{sid}/io",
-                     params={"agent_secret": state["agent_secret"]}, timeout=35)
+                     headers={"X-Agent-Secret": state["agent_secret"]}, timeout=35)
         d = r.json()
         return d.get("msgs", []), bool(d.get("closed"))
     except Exception:

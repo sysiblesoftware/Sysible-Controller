@@ -103,6 +103,23 @@ _HOST_RE = re.compile(r"^[A-Za-z0-9.\-]+$")
 _SHARE_RE = re.compile(r"^[^\x00/]+$")
 
 
+def _validate_mount_options(options: str) -> str:
+    """Vet mount options before they're inlined into the mount command AND written
+    to /etc/fstab. shlex.quote already blocks shell injection in the mount command,
+    but an fstab line is whitespace-delimited and newline-terminated: a space would
+    split the option into extra fstab fields and a NEWLINE would append an ATTACKER-
+    CONTROLLED second fstab entry (persisted, run at every boot as root). Mount
+    options are always comma-separated tokens with no whitespace, so reject any."""
+    opts = (options or "").strip()
+    if not opts:
+        return opts
+    for ch in opts:
+        if ch.isspace() or ch == "\x00":
+            raise ValueError("Mount options must be a comma-separated list with no "
+                             "spaces or newlines (e.g. rw,noexec,vers=3).")
+    return opts
+
+
 def cmd_mount_nfs(server: str, export_path: str, mount_point: str,
                   options: str = "", persist: bool = False) -> str:
     """Mount an NFS export (server:/export) at `mount_point`, optionally
@@ -114,7 +131,7 @@ def cmd_mount_nfs(server: str, export_path: str, mount_point: str,
         raise ValueError("NFS server must be a hostname or IP.")
     if not export_path.startswith("/"):
         raise ValueError("NFS export path should start with '/' (e.g. /exports/data).")
-    opts = (options or "").strip() or "defaults"
+    opts = _validate_mount_options(options) or "defaults"
     src = f"{server}:{export_path}"
     q_src, q_mnt, q_opts = shlex.quote(src), shlex.quote(mount_point), shlex.quote(opts)
     cmd = (
@@ -146,7 +163,7 @@ def cmd_mount_cifs(server: str, share: str, mount_point: str, username: str = ""
     if not _SHARE_RE.match(share):
         raise ValueError("Share name is required (the part after //server/).")
     unc = f"//{server}/{share}"
-    opts = (options or "").strip()
+    opts = _validate_mount_options(options)
     extra = f",{opts}" if opts else ""   # for the fstab line only (whole line is shlex-quoted below)
     q_unc, q_mnt = shlex.quote(unc), shlex.quote(mount_point)
     q_user, q_pass = shlex.quote(username or "guest"), shlex.quote(password or "")

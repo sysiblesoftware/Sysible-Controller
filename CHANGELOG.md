@@ -4,6 +4,14 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Security
+- **fstab-line injection via mount options (fixed).** NFS/CIFS mount options were
+  `shlex`-quoted for the mount command but written literally into an `/etc/fstab`
+  line on persist — a newline could append an attacker-controlled fstab entry
+  mounted at every boot as root. Options are now rejected if they contain
+  whitespace or newlines (they are always comma-separated tokens, e.g.
+  `rw,noexec,vers=3`). `client/_api_filesystem_mount.py`.
+
 ## 3.0.1 — 2026-07-10
 
 A large security-hardening and reliability release on top of 3.0.0, plus new

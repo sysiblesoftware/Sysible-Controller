@@ -2,9 +2,14 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import HostResults from "../components/HostResults.jsx";
 
-// Faithful rebuild of the desktop User & Group Administration page: host tree
-// with checkboxes + live sync (left), users-on-selected-host (middle), and
-// Create/Account/Password/Groups/Reports/Policies tabs (right).
+// User & Group Administration. Host tree with live sync (left), the fleet's
+// distinct accounts with coverage (middle), and the Create/Account/Password/
+// Groups/Reports/Policies tabs (right).
+//
+// The middle pane is keyed on the DISTINCT account (not the host), so it stays
+// bounded — a few hundred usernames — even across thousands of hosts. Presence is
+// shown as a coverage count with a per-environment drill-down instead of an
+// unusable inline list of host names.
 
 function genPassword(len = 16) {
   const lower = "abcdefghijkmnpqrstuvwxyz", upper = "ABCDEFGHJKLMNPQRSTUVWXYZ",
@@ -16,6 +21,12 @@ function genPassword(len = 16) {
   return out.sort(() => Math.random() - 0.5).join("");
 }
 
+const LockIcon = () => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5Zm3 8H9V6a3 3 0 0 1 6 0Z" />
+  </svg>
+);
+
 export default function UserGroupPage({ initialTab } = {}) {
   const [hosts, setHosts] = useState([]);
   const [checked, setChecked] = useState([]);
@@ -25,6 +36,8 @@ export default function UserGroupPage({ initialTab } = {}) {
   const [syncMsg, setSyncMsg] = useState("Check one or more hosts, then Sync to pull live user data.");
   const [syncing, setSyncing] = useState(false);
   const [userQuery, setUserQuery] = useState("");
+  const [filter, setFilter] = useState("all");     // all|people|priv|locked|partial|system
+  const [drill, setDrill] = useState(null);        // account name whose coverage drill-down is open
   const [selUser, setSelUser] = useState(null);
   const [tab, setTab] = useState(initialTab || "create");
   const [results, setResults] = useState(null);
@@ -55,15 +68,15 @@ export default function UserGroupPage({ initialTab } = {}) {
     setSyncing(false);
   }
 
-  // Hosts we have synced data for — prefer the checked set, fall back to all
-  // synced. The middle list is the UNION across these hosts so we can flag
-  // users that exist on only some of them ("host mismatch").
+  // Hosts we have synced data for — prefer the checked set, fall back to all synced.
   const syncedIds = useMemo(() => {
     const have = Object.keys(hostData);
     const c = checked.filter((id) => hostData[id]);
     return c.length ? c : have;
   }, [hostData, checked]);
   const labelOf = (id) => (hosts.find((h) => h.id === id)?.label || id);
+  const hostEnvOf = useMemo(
+    () => Object.fromEntries(hosts.map((h) => [h.id, h.environment || "Unassigned"])), [hosts]);
 
   // username -> Set(hostId) it exists on, across syncedIds.
   const present = useMemo(() => {
@@ -72,12 +85,6 @@ export default function UserGroupPage({ initialTab } = {}) {
       for (const u of (hostData[id]?.users || [])) (p[u.username] || (p[u.username] = new Set())).add(id);
     return p;
   }, [hostData, syncedIds]);
-
-  const ft = userQuery.trim().toLowerCase();
-  const showU = (name) => !ft || name.toLowerCase().includes(ft);
-  const names = Object.keys(present).filter(showU).sort();
-  const consistent = names.filter((n) => present[n].size === syncedIds.length);
-  const partial = names.filter((n) => present[n].size !== syncedIds.length);
 
   // user object (for the detail panels) from any synced host that has it.
   function userObj(name) {
@@ -89,6 +96,52 @@ export default function UserGroupPage({ initialTab } = {}) {
   }
   const selUserObj = selUser ? userObj(selUser) : null;
 
+  // One entry per DISTINCT account across the synced hosts, with fleet coverage
+  // and a per-environment breakdown. Bounded by account count, not host count.
+  const accounts = useMemo(() => {
+    const total = syncedIds.length;
+    return Object.keys(present).sort().map((name) => {
+      const on = present[name];
+      const obj = userObj(name) || {};
+      const env = {};
+      for (const id of syncedIds) {
+        const e = hostEnvOf[id] || "Unassigned";
+        (env[e] || (env[e] = { on: 0, of: 0 }));
+        env[e].of++; if (on.has(id)) env[e].on++;
+      }
+      const active = syncedIds.some((id) => (hostData[id]?.sessions || []).some((s) => s.username === name));
+      return {
+        name, obj, active, env,
+        cov: on.size, total,
+        partial: total > 0 && on.size < total,
+        system: (obj.uid ?? 1000) < 1000,
+        priv: !!obj.sudo, locked: !!obj.locked,
+        missing: syncedIds.filter((id) => !on.has(id)),
+      };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [present, syncedIds, hostData, hostEnvOf]);
+
+  const ft = userQuery.trim().toLowerCase();
+  const shown = accounts
+    .filter((a) => !ft || a.name.toLowerCase().includes(ft))
+    .filter((a) => filter === "all" ? true
+      : filter === "people" ? !a.system
+      : filter === "priv" ? a.priv
+      : filter === "locked" ? a.locked
+      : filter === "partial" ? a.partial
+      : filter === "system" ? a.system : true);
+  const summary = {
+    total: accounts.length,
+    priv: accounts.filter((a) => a.priv).length,
+    locked: accounts.filter((a) => a.locked).length,
+    partial: accounts.filter((a) => a.partial).length,
+    system: accounts.filter((a) => a.system).length,
+  };
+  const gFull = shown.filter((a) => !a.system && !a.partial);
+  const gPartial = shown.filter((a) => !a.system && a.partial);
+  const gSystem = shown.filter((a) => a.system);
+
   async function run(action, targets, params, label, confirmMsg) {
     if (targets.length === 0) { setErr("No target host(s) for this action."); return; }
     if (confirmMsg && !window.confirm(`${confirmMsg} on ${targets.length} host${targets.length === 1 ? "" : "s"}?`)) return;
@@ -96,54 +149,90 @@ export default function UserGroupPage({ initialTab } = {}) {
     try {
       const r = await api.runTool(action, targets, params);
       setResults({ label: label || action, ...r });
-      // Re-sync the hosts we acted on (not just the viewed one) so the live
-      // user/group lists reflect the change — Create User in particular runs
-      // on the *checked* hosts, which may differ from the viewed host.
       if (action !== "user_audit_privileged" && action !== "group_members") {
         const toSync = [...new Set([...(targets || []), ...(viewHost ? [viewHost] : [])])];
         for (const id of toSync) {
           try { const s = await api.usersSync(id); setHostData((d) => ({ ...d, [id]: s.data || {} })); }
           catch { /* ignore */ }
         }
-        // Make sure the operator is viewing a host the change actually
-        // happened on (e.g. Create User runs on the checked hosts) so the
-        // refreshed user list shows the result.
         if (targets[0] && !targets.includes(viewHost)) setViewHost(targets[0]);
       }
     } catch (e) { setErr(e.message); }
     finally { setRunning(false); }
   }
 
-  // Per-user actions target the synced hosts where that user exists (so a
-  // Lock/Delete applies everywhere it's present); fall back to all synced.
+  // Per-user actions target the synced hosts where that user exists.
   const selTargets = selUser && present[selUser] ? [...present[selUser]] : syncedIds;
   const allHostIds = hosts.map((h) => h.id);
-  // Selected user's status on each synced host (for "View Status by Host").
   const statusRows = selUser ? syncedIds.map((id) => {
     const u = (hostData[id]?.users || []).find((x) => x.username === selUser);
     return { host: labelOf(id), present: !!u, shell: u?.shell, sudo: u?.sudo, locked: u?.locked };
   }) : [];
 
-  function renderUserRow(name, note) {
-    const u = userObj(name);
+  function pickUser(name) { setSelUser(name); setTab("account"); }
+
+  function AccountRow({ a }) {
+    const initial = (a.name[0] || "?").toUpperCase();
+    const mcls = a.locked ? "locked" : ((a.priv || a.obj.uid === 0) ? "priv" : (a.system ? "" : "human"));
+    const open = drill === a.name;
     return (
-      <div key={name} className="host-row" style={{ paddingLeft: 4, cursor: "pointer", alignItems: "flex-start",
-             background: selUser === name ? "var(--row-hover)" : "" }}
-           onClick={() => { setSelUser(name); setTab("account"); }}>
-        <div style={{ display: "flex", flexDirection: "column" }}>
-          <span>
-            {name}
-            {u && u.sudo ? <span className="badge amber" style={{ fontSize: 10, marginLeft: 6 }}>sudo</span> : null}
-            {u && u.locked ? <span className="badge" style={{ fontSize: 10, marginLeft: 6 }}>locked</span> : null}
-          </span>
-          {note && <span className="meta" style={{ fontSize: 11 }}>{note}</span>}
+      <React.Fragment>
+        <div className={"ug-urow" + (selUser === a.name ? " sel" : "") + (a.locked ? " locked" : "")}
+             onClick={() => pickUser(a.name)}>
+          <div className={"ug-mono " + mcls}>{a.locked ? <LockIcon /> : initial}</div>
+          <div className="ug-main">
+            <div className="ug-name">{a.name}</div>
+            <div className="ug-sub">uid {a.obj.uid ?? "—"} · {a.obj.shell || "—"}</div>
+          </div>
+          <div className="ug-right">
+            <div className="ug-chips">
+              {a.priv && <span className="ug-chip sudo">sudo</span>}
+              {a.locked && <span className="ug-chip locked">locked</span>}
+              {a.system && <span className="ug-chip sys">system</span>}
+              {a.active && <span className="ug-sess"><span className="ug-pulse" />active</span>}
+            </div>
+            <div className={"ug-cov" + (a.partial ? " part" : "")}
+                 title={`Present on ${a.cov} of ${a.total} synced host(s)`}
+                 onClick={a.total > 1 ? (e) => { e.stopPropagation(); setDrill(open ? null : a.name); } : undefined}>
+              <span className="ug-covnum">{a.cov.toLocaleString()}/{a.total.toLocaleString()}</span>
+              {a.total > 1 && <span className="ug-disc">{open ? "▾" : "▸"}</span>}
+            </div>
+          </div>
         </div>
-      </div>
+        {open && a.total > 1 && (
+          <div className="ug-drill" onClick={(e) => e.stopPropagation()}>
+            <div className="ug-drill-h">{a.name} — host coverage</div>
+            <div className="ug-drill-sub">
+              Present on {a.cov.toLocaleString()} · missing on {(a.total - a.cov).toLocaleString()} host(s). By environment:
+            </div>
+            {Object.entries(a.env).sort(([x], [y]) => x.localeCompare(y)).map(([e, c]) => {
+              const pct = c.of ? Math.round(c.on / c.of * 100) : 0;
+              return (
+                <div className="ug-envrow" key={e}>
+                  <span className="en">{e}</span>
+                  <span className={"ug-covbar" + (c.on < c.of ? " part" : "")}><i style={{ width: pct + "%" }} /></span>
+                  <span className="num">{c.on}/{c.of}{c.on === c.of ? " ✓" : ""}</span>
+                </div>
+              );
+            })}
+            {a.missing.length > 0 && (
+              <div className="ug-drill-act">
+                <button className="btn sm" disabled={running}
+                        onClick={() => run("user_create", a.missing,
+                          { username: a.name, shell: a.obj.shell || "/bin/bash" },
+                          `Create ${a.name} on ${a.missing.length} missing host(s)`)}>
+                  Create “{a.name}” on the {a.missing.length} missing host(s)
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </React.Fragment>
     );
   }
 
   return (
-    <div className="three-pane" style={{ gridTemplateColumns: "240px 230px 1fr" }}>
+    <div className="three-pane" style={{ gridTemplateColumns: "240px 300px 1fr" }}>
       {/* LEFT: hosts */}
       <div className="host-pane">
         <strong style={{ fontSize: 13 }}>Target Hosts</strong>
@@ -198,36 +287,54 @@ export default function UserGroupPage({ initialTab } = {}) {
         <div className="faint" style={{ fontSize: 12, marginTop: 8 }}>{syncMsg}</div>
       </div>
 
-      {/* MIDDLE: users — union across synced hosts, with host-mismatch grouping */}
-      <div style={{ borderRight: "1px solid var(--border)", paddingRight: 12, display: "flex", flexDirection: "column" }}>
-        <div style={{ fontWeight: 600, marginBottom: 6 }}>
-          {syncedIds.length === 0 ? "Users (no host synced)"
-            : syncedIds.length === 1 ? `Users on ${labelOf(syncedIds[0])}`
-            : `Users across ${syncedIds.length} synced hosts`}
+      {/* MIDDLE: fleet accounts — coverage-based, scales to thousands of hosts */}
+      <div className="ug-mid">
+        <div className="ug-mid-h">
+          {syncedIds.length === 0 ? "Accounts (no host synced)"
+            : syncedIds.length === 1 ? `Accounts on ${labelOf(syncedIds[0])}`
+            : `Fleet accounts · ${syncedIds.length.toLocaleString()} synced hosts`}
         </div>
-        <input placeholder="Search users…" value={userQuery} onChange={(e) => setUserQuery(e.target.value)} />
-        <div style={{ flex: 1, overflowY: "auto", marginTop: 10 }}>
-          {syncedIds.length === 0 && <div className="faint" style={{ padding: 8 }}>Check hosts and Sync to load users.</div>}
-          {syncedIds.length === 1 && names.map((n) => renderUserRow(n))}
-          {syncedIds.length >= 2 && (
-            <>
-              {consistent.length > 0 && (
-                <div className="section-title" style={{ marginTop: 0 }}>On all {syncedIds.length} hosts ({consistent.length})</div>
-              )}
-              {consistent.map((n) => renderUserRow(n))}
-              {partial.length > 0 && (
-                <div className="section-title" style={{ color: "var(--amber)" }}>
-                  Host mismatch — on some hosts only ({partial.length})
-                </div>
-              )}
-              {partial.map((n) => {
-                const on = [...present[n]].map(labelOf);
-                const missing = syncedIds.filter((id) => !present[n].has(id)).map(labelOf);
-                return renderUserRow(n, `on ${on.join(", ")} — missing on ${missing.join(", ")}`);
-              })}
-            </>
-          )}
-        </div>
+        <input placeholder="Search accounts…" value={userQuery} onChange={(e) => setUserQuery(e.target.value)} />
+
+        {syncedIds.length === 0 && (
+          <div className="faint" style={{ padding: 8 }}>Check hosts and Sync to load accounts.</div>
+        )}
+
+        {syncedIds.length > 0 && (
+          <>
+            <div className="ug-tiles">
+              <div className="ug-tile"><div className="n">{summary.total.toLocaleString()}</div><div className="l">Accounts</div></div>
+              <div className="ug-tile warn"><div className="n">{summary.priv}</div><div className="l">Privileged</div></div>
+              {summary.locked > 0 && <div className="ug-tile bad"><div className="n">{summary.locked}</div><div className="l">Locked</div></div>}
+              {syncedIds.length > 1 && <div className="ug-tile warn"><div className="n">{summary.partial}</div><div className="l">Partial</div></div>}
+            </div>
+
+            <div className="ug-filters">
+              {[["all", "All", summary.total], ["people", "People", summary.total - summary.system],
+                ["priv", "Privileged", summary.priv], ["locked", "Locked", summary.locked],
+                ["partial", "Partial", summary.partial], ["system", "System", summary.system]].map(([k, l, c]) => (
+                <span key={k} className={"ug-fchip" + (filter === k ? " on" : "")} onClick={() => setFilter(k)}>
+                  {l} <span className="c">{c}</span></span>
+              ))}
+            </div>
+
+            <div className="ug-list">
+              {filter === "all" ? (
+                <>
+                  {gFull.length > 0 && <div className="ug-grp">On every synced host <span className="n">{gFull.length}</span></div>}
+                  {gFull.map((a) => <AccountRow a={a} key={a.name} />)}
+                  {gPartial.length > 0 && <div className="ug-grp warn">Partial coverage <span className="n">{gPartial.length}</span></div>}
+                  {gPartial.map((a) => <AccountRow a={a} key={a.name} />)}
+                  {gSystem.length > 0 && <div className="ug-grp">System accounts <span className="n">{gSystem.length}</span></div>}
+                  {gSystem.map((a) => <AccountRow a={a} key={a.name} />)}
+                </>
+              ) : shown.map((a) => <AccountRow a={a} key={a.name} />)}
+              {shown.length === 0 && <div className="faint" style={{ padding: 8 }}>No accounts match.</div>}
+            </div>
+
+            <div className="ug-foot">{shown.length.toLocaleString()} of {accounts.length.toLocaleString()} accounts</div>
+          </>
+        )}
       </div>
 
       {/* RIGHT: tabs */}

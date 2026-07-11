@@ -557,3 +557,88 @@ tr:hover td { background: var(--row-hover); }
 .toast-x:hover { opacity: 1; }
 @keyframes toastIn { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
+
+/* ============================================================
+   User & Group Administration — fleet-account middle pane
+   Coverage-based, scales to thousands of hosts.
+   ============================================================ */
+.ug-mid { display: flex; flex-direction: column; min-height: 0;
+  border-right: 1px solid var(--border); padding-right: 12px; }
+.ug-mid > input { margin-top: 8px; }
+.ug-mid-h { font-weight: 600; font-size: 13px; }
+
+.ug-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0 4px; }
+.ug-tile { background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px;
+  padding: 8px 10px; }
+.ug-tile .n { font-size: 18px; font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.ug-tile .l { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-faint); font-weight: 600; margin-top: 2px; }
+.ug-tile.warn { border-color: rgba(227,167,47,0.32); }
+.ug-tile.warn .n { color: var(--amber); }
+.ug-tile.bad .n { color: var(--red); }
+
+.ug-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.ug-fchip { font-size: 11.5px; font-weight: 550; color: var(--text-dim); cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; }
+.ug-fchip .c { color: var(--text-faint); margin-left: 5px; }
+.ug-fchip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.ug-fchip.on .c { color: var(--accent); }
+
+.ug-list { flex: 1; overflow-y: auto; min-height: 0; margin: 0 -12px; }
+.ug-grp { display: flex; align-items: center; gap: 8px; padding: 10px 12px 5px;
+  font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); font-weight: 600; }
+.ug-grp.warn { color: var(--amber); }
+.ug-grp .n { background: var(--panel-2); color: var(--text-dim); border-radius: 999px; padding: 0 7px; font-size: 10px; }
+.ug-grp.warn .n { background: var(--amber-bg); color: var(--amber); }
+
+.ug-urow { display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  border-top: 1px solid var(--border); cursor: pointer; }
+.ug-urow:hover { background: var(--row-hover); }
+.ug-urow.sel { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.ug-urow.locked .ug-name { color: var(--text-dim); }
+
+.ug-mono { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 8px; display: grid;
+  place-items: center; font-weight: 650; font-size: 12px; border: 1px solid transparent;
+  background: var(--slate-bg); color: var(--text-dim); }
+.ug-mono.human { background: var(--accent-soft); color: var(--accent); border-color: rgba(140,149,207,0.3); }
+.ug-mono.priv { background: var(--amber-bg); color: var(--amber); border-color: rgba(227,167,47,0.3); }
+.ug-mono.locked { background: var(--panel-2); color: var(--text-faint); }
+
+.ug-main { flex: 1 1 auto; min-width: 0; }
+.ug-name { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ug-sub { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px;
+  color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.ug-right { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; flex: 0 0 auto; }
+.ug-chips { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.ug-chip { font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 999px; white-space: nowrap;
+  background: var(--slate-bg); color: var(--text-dim); display: inline-flex; align-items: center; gap: 4px; }
+.ug-chip.sudo { background: var(--amber-bg); color: var(--amber); }
+.ug-chip.locked { background: var(--panel-2); color: var(--text-faint); }
+.ug-chip.sys { background: var(--slate-bg); color: var(--text-faint); }
+.ug-sess { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--green-bright); font-weight: 600; }
+.ug-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--green-bright); }
+
+.ug-cov { display: inline-flex; align-items: center; gap: 5px;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px;
+  color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.ug-cov.part { color: var(--amber); }
+.ug-cov .ug-disc { color: var(--text-faint); font-size: 13px; cursor: pointer; }
+
+.ug-drill { margin: 0 0 2px 52px; padding: 10px 12px; background: var(--panel-2);
+  border: 1px solid var(--border-strong); border-radius: 9px; }
+.ug-drill-h { font-weight: 600; font-size: 12.5px; }
+.ug-drill-sub { font-size: 11.5px; color: var(--text-dim); margin: 2px 0 8px; }
+.ug-envrow { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 11.5px; }
+.ug-envrow .en { width: 78px; color: var(--text-dim); font-weight: 600; flex: 0 0 auto;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ug-envrow .num { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--text-dim);
+  min-width: 70px; text-align: right; flex: 0 0 auto; }
+.ug-covbar { flex: 1 1 auto; height: 5px; border-radius: 999px; background: var(--panel);
+  overflow: hidden; min-width: 40px; }
+.ug-covbar > i { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+.ug-covbar.part > i { background: var(--amber); }
+.ug-drill-act { margin-top: 10px; }
+
+.ug-foot { padding: 8px 0 0; font-size: 11px; color: var(--text-faint);
+  border-top: 1px solid var(--border); margin-top: 4px; }

@@ -4,6 +4,18 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Web console
+- **User & Group Administration — redesigned account list, built for fleet scale.**
+  The middle pane is now keyed on the **distinct account** (not the host), so it stays
+  bounded to a few hundred usernames even across thousands of hosts. Each account row
+  shows a monogram, `uid · shell`, status chips (sudo / locked / system / live
+  session), and a **coverage count** (present on N of M synced hosts); accounts group
+  into *On every synced host / Partial coverage / System*. Presence expands to a
+  **per-environment coverage drill-down** with a one-click **"create on the N missing
+  hosts"** remediation — replacing the old inline list of host names that didn't scale.
+  Summary tiles (accounts / privileged / locked / partial) and filter chips float the
+  signal up. `webgui/frontend/src/views/UserGroupPage.jsx`.
+
 ### Security
 - **fstab-line injection via mount options (fixed).** NFS/CIFS mount options were
   `shlex`-quoted for the mount command but written literally into an `/etc/fstab`

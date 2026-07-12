@@ -51,6 +51,53 @@ def cmd_configure_chrony() -> str:
     )
 
 
+def cmd_install_chrony() -> str:
+    """Install the chrony NTP client/daemon and enable + start it. (chrony is the
+    modern default on most distros; use this rather than classic ntpd unless you have
+    a specific reason.)"""
+    return (
+        _install_chrony_fragment() + " && " + _chrony_service_fragment() +
+        " && echo 'chrony installed, enabled, and started.'"
+    )
+
+
+def _install_ntp_fragment() -> str:
+    # Classic NTP. Debian/Ubuntu ship it as `ntpsec` (with `ntp` as a transitional
+    # name); RHEL/SUSE as `ntp`. NOTE: RHEL 8+ dropped ntp in favour of chrony, so an
+    # install there can legitimately fail with "no match" — the package manager's own
+    # error surfaces and the caller should use Install chrony instead.
+    return (
+        "if command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; "
+        "apt-get install -y ntpsec || apt-get install -y ntp; "
+        "elif command -v dnf >/dev/null 2>&1; then dnf install -y ntp || dnf install -y ntpsec; "
+        "elif command -v yum >/dev/null 2>&1; then yum install -y ntp; "
+        "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install ntp; "
+        "else echo 'No supported package manager found.' >&2; exit 1; fi"
+    )
+
+
+def _ntp_service_fragment() -> str:
+    # The unit is ntpsec (ntpsec pkg), ntp (Debian classic), or ntpd (RHEL). Find the
+    # one that exists first, then enable it as the LAST command so a real enable
+    # failure (missing unit / no root) propagates loudly — same rationale as chrony's.
+    return (
+        "found=; for svc in ntpsec ntp ntpd; do "
+        "if systemctl list-unit-files 2>/dev/null | grep -q \"^${svc}\\.service\"; then found=$svc; break; fi; done; "
+        "if [ -z \"$found\" ]; then echo 'ntp installed but no ntp service unit was found to enable.' >&2; exit 1; fi; "
+        "systemctl enable --now \"$found\""
+    )
+
+
+def cmd_install_ntp() -> str:
+    """Install the classic NTP daemon (ntpsec/ntp/ntpd, per distro) and enable + start
+    it. chrony and ntp are mutually exclusive time daemons — install one or the other,
+    not both."""
+    return (
+        _install_ntp_fragment() + " && " + _ntp_service_fragment() +
+        " && echo 'ntp installed, enabled, and started.'"
+    )
+
+
 def cmd_set_ntp_servers(servers: str) -> str:
     """Point chrony at the given NTP servers and restart it."""
     servers = (servers or "").strip()

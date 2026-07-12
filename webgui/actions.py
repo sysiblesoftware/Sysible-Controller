@@ -1272,6 +1272,13 @@ _register(Action(name="boot_remove_kernels", tool="System Health, Logs & Recover
 # ---- Time Synchronization (advanced) ---------------------------------
 _register(Action(name="time_configure_chrony", tool="Time Synchronization", label="Configure chrony",
     params=[], build=lambda p: api.cmd_configure_chrony()))
+_register(Action(name="time_install_chrony", tool="Time Synchronization", label="Install chrony",
+    description="Install the chrony NTP daemon (the modern default) and enable + start it.",
+    params=[], build=lambda p: api.cmd_install_chrony()))
+_register(Action(name="time_install_ntp", tool="Time Synchronization", label="Install NTP",
+    description="Install the classic NTP daemon (ntpsec/ntp/ntpd, per distro) and enable + "
+                "start it. chrony and ntp are mutually exclusive — install one, not both.",
+    params=[], build=lambda p: api.cmd_install_ntp()))
 _register(Action(name="time_troubleshoot", tool="Time Synchronization", label="Troubleshoot drift",
     params=[], build=lambda p: api.cmd_troubleshoot_drift()))
 
@@ -1503,7 +1510,8 @@ _LAYOUT: dict[str, list] = {
     ],
     "Time Synchronization": [
         ("", "Status", ["time_status", "time_verify", "time_troubleshoot"]),
-        ("", "Configure", ["time_set_ntp", "time_set_tz", "time_list_tz", "time_configure_chrony"]),
+        ("", "Install", ["time_install_chrony", "time_install_ntp"]),
+        ("", "Configure", ["time_set_ntp", "time_set_tz", "time_list_tz"]),
     ],
 }
 

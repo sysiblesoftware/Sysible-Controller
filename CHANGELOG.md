@@ -4,6 +4,14 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### System Administration Tools
+- **Time Synchronization — explicit Install buttons for chrony and NTP.** The tool now
+  has an **Install** group with **Install chrony** and **Install NTP** buttons (chrony is
+  the modern default; NTP installs the classic ntpsec/ntp/ntpd per distro). Previously
+  the only way to get a time daemon was the "Configure chrony" button and there was no
+  NTP install path at all — so on a host reporting "(neither chrony nor ntp is
+  installed)" there was nothing to click. `client/_api_timesync.py`, `webgui/actions.py`.
+
 ### Web console
 - **User & Group Administration — redesigned account list, built for fleet scale.**
   The middle pane is now keyed on the **distinct account** (not the host), so it stays

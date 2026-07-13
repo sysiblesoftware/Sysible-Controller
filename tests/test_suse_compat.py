@@ -93,3 +93,30 @@ def test_installer_zypper_branch_has_no_dash_y():
     assert not re.search(r"zypper[^\n]*install -y", text), \
         "zypper 'install -y' found — use --non-interactive (drop -y)"
     assert "zypper --non-interactive install" in text
+
+
+# ---------------------------------------------------------------------------
+# Python 3.6 safety: code that runs ON MANAGED HOSTS (the agent, and the
+# embedded scripts the controller ships to hosts via `python3 -c`) must not use
+# subprocess.run kwargs added in 3.7 — `capture_output=` and `text=`. openSUSE
+# Leap / SLES 15 ship Python 3.6, where those raise
+# "__init__() got an unexpected keyword argument 'capture_output'". Use
+# stdout=PIPE, stderr=PIPE, universal_newlines=True instead (works on 3.6+).
+# ---------------------------------------------------------------------------
+def test_embedded_user_sync_script_is_py36_safe():
+    import client._api_users as u
+    script = u._SYNC_USERS_SCRIPT
+    assert "capture_output" not in script, \
+        "_SYNC_USERS_SCRIPT runs on the host's python3 (3.6 on SUSE) — no capture_output="
+    assert "text=True" not in script, \
+        "_SYNC_USERS_SCRIPT runs on the host's python3 (3.6 on SUSE) — no text=True"
+    compile(script, "<sync_users>", "exec")   # still valid Python
+
+
+@pytest.mark.parametrize("rel", ["host_agent/agent.py", "client/_api_users.py"])
+def test_host_side_code_has_no_py37_only_subprocess_kwargs(rel):
+    src = (REPO_ROOT / rel).read_text()
+    assert "capture_output=" not in src, \
+        f"{rel} runs on managed hosts (SUSE python 3.6) — replace capture_output= with stdout/stderr=PIPE"
+    assert "text=True" not in src, \
+        f"{rel} runs on managed hosts (SUSE python 3.6) — replace text=True with universal_newlines=True"

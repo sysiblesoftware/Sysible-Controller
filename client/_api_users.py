@@ -235,14 +235,14 @@ import pwd, grp, subprocess, json
 
 def _groups(username):
     try:
-        out = subprocess.run(["id", "-nG", username], capture_output=True, text=True).stdout
+        out = subprocess.run(["id", "-nG", username], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True).stdout
         return out.split()
     except Exception:
         return []
 
 def _locked(username):
     try:
-        out = subprocess.run(["passwd", "-S", username], capture_output=True, text=True).stdout
+        out = subprocess.run(["passwd", "-S", username], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True).stdout
         fields = out.split()
         return len(fields) > 1 and fields[1].startswith("L")
     except Exception:
@@ -251,7 +251,7 @@ def _locked(username):
 def _sessions():
     sessions = []
     try:
-        out = subprocess.run(["who"], capture_output=True, text=True).stdout
+        out = subprocess.run(["who"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True).stdout
         for line in out.splitlines():
             parts = line.split()
             if len(parts) >= 2:

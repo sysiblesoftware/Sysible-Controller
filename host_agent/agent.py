@@ -402,7 +402,9 @@ _CMD_TIMEOUT = int(os.getenv("SYSIBLE_AGENT_CMD_TIMEOUT", "1800"))
 
 def _exec(argv, shell=False, input_data=None, timeout=None):
     try:
-        proc = subprocess.run(argv, shell=shell, capture_output=True, text=True,
+        proc = subprocess.run(argv, shell=shell,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              universal_newlines=True,
                               timeout=timeout or _CMD_TIMEOUT, input=input_data)
         return {
             "stdout": _truncate(proc.stdout),

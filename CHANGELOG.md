@@ -4,6 +4,16 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Fixed
+- **openSUSE / SLES user management ("View Status by Host" etc.) crashed with
+  `__init__() got an unexpected keyword argument 'capture_output'`.** The embedded
+  user-sync script runs on the *host's* `python3`, and the agent's command executor
+  runs there too — openSUSE Leap / SLES 15 ship Python 3.6, where `subprocess.run`'s
+  `capture_output=` / `text=` (added in 3.7) don't exist. Replaced both with
+  `stdout=PIPE, stderr=PIPE, universal_newlines=True` (works on 3.6+). Added a
+  SUSE-compat regression test that fails if host-side code reintroduces the 3.7-only
+  kwargs. `client/_api_users.py`, `host_agent/agent.py`.
+
 ### Web console
 - **Update Hosts — "Defer to maintenance window".** Alongside *Install now*, you can
   now schedule the install for the selected hosts into a recurring maintenance window

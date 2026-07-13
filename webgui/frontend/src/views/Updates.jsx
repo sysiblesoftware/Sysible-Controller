@@ -62,6 +62,86 @@ function InstallProgress({ job }) {
 // Fleet patch status: pending updates, security updates, and reboot-required per
 // host — with one-click "install security" / "install all" / "reboot" across the
 // selected hosts. Read-only for auditors (the install/reboot actions 403).
+const _WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+// "Defer to maintenance window": instead of installing now, schedule the install for
+// a recurring maintenance window on the selected hosts. Reuses the existing scheduler
+// (security_updates / all_updates actions) — the same engine the Schedules page uses,
+// so attribution and the run loop all apply unchanged.
+function DeferModal({ count, targets, onClose, onScheduled }) {
+  const [action, setAction] = useState("all_updates");
+  const [cadence, setCadence] = useState("weekly");
+  const [weekday, setWeekday] = useState(6);       // Sun — a common quiet window
+  const [at, setAt] = useState("02:00");
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const when = cadence === "weekly" ? `${_WEEKDAYS[weekday]} at ${at}, every week`
+    : cadence === "daily" ? `every day at ${at}` : `hourly at :${at.split(":")[1] || "00"}`;
+
+  async function submit() {
+    setBusy(true); setErr("");
+    try {
+      const label = action === "security_updates" ? "Security updates" : "All updates";
+      const job = await api.scheduleCreate({
+        name: name.trim() || `${label} — ${count} host${count === 1 ? "" : "s"}`,
+        action, arg: "", targets, cadence, at, weekday: Number(weekday), enabled: true,
+      });
+      onScheduled(job, when);
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+        <h3>Defer to maintenance window</h3>
+        <p className="faint" style={{ textAlign: "center", marginTop: 0, fontSize: 13 }}>
+          Schedule the install for <b>{count}</b> selected host{count === 1 ? "" : "s"} instead of
+          running it now. It runs unattended in the window and shows up under <b>Schedules</b>.
+        </p>
+
+        <label className="field"><span>Install</span>
+          <select value={action} onChange={(e) => setAction(e.target.value)}>
+            <option value="all_updates">All updates</option>
+            <option value="security_updates">Security updates only</option>
+          </select></label>
+
+        <label className="field"><span>Window</span>
+          <select value={cadence} onChange={(e) => setCadence(e.target.value)}>
+            <option value="weekly">Weekly</option>
+            <option value="daily">Daily</option>
+          </select></label>
+
+        <div className="row" style={{ gap: 10 }}>
+          {cadence === "weekly" && (
+            <label className="field" style={{ flex: 1 }}><span>Day</span>
+              <select value={weekday} onChange={(e) => setWeekday(e.target.value)}>
+                {_WEEKDAYS.map((d, i) => <option key={d} value={i}>{d}</option>)}
+              </select></label>
+          )}
+          <label className="field" style={{ flex: 1 }}><span>Time (host local)</span>
+            <input type="time" value={at} onChange={(e) => setAt(e.target.value)} /></label>
+        </div>
+
+        <label className="field"><span>Name (optional)</span>
+          <input value={name} placeholder={`${action === "security_updates" ? "Security updates" : "All updates"} — ${count} host${count === 1 ? "" : "s"}`}
+                 onChange={(e) => setName(e.target.value)} /></label>
+
+        <p className="faint" style={{ fontSize: 12, margin: "2px 0 10px" }}>Will run: <b>{when}</b>.</p>
+        {err && <div className="error-box" style={{ marginBottom: 8 }}>{err}</div>}
+
+        <div className="row" style={{ gap: 8, justifyContent: "flex-end" }}>
+          <button className="btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn" onClick={submit} disabled={busy}>
+            {busy ? <span className="spin" /> : "Schedule it"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Updates({ role }) {
   const canAct = role !== "auditor";
   const [data, setData] = useState({ hosts: [], ts: 0 });
@@ -70,6 +150,8 @@ export default function Updates({ role }) {
   const [checked, setChecked] = useState([]);   // host ids
   const [results, setResults] = useState(null);
   const [busy, setBusy] = useState("");
+  const [deferOpen, setDeferOpen] = useState(false);
+  const [okMsg, setOkMsg] = useState("");
 
   const [liveLoading, setLiveLoading] = useState(false);
   const load = useCallback((refresh = 0, live = 0) => {
@@ -207,9 +289,23 @@ export default function Updates({ role }) {
             {busy === "security" ? <span className="spin" /> : "Install security updates"}</button>
           <button className="btn sm" disabled={!checked.length || busy} onClick={() => run("all")}>
             {busy === "all" ? <span className="spin" /> : "Install all updates"}</button>
+          <button className="btn sm ghost" disabled={!checked.length || busy}
+                  title="Schedule the install for a maintenance window instead of running it now"
+                  onClick={() => { setErr(""); setOkMsg(""); setDeferOpen(true); }}>
+            Defer to maintenance window</button>
           <button className="btn sm danger" disabled={!checked.length || busy} onClick={() => run("reboot")}>
             {busy === "reboot" ? <span className="spin" /> : "Reboot"}</button>
         </div>
+      )}
+
+      {okMsg && <div className="ok-text" style={{ marginBottom: 10 }}>{okMsg}</div>}
+      {deferOpen && (
+        <DeferModal count={checked.length} targets={checked}
+          onClose={() => setDeferOpen(false)}
+          onScheduled={(job, when) => {
+            setDeferOpen(false);
+            setOkMsg(`Scheduled “${job.name}” — ${when}. Manage it under Schedules.`);
+          }} />
       )}
 
       {hosts.length === 0 ? (

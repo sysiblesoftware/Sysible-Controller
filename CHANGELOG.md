@@ -4,6 +4,14 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Web console
+- **Update Hosts — "Defer to maintenance window".** Alongside *Install now*, you can
+  now schedule the install for the selected hosts into a recurring maintenance window
+  (security or all updates; weekly on a chosen day / daily, at a set time) instead of
+  running it immediately. It creates a Schedule under the hood — same engine, same
+  attribution — so it shows up and can be managed on the Schedules page.
+  `webgui/frontend/src/views/Updates.jsx`.
+
 ### System Administration Tools
 - **Time Synchronization — explicit Install buttons for chrony and NTP.** The tool now
   has an **Install** group with **Install chrony** and **Install NTP** buttons (chrony is

@@ -4,6 +4,13 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Added
+- **The console now shows the deployed build version.** Controller Configuration adds a
+  "Current build: v<version> · <commit> (<branch>)" line so an admin can confirm at a glance
+  which build is actually running (the released version from `version.py`, alongside the
+  existing running-directory / commit deployment guard). `GET /version` now includes
+  `version`. Mirrors the Enterprise build-version display.
+
 ### Fixed
 - **openSUSE / SLES user management ("View Status by Host" etc.) crashed with
   `__init__() got an unexpected keyword argument 'capture_output'`.** The embedded

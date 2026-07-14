@@ -286,6 +286,13 @@ function ControllerCfg() {
     <div className="card" style={{ maxWidth: 460 }}>
       {ver && (
         <div style={{ marginBottom: 12, fontSize: 12 }}>
+          {ver.version && (
+            <div className="faint mono" style={{ marginBottom: 2 }}>
+              Current build: v{ver.version}
+              {ver.commit_short ? ` · ${ver.commit_short}` : ""}
+              {ver.branch ? ` (${ver.branch})` : ""}
+            </div>
+          )}
           <div className="faint">
             Running from <code>{ver.running_dir}</code>
             {ver.commit_short ? <> @ <code>{ver.commit_short}</code></> : null}

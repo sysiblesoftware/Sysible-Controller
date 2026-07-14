@@ -12,6 +12,9 @@ def test_info_reports_running_dir():
     # running_dir is the repo root that actually holds backend/build_info.py.
     assert i["running_dir"].endswith("Sysible-Controller") or "sysible" in i["running_dir"].lower()
     assert "restart_needed" in i and "commit" in i and "branch" in i
+    # The released build version (from version.py) is surfaced for the console's
+    # "Current build" line — best-effort, so it may be None if version.py is absent.
+    assert "version" in i
 
 
 def test_restart_needed_flags_moved_head(monkeypatch):

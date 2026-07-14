@@ -58,12 +58,25 @@ def _head_commit(cwd=None):
 _STARTED_COMMIT = _head_commit()
 
 
+def _version():
+    """The released controller version (version.py's VERSION), or None. Kept best-effort so
+    a missing/un-importable version file never breaks the deployment guard."""
+    try:
+        from version import VERSION
+        return VERSION
+    except Exception:
+        return None
+
+
 def info() -> dict:
     rd = running_dir()
     current = _head_commit()
     branch = _git("rev-parse", "--abbrev-ref", "HEAD")
     dirty = bool(_git("status", "--porcelain"))
     return {
+        # Released version string (v-prefixed in the console) so an admin sees the build
+        # number, not just the commit -- mirrors the Enterprise "Current build" line.
+        "version": _version(),
         "running_dir": str(rd),
         "commit": current,
         "commit_short": current[:12] if current else None,

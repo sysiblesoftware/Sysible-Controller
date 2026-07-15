@@ -540,7 +540,163 @@ def cmd_install_ufw() -> str:
     return (
         _PKG_DETECT
         + "DEBIAN_FRONTEND=noninteractive $PM ufw 2>&1 && "
-        "echo 'ufw installed (not enabled). Turn it on later with: ufw enable'"
+        "echo 'ufw installed (not enabled). Turn it on later with the \"Enable/disable ufw\" action.'"
+    )
+
+
+# ---------------------------------------------------------
+# ufw (Uncomplicated Firewall) - the default firewall front-end on
+# Debian/Ubuntu. firewalld covers RHEL/Fedora/SUSE; ufw is its
+# Debian-world counterpart, so managing it needs the same status /
+# on-off / rule verbs firewalld already has above.
+# ---------------------------------------------------------
+_UFW_MISSING = (
+    "if ! command -v ufw >/dev/null 2>&1; then "
+    "echo 'ufw is not installed on this host (package: ufw). Use \"Install ufw\" first.' >&2; "
+    "exit 1; fi; "
+)
+
+# ufw port ranges use a colon (6000:6010), NOT the hyphen firewalld uses.
+def _validate_ufw_port_spec(value: str, label: str = "Port") -> str:
+    value = (value or "").strip()
+    if not value:
+        raise ValueError(f"{label} is required.")
+    parts = value.split(":")
+    if len(parts) not in (1, 2):
+        raise ValueError(f"{label} must be a single port or a range like 6000:6010.")
+    nums = []
+    for p in parts:
+        try:
+            n = int(p)
+        except ValueError:
+            raise ValueError(f"{label} must be numeric.")
+        if not (1 <= n <= 65535):
+            raise ValueError(f"{label} must be between 1 and 65535.")
+        nums.append(n)
+    if len(nums) == 2 and nums[0] >= nums[1]:
+        raise ValueError(f"{label} range must have a lower start than end.")
+    return value
+
+
+def _validate_cidr(value: str, label: str = "Source") -> str:
+    """Optional IP or CIDR (e.g. 10.0.0.0/24). Blank means 'any'."""
+    import ipaddress
+    value = (value or "").strip()
+    if not value:
+        return ""
+    try:
+        ipaddress.ip_network(value, strict=False)
+    except ValueError:
+        raise ValueError(f"{label} must be an IP or CIDR like 10.0.0.0/24 (leave blank for any).")
+    return value
+
+
+def cmd_ufw_status() -> str:
+    """ufw state. Distinguishes the three cases an operator actually cares about:
+    NOT INSTALLED (the guard above), installed-but-INACTIVE ('Status: inactive'),
+    and ACTIVE (with the numbered rule list). Also shows whether it starts at
+    boot, so 'off right now' vs 'off and won't come back' are distinguishable."""
+    return (
+        _UFW_MISSING +
+        "echo '-- ufw status --'; ufw status verbose 2>&1; "
+        "echo; echo '-- numbered rules --'; ufw status numbered 2>&1; "
+        "echo; printf 'Starts at boot: '; systemctl is-enabled ufw 2>&1"
+    )
+
+
+def cmd_set_ufw_enabled(enabled: bool) -> str:
+    """Turn ufw on or off. Enabling uses `ufw --force enable` so it doesn't hang
+    on the interactive 'this may disrupt existing ssh connections' prompt, and
+    also enables the service so it survives a reboot; disabling stops it and
+    keeps the configured rules (re-enabling re-applies them)."""
+    if enabled:
+        return (
+            _UFW_MISSING +
+            "ufw --force enable 2>&1 && systemctl enable ufw >/dev/null 2>&1; "
+            "echo; ufw status verbose 2>&1"
+        )
+    return (
+        _UFW_MISSING +
+        "ufw disable 2>&1 && systemctl disable ufw >/dev/null 2>&1; "
+        "echo 'ufw disabled (rules kept; re-enable to re-apply them).'"
+    )
+
+
+_UFW_RULE_ACTIONS = {"allow", "deny", "reject", "limit"}
+
+
+def cmd_ufw_add_rule(action: str, port: str, protocol: str = "", source: str = "") -> str:
+    """Add a ufw rule. `action` is allow/deny/reject/limit, `port` a single
+    port or N:M range, `protocol` tcp/udp (blank = both), `source` an optional
+    IP/CIDR to scope the rule to (blank = from anywhere)."""
+    action = (action or "").strip().lower()
+    if action not in _UFW_RULE_ACTIONS:
+        raise ValueError(f"Action must be one of: {', '.join(sorted(_UFW_RULE_ACTIONS))}.")
+    port = _validate_ufw_port_spec(port)
+    protocol = (protocol or "").strip().lower()
+    if protocol and protocol not in _VALID_PROTOCOLS:
+        raise ValueError(f"Protocol must be tcp, udp, or blank for both.")
+    source = _validate_cidr(source)
+    # ufw's own syntax differs for scoped vs unscoped rules. A port range REQUIRES
+    # a protocol (ufw rejects '6000:6010' without one).
+    if ":" in port and not protocol:
+        raise ValueError("A port range needs a protocol (tcp or udp).")
+    spec = port + (f"/{protocol}" if protocol else "")
+    if source:
+        # `ufw allow from 10.0.0.0/24 to any port 22 proto tcp`
+        proto_clause = f" proto {protocol}" if protocol else ""
+        body = f"from {shlex.quote(source)} to any port {shlex.quote(port)}{proto_clause}"
+    else:
+        # `ufw allow 22/tcp`
+        body = shlex.quote(spec)
+    return (
+        _UFW_MISSING +
+        f"ufw {action} {body} 2>&1 && echo 'Rule added: {action} {spec}"
+        + (f' from {source}' if source else '') + "'"
+    )
+
+
+def cmd_ufw_delete_rule(number: str) -> str:
+    """Delete a ufw rule by its NUMBER (the [n] shown by ufw status numbered /
+    the Status action). `ufw --force delete` skips the y/n confirmation prompt."""
+    try:
+        n = int(str(number).strip())
+    except (TypeError, ValueError):
+        raise ValueError("Rule number must be a whole number (see the numbered list in Status).")
+    if n < 1:
+        raise ValueError("Rule number must be 1 or greater.")
+    return (
+        _UFW_MISSING +
+        f"ufw --force delete {n} 2>&1"
+    )
+
+
+_UFW_DEFAULT_POLICIES = {"allow", "deny", "reject"}
+_UFW_DEFAULT_DIRECTIONS = {"incoming", "outgoing", "routed"}
+
+
+def cmd_ufw_set_default(policy: str, direction: str = "incoming") -> str:
+    """Set ufw's default policy for a direction (deny incoming / allow outgoing
+    is the usual hardened baseline)."""
+    policy = (policy or "").strip().lower()
+    if policy not in _UFW_DEFAULT_POLICIES:
+        raise ValueError(f"Policy must be one of: {', '.join(sorted(_UFW_DEFAULT_POLICIES))}.")
+    direction = (direction or "incoming").strip().lower()
+    if direction not in _UFW_DEFAULT_DIRECTIONS:
+        raise ValueError(f"Direction must be one of: {', '.join(sorted(_UFW_DEFAULT_DIRECTIONS))}.")
+    return (
+        _UFW_MISSING +
+        f"ufw default {policy} {direction} 2>&1 "
+        f"&& echo 'Default {direction} policy set to {policy}.'"
+    )
+
+
+def cmd_ufw_reset() -> str:
+    """Wipe ALL ufw rules back to installed defaults and disable it. Irreversible
+    - confirm with the admin before dispatching."""
+    return (
+        _UFW_MISSING +
+        "ufw --force reset 2>&1 && echo 'ufw reset to defaults and disabled.'"
     )
 
 

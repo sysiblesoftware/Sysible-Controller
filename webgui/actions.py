@@ -405,6 +405,28 @@ _register(Action(name="fw_install_firewalld", tool="Firewall Administration",
     label="Install firewalld", params=[], build=lambda p: api.cmd_install_firewalld()))
 _register(Action(name="fw_install_ufw", tool="Firewall Administration",
     label="Install ufw", params=[], build=lambda p: api.cmd_install_ufw()))
+_register(Action(name="fw_ufw_status", tool="Firewall Administration",
+    label="ufw status", params=[], build=lambda p: api.cmd_ufw_status()))
+_register(Action(name="fw_ufw_set_enabled", tool="Firewall Administration", label="Enable/disable ufw",
+    params=[Param("enabled", "Enabled", type="checkbox", default=True, required=False)],
+    build=lambda p: api.cmd_set_ufw_enabled(_b(p, "enabled", True))))
+_register(Action(name="fw_ufw_add_rule", tool="Firewall Administration", label="ufw: add rule",
+    params=[Param("action", "Action", type="select", options=["allow", "deny", "reject", "limit"], default="allow"),
+            Param("port", "Port", help="single port or range like 6000:6010"),
+            Param("protocol", "Protocol", type="select", options=["", "tcp", "udp"], default="", required=False),
+            Param("source", "From (IP/CIDR)", required=False, help="blank = from anywhere")],
+    build=lambda p: api.cmd_ufw_add_rule(_s(p, "action", "allow"), _s(p, "port"),
+                                         _s(p, "protocol"), _s(p, "source"))))
+_register(Action(name="fw_ufw_delete_rule", tool="Firewall Administration", label="ufw: delete rule",
+    danger=True, params=[Param("number", "Rule #", help="the [n] from ufw status")],
+    build=lambda p: api.cmd_ufw_delete_rule(_s(p, "number"))))
+_register(Action(name="fw_ufw_default", tool="Firewall Administration", label="ufw: default policy",
+    params=[Param("policy", "Policy", type="select", options=["allow", "deny", "reject"], default="deny"),
+            Param("direction", "Direction", type="select",
+                  options=["incoming", "outgoing", "routed"], default="incoming")],
+    build=lambda p: api.cmd_ufw_set_default(_s(p, "policy", "deny"), _s(p, "direction", "incoming"))))
+_register(Action(name="fw_ufw_reset", tool="Firewall Administration", label="ufw: reset",
+    danger=True, params=[], build=lambda p: api.cmd_ufw_reset()))
 _register(Action(name="fw_nft_ruleset", tool="Firewall Administration",
     label="nftables ruleset", params=[], build=lambda p: api.cmd_nft_list_ruleset()))
 _register(Action(name="fw_iptables_list", tool="Firewall Administration",
@@ -1446,6 +1468,9 @@ _LAYOUT: dict[str, list] = {
         ("Ports", "Open / Close Ports", ["fw_open_port", "fw_close_port"]),
         ("Zones", "Zones", ["fw_list_zones", "fw_create_zone", "fw_delete_zone"]),
         ("Rich Rules", "Rich Rules", ["fw_list_rich", "fw_add_rich", "fw_remove_rich"]),
+        ("ufw", "Service State", ["fw_ufw_status", "fw_ufw_set_enabled"]),
+        ("ufw", "Rules", ["fw_ufw_add_rule", "fw_ufw_delete_rule"]),
+        ("ufw", "Defaults & Reset", ["fw_ufw_default", "fw_ufw_reset"]),
         ("nftables", "Ruleset", ["fw_nft_ruleset", "fw_nft_flush"]),
         ("nftables", "Tables & Chains", ["fw_nft_add_table", "fw_nft_add_chain"]),
         ("nftables", "Rules", ["fw_nft_add_rule", "fw_nft_delete_rule"]),

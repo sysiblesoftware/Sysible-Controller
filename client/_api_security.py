@@ -120,7 +120,15 @@ def cmd_install_selinux_tools() -> str:
     to SELinux - that's a separate, reboot-level decision."""
     return _pkgmgr_dispatch(
         rpm_cmd='"$PKGMGR" install -y policycoreutils policycoreutils-python-utils setools-console libselinux-utils',
-        zypper_cmd="zypper --non-interactive install policycoreutils policycoreutils-python-utils setools-console libselinux-tools",
+        # openSUSE/SLES: install each package separately so one wrong/renamed name on
+        # a given SUSE release doesn't abort the whole zypper transaction (exit 104)
+        # and leave NONE of the tools installed. Mirrors cmd_install_firewalld's loop.
+        zypper_cmd=(
+            "for _p in policycoreutils policycoreutils-python-utils setools-console libselinux-tools; do "
+            "  rpm -q \"$_p\" >/dev/null 2>&1 || zypper --non-interactive install \"$_p\" 2>&1 || "
+            "    echo \"Warning: could not install $_p on this SUSE release.\" >&2; "
+            "done"
+        ),
         apt_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y policycoreutils selinux-utils setools",
     ) + " && echo 'SELinux userspace tools installed.'"
 

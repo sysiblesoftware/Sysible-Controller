@@ -656,8 +656,14 @@ _TASK_RECLAIM_SECONDS = int(os.getenv("SYSIBLE_TASK_RECLAIM_SECONDS", "900"))
 
 def _task_reclaim_loop():
     import time as _t
+    _first = True
     while True:
-        _t.sleep(60)
+        # Reclaim once at startup BEFORE the first sleep: a command dispatched
+        # seconds before a backend restart would otherwise sit "in progress" for up
+        # to the reclaim window (default 15 min) before being marked timed_out.
+        if not _first:
+            _t.sleep(60)
+        _first = False
         try:
             n = reclaim_stale_tasks(_TASK_RECLAIM_SECONDS)
             if n:

@@ -670,7 +670,8 @@ def enroll_ssh(body: EnrollSSHRequest):
             body.ip,
             username=body.username,
             password=body.password,
-            timeout=10
+            timeout=10,
+            banner_timeout=15, auth_timeout=15,
         )
 
         stdin, stdout, stderr = client.exec_command(install_cmd)
@@ -1277,7 +1278,18 @@ def open_terminal(name: str, request: Request):
     client = _new_ssh_client()
     session_id = uuid.uuid4().hex
     try:
+        connect_kwargs.setdefault("banner_timeout", 15)
+        connect_kwargs.setdefault("auth_timeout", 15)
         client.connect(ip, username=ssh_user, timeout=10, **connect_kwargs)
+        # Keepalive on the interactive session: an idle PTY whose TCP is silently
+        # dropped (NAT timeout, network blip) would otherwise linger until the 180s
+        # idle reaper. Server-alive probes surface a dead peer within ~30s.
+        try:
+            _tr = client.get_transport()
+            if _tr is not None:
+                _tr.set_keepalive(30)
+        except Exception:
+            pass
         if become:
             channel = client.get_transport().open_session()
             channel.get_pty(term="xterm", width=120, height=32)
@@ -1498,6 +1510,7 @@ def _connect_sftp(name: str):
             username=host.get("user", "root"),
             key_filename=key_path,
             timeout=10,
+            banner_timeout=15, auth_timeout=15,
         )
         sftp = client.open_sftp()
     except paramiko.BadHostKeyException as e:

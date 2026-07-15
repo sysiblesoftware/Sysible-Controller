@@ -384,6 +384,10 @@ if [[ ! -f "$WEBGUI_SERVICE_FILE" ]] || [[ "$(cat "$WEBGUI_SERVICE_FILE")" != "$
   echo "$WEBGUI_UNIT" > "$WEBGUI_SERVICE_FILE"
   systemctl daemon-reload
 fi
+# Enable the web console unit at install (like the backend), so it comes back on
+# reboot even if the admin only ever ran `sysible_controller start`. Enabled, not
+# started -- bringing it up stays a separate `sysible_controller webgui start`.
+systemctl enable sysible-webgui.service 2>/dev/null || true
 chmod +x "$BASE/start_webgui.sh" 2>/dev/null || true
 
 # =========================================================

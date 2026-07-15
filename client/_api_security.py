@@ -37,7 +37,9 @@ def _validate_path(value: str, label: str = "Path") -> str:
     value = (value or "").strip()
     if not value:
         raise ValueError(f"{label} is required.")
-    if "\x00" in value:
+    # Reject NUL and CR/LF: a newline in a path could append an extra line to a
+    # file this value is written into (e.g. /etc/fstab). Matches the mount copy.
+    if "\x00" in value or "\n" in value or "\r" in value:
         raise ValueError(f"{label} contains an invalid character.")
     return value
 

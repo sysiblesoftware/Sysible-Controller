@@ -1100,24 +1100,42 @@ _register(Action(name="sec_sshd_reload", tool="Security Administration", label="
 # SSH auth policy: each toggle edits one sshd_config directive, then reloads
 # sshd. Distinct param names (not a shared "enabled") so the three checkboxes
 # don't collapse into one in the grouped tool UI — each button reads its own box.
-_register(Action(name="sec_set_root_login", tool="Security Administration", label="Apply root login",
-    description="Set sshd's PermitRootLogin from the checkbox, then reload sshd. "
-                "Checked = root may log in over SSH; unchecked = root SSH login denied.",
-    params=[Param("allow", "Allow root login over SSH", type="checkbox", default=False, required=False,
-                  help="on = PermitRootLogin yes, off = no")],
-    build=lambda p: api.cmd_set_root_login(_b(p, "allow"))))
-_register(Action(name="sec_set_pubkey_auth", tool="Security Administration", label="Apply public-key auth",
-    description="Set sshd's PubkeyAuthentication from the checkbox, then reload sshd. "
-                "Checked = allow key-based SSH login (recommended); unchecked = disable it.",
-    params=[Param("pubkey_enabled", "Enable public-key auth", type="checkbox", default=True, required=False,
-                  help="on = PubkeyAuthentication yes")],
-    build=lambda p: api.cmd_set_pubkey_auth(_b(p, "pubkey_enabled", True))))
-_register(Action(name="sec_set_password_auth", tool="Security Administration", label="Apply password auth",
-    description="Set sshd's PasswordAuthentication from the checkbox, then reload sshd. "
-                "Checked = allow password SSH login; unchecked = keys only (more secure).",
-    params=[Param("password_enabled", "Enable password auth", type="checkbox", default=False, required=False,
-                  help="on = PasswordAuthentication yes")],
-    build=lambda p: api.cmd_set_password_auth(_b(p, "password_enabled"))))
+# Explicit-intent buttons (no checkbox): each button applies ONE unambiguous
+# sshd state and reloads. This replaces the old "set a checkbox, then click Apply"
+# pattern, where hardening a host meant the counter-intuitive "leave the box
+# unchecked, then click Apply". Now you click exactly what you want.
+_register(Action(name="sec_root_login_off", tool="Security Administration",
+    label="Disable root login",
+    description="Set PermitRootLogin no (deny root SSH login) and reload sshd.",
+    params=[], build=lambda p: api.cmd_set_root_login_mode("no")))
+_register(Action(name="sec_root_login_keyonly", tool="Security Administration",
+    label="Root login: key only",
+    description="Set PermitRootLogin prohibit-password (root may log in by SSH key, "
+                "never by password) and reload sshd.",
+    params=[], build=lambda p: api.cmd_set_root_login_mode("prohibit-password")))
+_register(Action(name="sec_root_login_on", tool="Security Administration",
+    label="Allow root login (password)", danger=True,
+    description="Set PermitRootLogin yes (root may log in over SSH, including by "
+                "password) and reload sshd. Loosens security -- prefer key-only or disabled.",
+    params=[], build=lambda p: api.cmd_set_root_login_mode("yes")))
+_register(Action(name="sec_pubkey_on", tool="Security Administration",
+    label="Enable public-key auth",
+    description="Set PubkeyAuthentication yes (allow key-based SSH login) and reload sshd.",
+    params=[], build=lambda p: api.cmd_set_pubkey_auth(True)))
+_register(Action(name="sec_pubkey_off", tool="Security Administration",
+    label="Disable public-key auth", danger=True,
+    description="Set PubkeyAuthentication no and reload sshd. Only do this if another "
+                "auth method is configured, or you may lock yourself out.",
+    params=[], build=lambda p: api.cmd_set_pubkey_auth(False)))
+_register(Action(name="sec_password_off", tool="Security Administration",
+    label="Disable password auth (keys only)",
+    description="Set PasswordAuthentication no (SSH keys only -- more secure) and reload sshd.",
+    params=[], build=lambda p: api.cmd_set_password_auth(False)))
+_register(Action(name="sec_password_on", tool="Security Administration",
+    label="Enable password auth", danger=True,
+    description="Set PasswordAuthentication yes (allow SSH password login) and reload sshd. "
+                "Loosens security -- prefer keys only.",
+    params=[], build=lambda p: api.cmd_set_password_auth(True)))
 _register(Action(name="sec_list_authkeys", tool="Security Administration", label="List authorized keys",
     description="Show the keys in ~USER/.ssh/authorized_keys on the selected hosts.",
     params=[Param("user", "User", help="account whose authorized_keys to read, e.g. alice")],
@@ -1458,7 +1476,9 @@ _LAYOUT: dict[str, list] = {
         ("SELinux", "Denials", ["sec_selinux_denials", "sec_selinux_explain", "sec_selinux_journal"]),
         ("SELinux", "File Contexts", ["sec_selinux_getctx", "sec_selinux_restorectx", "sec_selinux_list_fctx", "sec_selinux_add_fctx", "sec_selinux_rm_fctx", "sec_selinux_gen_policy"]),
         ("SSH", "Service", ["sec_sshd_status", "sec_sshd_get", "sec_sshd_set", "sec_sshd_reload"]),
-        ("SSH", "Auth Policy", ["sec_set_root_login", "sec_set_pubkey_auth", "sec_set_password_auth"]),
+        ("SSH", "Auth Policy", ["sec_root_login_off", "sec_root_login_keyonly", "sec_root_login_on",
+                                "sec_pubkey_on", "sec_pubkey_off",
+                                "sec_password_off", "sec_password_on"]),
         ("SSH", "Authorized Keys", ["sec_list_authkeys", "sec_install_authkey", "sec_remove_authkey", "sec_rotate_hostkeys"]),
         ("Audit & Logins", "Logins", ["sec_failed_logins", "sec_locked_accounts", "sec_failed_summary"]),
         ("Audit & Logins", "Auditd", ["sec_auditd_status", "sec_audit_tail", "sec_audit_search"]),

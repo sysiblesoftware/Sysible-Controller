@@ -421,10 +421,25 @@ def cmd_sshd_reload() -> str:
 # ===========================================================
 # Disable root login
 # ===========================================================
+_ROOT_LOGIN_MODES = {"no", "yes", "prohibit-password"}
+
+
+def cmd_set_root_login_mode(mode: str) -> str:
+    """Set sshd PermitRootLogin to an explicit mode and reload. `mode` is one of
+    'no' (deny root SSH), 'prohibit-password' (root by key only), or 'yes' (root
+    with a password). Whitelisted so only valid sshd values reach the config. The
+    console offers these as three explicit buttons instead of a checkbox, so an
+    operator clicks the exact intent rather than toggling a box and guessing."""
+    m = (mode or "").strip().lower()
+    if m not in _ROOT_LOGIN_MODES:
+        raise ValueError("root login mode must be one of: no, prohibit-password, yes")
+    return _build_sshd_set_option_script("PermitRootLogin", m, reload=True)
+
+
 def cmd_set_root_login(allow: bool) -> str:
-    value = "yes" if allow else "no"
-    # Apply + reload in one click (the button is labelled "Apply root login").
-    return _build_sshd_set_option_script("PermitRootLogin", value, reload=True)
+    # Back-compat boolean wrapper (True=yes, False=no); the console now uses the
+    # explicit-mode buttons via cmd_set_root_login_mode.
+    return cmd_set_root_login_mode("yes" if allow else "no")
 
 
 # ===========================================================

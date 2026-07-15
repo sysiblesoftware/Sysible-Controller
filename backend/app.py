@@ -1172,14 +1172,21 @@ def get_agents():
     from backend import agent_integrity
     agents = list_agents()
     ctrl_names, ctrl_ips = _controller_identity()
+    # Load the SSH-terminal and integrity state for the WHOLE fleet once, then index
+    # in-memory in the loop below. Previously each iteration re-read and re-parsed the
+    # entire state file (get_agent_ssh_state / agent_integrity.status) — an O(N^2)
+    # re-parse that made this hot dashboard route crawl at fleet scale.
+    from backend.remote_routes import get_all_agent_ssh_states
+    ssh_states = get_all_agent_ssh_states()
+    integrity_states = agent_integrity.status_all()
     for a in agents:
-        st = get_agent_ssh_state(a.get("host_id"))
+        st = ssh_states.get(a.get("host_id"))
         # "enabled" | "pending" | "sshd_missing" | "error" | None
         a["ssh_terminal_state"] = (st or {}).get("status")
         # Agent integrity: let the console flag a host whose self-measurement
         # diverged from its sealed baseline ('revoked' already comes from
         # list_agents). integrity_detail carries the mismatch reasons for the UI.
-        _ist = agent_integrity.status(a.get("host_id"))
+        _ist = integrity_states.get(a.get("host_id")) or {"status": "unknown"}
         a["integrity_quarantined"] = _ist.get("status") == "quarantined"
         a["integrity_detail"] = _ist.get("mismatches", [])
         # Is THIS enrolled host the controller itself (self-managed)? Lets the

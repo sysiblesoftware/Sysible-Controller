@@ -413,6 +413,31 @@ chmod 750 "$BASE/run"
 # local account should be able to traverse in and read them.
 chmod 700 "$BASE"
 
+# =========================================================
+# OPEN THE CONTROLLER'S OWN FIREWALL PORTS
+# The agent API (9000) and the web console (8800) must be reachable, but on
+# RHEL/Rocky/SLES firewalld is enabled by default and blocks them, so a fresh
+# install was silently unreachable until the admin opened the ports by hand.
+# Open them here when a firewall is active. Best-effort (never abort the install
+# under `set -e`); if no supported firewall is managing the host, just print the
+# commands so the admin can open them on whatever they run.
+# =========================================================
+BACKEND_PORT=9000
+CONSOLE_PORT=8800
+if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+  echo "Opening firewalld ports ${BACKEND_PORT}/tcp and ${CONSOLE_PORT}/tcp..."
+  firewall-cmd --permanent --add-port=${BACKEND_PORT}/tcp >/dev/null 2>&1 || true
+  firewall-cmd --permanent --add-port=${CONSOLE_PORT}/tcp >/dev/null 2>&1 || true
+  firewall-cmd --reload >/dev/null 2>&1 || true
+elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi "Status: active"; then
+  echo "Opening ufw ports ${BACKEND_PORT}/tcp and ${CONSOLE_PORT}/tcp..."
+  ufw allow ${BACKEND_PORT}/tcp >/dev/null 2>&1 || true
+  ufw allow ${CONSOLE_PORT}/tcp >/dev/null 2>&1 || true
+else
+  echo "NOTE: no active firewalld/ufw detected. If a firewall is in front of this host,"
+  echo "      open TCP ${BACKEND_PORT} (agent API) and ${CONSOLE_PORT} (web console) manually."
+fi
+
 echo ""
 echo "Installation complete"
 echo "Installed to: $BASE"

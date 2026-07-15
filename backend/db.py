@@ -580,6 +580,21 @@ def init_db():
     )
     """)
 
+    # Indexes for the agent task-queue hot paths. fetch_pending_tasks (every agent
+    # poll) filters host_id+status; reclaim_stale_tasks scans status+dispatched; the
+    # prune and per-host result lookups filter status/host_id. Without these the most
+    # frequent query in the system is a full-table scan that grows with every command
+    # ever queued (the tasks tables, unlike metric_samples, are age-pruned).
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_tasks_host_status "
+        "ON agent_tasks(host_id, status)")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_tasks_status_dispatched "
+        "ON agent_tasks(status, dispatched)")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_agent_results_host "
+        "ON agent_results(host_id)")
+
     # -----------------------------------------------------
     # Admin login tokens (RBAC). Issued at /admin/login, bound to a
     # username + role, used to attribute API actions to a specific admin
@@ -1983,52 +1998,42 @@ def get_admin_audit_log(limit=200):
 # AGENT TASKS (command queue)
 # =========================================================
 def queue_task(host_id, command, kind="command", run_as=None):
-    conn = _connect()
-    cur = conn.cursor()
-
-    cur.execute("""
-    INSERT INTO agent_tasks (host_id, command, kind, status, created, run_as)
-    VALUES (?, ?, ?, 'pending', ?, ?)
-    """,
-    (host_id, command, kind, time.time(), run_as))
-
-    task_id = cur.lastrowid
-
-    conn.commit()
-    conn.close()
-
+    # closing() so a 'database is locked' between INSERT and close can't leak the
+    # connection (and its WAL reservation) on this hot enqueue path.
+    with contextlib.closing(_connect()) as conn:
+        cur = conn.cursor()
+        cur.execute("""
+        INSERT INTO agent_tasks (host_id, command, kind, status, created, run_as)
+        VALUES (?, ?, ?, 'pending', ?, ?)
+        """,
+        (host_id, command, kind, time.time(), run_as))
+        task_id = cur.lastrowid
+        conn.commit()
     return task_id
 
 
 def fetch_pending_tasks(host_id):
-    """Return pending tasks for a host and mark them dispatched so a
-    slow-polling agent (or a retry) doesn't get the same command twice."""
+    """Atomically claim this host's pending tasks and return them.
 
-    conn = _connect()
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-
-    cur.execute("""
-    SELECT id, command, kind, run_as
-    FROM agent_tasks
-    WHERE host_id=? AND status='pending'
-    ORDER BY created
-    """,
-    (host_id,))
-
-    rows = [dict(row) for row in cur.fetchall()]
-
-    if rows:
-        ids = [row["id"] for row in rows]
+    A single `UPDATE ... WHERE status='pending' RETURNING` claims and reads in one
+    statement, so two concurrent polls for the same host can't both hand out the
+    same command: only the rows THIS statement flips to 'dispatched' are returned.
+    (The previous SELECT-then-UPDATE could double-dispatch — both readers saw the
+    same pending rows before either updated.) Rows are ordered by id client-side
+    (autoincrement == queue order) since UPDATE...RETURNING has no ORDER BY.
+    Wrapped in closing() so a 'database is locked' error can't leak the connection."""
+    with contextlib.closing(_connect()) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
         cur.execute(
-            f"UPDATE agent_tasks SET status='dispatched', dispatched=? "
-            f"WHERE id IN ({','.join('?' * len(ids))})",
-            (time.time(), *ids)
+            "UPDATE agent_tasks SET status='dispatched', dispatched=? "
+            "WHERE host_id=? AND status='pending' "
+            "RETURNING id, command, kind, run_as",
+            (time.time(), host_id),
         )
-
-    conn.commit()
-    conn.close()
-
+        rows = [dict(row) for row in cur.fetchall()]
+        conn.commit()
+    rows.sort(key=lambda r: r["id"])
     return rows
 
 
@@ -2038,24 +2043,22 @@ def submit_task_result(task_id, host_id, result):
     status makes result submission idempotent: a duplicate/retried result for an
     already-'done' task is a no-op (no second agent_results row, no re-run of
     side effects like ssh_enable), and an agent cannot mark its own still-
-    'pending' task done without it ever being delivered/run."""
-    conn = _connect()
-    cur = conn.cursor()
-
-    cur.execute(
-        "UPDATE agent_tasks SET status='done' WHERE id=? AND status='dispatched'",
-        (task_id,),
-    )
-    applied = cur.rowcount == 1
-    if applied:
-        cur.execute("""
-        INSERT INTO agent_results (task_id, host_id, result, completed)
-        VALUES (?, ?, ?, ?)
-        """,
-        (task_id, host_id, result, time.time()))
-
-    conn.commit()
-    conn.close()
+    'pending' task done without it ever being delivered/run.
+    Wrapped in closing() so a locked-DB error can't leak the connection."""
+    with contextlib.closing(_connect()) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE agent_tasks SET status='done' WHERE id=? AND status='dispatched'",
+            (task_id,),
+        )
+        applied = cur.rowcount == 1
+        if applied:
+            cur.execute("""
+            INSERT INTO agent_results (task_id, host_id, result, completed)
+            VALUES (?, ?, ?, ?)
+            """,
+            (task_id, host_id, result, time.time()))
+        conn.commit()
     return applied
 
 
@@ -2070,38 +2073,72 @@ def reclaim_stale_tasks(timeout_seconds):
     the RESULT was lost, so silently re-delivering a privileged command could
     double-execute it (at-most-once by design). An operator re-queues manually if
     they want. Returns the number reclaimed. `dispatched` is stamped by
-    fetch_pending_tasks when a task is handed out."""
+    fetch_pending_tasks when a task is handed out.
+
+    Also opportunistically prunes terminal task/result rows older than the
+    retention window (see _prune_terminal_tasks) — this loop is the natural place
+    to keep agent_tasks/agent_results from growing unboundedly with every command
+    ever run. Wrapped in closing() so a locked-DB error can't leak the connection."""
     import json as _json
-    conn = _connect()
-    cur = conn.cursor()
-    cutoff = time.time() - float(timeout_seconds)
+    with contextlib.closing(_connect()) as conn:
+        cur = conn.cursor()
+        cutoff = time.time() - float(timeout_seconds)
+        cur.execute(
+            "SELECT id, host_id FROM agent_tasks "
+            "WHERE status='dispatched' AND dispatched IS NOT NULL AND dispatched < ?",
+            (cutoff,),
+        )
+        stale = cur.fetchall()
+        msg = _json.dumps({
+            "stdout": "",
+            "stderr": ("[sysible] Task timed out: the host was handed this command but never "
+                       "reported a result. It may or may not have run — re-queue it if needed."),
+            "returncode": -1,
+        })
+        now = time.time()
+        reclaimed = 0
+        for tid, host_id in stale:
+            # Guard on status again: if a real result won the race between the SELECT
+            # and here, the row is already 'done' -> 0 rows -> don't add a synthetic one.
+            cur.execute("UPDATE agent_tasks SET status='timed_out' WHERE id=? AND status='dispatched'", (tid,))
+            if cur.rowcount == 1:
+                cur.execute(
+                    "INSERT INTO agent_results (task_id, host_id, result, completed) VALUES (?, ?, ?, ?)",
+                    (tid, host_id, msg, now),
+                )
+                reclaimed += 1
+        _prune_terminal_tasks(cur, now)
+        conn.commit()
+    return reclaimed
+
+
+# Retention for finished task/result rows. Terminal tasks (done/timed_out) and
+# their results are kept this long for the activity feed, then pruned so the
+# agent_tasks/agent_results tables stay bounded. Tunable; 0 disables pruning.
+try:
+    TASK_RETENTION_DAYS = int(os.getenv("SYSIBLE_TASK_RETENTION_DAYS", "30"))
+except ValueError:
+    TASK_RETENTION_DAYS = 30
+
+
+def _prune_terminal_tasks(cur, now):
+    """Delete terminal (done/timed_out) tasks and their results older than the
+    retention window. Takes an existing cursor so it runs inside the caller's
+    transaction. No-op when retention is disabled (<= 0)."""
+    if TASK_RETENTION_DAYS <= 0:
+        return
+    cutoff = now - TASK_RETENTION_DAYS * 24 * 60 * 60
     cur.execute(
-        "SELECT id, host_id FROM agent_tasks "
-        "WHERE status='dispatched' AND dispatched IS NOT NULL AND dispatched < ?",
+        "DELETE FROM agent_results WHERE task_id IN ("
+        "  SELECT id FROM agent_tasks "
+        "  WHERE status IN ('done','timed_out') AND created IS NOT NULL AND created < ?)",
         (cutoff,),
     )
-    stale = cur.fetchall()
-    msg = _json.dumps({
-        "stdout": "",
-        "stderr": ("[sysible] Task timed out: the host was handed this command but never "
-                   "reported a result. It may or may not have run — re-queue it if needed."),
-        "returncode": -1,
-    })
-    now = time.time()
-    reclaimed = 0
-    for tid, host_id in stale:
-        # Guard on status again: if a real result won the race between the SELECT
-        # and here, the row is already 'done' -> 0 rows -> don't add a synthetic one.
-        cur.execute("UPDATE agent_tasks SET status='timed_out' WHERE id=? AND status='dispatched'", (tid,))
-        if cur.rowcount == 1:
-            cur.execute(
-                "INSERT INTO agent_results (task_id, host_id, result, completed) VALUES (?, ?, ?, ?)",
-                (tid, host_id, msg, now),
-            )
-            reclaimed += 1
-    conn.commit()
-    conn.close()
-    return reclaimed
+    cur.execute(
+        "DELETE FROM agent_tasks "
+        "WHERE status IN ('done','timed_out') AND created IS NOT NULL AND created < ?",
+        (cutoff,),
+    )
 
 
 def get_task_kind(task_id):

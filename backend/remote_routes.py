@@ -538,6 +538,14 @@ def get_agent_ssh_state(host_id: str):
     return _load_agent_ssh_state().get(host_id)
 
 
+def get_all_agent_ssh_states():
+    """Return {host_id: state} for EVERY agent from a SINGLE file read, so the
+    dashboard roster indexes in-memory instead of calling get_agent_ssh_state()
+    per host in a loop (which re-read and re-parsed the whole file each time —
+    the O(N^2) that made GET /agents slow at fleet scale)."""
+    return _load_agent_ssh_state()
+
+
 def set_agent_ssh_state(host_id: str, value):
     with _SSH_STATE_LOCK:
         state = _load_agent_ssh_state()

@@ -212,11 +212,16 @@ def cmd_delete_timer(name: str, delete_service: bool = True) -> str:
     """Stops + disables the timer, removes its unit file, and (by
     default) removes the paired .service unit cmd_create_systemd_timer()
     wrote alongside it."""
+    # Strip a supplied .timer/.service suffix, then run through _safe_unit_base so a
+    # traversal like `../../../etc/cron.d/foo` can't redirect the rm -f outside
+    # /etc/systemd/system/ (shlex.quote blocks shell injection but NOT the '/' / '..').
+    # Its sibling builders (cmd_create_systemd_timer, _timer_unit) already do this.
     base = (name or "").strip()
     if base.endswith(".timer"):
         base = base[: -len(".timer")]
     if base.endswith(".service"):
         base = base[: -len(".service")]
+    base = _safe_unit_base(base)
     if not base:
         raise ValueError("Timer name cannot be empty")
 

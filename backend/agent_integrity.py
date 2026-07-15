@@ -233,6 +233,15 @@ def status(host_id):
     return _load().get(host_id) or {"status": "unknown"}
 
 
+def status_all():
+    """Return {host_id: status_dict} for every measured host from a SINGLE state-file
+    read, so the dashboard roster can index in-memory instead of calling status()
+    (which re-reads and re-parses the whole file) once per host — the O(N^2) that
+    made GET /agents slow at fleet scale. Missing hosts default to 'unknown' at the
+    call site (dict.get)."""
+    return dict(_load())
+
+
 def rebaseline(host_id):
     """Admin action after a legitimate upgrade: drop the sealed baseline so the
     next heartbeat re-seals and the host is no longer quarantined."""

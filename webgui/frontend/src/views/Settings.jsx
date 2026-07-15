@@ -418,8 +418,12 @@ function SoftwareUpdate() {
   const [agents, setAgents] = useState(null);   // null | {total, updated, ver, done, timedOut}
   const [ctrlLog, setCtrlLog] = useState("");   // live self-update output
   const [agentRows, setAgentRows] = useState(null); // per-host update status list
+  const [skipped, setSkipped] = useState(() => new Set()); // hosts excluded from this rollout
+  const skippedRef = useRef(new Set());            // mirror so the poll tick reads the live set
   const [avail, setAvail] = useState(null);     // null | {controller, agents} from /update-status
   const [checking, setChecking] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildMsg, setRebuildMsg] = useState("");
   const pollRef = useRef(null);
   const agentPollRef = useRef(null);
   const logRef = useRef(null);
@@ -437,6 +441,24 @@ function SoftwareUpdate() {
     try { await api.logout(); } catch { /* ignore */ }
     setTimeout(() => window.location.reload(), 900);
   }, []);
+
+  // Rebuild just the web console front end (npm build) without a full controller
+  // update — for when new code was deployed (e.g. a manual git pull) but the compiled
+  // bundle wasn't refreshed. On success, hard-reload so the new UI loads.
+  async function rebuildUi() {
+    setRebuilding(true); setErr(""); setMsg(""); setRebuildMsg("");
+    try {
+      const r = await api.rebuildWebgui();
+      if (r && r.ok) {
+        setRebuildMsg("Rebuilt. Reloading the new console…");
+        setTimeout(() => window.location.reload(true), 1200);
+      } else {
+        const bad = (r?.steps || []).find((s) => !s.ok);
+        setErr("Rebuild failed" + (bad ? ` at “${bad.name}”: ${bad.output}` : "."));
+      }
+    } catch (e) { setErr(e.message); }
+    finally { setRebuilding(false); }
+  }
 
   // Check whether the controller (git-behind) or any agent (build-hash mismatch)
   // has an update available. Does a live git fetch on the controller, so it's an
@@ -515,8 +537,34 @@ function SoftwareUpdate() {
 
   // Kick the agent update + N-of-M polling on its OWN interval (so it can run
   // alongside the controller update). Doesn't reset controller state.
+  // Exclude a hung/offline agent from THIS rollout so it stops holding the bar at
+  // "applying on next check-in…". Skipping only affects the console's completion
+  // accounting — the update task stays queued, so a skipped host still applies
+  // whenever it next reconnects; it just no longer blocks the operator here.
+  function reevaluate(rows, s, total) {
+    const updated = (rows || []).filter((a) => a.updated).length;
+    const skippedActive = (rows || []).filter((a) => !a.updated && s.has(a.host)).length;
+    return { updated, skippedActive, done: (updated + skippedActive) >= total };
+  }
+  function skipAgents(hosts) {
+    const s = new Set(skippedRef.current);
+    hosts.forEach((h) => s.add(h));
+    skippedRef.current = s; setSkipped(s);
+    setAgents((a) => {
+      if (!a) return a;
+      const { skippedActive, done } = reevaluate(agentRows, s, a.total);
+      if (done && agentPollRef.current) {
+        clearInterval(agentPollRef.current);
+        agentsDoneRef.current = true;
+        if (ctrlWaitingRef.current) { ctrlWaitingRef.current = false; logoutReload(); }
+      }
+      return { ...a, done, skipped: skippedActive };
+    });
+  }
+
   async function kickAgents() {
     agentsDoneRef.current = false;
+    skippedRef.current = new Set(); setSkipped(new Set());
     const r = await api.updateAgents();
     const ver = r?.version, total = r?.queued || 0;
     setMsg(r?.message || `Agent update queued for ${total} host(s).`);
@@ -537,10 +585,9 @@ function SoftwareUpdate() {
           updated: a.agent_version === ver,
         })).sort((x, y) => (x.updated - y.updated) || x.host.localeCompare(y.host));
         setAgentRows(list);
-        const updated = list.filter((a) => a.updated).length;
-        const done = updated >= total;
+        const { updated, skippedActive, done } = reevaluate(list, skippedRef.current, total);
         const timedOut = !done && Date.now() - t0 > 240000;
-        setAgents({ total, updated, ver, done, timedOut });
+        setAgents({ total, updated, ver, done, timedOut, skipped: skippedActive });
         if (done || timedOut) {
           clearInterval(agentPollRef.current);
           agentsDoneRef.current = true;
@@ -643,6 +690,17 @@ function SoftwareUpdate() {
         <Button which="controller" label="Update controller only" start={startController} />
         <Button which="agents" label="Update agents only" start={startAgents} />
       </div>
+
+      <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
+        <div className="faint" style={{ fontSize: 12, marginBottom: 6 }}>
+          Console UI not reflecting new code (e.g. after a manual <code>git pull</code>)? Rebuild just the
+          web console front end — no full update, no agent changes.
+        </div>
+        <button className="btn ghost sm" disabled={rebuilding || busy} onClick={rebuildUi}>
+          {rebuilding ? <span className="spin" /> : "Rebuild web console"}</button>
+        {rebuilding && <span className="faint" style={{ marginLeft: 8, fontSize: 12 }}>Building (can take a minute)…</span>}
+        {rebuildMsg && <div className="ok-text" style={{ marginTop: 6, fontSize: 13 }}>{rebuildMsg}</div>}
+      </div>
       {ctrl === "restarting" && (
         <div style={{ marginTop: 8 }}>
           <div className="faint" style={{ fontSize: 12 }}>Updating the controller… confirming the result (this can take 30–90 s).</div>
@@ -691,30 +749,57 @@ function SoftwareUpdate() {
         <div style={{ marginTop: 12 }}>
           <div className="spread" style={{ fontSize: 12 }}>
             <span className="faint">
-              {agents.done ? "✓ all agents updated"
+              {agents.done ? (agents.skipped ? `✓ done — ${agents.skipped} skipped` : "✓ all agents updated")
                 : agents.timedOut ? "still updating — offline hosts apply on reconnect"
                 : "Updating agents…"}
             </span>
-            <span className="faint">{agents.updated} / {agents.total}</span>
+            <span className="faint">
+              {agents.updated}{agents.skipped ? ` +${agents.skipped}` : ""} / {agents.total}
+            </span>
           </div>
-          <ProgressBar value={agents.updated} max={agents.total}
+          <ProgressBar value={agents.updated + (agents.skipped || 0)} max={agents.total}
                        color={agents.done ? "#4ec07a" : undefined} />
         </div>
       )}
-      {agentRows && agentRows.length > 0 && (
-        <div style={{ marginTop: 8, maxHeight: 220, overflow: "auto", border: "1px solid var(--border)",
-                      borderRadius: 8, padding: "6px 8px" }}>
-          {agentRows.map((a) => (
-            <div key={a.host} className="spread" style={{ fontSize: 12, padding: "3px 0" }}>
+      {agentRows && agentRows.length > 0 && (() => {
+        const pending = agentRows.filter((a) => !a.updated && !skipped.has(a.host));
+        return (
+        <div style={{ marginTop: 8 }}>
+          {pending.length > 0 && (
+            <div className="spread" style={{ fontSize: 11, marginBottom: 4 }}>
+              <span className="faint">{pending.length} still applying</span>
+              <button className="btn ghost sm" onClick={() => skipAgents(pending.map((a) => a.host))}>
+                Skip {pending.length} pending
+              </button>
+            </div>
+          )}
+          <div style={{ maxHeight: 220, overflow: "auto", border: "1px solid var(--border)",
+                        borderRadius: 8, padding: "6px 8px" }}>
+          {agentRows.map((a) => {
+            const isSkipped = !a.updated && skipped.has(a.host);
+            return (
+            <div key={a.host} className="spread" style={{ fontSize: 12, padding: "3px 0",
+                 opacity: isSkipped ? 0.55 : 1 }}>
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span className="dot" style={{ background: a.updated ? "#4ec07a" : "#e0a83a" }} />
+                <span className="dot" style={{ background: a.updated ? "#4ec07a"
+                       : isSkipped ? "#6b7280" : "#e0a83a" }} />
                 {a.host}{a.env ? <span className="faint" style={{ fontSize: 11 }}>{a.env}</span> : null}
               </span>
-              <span className="faint">{a.updated ? "updated ✓" : "applying on next check-in…"}</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span className="faint">{a.updated ? "updated ✓"
+                  : isSkipped ? "skipped" : "applying on next check-in…"}</span>
+                {!a.updated && !isSkipped && (
+                  <button className="btn ghost sm" style={{ padding: "1px 8px" }}
+                          onClick={() => skipAgents([a.host])}>Skip</button>
+                )}
+              </span>
             </div>
-          ))}
+            );
+          })}
+          </div>
         </div>
-      )}
+        );
+      })()}
 
       <div className="row" style={{ marginTop: 12, gap: 8, alignItems: "center" }}>
         <button className="btn ghost sm" onClick={downloadLog}>Download last update log</button>

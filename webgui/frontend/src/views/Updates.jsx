@@ -151,6 +151,8 @@ export default function Updates({ role }) {
   const [results, setResults] = useState(null);
   const [busy, setBusy] = useState("");
   const [deferOpen, setDeferOpen] = useState(false);
+  const [nobest, setNobest] = useState(false);       // dnf --nobest for "Install all updates"
+  const [skipBroken, setSkipBroken] = useState(false); // dnf --skip-broken
   const [okMsg, setOkMsg] = useState("");
 
   const [liveLoading, setLiveLoading] = useState(false);
@@ -230,7 +232,10 @@ export default function Updates({ role }) {
     setBusy(kind); setErr(""); setResults(null);
     if (jobPoll.current) clearInterval(jobPoll.current);
     try {
-      const r = await api.fleetInstall(checked, kind);
+      // Resolver flags apply only to an "all" dnf/yum run (where "nothing provides…"
+      // conflicts arise); the security path uses the security plugin's own resolution.
+      const flags = kind === "all" ? [nobest && "nobest", skipBroken && "skip-broken"].filter(Boolean).join(" ") : "";
+      const r = await api.fleetInstall(checked, kind, flags);
       setJob({ id: r.job_id, kind, done: false, hosts: r.hosts });
       let counted = false;
       jobPoll.current = setInterval(async () => {
@@ -289,6 +294,14 @@ export default function Updates({ role }) {
             {busy === "security" ? <span className="spin" /> : "Install security updates"}</button>
           <button className="btn sm" disabled={!checked.length || busy} onClick={() => run("all")}>
             {busy === "all" ? <span className="spin" /> : "Install all updates"}</button>
+          <label className="faint" style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}
+                 title="dnf/yum --nobest: allow a non-latest candidate when the newest can't be resolved">
+            <input type="checkbox" checked={nobest} onChange={(e) => setNobest(e.target.checked)} disabled={busy} /> --nobest
+          </label>
+          <label className="faint" style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}
+                 title="dnf/yum --skip-broken: skip packages whose dependencies can't be satisfied">
+            <input type="checkbox" checked={skipBroken} onChange={(e) => setSkipBroken(e.target.checked)} disabled={busy} /> --skip-broken
+          </label>
           <button className="btn sm ghost" disabled={!checked.length || busy}
                   title="Schedule the install for a maintenance window instead of running it now"
                   onClick={() => { setErr(""); setOkMsg(""); setDeferOpen(true); }}>

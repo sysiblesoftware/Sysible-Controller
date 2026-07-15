@@ -74,6 +74,7 @@ export const api = {
     req("/api/controller-config", { method: "POST", body: cfg }),
   controllerRestart: () => req("/api/controller-restart", { method: "POST" }),
   controllerUpdate: () => req("/api/controller-update", { method: "POST" }),
+  rebuildWebgui: () => req("/api/webgui-rebuild", { method: "POST" }),
   controllerUpdateStatus: () => req("/api/controller-update-status"),
   controllerUpdateLog: (lines = 400) => req(`/api/controller-update-log?lines=${lines}`),
   updateAgents: () => req("/api/update-agents", { method: "POST" }),
@@ -154,7 +155,7 @@ export const api = {
     req("/api/fleet-query", { method: "POST", body: { qtype, arg, targets } }),
   fleetUpdates: (refresh = 0, live = 0) =>
     req("/api/fleet-updates" + (live ? "?refresh=1&live=1" : refresh ? "?refresh=1" : "")),
-  fleetInstall: (targets, kind) => req("/api/fleet-updates/install", { method: "POST", body: { targets, kind } }),
+  fleetInstall: (targets, kind, flags = "") => req("/api/fleet-updates/install", { method: "POST", body: { targets, kind, flags } }),
   fleetInstallStatus: (jobId) => req(`/api/fleet-updates/install-status/${encodeURIComponent(jobId)}`),
   schedules: () => req("/api/schedules"),
   scheduleCreate: (body) => req("/api/schedules", { method: "POST", body }),

@@ -283,7 +283,27 @@ cmd_update() {
   if [[ -d "$SRC/.git" ]] && command -v git >/dev/null 2>&1; then
     echo "Pulling latest code (git) ..."
     _git() { git -C "$SRC" -c safe.directory="$SRC" "$@"; }
-    if ! _git pull --ff-only 2>&1; then
+    _pull_out="$(_git pull --ff-only 2>&1)"; _pull_rc=$?
+    printf '%s\n' "$_pull_out"
+    if [[ $_pull_rc -ne 0 ]]; then
+      # An untracked-file collision ("untracked working tree files would be overwritten
+      # by merge") is NOT a ref-store problem — the checkout has untracked files shadowing
+      # files the update adds, and a ref repair won't help. Give the exact, safe remedy
+      # and stop, rather than falling through to a misleading "ref-store repair" attempt.
+      # We deliberately do NOT auto-delete untracked files (possible data loss) — the
+      # operator decides. A deploy checkout's untracked files are normally just cruft, and
+      # git clean -fd leaves the git-ignored built dist/ and node_modules/ untouched.
+      if printf '%s' "$_pull_out" | grep -q 'untracked working tree files would be overwritten'; then
+        echo "ERROR: update blocked — this checkout has UNTRACKED files that collide with the incoming update."
+        echo "       A ref-store repair can't fix this. On the host, clear the untracked cruft, then retry:"
+        echo "         cd $SRC && sudo git -c safe.directory=\"\$PWD\" clean -fd && sudo git -c safe.directory=\"\$PWD\" pull --ff-only"
+        echo "       (clean -fd removes only untracked files; the ignored dist/ and node_modules/ are preserved.)"
+        echo "       Reversible alternative (keeps a recoverable copy in a stash):"
+        echo "         cd $SRC && sudo git -c safe.directory=\"\$PWD\" stash push --include-untracked -m pre-update && sudo git -c safe.directory=\"\$PWD\" pull --ff-only"
+        echo "       Then re-run the update."
+        _write_update_status failed "Update blocked: untracked files in $SRC collide with the incoming update. On the host run: cd $SRC && sudo git -c safe.directory=\$PWD clean -fd (removes untracked cruft; keeps ignored dist/ and node_modules/), then retry update. Reversible alt: stash push --include-untracked."
+        exit 1
+      fi
       # A common, non-fatal failure is a corrupted ref store — e.g.
       #   "fetching ref refs/remotes/origin/main failed: reference already exists"
       # — a loose remote-tracking ref colliding with packed-refs, usually left by

@@ -305,6 +305,13 @@ def controller_update():
     return _request("POST", "/controller/update", timeout=30)
 
 
+def rebuild_webgui():
+    """Rebuild the web console front end (npm install + npm run build) on the controller
+    host. Synchronous; returns each build step's output. Generous timeout — the build can
+    take a while on first run."""
+    return _request("POST", "/controller/webgui/rebuild", timeout=900)
+
+
 def controller_update_status():
     """Outcome of the most recent controller self-update:
     {"status": running|success|failed|none|unknown, "message", "version", "ts",

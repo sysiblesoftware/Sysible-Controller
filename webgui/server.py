@@ -1346,6 +1346,10 @@ class InstallUpdatesRequest(BaseModel):
     # Optional one-run sudo password for password-sudo hosts, for operators who
     # don't keep one stored. Transient (RAM only), same handling as /api/fleet.
     sudo_password: str = ""
+    # Optional dnf/yum resolver flags (nobest, skip-broken, allowerasing) for when an
+    # "all updates" run dead-ends on a dependency conflict. Whitelisted downstream; only
+    # applies to the "all" kind (security updates use the security plugin's own path).
+    flags: str = ""
 
 
 # In-memory registry of background install jobs -> per-host status + output, so
@@ -1425,7 +1429,7 @@ def fleet_updates_install(body: InstallUpdatesRequest, request: Request,
     import time as _t
     import uuid
     action = "all_updates" if body.kind == "all" else "security_updates"
-    cmd = (actions.get("pkg_update").build({"names": ""}) if action == "all_updates"
+    cmd = (actions.get("pkg_update").build({"names": "", "flags": body.flags}) if action == "all_updates"
            else actions.get("sec_install_updates").build({}))
     install_desc = "Install all updates" if action == "all_updates" else "Install security updates"
     try:
@@ -2189,6 +2193,13 @@ def controller_update(request: Request, user: str = Depends(require_superuser_se
     Superuser-only — the controller launches it as a detached transient unit and
     returns immediately, then the backend and this web console both restart."""
     return _wrap(lambda: _as_admin(request, lambda: api.controller_update()))
+
+
+@app.post("/api/webgui-rebuild")
+def webgui_rebuild(request: Request, user: str = Depends(require_superuser_session)):
+    """Rebuild the web console front end (npm build) from the browser. Superuser-only.
+    Synchronous — returns each build step's output."""
+    return _wrap(lambda: _as_admin(request, lambda: api.rebuild_webgui()))
 
 
 @app.get("/api/controller-update-status")

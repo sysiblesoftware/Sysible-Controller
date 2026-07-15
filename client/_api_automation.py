@@ -434,18 +434,46 @@ def cmd_remove_packages(names: str) -> str:
     )
 
 
-def cmd_update_packages(names: str = "") -> str:
-    """Upgrades the named package(s), or every installed package if
-    left blank."""
+# Opt-in resolver flags for the RPM (dnf/yum) update command, for when an update
+# dead-ends on a dependency conflict (dnf itself suggests these). WHITELIST ONLY -- a
+# free-form flag string would be a shell-injection vector, so only these known tokens map
+# to a fixed flag and anything else is dropped. dnf-centric; that's where these conflicts
+# arise. (`--nobest` is dnf-only, harmless-to-omit on yum.)
+_RPM_UPDATE_FLAGS = {
+    "nobest": "--nobest",
+    "skip-broken": "--skip-broken",
+    "allowerasing": "--allowerasing",
+}
+
+
+def _rpm_update_flags(flags: str) -> str:
+    """Map an opt-in, space/comma-separated flag list to a VALIDATED dnf/yum flag string.
+    Accepts tokens with or without leading dashes (e.g. 'nobest' or '--nobest'); unknown
+    tokens are silently dropped, so a hostile value can never inject shell."""
+    out = []
+    for tok in (flags or "").replace(",", " ").split():
+        mapped = _RPM_UPDATE_FLAGS.get(tok.strip().lstrip("-"))
+        if mapped and mapped not in out:
+            out.append(mapped)
+    return (" " + " ".join(out)) if out else ""
+
+
+def cmd_update_packages(names: str = "", flags: str = "") -> str:
+    """Upgrades the named package(s), or every installed package if left blank.
+
+    `flags` is an opt-in, whitelisted set of dnf/yum resolver flags (nobest, skip-broken,
+    allowerasing) for when an update dead-ends on a dependency conflict -- applied only to
+    the RPM command; ignored for apt/zypper."""
     pkgs = _pkg_quote_list(names)
+    rf = _rpm_update_flags(flags)
     if pkgs:
         return _pkgmgr_dispatch(
-            rpm_cmd=f'"$PKGMGR" update -y {pkgs}',
+            rpm_cmd=f'"$PKGMGR" update -y{rf} {pkgs}',
             zypper_cmd=f'zypper --non-interactive update {pkgs}',
             apt_cmd=f'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --only-upgrade -y {pkgs}',
         )
     return _pkgmgr_dispatch(
-        rpm_cmd='"$PKGMGR" upgrade -y',
+        rpm_cmd=f'"$PKGMGR" upgrade -y{rf}',
         zypper_cmd='zypper --non-interactive update',
         apt_cmd='apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y',
     )

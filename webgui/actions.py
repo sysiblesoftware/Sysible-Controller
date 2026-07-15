@@ -236,8 +236,12 @@ _register(Action(
     name="pkg_update", tool="Host Software Management",
     label="Update / upgrade packages",
     params=[Param("names", "Package name(s)", required=False,
-                  help="leave blank to update everything")],
-    build=lambda p: _pkg_and_status(api.cmd_update_packages(_s(p, "names")), _s(p, "names")),
+                  help="leave blank to update everything"),
+            Param("flags", "Resolver flags", required=False,
+                  help="optional dnf/yum flags for dependency conflicts: nobest, "
+                       "skip-broken, allowerasing (space-separated)")],
+    build=lambda p: _pkg_and_status(
+        api.cmd_update_packages(_s(p, "names"), _s(p, "flags")), _s(p, "names")),
 ))
 _register(Action(
     name="pkg_remove", tool="Host Software Management", label="Remove packages",

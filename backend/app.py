@@ -1836,6 +1836,24 @@ def controller_update_route(acting: str = Depends(acting_admin_name)):
     }
 
 
+@app.post("/controller/webgui/rebuild", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def controller_webgui_rebuild_route(acting: str = Depends(acting_admin_name)):
+    """Rebuild the web console front end (npm install + npm run build) from the browser,
+    so an admin never needs shell access after pulling new code. The console serves a
+    COMPILED bundle (webgui/frontend/dist, not tracked in git), so source changes only
+    show once it's rebuilt — the in-app 'Update controller' already does this; this is the
+    same build on demand (e.g. after a manual git pull that restarted only the backend).
+    Superuser-only. Returns each step's output so the UI can show exactly what happened."""
+    from backend import webgui_manager
+    result = webgui_manager.install_dependencies()
+    try:
+        log_admin_audit("controller_update_started", acting,
+                        "web console front end rebuilt from the console")
+    except Exception:
+        pass
+    return result
+
+
 @app.get("/controller/update-status", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def controller_update_status_route():
     """Report the outcome of the most recent controller self-update, so the

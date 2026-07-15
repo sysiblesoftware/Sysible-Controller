@@ -178,7 +178,7 @@ export default function HostEnrollment() {
 
   async function disenrollChecked() {
     if (checked.length === 0) { setErr("Check one or more hosts first."); return; }
-    if (!window.confirm(`Disenroll ${checked.length} host(s)? An online host's agent service is stopped and removed first; an offline or revoked host is dropped from the console immediately (run disenroll_agent.sh on it if it ever comes back).`)) return;
+    if (!window.confirm(`Disenroll ${checked.length} host(s)? This removes them from the controller. Each agent keeps running on its host until you stop/uninstall it there (run disenroll_agent.sh on the host), and can re-enroll unless you Force Delete (which purges its enrollment token).`)) return;
     await run(async () => {
       const warnings = [];
       for (const id of checked) {
@@ -189,7 +189,7 @@ export default function HostEnrollment() {
       setChecked([]);
       if (warnings.length) throw new Error("Disenrolled, but service teardown was not confirmed on:\n" + warnings.join("\n"));
     }, `Disenrolled ${checked.length} host(s).`,
-      `Disenrolling ${checked.length} host(s)… online hosts stop their agent service first, which can take a few seconds.`);
+      `Disenrolling ${checked.length} host(s)…`);
   }
 
   async function forceDeleteChecked() {

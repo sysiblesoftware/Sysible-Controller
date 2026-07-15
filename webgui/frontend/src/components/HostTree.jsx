@@ -7,7 +7,7 @@ export default function HostTree({ hosts, value, onChange, onRefresh, footer }) 
   const groups = useMemo(() => {
     const m = {};
     for (const h of hosts) {
-      const env = h.environment || "Ungrouped";
+      const env = h.environment || "Unassigned";
       (m[env] = m[env] || []).push(h);
     }
     return Object.entries(m).sort(([a], [b]) => a.localeCompare(b));
@@ -42,8 +42,14 @@ export default function HostTree({ hosts, value, onChange, onRefresh, footer }) 
           const allInGroup = groupIds.every((id) => value.includes(id));
           return (
             <div className="env-group" key={env}>
-              <div className="env-head" onClick={() =>
-                setCollapsed((c) => ({ ...c, [env]: isOpen }))}>
+              <div className="env-head" role="button" tabIndex={0}
+                onClick={() => setCollapsed((c) => ({ ...c, [env]: isOpen }))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setCollapsed((c) => ({ ...c, [env]: isOpen }));
+                  }
+                }}>
                 <input
                   type="checkbox"
                   className="env-check"

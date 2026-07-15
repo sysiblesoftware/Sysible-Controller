@@ -26,7 +26,7 @@ export default function Login({ onLoggedIn }) {
       <form className="login-card" onSubmit={submit}>
         <div className="brand">
           <div className="brand-mark">S</div>
-          <h1>Sysible Console</h1>
+          <h1>Sysible Controller</h1>
         </div>
         <p className="muted" style={{ marginTop: 4 }}>
           Sign in with your controller administrator account.

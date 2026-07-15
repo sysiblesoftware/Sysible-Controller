@@ -333,6 +333,15 @@ tr:hover td { background: var(--row-hover); }
   .three-pane > .host-pane { border-right: none; border-bottom: 1px solid var(--border);
     padding-right: 0; padding-bottom: 12px; }
 }
+/* User & Group page: three columns (hosts / groups / detail) that must also
+   collapse on tablet/narrow widths so the wide middle column can't force the
+   page into horizontal scroll. */
+.three-pane.ug-3col { grid-template-columns: 240px 300px 1fr; }
+@media (max-width: 900px) {
+  .three-pane.ug-3col { grid-template-columns: 1fr; height: auto; }
+  .three-pane.ug-3col > .host-pane { border-right: none; border-bottom: 1px solid var(--border);
+    padding-right: 0; padding-bottom: 12px; }
+}
 .host-pane { border-right: 1px solid var(--border); padding-right: 14px; display: flex; flex-direction: column; }
 .host-pane .ctl-row { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
 .host-tree { flex: 1; overflow-y: auto; margin-top: 8px; }

@@ -25,7 +25,7 @@ export default function Connect() {
 
   const groups = useMemo(() => {
     const m = {};
-    for (const h of hosts) (m[h.environment || "Ungrouped"] ||= []).push(h);
+    for (const h of hosts) (m[h.environment || "Unassigned"] ||= []).push(h);
     return Object.entries(m).sort(([a], [b]) => a.localeCompare(b));
   }, [hosts]);
 
@@ -110,7 +110,14 @@ export default function Connect() {
             const allInGroup = groupIds.every((id) => checked.includes(id));
             return (
               <div className="env-group" key={env}>
-                <div className="env-head" onClick={() => setCollapsed((c) => ({ ...c, [env]: open }))}>
+                <div className="env-head" role="button" tabIndex={0}
+                     onClick={() => setCollapsed((c) => ({ ...c, [env]: open }))}
+                     onKeyDown={(e) => {
+                       if (e.key === "Enter" || e.key === " ") {
+                         e.preventDefault();
+                         setCollapsed((c) => ({ ...c, [env]: open }));
+                       }
+                     }}>
                   <input
                     type="checkbox"
                     className="env-check"
@@ -234,8 +241,9 @@ function SelectedHost({ host, onTerminal, onChanged, onErr }) {
 
   async function disenroll() {
     if (!window.confirm(
-      `Disenroll ${host.label}? The host's agent keeps running but stops being managed ` +
-      `by this controller. You can re-enroll it later.`)) return;
+      `Disenroll ${host.label}? This removes the host from the controller. ` +
+      `The agent on the host keeps running until you stop/uninstall it there, ` +
+      `and can re-enroll unless you Force Delete (which purges its enrollment token).`)) return;
     setBusy("rm"); onErr("");
     try { await api.removeHost(host.id); onChanged(true); }
     catch (e) { onErr(e.message); }
@@ -254,7 +262,7 @@ function SelectedHost({ host, onTerminal, onChanged, onErr }) {
         <div>
           <strong>{host.label}</strong>{" "}
           <span className="badge">{host.has_agent ? "Agent + SSH" : "SSH"}</span>{" "}
-          <span className="faint">{host.address} · {host.environment || "Ungrouped"}</span>
+          <span className="faint">{host.address} · {host.environment || "Unassigned"}</span>
         </div>
         <div className="row">
           <button className="btn sm" onClick={onTerminal}>Open Terminal</button>

@@ -26,6 +26,28 @@ export default function Settings({ initialTab }) {
 
 function useErr() { const [err, setErr] = useState(""); return [err, setErr]; }
 
+// Small labeled read-out row, so panels can show structured fields instead of a
+// raw JSON.stringify blob. Defensive: renders whatever value it's handed.
+function InfoRow({ label, value }) {
+  return (
+    <div className="row" style={{ justifyContent: "space-between", gap: 12, padding: "3px 0",
+                                  borderTop: "1px solid var(--border)" }}>
+      <span className="faint">{label}</span>
+      <span className="mono" style={{ textAlign: "right", wordBreak: "break-word", minWidth: 0 }}>{value}</span>
+    </div>
+  );
+}
+function fmtDate(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? String(v) : d.toLocaleString();
+}
+// Pull CN=… out of an RFC4514 subject/issuer string for a friendlier field.
+function cnOf(dn) {
+  const m = /CN=([^,]+)/.exec(dn || "");
+  return m ? m[1].trim() : (dn || "—");
+}
+
 // Strong random password: crypto RNG over an unambiguous charset (no 0/O/1/l/I).
 // Generate a password that ALWAYS satisfies the admin policy: one guaranteed
 // char from each required class, padded to at least the policy's minlen, then
@@ -102,7 +124,7 @@ function Admins() {
         <button className="btn sm" onClick={() => { setMsg(""); setErr(""); setModal({ mode: "add" }); }}>+ Add Administrator</button>
       </div>
 
-      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+      <div className="card" style={{ padding: 0, overflowX: "auto" }}>
         <table>
           <thead><tr><th>Username</th><th>Role</th><th>Sudo on Connect</th><th style={{ textAlign: "right" }}>Actions</th></tr></thead>
           <tbody>
@@ -851,8 +873,21 @@ function Tls() {
     <div style={{ maxWidth: 560 }}>
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="spread"><strong>Current TLS certificate</strong><button className="btn ghost sm" onClick={load}>Refresh</button></div>
-        <div className="muted mono" style={{ fontSize: 12.5, marginTop: 8 }}>
-          {info ? <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>{JSON.stringify(info, null, 2)}</pre> : "Loading…"}
+        <div style={{ fontSize: 12.5, marginTop: 8 }}>
+          {!info ? <span className="muted">Loading…</span>
+            : info.installed === false ? <span className="muted">No certificate installed.</span>
+            : (
+              <>
+                <InfoRow label="Common name" value={cnOf(info.subject)} />
+                <InfoRow label="Subject" value={info.subject || "—"} />
+                <InfoRow label="Issuer" value={info.issuer || "—"} />
+                <InfoRow label="Expires" value={fmtDate(info.not_valid_after)} />
+                {info.days_remaining !== undefined && info.days_remaining !== null &&
+                  <InfoRow label="Days remaining" value={String(info.days_remaining)} />}
+                {info.is_self_signed !== undefined &&
+                  <InfoRow label="Self-signed" value={info.is_self_signed ? "Yes" : "No"} />}
+              </>
+            )}
         </div>
         <a className="btn sm ghost" style={{ marginTop: 10 }} href={api.trustCertUrl()}>Download Trust Certificate</a>
       </div>
@@ -882,9 +917,15 @@ function License() {
   return (
     <div className="card" style={{ maxWidth: 460 }}>
       <strong>License</strong>
-      <div className="muted" style={{ marginTop: 8 }}>
-        {cfg ? <pre className="mono" style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(cfg, null, 2)}</pre> : "Loading…"}
-      </div>
+      {!cfg ? <div className="muted" style={{ marginTop: 8 }}>Loading…</div> : (
+        <div style={{ marginTop: 8 }}>
+          <InfoRow label="Edition" value={cfg.edition || "Community"} />
+          {cfg.plan && <InfoRow label="Plan" value={cfg.plan} />}
+          {(cfg.expiry || cfg.expires_at || cfg.valid_until) &&
+            <InfoRow label="Expires" value={fmtDate(cfg.expiry || cfg.expires_at || cfg.valid_until)} />}
+          <InfoRow label="License key" value={cfg.license_key ? "Entered" : "Not entered"} />
+        </div>
+      )}
       <div className="faint" style={{ marginTop: 8 }}>This is the Community edition. License entry applies to paid editions.</div>
       {err && <div className="error-box">{err}</div>}
     </div>
@@ -898,12 +939,13 @@ function Audit() {
   if (err) return <div className="error-box">{err}</div>;
   if (rows.length === 0) return <div className="empty">No audit entries.</div>;
   return (
+    <div style={{ overflowX: "auto" }}>
     <table>
       <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th></tr></thead>
       <tbody>
         {rows.map((r, i) => (
           <tr key={r.id ?? i}>
-            <td className="faint mono">{r.timestamp || r.time || ""}</td>
+            <td className="faint mono">{fmtDate(r.timestamp || r.time)}</td>
             <td>{r.actor || r.admin || ""}</td>
             <td>{r.action || r.event || ""}</td>
             <td>{r.target || r.detail || r.username || ""}</td>
@@ -911,5 +953,6 @@ function Audit() {
         ))}
       </tbody>
     </table>
+    </div>
   );
 }

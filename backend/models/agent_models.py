@@ -41,6 +41,19 @@ def _validate_agent_addr(cls, v):
     return v
 
 
+def _validate_agent_hostname(cls, v):
+    # The agent-reported hostname is written into the activity feed and used to
+    # reconcile SSH-mirror records. Reject CONTROL characters (newline/CR/NUL, the
+    # 0x1e record separator, other C0/C1) so a hostile/compromised agent can't inject
+    # a line into anything that later logs or renders it. Unicode letters/emoji are
+    # legitimate hostnames and remain allowed. Empty/None passes (older agents omit).
+    if v is None or v == "":
+        return v
+    if any(ord(c) < 0x20 or ord(c) == 0x7f for c in v):
+        raise ValueError("hostname must not contain control characters")
+    return v
+
+
 _METRICS_MAX = _int_env("SYSIBLE_MAX_METRICS_BYTES", 64 * 1024)
 _SNAPSHOT_MAX = _int_env("SYSIBLE_MAX_SNAPSHOT_BYTES", 512 * 1024)
 _MEASUREMENTS_MAX = _int_env("SYSIBLE_MAX_MEASUREMENTS_BYTES", 512 * 1024)
@@ -71,6 +84,7 @@ class EnrollRequest(BaseModel):
     ip: Optional[str] = Field(default=None, max_length=_HOSTNAME_MAX)
 
     _v_ip = field_validator("ip")(classmethod(_validate_agent_addr))
+    _v_hostname = field_validator("hostname")(classmethod(_validate_agent_hostname))
 
 
 class HeartbeatRequest(BaseModel):
@@ -80,6 +94,7 @@ class HeartbeatRequest(BaseModel):
     hostname: Optional[str] = Field(default=None, max_length=_HOSTNAME_MAX)
 
     _v_ip = field_validator("ip")(classmethod(_validate_agent_addr))
+    _v_hostname = field_validator("hostname")(classmethod(_validate_agent_hostname))
     # Short hash of the agent's own agent.py, so the controller knows which hosts
     # run the current agent (drives the web console's Update-agents progress).
     # Older agents omit it.

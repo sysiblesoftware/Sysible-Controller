@@ -49,7 +49,7 @@ export default function UserGroupPage({ initialTab } = {}) {
 
   const groups = useMemo(() => {
     const m = {};
-    for (const h of hosts) (m[h.environment || "Ungrouped"] ||= []).push(h);
+    for (const h of hosts) (m[h.environment || "Unassigned"] ||= []).push(h);
     return Object.entries(m).sort(([a], [b]) => a.localeCompare(b));
   }, [hosts]);
 
@@ -232,7 +232,7 @@ export default function UserGroupPage({ initialTab } = {}) {
   }
 
   return (
-    <div className="three-pane" style={{ gridTemplateColumns: "240px 300px 1fr" }}>
+    <div className="three-pane ug-3col">
       {/* LEFT: hosts */}
       <div className="host-pane">
         <strong style={{ fontSize: 13 }}>Target Hosts</strong>

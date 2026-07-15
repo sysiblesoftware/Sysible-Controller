@@ -123,6 +123,7 @@ export default function LiveActivity({ role }) {
 
       {tab === "activity" ? (
         activity.length === 0 ? <div className="empty">No activity recorded yet.</div> : (
+          <div style={{ overflowX: "auto" }}>
           <table>
             <thead><tr><th>Time</th><th>User</th><th>Host</th><th>Action</th></tr></thead>
             <tbody>
@@ -138,10 +139,11 @@ export default function LiveActivity({ role }) {
               ))}
             </tbody>
           </table>
+          </div>
         )
       ) : (
         <pre className="card mono" style={{ whiteSpace: "pre-wrap", maxHeight: "70vh", overflowY: "auto", fontSize: 12.5 }}>
-          {log || "（empty）"}
+          {log || "(empty)"}
         </pre>
       )}
 

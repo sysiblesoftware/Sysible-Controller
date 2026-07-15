@@ -75,14 +75,16 @@ export default function QuickSystemActionsPage({ hosts = [], onRefreshHosts, pre
   }
 
   // One-click groups → [action name, button label, danger?]
+  // Third field = confirm before running: these restart services that can sever
+  // the operator's own management path (SSH / networking / the agent itself).
   const COMMON = [
-    ["qsa_restart_networkmanager", "Restart NetworkManager"],
+    ["qsa_restart_networkmanager", "Restart NetworkManager", true],
     ["qsa_flush_dns", "Flush DNS cache"],
-    ["qsa_restart_ssh", "Restart SSH server"],
+    ["qsa_restart_ssh", "Restart SSH server", true],
     ["qsa_restart_timesync", "Restart time sync"],
     ["qsa_sync_time_now", "Sync clock now"],
     ["qsa_restart_docker", "Restart Docker"],
-    ["qsa_restart_agent", "Restart Sysible agent"],
+    ["qsa_restart_agent", "Restart Sysible agent", true],
   ];
   const FREE = [
     ["qsa_drop_caches", "Free memory (drop caches)"],
@@ -176,8 +178,11 @@ export default function QuickSystemActionsPage({ hosts = [], onRefreshHosts, pre
 
         <fieldset className="tool-group-box"><legend>Common services</legend>
           <div className="group-buttons">
-            {COMMON.map(([a, l]) => (
-              <button key={a} className="btn sm" disabled={busy} onClick={() => run(a, {}, l)}>{l}</button>
+            {COMMON.map(([a, l, needsConfirm]) => (
+              <button key={a} className="btn sm" disabled={busy} onClick={() =>
+                needsConfirm
+                  ? confirmRun(a, l, `${l} on the ${targets.length} checked host(s)? This can interrupt your own connection to them.`)
+                  : run(a, {}, l)}>{l}</button>
             ))}
           </div>
         </fieldset>

@@ -119,7 +119,7 @@ export default function Alerts() {
             <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               <label className="checkrow" style={{ margin: 0 }}>
                 <input type="checkbox" checked={!!r.enabled} onChange={(e) => setCustomAt(i, "enabled", e.target.checked)} /></label>
-              <input style={{ flex: 1, minWidth: 140 }} placeholder="Rule name"
+              <input style={{ flex: 1, minWidth: 140 }} placeholder="Rule name" aria-label="Custom rule name"
                      value={r.name || ""} onChange={(e) => setCustomAt(i, "name", e.target.value)} />
               <select value={r.mode || "present"} onChange={(e) => setCustomAt(i, "mode", e.target.value)}>
                 <option value="present">Alert when output matches</option>
@@ -129,8 +129,10 @@ export default function Alerts() {
             </div>
             <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 6 }}>
               <input style={{ flex: 2, minWidth: 220, fontFamily: "monospace" }} placeholder="command, e.g. systemctl is-failed nginx"
+                     aria-label="Custom rule command"
                      value={r.command || ""} onChange={(e) => setCustomAt(i, "command", e.target.value)} />
               <input style={{ flex: 1, minWidth: 140, fontFamily: "monospace" }} placeholder="regex, e.g. failed"
+                     aria-label="Custom rule regex"
                      value={r.regex || ""} onChange={(e) => setCustomAt(i, "regex", e.target.value)} />
             </div>
           </div>

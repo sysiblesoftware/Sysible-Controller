@@ -111,6 +111,8 @@ function FleetHostCard({ h, onOpenHost }) {
   return (
     <div onClick={clickable ? () => onOpenHost(h) : undefined}
          title={clickable ? "View posture / compliance detail" : undefined}
+         {...(clickable ? { role: "button", tabIndex: 0,
+           onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenHost(h); } } } : {})}
          style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px",
                   cursor: clickable ? "pointer" : "default" }}>
       <div className="spread" style={{ marginBottom: noData ? 0 : 6 }}>
@@ -860,7 +862,7 @@ export default function Dashboard({ role, edition, onOpen }) {
   if (q.trim()) {
     return (
       <div>
-        <input className="search-bar" autoFocus
+        <input className="search-bar" autoFocus aria-label="Search for a task"
                placeholder='Search for a task, e.g. "create a user" or "add a repository"…'
                value={q} onChange={(e) => setQ(e.target.value)} />
         <div className="card" style={{ padding: 6 }}>
@@ -910,7 +912,7 @@ export default function Dashboard({ role, edition, onOpen }) {
       {/* The task search routes into the tool pages, which auditors can't use,
           so it's hidden for the read-only role. */}
       {!isAuditor && (
-        <input className="search-bar"
+        <input className="search-bar" aria-label="Search for a task"
                placeholder='Search for a task, e.g. "create a user" or "add a repository"…'
                value={q} onChange={(e) => setQ(e.target.value)} />
       )}
@@ -958,6 +960,8 @@ export default function Dashboard({ role, edition, onOpen }) {
           <div style={{ display: "grid", gap: 6 }}>
             {attention.slice(0, 8).map((r) => (
               <div key={r.id} onClick={() => openHost(r)} title="View host detail"
+                   role="button" tabIndex={0}
+                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openHost(r); } }}
                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 9px",
                             border: "1px solid var(--border)", borderRadius: 6, cursor: "pointer" }}>
                 <span className="dot" style={{ background: SEV_COLOR[r.sev] || VERDICT_COLOR.WARNING }} />

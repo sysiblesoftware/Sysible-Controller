@@ -314,6 +314,13 @@ def _webhook_url_safe(url):
     pinned = None
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
+        # Normalize an IPv4-mapped IPv6 address (::ffff:127.0.0.1) to its IPv4 form
+        # before the range checks: Python's ipaddress does NOT flag the mapped form
+        # as loopback/private, so without this a resolver returning a mapped address
+        # could smuggle an internal target past the guard.
+        mapped = getattr(ip, "ipv4_mapped", None)
+        if mapped is not None:
+            ip = mapped
         if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
                 or ip.is_multicast or ip.is_unspecified):
             return False, "webhook host resolves to a non-public address (blocked)", None

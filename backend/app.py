@@ -1686,9 +1686,24 @@ async def install_tls_certificate_route(
     client/events.py's backend_restart_expected signal) so a deliberate
     restart doesn't get mistaken for a crash."""
 
-    cert_pem = await cert_file.read()
-    key_pem = await key_file.read()
-    chain_pem = await chain_file.read() if chain_file is not None else None
+    # Cap each upload: a PEM cert/key/chain is a few KB, so a 1 MB ceiling is
+    # generous. Reading with an explicit bound (read(cap+1)) means a multi-GB body
+    # can't be buffered into RAM before we reject it -- matching the portal/SSH
+    # upload paths, which are already capped. (Superuser-gated, so this is DoS
+    # defence-in-depth, not a privilege boundary.)
+    _CERT_UPLOAD_MAX = 1024 * 1024
+
+    async def _read_capped(upload, label):
+        if upload is None:
+            return None
+        data = await upload.read(_CERT_UPLOAD_MAX + 1)
+        if len(data) > _CERT_UPLOAD_MAX:
+            raise HTTPException(status_code=413, detail=f"{label} is too large (max 1 MB).")
+        return data
+
+    cert_pem = await _read_capped(cert_file, "Certificate")
+    key_pem = await _read_capped(key_file, "Private key")
+    chain_pem = await _read_capped(chain_file, "Chain")
 
     try:
         info = tls_manager.install_certificate(cert_pem, key_pem, chain_pem or None)

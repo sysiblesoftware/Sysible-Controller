@@ -69,6 +69,17 @@ from client import _api_dispatch as dispatch
 from client import _api_users
 from webgui import actions
 
+import logging as _logging
+_log = _logging.getLogger("sysible.webgui")
+
+
+def _bad_gateway(exc):
+    """A 502 for a failed controller round-trip. The exception text (which can carry
+    the controller's internal hostname/IP/port) is logged server-side, NOT echoed to
+    the browser -- the client only sees a constant message."""
+    _log.warning("controller round-trip failed: %s", exc)
+    return HTTPException(status_code=502, detail="Controller unreachable.")
+
 
 # docs_url/redoc_url/openapi_url disabled: this console is built to be
 # network-reachable, so we don't publish the interactive Swagger/ReDoc consoles
@@ -549,7 +560,7 @@ def hosts(user: str = Depends(require_login)):
     try:
         entries = dispatch.list_merged_hosts(agent_only=False)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        raise _bad_gateway(e)
 
     # Agent heartbeat ages -> passive online/offline (no traffic to the host).
     # An agent heartbeats every ~1.5s; >20s stale = offline (matches desktop's
@@ -694,7 +705,7 @@ def _fleet_health_sweep():
         # Connect concept and don't belong in the fleet donut/health rollup.
         entries = dispatch.list_merged_hosts(agent_only=True)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        raise _bad_gateway(e)
 
     try:
         last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
@@ -763,7 +774,7 @@ def fleet_metrics(window: int = 3600, user: str = Depends(require_login)):
     try:
         return api.get_metrics_timeseries(window)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        raise _bad_gateway(e)
 
 
 @app.get("/api/host-snapshot/{host_id}")
@@ -774,7 +785,7 @@ def host_snapshot(host_id: str, user: str = Depends(require_login)):
     try:
         return api.get_host_snapshot(host_id)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        raise _bad_gateway(e)
 
 
 # ----------------------------------------------------------------------
@@ -1000,7 +1011,7 @@ def fleet_posture(refresh: int = 0, user: str = Depends(require_login)):
             # Sysible Connect, not the fleet posture rollup).
             entries = dispatch.list_merged_hosts(agent_only=True)
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+            raise _bad_gateway(e)
         try:
             last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
         except Exception:
@@ -1022,7 +1033,7 @@ def host_posture(host_id: str, user: str = Depends(require_login)):
     try:
         entries = dispatch.list_merged_hosts(agent_only=False)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        raise _bad_gateway(e)
     entry = next((e for e in entries if str(e.get("id")) == str(host_id)), None)
     if entry is None:
         raise HTTPException(status_code=404, detail="Host not found")
@@ -1113,7 +1124,7 @@ def fleet_updates(refresh: int = 0, live: int = 0, user: str = Depends(require_l
             # Sysible Connect, not the fleet updates rollup).
             entries = dispatch.list_merged_hosts(agent_only=True)
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+            raise _bad_gateway(e)
         try:
             last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
         except Exception:
@@ -1420,7 +1431,7 @@ def fleet_updates_install(body: InstallUpdatesRequest, request: Request,
     try:
         all_entries = dispatch.list_merged_hosts(agent_only=False)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        raise _bad_gateway(e)
     tgt = set(body.targets or [])
     entries = [e for e in all_entries if (not tgt or e.get("id") in tgt)]
     if not entries:
@@ -1707,7 +1718,7 @@ def _superuser_request(method, path, request: Request, **kw):
         r = api._SESSION.request(method, f"{api.BASE_URL}{path}", headers=headers,
                                  timeout=kw.pop("timeout", 30), verify=api._VERIFY, **kw)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        raise _bad_gateway(e)
     if not r.ok:
         detail = None
         try:
@@ -1751,7 +1762,7 @@ def fleet(body: FleetRequest, request: Request, user: str = Depends(require_oper
     try:
         all_entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        raise _bad_gateway(e)
 
     desc = {"reboot": "Reboot host", "poweroff": "Power off host",
             "restart_agent": "Restart agent", "script": "Ran fleet script"}.get(body.action, body.action)
@@ -1806,7 +1817,7 @@ def restart_unit(host_id: str, body: RestartUnitRequest, request: Request,
     try:
         all_entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        raise _bad_gateway(e)
     entry = all_entries.get(host_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Host not found.")
@@ -1833,7 +1844,7 @@ def checkin(body: CheckinRequest | None = None, user: str = Depends(require_oper
     try:
         entries = dispatch.list_merged_hosts(agent_only=False)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        raise _bad_gateway(e)
     wanted = set((body.targets if body else None) or [])
     if wanted:
         entries = [e for e in entries if e.get("id") in wanted]
@@ -2333,7 +2344,7 @@ def users_sync(body: UserSyncRequest, user: str = Depends(require_operator)):
     try:
         entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        raise _bad_gateway(e)
     entry = entries.get(body.host_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="host not found")
@@ -2370,7 +2381,7 @@ def services_list(body: ServicesListRequest, request: Request, user: str = Depen
     try:
         entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        raise _bad_gateway(e)
     entry = entries.get(body.host_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="host not found")
@@ -2403,7 +2414,7 @@ def packages_list(body: PkgListRequest, request: Request, user: str = Depends(re
     try:
         entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        raise _bad_gateway(e)
     entry = entries.get(body.host_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="host not found")
@@ -2444,7 +2455,7 @@ async def packages_install_local(request: Request, file: UploadFile = File(...),
     try:
         entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        raise _bad_gateway(e)
     data = local.read_bytes()
     is_super = request.session.get("role") == "superuser"
     agent_limit = _api_users.AGENT_FILE_TRANSFER_LIMIT_BYTES
@@ -2722,7 +2733,7 @@ def run_tool(action_name: str, body: RunRequest, request: Request, user: str = D
     try:
         all_entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        raise _bad_gateway(e)
 
     # Human description for the activity feed (else the controller logs a
     # generic "ran a script"). Use the action label + a representative param.
@@ -2864,7 +2875,7 @@ def fleet_query(body: FleetQueryRequest, user: str = Depends(require_operator)):
     try:
         all_entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        raise _bad_gateway(e)
     tgt = set(body.targets or [])
     entries = [e for e in all_entries.values() if (not tgt or e["id"] in tgt)]
     if not entries:
@@ -3000,7 +3011,7 @@ def files_compare(body: CompareRequest, request: Request, user: str = Depends(re
     try:
         all_entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Controller unreachable: {e}")
+        raise _bad_gateway(e)
 
     token = _session_token(request)
     versions = {}      # sha -> {sha, size, mtime, hosts:[...]}
@@ -3119,7 +3130,8 @@ def _transfer_entry(host_id):
     try:
         entries = dispatch.list_merged_hosts(agent_only=False)
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Controller unreachable: {e}")
+        _log.warning("controller round-trip failed: %s", e)
+        raise HTTPException(status_code=503, detail="Controller unreachable.")
     for e in entries:
         if e["id"] == host_id:
             return e

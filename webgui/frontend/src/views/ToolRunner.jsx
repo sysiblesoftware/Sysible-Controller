@@ -30,6 +30,7 @@ const TOOLS = [
   ["Service Management", "Start, stop, restart, enable/disable, and troubleshoot systemd services, or create and configure new ones.", "cogs", "ico-purple"],
   ["Environmental Policies", "Set the baseline password, lockout, sudo, and umask policy for accounts on managed hosts, and push it out.", "shield-alt", "ico-coral", "env"],
   ["Cron & Systemd Timers", "View, add, and remove cron jobs, and view, create, start/stop, enable/disable, and delete systemd timers.", "clock", "ico-amber"],
+  ["Environment & Shell", "Set and remove persistent, system-wide environment variables and shell aliases across managed hosts (via /etc/profile.d drop-ins for new login shells).", "cogs", "ico-teal"],
   ["Host Software Management", "Detect each host's package manager, then install, remove, update, query, verify, and clean packages across dnf/yum, zypper, and apt hosts alike.", "box", "ico-teal"],
   ["Repository Management", "List, add, enable, disable, and remove software repositories across dnf/yum, zypper, and apt hosts.", "code-branch", "ico-rose"],
   ["Network Management", "Diagnose connectivity and DNS, inspect ports and capture packets, and configure IP/DHCP/DNS/gateway/routing/hostname/bonding/teaming/VLANs/bridges/MTU across managed hosts.", "network-wired", "ico-sky"],

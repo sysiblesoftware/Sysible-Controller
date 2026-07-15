@@ -240,6 +240,110 @@ def cmd_delete_timer(name: str, delete_service: bool = True) -> str:
 
 
 # ---------------------------------------------------------
+# ENVIRONMENT & SHELL - persistent, system-wide environment variables and
+# shell aliases, managed through drop-in files under /etc/profile.d so every
+# NEW login shell picks them up (existing sessions must re-login / re-source).
+# The variable/alias NAME is charset-whitelisted (so it is safe to interpolate
+# into the sed match regex); the VALUE/COMMAND is shlex.quote'd into the file
+# line and CR/LF-rejected, then that whole line is written with a quoted
+# `printf` - so a value can neither break out into the shell nor inject a
+# second profile.d directive. Idempotent: setting an existing name replaces its
+# line rather than appending a duplicate.
+# ---------------------------------------------------------
+_SYSIBLE_ENV_FILE = "/etc/profile.d/sysible-env.sh"
+_SYSIBLE_ALIAS_FILE = "/etc/profile.d/sysible-aliases.sh"
+_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_ALIAS_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
+
+
+def _validate_env_key(name: str) -> str:
+    key = (name or "").strip()
+    if not _ENV_KEY_RE.match(key):
+        raise ValueError(
+            "Environment variable name must start with a letter or underscore and "
+            "contain only letters, digits, and underscores.")
+    return key
+
+
+def _validate_alias_name(name: str) -> str:
+    a = (name or "").strip()
+    if not _ALIAS_NAME_RE.match(a):
+        raise ValueError(
+            "Alias name must start with a letter or underscore and contain only "
+            "letters, digits, underscores, or hyphens.")
+    return a
+
+
+def cmd_set_env_var(name: str, value: str = "") -> str:
+    """Persist a system-wide environment variable in /etc/profile.d/sysible-env.sh
+    (export NAME=VALUE), replacing any existing definition of NAME. Applies to new
+    login shells."""
+    key = _validate_env_key(name)
+    _reject_newlines(value or "", "value")
+    f = shlex.quote(_SYSIBLE_ENV_FILE)
+    line = f"export {key}={shlex.quote(value or '')}"
+    return (
+        f"touch {f} && chmod 644 {f}; "
+        f"sed -i '/^export {key}=/d' {f}; "
+        f"printf '%s\\n' {shlex.quote(line)} >> {f} && "
+        f"echo 'Set {key} in {_SYSIBLE_ENV_FILE} (applies to new login shells).'"
+    )
+
+
+def cmd_unset_env_var(name: str) -> str:
+    """Remove a system-wide environment variable previously set via
+    cmd_set_env_var (deletes its line from /etc/profile.d/sysible-env.sh)."""
+    key = _validate_env_key(name)
+    f = shlex.quote(_SYSIBLE_ENV_FILE)
+    return (
+        f"if [ -f {f} ]; then sed -i '/^export {key}=/d' {f} && "
+        f"echo 'Removed {key} from {_SYSIBLE_ENV_FILE} (new login shells only).'; "
+        f"else echo '{_SYSIBLE_ENV_FILE} does not exist; nothing to remove.'; fi"
+    )
+
+
+def cmd_set_alias(name: str, command: str) -> str:
+    """Persist a system-wide shell alias in /etc/profile.d/sysible-aliases.sh
+    (alias NAME='COMMAND'), replacing any existing alias of NAME. Applies to new
+    login shells."""
+    a = _validate_alias_name(name)
+    _reject_newlines(command or "", "command")
+    if not (command or "").strip():
+        raise ValueError("Alias command cannot be empty.")
+    f = shlex.quote(_SYSIBLE_ALIAS_FILE)
+    line = f"alias {a}={shlex.quote(command)}"
+    return (
+        f"touch {f} && chmod 644 {f}; "
+        f"sed -i '/^alias {a}=/d' {f}; "
+        f"printf '%s\\n' {shlex.quote(line)} >> {f} && "
+        f"echo 'Set alias {a} in {_SYSIBLE_ALIAS_FILE} (applies to new login shells).'"
+    )
+
+
+def cmd_remove_alias(name: str) -> str:
+    """Remove a system-wide shell alias previously set via cmd_set_alias
+    (deletes its line from /etc/profile.d/sysible-aliases.sh)."""
+    a = _validate_alias_name(name)
+    f = shlex.quote(_SYSIBLE_ALIAS_FILE)
+    return (
+        f"if [ -f {f} ]; then sed -i '/^alias {a}=/d' {f} && "
+        f"echo 'Removed alias {a} from {_SYSIBLE_ALIAS_FILE}.'; "
+        f"else echo '{_SYSIBLE_ALIAS_FILE} does not exist; nothing to remove.'; fi"
+    )
+
+
+def cmd_list_env_and_aliases() -> str:
+    """Show the Sysible-managed environment variables and shell aliases (the
+    contents of both drop-in files), so an operator can see what's set."""
+    ef = shlex.quote(_SYSIBLE_ENV_FILE)
+    af = shlex.quote(_SYSIBLE_ALIAS_FILE)
+    return (
+        f"echo '# {_SYSIBLE_ENV_FILE}'; [ -f {ef} ] && cat {ef} || echo '(none)'; "
+        f"echo; echo '# {_SYSIBLE_ALIAS_FILE}'; [ -f {af} ] && cat {af} || echo '(none)'"
+    )
+
+
+# ---------------------------------------------------------
 # HOST SOFTWARE MANAGEMENT - cross-distro package manager detection
 # + package actions. Every command below detects which of dnf / yum /
 # zypper / apt-get is actually present on the specific host it runs

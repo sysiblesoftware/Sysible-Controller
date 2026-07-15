@@ -843,6 +843,34 @@ _register(Action(name="timer_delete", tool="Cron & Systemd Timers", label="Delet
         Param("delete_service", "Also delete service unit", type="checkbox", default=True, required=False)],
     build=lambda p: api.cmd_delete_timer(_s(p, "name"), _b(p, "delete_service", True))))
 
+# ---- Environment & Shell ---------------------------------------------
+# Persistent system-wide environment variables and shell aliases, written to
+# drop-in files under /etc/profile.d so new login shells pick them up.
+_register(Action(name="env_list", tool="Environment & Shell",
+    label="List managed variables & aliases", params=[],
+    description="Show the environment variables and shell aliases Sysible manages on each host.",
+    build=lambda p: api.cmd_list_env_and_aliases()))
+_register(Action(name="env_set_var", tool="Environment & Shell",
+    label="Set environment variable",
+    description="Persist a system-wide environment variable (export NAME=VALUE) for new login shells.",
+    params=[Param("name", "Variable name", help="e.g. JAVA_HOME (letters, digits, underscore)"),
+        Param("value", "Value", required=False)],
+    build=lambda p: api.cmd_set_env_var(_s(p, "name"), _s(p, "value"))))
+_register(Action(name="env_unset_var", tool="Environment & Shell",
+    label="Unset environment variable", danger=True,
+    params=[Param("name", "Variable name")],
+    build=lambda p: api.cmd_unset_env_var(_s(p, "name"))))
+_register(Action(name="env_set_alias", tool="Environment & Shell",
+    label="Set shell alias",
+    description="Persist a system-wide shell alias (alias NAME='COMMAND') for new login shells.",
+    params=[Param("name", "Alias name", help="e.g. ll"),
+        Param("command", "Command", help="e.g. ls -alF")],
+    build=lambda p: api.cmd_set_alias(_s(p, "name"), _s(p, "command"))))
+_register(Action(name="env_remove_alias", tool="Environment & Shell",
+    label="Remove shell alias", danger=True,
+    params=[Param("name", "Alias name")],
+    build=lambda p: api.cmd_remove_alias(_s(p, "name"))))
+
 # ---- Network Management (advanced) -----------------------------------
 _register(Action(name="net_set_hostname", tool="Network Management", label="Set hostname",
     params=[Param("new_hostname", "Hostname")],
@@ -1507,6 +1535,10 @@ _LAYOUT: dict[str, list] = {
     "Cron & Systemd Timers": [
         ("", "Cron Jobs", ["cron_list", "cron_add", "cron_remove"]),
         ("", "Systemd Timers", ["timer_list", "timer_status", "timer_start", "timer_stop", "timer_enable", "timer_disable", "timer_create", "timer_delete"]),
+    ],
+    "Environment & Shell": [
+        ("", "Environment variables", ["env_list", "env_set_var", "env_unset_var"]),
+        ("", "Shell aliases", ["env_set_alias", "env_remove_alias"]),
     ],
     "Time Synchronization": [
         ("", "Status", ["time_status", "time_verify", "time_troubleshoot"]),

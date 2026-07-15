@@ -14,6 +14,9 @@ destructive (flushes, deletes).
 import shlex
 
 
+from client._validators import validate_nonempty_line as _validate_nonempty_line
+
+
 def _validate_zone_name(name: str, label: str = "Zone name") -> str:
     name = (name or "").strip()
     if not name:
@@ -55,14 +58,6 @@ def _validate_protocol(value: str, label: str = "Protocol") -> str:
         raise ValueError(f"{label} must be one of: {', '.join(sorted(_VALID_PROTOCOLS))}")
     return value
 
-
-def _validate_nonempty_line(value: str, label: str) -> str:
-    value = (value or "").strip()
-    if not value:
-        raise ValueError(f"{label} is required.")
-    if "\n" in value or "\r" in value:
-        raise ValueError(f"{label} cannot span multiple lines.")
-    return value
 
 
 def _resplit_quote(value: str, label: str) -> str:

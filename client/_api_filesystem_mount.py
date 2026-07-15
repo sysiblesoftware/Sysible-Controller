@@ -16,6 +16,10 @@ import re
 import shlex
 
 
+from client._validators import validate_int_range as _validate_int_range
+from client._validators import validate_user_or_group as _validate_user_or_group
+
+
 def _validate_path(path: str, label: str = "Path") -> str:
     path = (path or "").strip()
     if not path:
@@ -43,26 +47,9 @@ def _reject_critical_mount(path: str, allow_critical: bool, label: str = "Mount"
         )
 
 
-def _validate_int_range(value, lo: int, hi: int, label: str) -> int:
-    try:
-        n = int(str(value).strip())
-    except (TypeError, ValueError):
-        raise ValueError(f"{label} must be a whole number.")
-    if not (lo <= n <= hi):
-        raise ValueError(f"{label} must be between {lo} and {hi}.")
-    return n
-
 
 _SAFE_USERGROUP_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
-
-def _validate_user_or_group(name: str, label: str) -> str:
-    name = (name or "").strip()
-    if not name:
-        raise ValueError(f"{label} is required.")
-    if not _SAFE_USERGROUP_RE.match(name):
-        raise ValueError(f"{label} doesn't look like a valid Linux user/group name.")
-    return name
 
 
 # --- mount / unmount -----------------------------------------------------

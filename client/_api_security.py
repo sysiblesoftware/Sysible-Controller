@@ -15,6 +15,14 @@ regeneration, ruleset/account changes).
 import shlex
 
 
+from client._pkgmgr import (
+    pkgmgr_detect_fragment as _pkgmgr_detect_fragment,
+    pkgmgr_dispatch as _pkgmgr_dispatch,
+)
+from client._validators import validate_int_range as _validate_int_range
+from client._validators import validate_nonempty_line as _validate_nonempty_line
+
+
 def _validate_identifier(value: str, label: str) -> str:
     value = (value or "").strip()
     if not value:
@@ -44,24 +52,6 @@ def _validate_path(value: str, label: str = "Path") -> str:
     return value
 
 
-def _validate_nonempty_line(value: str, label: str) -> str:
-    value = (value or "").strip()
-    if not value:
-        raise ValueError(f"{label} is required.")
-    if "\n" in value or "\r" in value:
-        raise ValueError(f"{label} cannot span multiple lines.")
-    return value
-
-
-def _validate_int_range(value, lo: int, hi: int, label: str) -> int:
-    try:
-        n = int(str(value).strip())
-    except (TypeError, ValueError):
-        raise ValueError(f"{label} must be a whole number.")
-    if not (lo <= n <= hi):
-        raise ValueError(f"{label} must be between {lo} and {hi}.")
-    return n
-
 
 _AUDITD_MISSING = (
     "if ! command -v ausearch >/dev/null 2>&1; then "
@@ -75,24 +65,6 @@ _AUDITD_MISSING = (
 # copy rather than imported, since none of the _api_*.py modules
 # import from one another (each stays self-contained).
 # ---------------------------------------------------------
-def _pkgmgr_detect_fragment(var: str = "PKGMGR") -> str:
-    return (
-        f"if command -v dnf >/dev/null 2>&1; then {var}=dnf; "
-        f"elif command -v yum >/dev/null 2>&1; then {var}=yum; "
-        f"elif command -v zypper >/dev/null 2>&1; then {var}=zypper; "
-        f"elif command -v apt-get >/dev/null 2>&1; then {var}=apt-get; "
-        f"else echo 'No supported package manager found (looked for dnf, yum, zypper, apt-get).' >&2; exit 1; fi"
-    )
-
-
-def _pkgmgr_dispatch(rpm_cmd: str, zypper_cmd: str, apt_cmd: str) -> str:
-    detect = _pkgmgr_detect_fragment()
-    return (
-        f'{detect}; '
-        f'if [ "$PKGMGR" = "dnf" ] || [ "$PKGMGR" = "yum" ]; then {rpm_cmd}; '
-        f'elif [ "$PKGMGR" = "zypper" ]; then {zypper_cmd}; '
-        f'else {apt_cmd}; fi'
-    )
 
 
 # ===========================================================

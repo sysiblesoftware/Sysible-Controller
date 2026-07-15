@@ -15,6 +15,13 @@ import re
 import shlex
 
 
+from client._pkgmgr import (
+    pkgmgr_detect_fragment as _pkgmgr_detect_fragment,
+    pkgmgr_dispatch as _pkgmgr_dispatch,
+)
+from client._validators import validate_int_range as _validate_int_range
+
+
 def _validate_path(path: str, label: str = "Path") -> str:
     path = (path or "").strip()
     if not path:
@@ -25,15 +32,6 @@ def _validate_path(path: str, label: str = "Path") -> str:
         raise ValueError(f"{label} contains an invalid character.")
     return path
 
-
-def _validate_int_range(value, lo: int, hi: int, label: str) -> int:
-    try:
-        n = int(str(value).strip())
-    except (TypeError, ValueError):
-        raise ValueError(f"{label} must be a whole number.")
-    if not (lo <= n <= hi):
-        raise ValueError(f"{label} must be between {lo} and {hi}.")
-    return n
 
 
 def _devices_list(text: str, label: str = "Device(s)") -> list:
@@ -73,29 +71,6 @@ def _validate_parted_token(value: str, label: str, default: str = None) -> str:
     return value
 
 
-def _pkgmgr_detect_fragment(var: str = "PKGMGR") -> str:
-    """Shell fragment that sets $<var> to whichever of dnf / yum /
-    zypper / apt-get is actually present on this host, preferring dnf
-    over yum where a host has both."""
-    return (
-        f"if command -v dnf >/dev/null 2>&1; then {var}=dnf; "
-        f"elif command -v yum >/dev/null 2>&1; then {var}=yum; "
-        f"elif command -v zypper >/dev/null 2>&1; then {var}=zypper; "
-        f"elif command -v apt-get >/dev/null 2>&1; then {var}=apt-get; "
-        f"else echo 'No supported package manager found (looked for dnf, yum, zypper, apt-get).' >&2; exit 1; fi"
-    )
-
-
-def _pkgmgr_dispatch(rpm_cmd: str, zypper_cmd: str, apt_cmd: str) -> str:
-    """Wraps the detection fragment above around three command
-    templates and branches to whichever one matches."""
-    detect = _pkgmgr_detect_fragment()
-    return (
-        f'{detect}; '
-        f'if [ "$PKGMGR" = "dnf" ] || [ "$PKGMGR" = "yum" ]; then {rpm_cmd}; '
-        f'elif [ "$PKGMGR" = "zypper" ]; then {zypper_cmd}; '
-        f'else {apt_cmd}; fi'
-    )
 
 
 # ---------------------------------------------------------

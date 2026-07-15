@@ -7,6 +7,12 @@ import re
 import shlex
 
 
+from client._pkgmgr import (
+    pkgmgr_detect_fragment as _pkgmgr_detect_fragment,
+    pkgmgr_dispatch as _pkgmgr_dispatch,
+)
+
+
 def cmd_list_cron_jobs() -> str:
     """Everything that can schedule a cron job on a typical Linux host:
     the connecting user's own crontab, /etc/crontab, and every file
@@ -350,29 +356,6 @@ def cmd_list_env_and_aliases() -> str:
 # against at the moment it runs, so one click with a mixed-distro
 # fleet checked does the right thing everywhere.
 # ---------------------------------------------------------
-def _pkgmgr_detect_fragment(var: str = "PKGMGR") -> str:
-    """Shell fragment that sets $<var> to whichever of dnf / yum /
-    zypper / apt-get is actually present on this host, preferring dnf
-    over yum where a host has both."""
-    return (
-        f"if command -v dnf >/dev/null 2>&1; then {var}=dnf; "
-        f"elif command -v yum >/dev/null 2>&1; then {var}=yum; "
-        f"elif command -v zypper >/dev/null 2>&1; then {var}=zypper; "
-        f"elif command -v apt-get >/dev/null 2>&1; then {var}=apt-get; "
-        f"else echo 'No supported package manager found (looked for dnf, yum, zypper, apt-get).' >&2; exit 1; fi"
-    )
-
-
-def _pkgmgr_dispatch(rpm_cmd: str, zypper_cmd: str, apt_cmd: str) -> str:
-    """Wraps the detection fragment above around three command
-    templates and branches to whichever one matches."""
-    detect = _pkgmgr_detect_fragment()
-    return (
-        f'{detect}; '
-        f'if [ "$PKGMGR" = "dnf" ] || [ "$PKGMGR" = "yum" ]; then {rpm_cmd}; '
-        f'elif [ "$PKGMGR" = "zypper" ]; then {zypper_cmd}; '
-        f'else {apt_cmd}; fi'
-    )
 
 
 def _pkg_quote_list(text: str) -> str:

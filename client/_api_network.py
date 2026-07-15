@@ -19,6 +19,9 @@ import re
 import shlex
 
 
+from client._validators import validate_int_range as _validate_int_range
+
+
 def _require_nmcli_fragment() -> str:
     """Shell fragment that exits with a clear stderr message instead
     of a bare "command not found" if either nmcli itself isn't
@@ -102,15 +105,6 @@ def _validate_hostname(name: str) -> str:
         raise ValueError("That doesn't look like a valid hostname.")
     return name
 
-
-def _validate_int_range(value, lo: int, hi: int, label: str) -> int:
-    try:
-        n = int(str(value).strip())
-    except (TypeError, ValueError):
-        raise ValueError(f"{label} must be a whole number.")
-    if not (lo <= n <= hi):
-        raise ValueError(f"{label} must be between {lo} and {hi}.")
-    return n
 
 
 def _ifaces_list(text: str, label: str = "Interface(s)") -> list:

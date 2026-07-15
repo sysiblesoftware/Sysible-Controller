@@ -20,6 +20,9 @@ import re
 import shlex
 
 
+from client._validators import validate_user_or_group as _validate_user_or_group
+
+
 def _validate_path(path: str, label: str = "Path") -> str:
     path = (path or "").strip()
     if not path:
@@ -68,14 +71,6 @@ def _reject_critical_path(path: str, allow_critical: bool, label: str = "Path") 
 
 _SAFE_USERGROUP_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
-
-def _validate_user_or_group(name: str, label: str) -> str:
-    name = (name or "").strip()
-    if not name:
-        raise ValueError(f"{label} is required.")
-    if not _SAFE_USERGROUP_RE.match(name):
-        raise ValueError(f"{label} doesn't look like a valid Linux user/group name.")
-    return name
 
 
 _OCTAL_MODE_RE = re.compile(r"^[0-7]{3,4}$")

@@ -303,10 +303,22 @@ export default function UserGroupPage({ initialTab } = {}) {
         {syncedIds.length > 0 && (
           <>
             <div className="ug-tiles">
-              <div className="ug-tile"><div className="n">{summary.total.toLocaleString()}</div><div className="l">Accounts</div></div>
-              <div className="ug-tile warn"><div className="n">{summary.priv}</div><div className="l">Privileged</div></div>
-              {summary.locked > 0 && <div className="ug-tile bad"><div className="n">{summary.locked}</div><div className="l">Locked</div></div>}
-              {syncedIds.length > 1 && <div className="ug-tile warn"><div className="n">{summary.partial}</div><div className="l">Partial</div></div>}
+              {/* Each tile is a shortcut to its filter — clicking narrows the list
+                  below (and toggles back to All when clicked while already active),
+                  mirroring the filter chips. */}
+              {[["all", "Accounts", summary.total.toLocaleString(), ""],
+                ["priv", "Privileged", summary.priv, "warn"],
+                ...(summary.locked > 0 ? [["locked", "Locked", summary.locked, "bad"]] : []),
+                ...(syncedIds.length > 1 ? [["partial", "Partial", summary.partial, "warn"]] : []),
+              ].map(([k, l, n, cls]) => (
+                <div key={k} role="button" tabIndex={0}
+                     className={"ug-tile" + (cls ? " " + cls : "") + (filter === k ? " on" : "")}
+                     title={filter === k ? `Showing ${l} — click to clear` : `Show ${l}`}
+                     onClick={() => setFilter(filter === k ? "all" : k)}
+                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setFilter(filter === k ? "all" : k); } }}>
+                  <div className="n">{n}</div><div className="l">{l}</div>
+                </div>
+              ))}
             </div>
 
             <div className="ug-filters">

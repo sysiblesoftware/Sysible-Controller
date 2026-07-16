@@ -2712,6 +2712,21 @@ def enroll_token(request: Request, user: str = Depends(require_login)):
     return _wrap(lambda: _as_admin(request, lambda: api.generate_enroll_token()))
 
 
+@app.get("/api/enrollment-pause")
+def get_enrollment_pause(request: Request, user: str = Depends(require_login)):
+    """Whether new agent enrollment is paused (the runaway kill-switch)."""
+    return _wrap(lambda: _as_admin(request, lambda: api.get_enrollment_pause()))
+
+
+@app.post("/api/enrollment-pause")
+def set_enrollment_pause(body: dict, request: Request,
+                         user: str = Depends(require_superuser_session)):
+    """Pause/resume all new agent enrollment (superuser). The emergency brake for a
+    runaway that re-enrolls faster than it can be deleted."""
+    paused = bool(body.get("paused")) if isinstance(body, dict) else False
+    return _wrap(lambda: _as_admin(request, lambda: api.set_enrollment_pause(paused, actor=user)))
+
+
 @app.get("/api/agent-bundle")
 def agent_bundle(request: Request, user: str = Depends(require_superuser_session)):
     """Download the ready-to-run agent bundle (tar.gz) the desktop's Host

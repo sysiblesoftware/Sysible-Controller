@@ -128,6 +128,10 @@ export const api = {
   restoreHost: (hostId) =>
     req(`/api/host/${encodeURIComponent(hostId)}/restore`, { method: "POST" }),
   enrollToken: () => req("/api/enroll-token", { method: "POST" }),
+  // Runaway kill-switch: pause/resume all new agent enrollment (superuser).
+  enrollmentPause: () => req("/api/enrollment-pause"),
+  setEnrollmentPause: (paused) =>
+    req("/api/enrollment-pause", { method: "POST", body: { paused } }),
   // Cache-buster so a repeat download after a controller hostname/IP change
   // can't be served from the browser cache (server also sends no-store).
   agentBundleUrl: () => `/api/agent-bundle?t=${Date.now()}`,

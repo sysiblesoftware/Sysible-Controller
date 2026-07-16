@@ -240,6 +240,27 @@ async def generate_token(request: Request):
     }
 
 
+@app.get("/admin/enrollment-pause", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def get_enrollment_pause_route():
+    """Whether new agent enrollment is currently paused (the runaway kill-switch)."""
+    from backend.db import get_enrollment_control
+    return get_enrollment_control()
+
+
+@app.post("/admin/enrollment-pause", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def set_enrollment_pause_route(body: dict = Body(...),
+                               acting: str = Depends(acting_admin_name)):
+    """Pause or resume all new agent enrollment. Paused, /agents/enroll refuses
+    every new host — the emergency brake for a runaway that re-enrolls faster than
+    you can delete it. Existing agents are unaffected. Superuser-gated, audited."""
+    from backend.db import set_enrollment_paused, get_enrollment_control
+    paused = bool(body.get("paused")) if isinstance(body, dict) else False
+    set_enrollment_paused(paused, actor=acting)
+    log_admin_audit("enrollment_paused" if paused else "enrollment_resumed",
+                    acting, "new agent enrollment " + ("PAUSED" if paused else "resumed"))
+    return get_enrollment_control()
+
+
 # =========================================================
 # AGENT ENROLLMENT (agent-facing: authenticated by one-time token)
 #
@@ -435,6 +456,18 @@ def enroll(req: EnrollRequest):
     if hid_in and (hid_in in _RESERVED_HOST_IDS or
                    not all(c.isalnum() or c in "._-" for c in hid_in)):
         raise HTTPException(status_code=400, detail="Invalid host_id.")
+
+    # Emergency brake: when an admin has paused enrollment (the runaway
+    # kill-switch), refuse ALL new enrollments so a crash-looping/re-provisioning
+    # agent can't keep spawning rows faster than they're deleted. Existing agents
+    # keep heartbeating; only /agents/enroll is closed. 503 (not 403) so a healthy
+    # agent's client treats it as retryable rather than a hard auth failure.
+    from backend.db import get_enrollment_paused
+    if get_enrollment_paused():
+        raise HTTPException(
+            status_code=503,
+            detail="Enrollment is paused by an administrator. New hosts cannot enroll "
+                   "until it is resumed from the console.")
 
     # Hold the enroll lock across validate→consume so a single-use token can't
     # be claimed by two concurrent requests (TOCTOU). enforce_host_limit's

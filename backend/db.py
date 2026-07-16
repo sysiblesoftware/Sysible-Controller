@@ -285,6 +285,23 @@ def init_db():
         pass
 
     # -----------------------------------------------------
+    # Enrollment control (single row, id=1) — a kill-switch for /agents/enroll.
+    # When paused, the controller refuses all new enrollments. This is the
+    # operator's emergency brake on a RUNAWAY: a broken agent (or a re-provision
+    # loop) that keeps enrolling fresh host_ids faster than they can be deleted.
+    # Pause, clear the flood (it stays gone because nothing new is accepted), fix
+    # the source host, then resume.
+    # -----------------------------------------------------
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS enrollment_control (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        paused INTEGER DEFAULT 0,
+        updated REAL,
+        actor TEXT
+    )
+    """)
+
+    # -----------------------------------------------------
     # Controller Configuration (single row, id=1)
     # The address/port the controller is reachable at - used to bake
     # a working SYSIBLE_CONTROLLER value into agent bundles generated
@@ -1086,6 +1103,47 @@ try:
     ENROLL_TOKEN_VALID_DAYS = int(os.getenv("SYSIBLE_ENROLL_TOKEN_VALID_DAYS", "30"))
 except ValueError:
     ENROLL_TOKEN_VALID_DAYS = 30
+
+
+def get_enrollment_paused():
+    """True if new agent enrollment is currently paused (the runaway kill-switch)."""
+    conn = _connect()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT paused FROM enrollment_control WHERE id=1")
+        row = cur.fetchone()
+    except sqlite3.Error:
+        row = None
+    conn.close()
+    return bool(row and row[0])
+
+
+def get_enrollment_control():
+    """Full pause state for status display: {paused, updated, actor}."""
+    conn = _connect()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT paused, updated, actor FROM enrollment_control WHERE id=1")
+        row = cur.fetchone()
+    except sqlite3.Error:
+        row = None
+    conn.close()
+    if not row:
+        return {"paused": False, "updated": None, "actor": None}
+    return {"paused": bool(row[0]), "updated": row[1], "actor": row[2]}
+
+
+def set_enrollment_paused(paused, actor=None):
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO enrollment_control (id, paused, updated, actor) VALUES (1, ?, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET paused=excluded.paused, updated=excluded.updated, "
+        "actor=excluded.actor",
+        (1 if paused else 0, time.time(), actor))
+    conn.commit()
+    conn.close()
+    return bool(paused)
 
 
 def create_enroll_token(token):

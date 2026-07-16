@@ -26,6 +26,7 @@ export default function HostEnrollment() {
   const [portal, setPortal] = useState({});
   const [cfg, setCfg] = useState({});
   const [checked, setChecked] = useState([]);
+  const [enrollPaused, setEnrollPaused] = useState(false);
   const [collapsed, setCollapsed] = useState({});
   const [assignEnv, setAssignEnv] = useState("");
   const [err, setErr] = useState("");
@@ -71,6 +72,7 @@ export default function HostEnrollment() {
     // the essential ones on the single-process controller (which could then
     // read-timeout). It's loaded lazily when the Portal tab opens instead.
     loadPortal();
+    api.enrollmentPause().then((d) => setEnrollPaused(!!(d && d.paused))).catch(() => {});
   }
   useEffect(() => { load(true); }, []);
   useEffect(() => {
@@ -232,6 +234,20 @@ export default function HostEnrollment() {
       `Force-deleting ${ids.length} host(s)…`);
   }
 
+  async function toggleEnrollPause() {
+    const next = !enrollPaused;
+    if (next && !window.confirm(
+      "Pause ALL new agent enrollment?\n\n" +
+      "No new host can enroll until you resume — this is the emergency brake for a " +
+      "runaway that re-enrolls faster than you can delete it. Existing agents keep " +
+      "running normally. Remember to resume once the source host is fixed.")) return;
+    await run(async () => {
+      const d = await api.setEnrollmentPause(next);
+      setEnrollPaused(!!(d && d.paused));
+    }, next ? "New enrollment PAUSED. Clear the runaway, then resume." : "Enrollment resumed.",
+      next ? "Pausing enrollment…" : "Resuming enrollment…");
+  }
+
   async function revokeChecked() {
     if (checked.length === 0) { setErr("Check one or more hosts first."); return; }
     if (!window.confirm(
@@ -381,7 +397,18 @@ export default function HostEnrollment() {
               Revoke Checked
             </button>
             <span className="faint">{checked.length} checked</span>
+            <button className={"btn sm " + (enrollPaused ? "" : "ghost")} onClick={toggleEnrollPause}
+                    disabled={!!busy} style={{ marginLeft: "auto" }}
+                    title="Stop the controller accepting any new enrollments — the emergency brake for a runaway that re-appears faster than you can delete it. Existing agents keep running.">
+              {enrollPaused ? "▶ Resume Enrollment" : "⏸ Pause Enrollment"}
+            </button>
           </div>
+          {enrollPaused && (
+            <div className="error-box" role="status" style={{ marginTop: 8 }}>
+              New agent enrollment is <strong>PAUSED</strong> — no host can enroll until you resume.
+              Clear the runaway rows now (Force Delete / Revoke), fix the source host, then Resume.
+            </div>
+          )}
           {busy && (
             <div className="ok-text" role="status" aria-live="polite"
                  style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>

@@ -192,6 +192,17 @@ def disenroll_agent(host_id: str, purge_token: bool = False):
     return _request("DELETE", path)
 
 
+def get_enrollment_pause():
+    """Whether new agent enrollment is currently paused (runaway kill-switch)."""
+    return _request("GET", "/admin/enrollment-pause")
+
+
+def set_enrollment_pause(paused: bool, actor: str = ""):
+    """Pause/resume all new agent enrollment. Superuser-only on the controller."""
+    return _request("POST", "/admin/enrollment-pause",
+                    json={"paused": bool(paused), "actor": actor})
+
+
 def revoke_agent(host_id: str):
     """Hard lock-out: revoke the host's agent secret so it can't heartbeat,
     poll, or report until an admin re-enrolls it. Superuser-only on the backend.

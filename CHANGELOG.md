@@ -2,7 +2,7 @@
 
 All notable changes to the Sysible Controller are recorded here.
 
-## 3.1.0 — 2026-07-16
+## 3.0.2 — 2026-07-16
 
 A fleet-management and reliability release on top of 3.0.1: a much sturdier host
 enrollment lifecycle (kill-switches and clean-up for runaway/stale hosts), new

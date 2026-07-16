@@ -1,4 +1,4 @@
-# Sysible Controller — Community 3.1.0
+# Sysible Controller — Community 3.0.2
 _Released 2026-07-16_
 
 A fleet-management and reliability release on top of 3.0.1. No breaking changes —

@@ -34,7 +34,10 @@ class TestSqlInjection:
         payload = "robert'); DROP TABLE administrators; --"
         r = controller.post("/admin/administrators", headers=superuser_headers,
                             json={"username": payload, "password": "Password123!", "role": "sysadmin"})
-        assert r.status_code in (200, 400, 409)
+        # SQL is parameterized (so a stored value would be inert anyway), but admin
+        # usernames are now also charset-validated at ingest, so a payload carrying
+        # quotes/;/shell metacharacters is rejected outright (422) — defense in depth.
+        assert r.status_code in (200, 400, 409, 422)
         # administrators table intact: the acting superuser is still listed.
         admins = controller.get("/admin/administrators", headers=superuser_headers).json()
         blob = str(admins)

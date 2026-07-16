@@ -784,7 +784,12 @@ def _as_admin_remote(ssh_user: str, admin: str, cmd: str, elevate=False, passwor
     else:
         inner = f"bash -c {inner_c}"
     switch = f"runuser -u {u} -- {inner}" if ssh_user == "root" else f"sudo -n -u {u} -- {inner}"
-    return (f"id {u} >/dev/null 2>&1 || {{ echo \"[sysible] user {admin} does not exist on this "
+    # NB: emit the username as its own shlex-quoted word ({u}), never the raw value —
+    # interpolating {admin} into this echo would let a crafted username (e.g. one holding
+    # $(...) / backticks) execute as the SSH login user (root) on hosts where the admin has
+    # no local account. Admin usernames are also charset-validated at ingest; this is the
+    # in-depth backstop.
+    return (f"id {u} >/dev/null 2>&1 || {{ echo \"[sysible] user\" {u} \"does not exist on this "
             f"host - create it (with the sudo policy you want) so commands run as that role\" >&2; "
             f"exit 126; }}; {switch}")
 
@@ -896,9 +901,11 @@ def _become_user_command(ssh_user: str, target: str) -> str:
         switch = f"exec runuser -u {t} -- /bin/sh -c {inner_q}"
     else:
         switch = f"exec sudo -u {t} /bin/sh -c {inner_q}"
+    # {t} is shlex-quoted; never interpolate the raw {target} here — a single quote in the
+    # value would break out of this echo and run as the SSH login user (root).
     return (
         f"if id {t} >/dev/null 2>&1; then {switch}; "
-        f"else echo '[sysible] user {target} does not exist on this host - opening a "
+        f"else echo '[sysible] user' {t} 'does not exist on this host - opening a "
         f"normal shell instead.'; exec bash -l 2>/dev/null || exec sh; fi"
     )
 

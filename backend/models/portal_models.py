@@ -1,4 +1,22 @@
-from pydantic import BaseModel
+import re
+
+from pydantic import BaseModel, field_validator
+
+# Admin console usernames flow into OS-user contexts on managed hosts (runuser -u /
+# sudo -u <name>) and into shell status messages, so they must be a strict, shell-safe
+# charset — never arbitrary text. This blocks every shell metacharacter ($ ` ' " ; | & <
+# > ( ) space newline …) at ingest, so a crafted username can never reach a command
+# builder. Letters/digits plus . _ @ - (no leading '-'), 1–64 chars.
+_ADMIN_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._@-]*$")
+
+
+def _validate_admin_name(v: str) -> str:
+    s = (v or "").strip()
+    if not s or len(s) > 64 or not _ADMIN_NAME_RE.match(s):
+        raise ValueError(
+            "username must be 1-64 characters using letters, digits, and . _ @ - "
+            "(no leading '-', no spaces or shell metacharacters)")
+    return s
 
 
 class SetControllerConfigRequest(BaseModel):
@@ -43,12 +61,24 @@ class ChangeAdminCredentialsRequest(BaseModel):
     new_username: str
     new_password: str
 
+    @field_validator("new_username")
+    @classmethod
+    def _v_new_username(cls, v):
+        # Empty = "keep the current username" (the route falls back to `username`);
+        # any non-empty rename target must pass the strict charset check.
+        return "" if not (v or "").strip() else _validate_admin_name(v)
+
 
 class AddAdministratorRequest(BaseModel):
     username: str
     password: str
     role: str = "sysadmin"  # 'superuser' or 'sysadmin'
     actor: str = ""  # username of the administrator performing the add, for the audit log
+
+    @field_validator("username")
+    @classmethod
+    def _v_username(cls, v):
+        return _validate_admin_name(v)
 
 
 class AdminSetupRequest(BaseModel):
@@ -57,6 +87,11 @@ class AdminSetupRequest(BaseModel):
     # still empty - see POST /admin/setup.
     username: str
     password: str
+
+    @field_validator("username")
+    @classmethod
+    def _v_username(cls, v):
+        return _validate_admin_name(v)
 
 
 class ForcePasswordChangeRequest(BaseModel):

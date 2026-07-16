@@ -2505,11 +2505,25 @@ async def packages_install_local(request: Request, file: UploadFile = File(...),
         raise HTTPException(status_code=400, detail="Malformed target list.")
     if not isinstance(tids, list) or not tids:
         raise HTTPException(status_code=400, detail="No target hosts selected.")
+    # Bound the upload the same way files_upload does: fail fast on an oversized
+    # Content-Length, then cap the actual read so an authenticated operator can't OOM
+    # the single-process console by POSTing an arbitrarily large package file.
+    try:
+        clen = int(request.headers.get("content-length") or 0)
+    except (ValueError, TypeError):
+        clen = 0
+    if clen and clen > _MAX_SSH_UPLOAD_BYTES + 4096:  # + small multipart framing allowance
+        raise HTTPException(status_code=413,
+                            detail=f"Package exceeds the {_MAX_SSH_UPLOAD_BYTES}-byte upload limit.")
+    data = await file.read(_MAX_SSH_UPLOAD_BYTES + 1)
+    if len(data) > _MAX_SSH_UPLOAD_BYTES:
+        raise HTTPException(status_code=413,
+                            detail=f"Package exceeds the {_MAX_SSH_UPLOAD_BYTES}-byte upload limit.")
     tmp = Path(tempfile.mkdtemp(prefix="sysible-pkg-"))
     fname = _safe_upload_name(file.filename, "package.bin")
     local = tmp / fname
     remote = "/tmp/" + fname
-    local.write_bytes(await file.read())
+    local.write_bytes(data)
     spec = actions.get("pkg_install_local")
     cmd = spec.build({"remote_path": remote})
     token = _session_token(request)

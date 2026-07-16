@@ -87,7 +87,11 @@ def cmd_unmount_filesystem(target: str, force: bool = False,
 
 
 _HOST_RE = re.compile(r"^[A-Za-z0-9.\-]+$")
-_SHARE_RE = re.compile(r"^[^\x00/]+$")
+# Exclude CR/LF as well as NUL and '/': a share name flows into a persisted /etc/fstab
+# line, where an embedded newline would append an attacker-controlled second entry.
+_SHARE_RE = re.compile(r"^[^\x00/\r\n]+$")
+# A filesystem type is a single bare token (ext4, xfs, nfs4, cifs, vfat, …).
+_FSTYPE_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _validate_mount_options(options: str) -> str:
@@ -118,6 +122,10 @@ def cmd_mount_nfs(server: str, export_path: str, mount_point: str,
         raise ValueError("NFS server must be a hostname or IP.")
     if not export_path.startswith("/"):
         raise ValueError("NFS export path should start with '/' (e.g. /exports/data).")
+    # export_path is persisted into an /etc/fstab line; reject CR/LF/NUL so it can't
+    # append a second, attacker-controlled fstab entry.
+    if "\x00" in export_path or "\n" in export_path or "\r" in export_path:
+        raise ValueError("NFS export path contains an invalid character.")
     opts = _validate_mount_options(options) or "defaults"
     src = f"{server}:{export_path}"
     q_src, q_mnt, q_opts = shlex.quote(src), shlex.quote(mount_point), shlex.quote(opts)
@@ -256,7 +264,14 @@ def cmd_add_fstab_entry(
     fstype = (fstype or "").strip()
     if not fstype:
         raise ValueError("Filesystem type is required (e.g. ext4, xfs, nfs).")
-    options = (options or "").strip() or "defaults"
+    # fstype and options are written verbatim into an /etc/fstab line (tab-delimited,
+    # newline-terminated). shlex.quote on the whole line blocks shell injection but NOT
+    # an embedded newline, which would append a second fstab entry. A filesystem type is
+    # a single bare token; options are comma-separated with no whitespace/newlines
+    # (reuse the same guard the mount builders apply).
+    if not _FSTYPE_RE.match(fstype):
+        raise ValueError("Filesystem type must be a single token (e.g. ext4, xfs, nfs).")
+    options = _validate_mount_options(options) or "defaults"
     dump = _validate_int_range(dump, 0, 1, "Dump field")
     pass_num = _validate_int_range(pass_num, 0, 9, "Pass field")
 

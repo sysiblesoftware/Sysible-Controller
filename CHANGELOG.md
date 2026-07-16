@@ -110,6 +110,30 @@ round of web-surface hardening. No breaking changes — upgrade in place with
   limits) and an infra/reliability batch (logging, robustness) across the command
   paths.
 
+Findings from a pre-release enterprise security & UX audit:
+- **Command injection via an admin username → root on SSH-managed hosts (fixed, HIGH).**
+  The "user does not exist" status echo in the SSH exec/terminal builders interpolated
+  the raw admin username; a username holding `$(…)`/backticks (double-quoted echo) or a
+  single quote (single-quoted echo) executed as the SSH login user (root) on hosts where
+  the admin had no local account — letting a non-superuser sysadmin escalate to root and
+  defeat per-user RBAC. Admin usernames are now charset-validated at ingest (letters,
+  digits, `. _ @ -`, no leading `-`) and the echoes emit the username as a shlex-quoted
+  word. `backend/models/portal_models.py`, `backend/remote_routes.py`.
+- **fstab-line injection via fstype / mount options / NFS export path / CIFS share
+  (fixed).** The earlier options fix didn't cover these adjacent fields, which are
+  written verbatim into a persisted `/etc/fstab` line; a newline could append an
+  attacker-controlled boot-time mount. All now reject CR/LF/NUL (and fstype is a single
+  token). `client/_api_filesystem_mount.py`.
+- **Session & bearer tokens are now hashed at rest.** Admin login tokens and portal
+  session tokens are stored only as their SHA-256, so a leaked database snapshot no
+  longer yields directly-replayable live sessions. (Upgrade note: existing sessions must
+  re-login once.) `backend/db.py`.
+- **Local-package upload is now size-bounded** (Content-Length pre-check + capped read →
+  413), matching the file-transfer path, so an authenticated operator can't OOM the
+  console with an oversized upload. `webgui/server.py`.
+- Removed a stray NUL byte from a console source file that tripped text tooling.
+  `webgui/frontend/src/views/ToolPage.jsx`.
+
 ## 3.0.1 — 2026-07-10
 
 A large security-hardening and reliability release on top of 3.0.0, plus new

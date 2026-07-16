@@ -1,10 +1,21 @@
 import contextlib
+import hashlib
 import json
 import os
 import socket
 import sqlite3
 import time
 from pathlib import Path
+
+
+def _token_at_rest(token):
+    """Key session/bearer tokens by their SHA-256 at rest so the DB never holds a
+    directly-replayable credential. The raw token is returned to the client once
+    (admin: Fernet-encrypted in the cookie; portal: the session cookie) and only its
+    hash is stored/looked-up here. A leaked DB snapshot (backup, file disclosure, a SQL
+    read primitive) then yields no usable live sessions. Upgrade note: tokens minted
+    before this change no longer resolve, so existing sessions must re-login once."""
+    return hashlib.sha256((token or "").encode("utf-8")).hexdigest()
 
 # =========================================================
 # DATABASE LOCATION
@@ -1625,7 +1636,7 @@ def create_portal_session(token, expires, ip=""):
     cur.execute("""
     INSERT INTO portal_sessions (token, created, expires, ip)
     VALUES (?, ?, ?, ?)
-    """, (token, time.time(), expires, ip))
+    """, (_token_at_rest(token), time.time(), expires, ip))
 
     conn.commit()
     conn.close()
@@ -1636,7 +1647,7 @@ def get_portal_session(token):
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    cur.execute("SELECT * FROM portal_sessions WHERE token=?", (token,))
+    cur.execute("SELECT * FROM portal_sessions WHERE token=?", (_token_at_rest(token),))
     row = cur.fetchone()
     conn.close()
 
@@ -1647,7 +1658,7 @@ def delete_portal_session_by_token(token):
     conn = _connect()
     cur = conn.cursor()
 
-    cur.execute("DELETE FROM portal_sessions WHERE token=?", (token,))
+    cur.execute("DELETE FROM portal_sessions WHERE token=?", (_token_at_rest(token),))
     conn.commit()
     conn.close()
 
@@ -1774,7 +1785,7 @@ def create_admin_token(token, username, role, expiry):
     cur = conn.cursor()
     cur.execute(
         "INSERT OR REPLACE INTO admin_tokens (token, username, role, expiry) VALUES (?, ?, ?, ?)",
-        (token, username, role, expiry),
+        (_token_at_rest(token), username, role, expiry),
     )
     conn.commit()
     conn.close()
@@ -1793,10 +1804,11 @@ def resolve_admin_token(token):
     username/role are unchanged, so those call delete_admin_tokens_for_user.)"""
     if not token:
         return None
+    tk = _token_at_rest(token)
     conn = _connect()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute("SELECT username, role, expiry FROM admin_tokens WHERE token=?", (token,))
+    cur.execute("SELECT username, role, expiry FROM admin_tokens WHERE token=?", (tk,))
     row = cur.fetchone()
     result = None
     if row:
@@ -1808,7 +1820,7 @@ def resolve_admin_token(token):
             if acct is None or (acct["role"] or "superuser") != (row["role"] or "superuser"):
                 stale = True
         if stale:
-            cur.execute("DELETE FROM admin_tokens WHERE token=?", (token,))
+            cur.execute("DELETE FROM admin_tokens WHERE token=?", (tk,))
             conn.commit()
         else:
             result = {"username": row["username"], "role": row["role"]}
@@ -1821,7 +1833,7 @@ def delete_admin_token(token):
         return
     conn = _connect()
     cur = conn.cursor()
-    cur.execute("DELETE FROM admin_tokens WHERE token=?", (token,))
+    cur.execute("DELETE FROM admin_tokens WHERE token=?", (_token_at_rest(token),))
     conn.commit()
     conn.close()
 

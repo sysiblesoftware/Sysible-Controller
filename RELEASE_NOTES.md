@@ -1,3 +1,33 @@
+# Sysible Controller — Community 3.1.0
+_Released 2026-07-16_
+
+A fleet-management and reliability release on top of 3.0.1. No breaking changes —
+upgrade in place with `sysible_controller update`.
+
+**Highlights**
+
+- **Sturdier host enrollment lifecycle.** A **Pause Enrollment** kill-switch stops the
+  controller accepting new enrollments when a mis-configured source floods it; **Revoke
+  Checked** and robust bulk Disenroll / Force Delete clean up runaway or stale hosts; and
+  a duplicate-enrollment bug (hosts that report an empty hostname) is fixed. Every host
+  now ships `disenroll_agent.sh` and `migrate_agent.sh` for host-side removal and
+  controller failover.
+- **SSH host connections are being phased out** in favour of the managed agent — existing
+  SSH records are marked, individually deletable, and clearable in one bulk action.
+- **New system-administration tooling:** full `ufw` firewall management (not just an
+  installer), an **Environment & Shell** section (env vars + shell aliases), and explicit
+  **Install chrony / Install NTP** buttons.
+- **A console that scales:** the User & Group list is keyed on the distinct account with
+  per-environment coverage drill-down and clickable filter tiles; busy tool pages auto-tab
+  instead of scrolling; Update Hosts can **defer to a maintenance window**.
+- **Web-surface hardening:** `Secure` cookie default-on, a CSRF Origin/Referer backstop,
+  loopback-only `/openapi.json`, clamped list limits, an fstab-injection fix, and
+  CR/LF rejection in path validation.
+
+See `CHANGELOG.md` for the itemised list.
+
+---
+
 # Sysible Controller — Community 3.0.1
 _Released 2026-07-10_
 

@@ -2,42 +2,63 @@
 
 All notable changes to the Sysible Controller are recorded here.
 
-## Unreleased
+## 3.1.0 — 2026-07-16
+
+A fleet-management and reliability release on top of 3.0.1: a much sturdier host
+enrollment lifecycle (kill-switches and clean-up for runaway/stale hosts), new
+system-administration tooling (full firewall management, a time-daemon installer,
+an Environment & Shell section), a console that scales to large fleets, and another
+round of web-surface hardening. No breaking changes — upgrade in place with
+`sysible_controller update`.
 
 ### Added
-- **The console now shows the deployed build version.** Controller Configuration adds a
-  "Current build: v<version> · <commit> (<branch>)" line so an admin can confirm at a glance
-  which build is actually running (the released version from `version.py`, alongside the
-  existing running-directory / commit deployment guard). `GET /version` now includes
-  `version`. Mirrors the Enterprise build-version display.
-
-### Fixed
-- **openSUSE / SLES user management ("View Status by Host" etc.) crashed with
-  `__init__() got an unexpected keyword argument 'capture_output'`.** The embedded
-  user-sync script runs on the *host's* `python3`, and the agent's command executor
-  runs there too — openSUSE Leap / SLES 15 ship Python 3.6, where `subprocess.run`'s
-  `capture_output=` / `text=` (added in 3.7) don't exist. Replaced both with
-  `stdout=PIPE, stderr=PIPE, universal_newlines=True` (works on 3.6+). Added a
-  SUSE-compat regression test that fails if host-side code reintroduces the 3.7-only
-  kwargs. `client/_api_users.py`, `host_agent/agent.py`.
-
-### Web console
-- **Update Hosts — "Defer to maintenance window".** Alongside *Install now*, you can
-  now schedule the install for the selected hosts into a recurring maintenance window
-  (security or all updates; weekly on a chosen day / daily, at a set time) instead of
-  running it immediately. It creates a Schedule under the hood — same engine, same
-  attribution — so it shows up and can be managed on the Schedules page.
-  `webgui/frontend/src/views/Updates.jsx`.
-
-### System Administration Tools
+- **Full `ufw` firewall management.** A firewall tool that reads status and the rule
+  list, turns the firewall on/off, and adds/deletes allow/deny rules (by port/proto/
+  source) — not just an installer. `client/_api_firewall.py`, `webgui/actions.py`.
+- **"Environment & Shell" tools section** — manage system-wide environment variables
+  (`/etc/environment`, `profile.d` drop-ins) and shell aliases from the console.
 - **Time Synchronization — explicit Install buttons for chrony and NTP.** The tool now
   has an **Install** group with **Install chrony** and **Install NTP** buttons (chrony is
   the modern default; NTP installs the classic ntpsec/ntp/ntpd per distro). Previously
   the only way to get a time daemon was the "Configure chrony" button and there was no
   NTP install path at all — so on a host reporting "(neither chrony nor ntp is
   installed)" there was nothing to click. `client/_api_timesync.py`, `webgui/actions.py`.
+- **Update Hosts — "Defer to maintenance window".** Alongside *Install now*, you can
+  now schedule the install for the selected hosts into a recurring maintenance window
+  (security or all updates; weekly on a chosen day / daily, at a set time) instead of
+  running it immediately. It creates a Schedule under the hood — same engine, same
+  attribution — so it shows up and can be managed on the Schedules page.
+  `webgui/frontend/src/views/Updates.jsx`.
+- **Pause Enrollment kill-switch.** A one-click emergency brake that stops the
+  controller accepting *any* new enrollments — for a runaway host that re-appears
+  faster than you can delete it. Existing agents keep running; resume when the source
+  is fixed. `Revoke Checked` (lock out the checked agents but keep their records) and
+  robust bulk Disenroll / Force Delete round out the runaway-fleet toolkit.
+- **`disenroll_agent.sh` and `migrate_agent.sh` in the agent bundle.** Every host now
+  ships a self-contained disenroll script (cleanly remove the agent from the host) and
+  a migrate script (re-point the agent at a new controller IP after a failover /
+  address change) — no console round-trip required. `backend/agent_bundle.py`.
+- **The console now shows the deployed build version.** Controller Configuration adds a
+  "Current build: v<version> · <commit> (<branch>)" line so an admin can confirm at a
+  glance which build is actually running (the released version from `version.py`,
+  alongside the existing running-directory / commit deployment guard). `GET /version`
+  now includes `version`.
 
-### Web console
+### Changed
+- **SSH host connections are being phased out** in favour of the managed agent. Existing
+  SSH host records are now clearly marked and **deletable** — individually or with a
+  single **"Remove all SSH hosts"** bulk cleanup — and the system-administration tool
+  pickers no longer offer SSH-only hosts. `webgui/frontend/src/views/Connect.jsx`,
+  `backend/remote_routes.py`.
+- **Firewall tool — each installer now sits with its own backend** (ufw / firewalld /
+  nftables) instead of a separate "Install a Firewall" group, so installing and managing
+  a backend live together. `webgui/actions.py`.
+- **Busy tool pages auto-tab** instead of scrolling one long vertical column — a tool
+  with several titled action groups is split into tabs automatically.
+  `webgui/frontend/src/views/ToolPage.jsx`.
+- **SSH Auth Policy uses explicit intent buttons** (apply the chosen policy directly)
+  instead of a checkbox-then-apply toggle that made the pending vs applied state
+  ambiguous.
 - **User & Group Administration — redesigned account list, built for fleet scale.**
   The middle pane is now keyed on the **distinct account** (not the host), so it stays
   bounded to a few hundred usernames even across thousands of hosts. Each account row
@@ -45,17 +66,49 @@ All notable changes to the Sysible Controller are recorded here.
   session), and a **coverage count** (present on N of M synced hosts); accounts group
   into *On every synced host / Partial coverage / System*. Presence expands to a
   **per-environment coverage drill-down** with a one-click **"create on the N missing
-  hosts"** remediation — replacing the old inline list of host names that didn't scale.
-  Summary tiles (accounts / privileged / locked / partial) and filter chips float the
-  signal up. `webgui/frontend/src/views/UserGroupPage.jsx`.
+  hosts"** remediation. Summary tiles (accounts / privileged / locked / partial) are
+  **clickable filters**. `webgui/frontend/src/views/UserGroupPage.jsx`.
+- **Enrolled Hosts footer polish.** The destructive-action row no longer reads as a wall
+  of solid-red buttons: only the primary action (Disenroll) is solid, Force Delete /
+  Revoke use a secondary outline-danger style, and the selection-scoped actions are
+  disabled until at least one host is checked. The Pause/Resume toggle drops its
+  unreliable ⏸/▶ glyphs. `webgui/frontend/src/views/HostEnrollment.jsx`.
+- **The agent's interactive terminal defaults to `bash`,** not the systemd unit's
+  `/bin/sh`, so the shell matches what an admin gets over SSH.
+
+### Fixed
+- **Duplicate enrollment when a host reported an empty hostname.** A host that
+  registered without a resolvable hostname (seen with some bastion-fronted agents) could
+  create a second record on every re-enroll instead of superseding the stale one; the
+  reconciler now adopts the existing record by IP when the incoming hostname is empty.
+  `backend/app.py`.
+- **Runaway host enrollment.** Hardened the enroll path against a mis-configured source
+  spawning an unbounded stream of records — stable host-id derivation plus the mass-
+  revoke / robust bulk operations above.
+- **openSUSE / SLES user management ("View Status by Host" etc.) crashed with
+  `__init__() got an unexpected keyword argument 'capture_output'`.** openSUSE Leap /
+  SLES 15 ship Python 3.6, where `subprocess.run`'s `capture_output=` / `text=` (added
+  in 3.7) don't exist; replaced both with `stdout=PIPE, stderr=PIPE,
+  universal_newlines=True` (works on 3.6+), with a regression test. `client/_api_users.py`,
+  `host_agent/agent.py`.
+- **Updater now gives a clear remedy when tracked files are locally modified** instead of
+  failing the `git pull` with a bare conflict.
+- Ported four shared console fixes from the Enterprise build to Community.
 
 ### Security
+- **Hardened web-facing defaults.** `Secure` cookie flag on by default, a CSRF
+  Origin/Referer backstop on state-changing routes, `/openapi.json` restricted to
+  loopback, and clamped list-endpoint limits. `webgui/server.py`.
 - **fstab-line injection via mount options (fixed).** NFS/CIFS mount options were
   `shlex`-quoted for the mount command but written literally into an `/etc/fstab`
   line on persist — a newline could append an attacker-controlled fstab entry
   mounted at every boot as root. Options are now rejected if they contain
-  whitespace or newlines (they are always comma-separated tokens, e.g.
-  `rw,noexec,vers=3`). `client/_api_filesystem_mount.py`.
+  whitespace or newlines. `client/_api_filesystem_mount.py`.
+- **`_validate_path` rejects CR/LF as well as NUL,** closing a header/line-injection
+  vector through path parameters.
+- Additional QA-sweep hardening (input validation, timer-name traversal, scaling
+  limits) and an infra/reliability batch (logging, robustness) across the command
+  paths.
 
 ## 3.0.1 — 2026-07-10
 

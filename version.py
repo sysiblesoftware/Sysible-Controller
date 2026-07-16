@@ -13,4 +13,4 @@ Version view, an admin API route, etc.) should import this rather than
 hardcoding its own copy.
 """
 
-VERSION = "3.0.0"
+VERSION = "3.1.0"

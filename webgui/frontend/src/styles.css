@@ -142,6 +142,12 @@ button { font-family: inherit; color: inherit; }
    `.btn.ghost:hover` would otherwise flip it to the neutral panel colour. */
 .btn.ghost.danger { background: var(--red); border-color: var(--red); color: #fff; }
 .btn.ghost.danger:hover { background: var(--red); filter: brightness(1.08); }
+/* Outline danger — a *secondary* destructive action: red text/border on a
+   transparent ground, filling solid red only on hover. Keeps a row of
+   destructive controls from reading as a wall of solid red; reserve solid
+   `.btn.danger` for the one primary destructive action in the group. */
+.btn.outline-danger { background: transparent; color: var(--red); border-color: var(--red); }
+.btn.outline-danger:hover:not(:disabled) { background: var(--red); color: #fff; }
 .btn.full { width: 100%; }
 .btn.sm { padding: 5px 11px; font-size: 12.5px; }
 .iconbtn {
@@ -385,6 +391,13 @@ tr:hover td { background: var(--row-hover); }
 /* Action buttons stay their natural size and pinned to the right — never shrunk
    or overlapped by the badges. */
 .he-host-actions { flex-shrink: 0; }
+/* Enrolled-hosts footer: the selection-scoped destructive actions cluster on
+   the left (with a live "N checked" count), the global Pause/Resume kill-switch
+   pinned right. Wraps cleanly on narrow panes instead of crowding. */
+.he-footer { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.he-footer-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.he-footer-actions .he-checked { color: var(--text-faint); font-size: 12px; white-space: nowrap; }
+.he-footer > .he-pause { margin-left: auto; }
 .linklike { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer;
   font: inherit; text-decoration: underline; }
 

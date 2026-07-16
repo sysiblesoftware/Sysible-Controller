@@ -378,7 +378,7 @@ export default function HostEnrollment() {
                         {!a.revoked && a.integrity_quarantined &&
                           <button className="btn ghost sm" title="Rebaseline: clear the quarantine and resume dispatch (use after a legitimate change)" onClick={(e) => resumeHost(a, e)}>Resume</button>}
                         {!a.revoked &&
-                          <button className="btn danger sm" title="Hard lock-out: revoke this agent's secret until re-enrolled" onClick={(e) => revokeHost(a, e)}>Revoke</button>}
+                          <button className="btn outline-danger sm" title="Hard lock-out: revoke this agent's secret until re-enrolled" onClick={(e) => revokeHost(a, e)}>Revoke</button>}
                       </span>
                     </label>
                   ))}
@@ -386,19 +386,21 @@ export default function HostEnrollment() {
               );
             })}
           </div>
-          <div className="row" style={{ marginTop: 10, alignItems: "center", gap: 8 }}>
-            <button className="btn danger sm" onClick={disenrollChecked} disabled={!!busy}>Disenroll Host(s)</button>
-            <button className="btn ghost sm danger" onClick={forceDeleteChecked} disabled={!!busy}
-                    title="Force-remove a zombie/broken-build host from the console without waiting for its agent to tear down — purges its enroll token too">
-              Force Delete
-            </button>
-            <button className="btn ghost sm danger" onClick={revokeChecked} disabled={!!busy}
-                    title="Lock out the checked agents immediately (no heartbeat/poll/report) but KEEP their records — the one-click emergency stop for a runaway or compromised fleet">
-              Revoke Checked
-            </button>
-            <span className="faint">{checked.length} checked</span>
-            <button className={"btn sm " + (enrollPaused ? "" : "ghost danger")} onClick={toggleEnrollPause}
-                    disabled={!!busy} style={{ marginLeft: "auto" }}
+          <div className="he-footer">
+            <div className="he-footer-actions">
+              <button className="btn danger sm" onClick={disenrollChecked} disabled={!!busy || checked.length === 0}>Disenroll Host(s)</button>
+              <button className="btn outline-danger sm" onClick={forceDeleteChecked} disabled={!!busy || checked.length === 0}
+                      title="Force-remove a zombie/broken-build host from the console without waiting for its agent to tear down — purges its enroll token too">
+                Force Delete
+              </button>
+              <button className="btn outline-danger sm" onClick={revokeChecked} disabled={!!busy || checked.length === 0}
+                      title="Lock out the checked agents immediately (no heartbeat/poll/report) but KEEP their records — the one-click emergency stop for a runaway or compromised fleet">
+                Revoke Checked
+              </button>
+              <span className="he-checked">{checked.length} checked</span>
+            </div>
+            <button className={"btn sm he-pause " + (enrollPaused ? "" : "outline-danger")} onClick={toggleEnrollPause}
+                    disabled={!!busy}
                     title="Stop the controller accepting any new enrollments — the emergency brake for a runaway that re-appears faster than you can delete it. Existing agents keep running.">
               {enrollPaused ? "Resume Enrollment" : "Pause Enrollment"}
             </button>

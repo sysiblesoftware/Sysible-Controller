@@ -3,7 +3,8 @@
 # layer. The controller's own requirements (requests, etc.) must also be
 # importable - run this service in the same environment as the controller,
 # or `pip install -r ../requirements.txt` as well.
-fastapi>=0.110
-uvicorn[standard]>=0.27
-itsdangerous>=2.1          # required by Starlette SessionMiddleware
-python-multipart>=0.0.9    # form/file uploads (later phases)
+# Pinned for reproducible builds — keep in step with ../requirements.txt.
+fastapi==0.139.0
+uvicorn[standard]==0.50.2
+itsdangerous==2.2.0          # required by Starlette SessionMiddleware
+python-multipart==0.0.32     # form/file uploads

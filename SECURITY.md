@@ -218,6 +218,11 @@ the controller safely.
    - Example (firewalld): allow only a trusted subnet
      `firewall-cmd --add-rich-rule='rule family=ipv4 source address=10.0.0.0/24 port port=9000 protocol=tcp accept'`
      (repeat for `8800`) and ensure those ports aren't open to `public`.
+   - To bind only one interface instead of all of them, set
+     `SYSIBLE_CONTROLLER_BIND=<nic-ip>` before running the installer (it fills
+     the controller unit's `--host`), so the API listens on just the NIC your
+     agents use rather than every address. Firewalling is still the primary
+     control; this narrows the exposed surface further.
 2. **Use a strong, unique admin password**, and rotate it if it may have
    been exposed. Set an admin password policy in Sysible Controller
    Settings. On a fresh install the web console seeds a default `admin`

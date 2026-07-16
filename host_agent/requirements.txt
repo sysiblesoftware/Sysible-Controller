@@ -5,4 +5,8 @@
 # disenroll_agent.sh install everything the agent needs in one step,
 # instead of one hardcoded `pip3 install requests` line that silently
 # falls behind if agent.py ever picks up another dependency.
-requests>=2.31
+# The agent runs on managed hosts with whatever Python they ship, so this stays
+# a compatible range (not an exact pin like the controller's) — pip resolves the
+# newest `requests` the host's interpreter supports — while bounding the major
+# version so an unforeseen 3.x can't land silently.
+requests>=2.31,<3

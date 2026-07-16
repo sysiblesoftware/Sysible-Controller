@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import { api } from "./api.js";
+import { api, setUnauthorizedHandler } from "./api.js";
 import Login from "./views/Login.jsx";
 import ForcePasswordChange from "./views/ForcePasswordChange.jsx";
 import Toasts from "./components/Toasts.jsx";
@@ -187,6 +187,20 @@ export default function App() {
       .catch(() => setUser(null))
       .finally(() => setChecking(false));
   }, []);
+
+  // When any API call sees a 401 (session expired/revoked), drop the stale session
+  // and return to the login screen — once, and only if we currently think we're
+  // logged in (so a background poll firing during logout doesn't double-toast).
+  const userRef = useRef(null);
+  userRef.current = user;
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      if (!userRef.current) return;
+      setUser(null); setView(null); setHistory([]); setMustChange(false);
+      pushToast("Your session expired — please sign in again.", { kind: "error" });
+    });
+    return () => setUnauthorizedHandler(null);
+  }, [pushToast]);
 
   useEffect(() => {
     if (user) api.edition().then(setEdition).catch(() => setEdition({}));

@@ -1,12 +1,20 @@
+# Sysible Controller runtime dependencies — pinned for reproducible builds.
+# These exact versions are what the test suite is validated against. Bump them
+# deliberately (not implicitly at install time): CI should run `pip-audit`
+# against this file, and for a fully hash-locked manifest regenerate with
+#   pip-compile --generate-hashes requirements.in
+# (a floating `>=` set previously resolved to whatever was newest on PyPI at
+# install time — non-reproducible and hard to attest for change control).
+
 # Backend
-fastapi>=0.110
-uvicorn[standard]>=0.29
-pydantic>=2.0
-psutil>=5.9
-paramiko>=3.4
-python-multipart>=0.0.9   # multipart/form-data (file upload endpoints)
-itsdangerous>=2.0         # Starlette SessionMiddleware (web console login cookie)
-cryptography>=42.0
+fastapi==0.139.0
+uvicorn[standard]==0.50.2
+pydantic==2.13.4
+psutil==7.2.2
+paramiko==5.0.0
+python-multipart==0.0.32   # multipart/form-data (file upload endpoints)
+itsdangerous==2.2.0        # Starlette SessionMiddleware (web console login cookie)
+cryptography==49.0.0
 
 # Agent
-requests>=2.31
+requests==2.34.2

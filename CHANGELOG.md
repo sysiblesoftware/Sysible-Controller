@@ -134,6 +134,25 @@ Findings from a pre-release enterprise security & UX audit:
 - Removed a stray NUL byte from a console source file that tripped text tooling.
   `webgui/frontend/src/views/ToolPage.jsx`.
 
+Console reliability &amp; hardening (audit follow-through):
+- **The web console no longer wedges on a hung request or an expired session.**
+  Every API call now has a request timeout (a stuck controller call aborts instead
+  of pinning a spinner forever), a single 401 handler drops the stale session and
+  returns to the login screen with a clear message, and a top-level error boundary
+  turns a render-time error into a recoverable panel instead of a white screen.
+  `webgui/frontend/src/api.js`, `App.jsx`, `components/ErrorBoundary.jsx`, `main.jsx`.
+- **Login brute-force lockout is now durable.** The admin-login throttle is stored in
+  the database, so an accumulated lockout survives a controller restart / crash-loop
+  instead of resetting with the process; the console's per-IP login throttle is now
+  mutation-locked. `backend/db.py`, `backend/app.py`, `webgui/server.py`.
+- **Python dependencies are pinned** for reproducible builds (the frontend was already
+  lock-pinned); the agent's `requests` stays a compatible range for host-Python
+  portability. `requirements.txt`, `webgui/requirements.txt`, `host_agent/requirements.txt`.
+- **The controller bind address is configurable** via `SYSIBLE_CONTROLLER_BIND` so an
+  operator can listen on a single management/agent NIC instead of all interfaces;
+  firewalling `:9000` remains the primary control (documented in SECURITY.md).
+  `install_sysible.sh`, `SECURITY.md`.
+
 ## 3.0.1 — 2026-07-10
 
 A large security-hardening and reliability release on top of 3.0.0, plus new

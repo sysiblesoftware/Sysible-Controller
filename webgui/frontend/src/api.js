@@ -3,7 +3,19 @@
 // API key never reaches the browser. A 401 means "not logged in" and is
 // surfaced so the app can bounce back to the login screen.
 
-async function req(path, { method = "GET", body, headers, raw = false } = {}) {
+// A global "session is gone" handler. api.js calls it whenever the BFF answers a
+// 401 (other than a failed login), so the app can drop the stale session and bounce
+// back to the login screen instead of leaving the user on a dead, half-loaded UI.
+let _onUnauthorized = null;
+export function setUnauthorizedHandler(fn) { _onUnauthorized = fn; }
+
+// Default per-request timeout (ms) for JSON calls. Guards against a hung controller
+// wedging a caller's busy/spinner state forever. `raw` responses (streams, uploads,
+// downloads) legitimately run long, so they default to no timeout; any caller can
+// override with `timeout` (ms), or `timeout: 0` to disable.
+const DEFAULT_TIMEOUT_MS = 60000;
+
+async function req(path, { method = "GET", body, headers, raw = false, timeout } = {}) {
   const opts = { method, credentials: "include", headers: { ...(headers || {}) } };
   if (body !== undefined) {
     if (body instanceof FormData) {
@@ -13,7 +25,32 @@ async function req(path, { method = "GET", body, headers, raw = false } = {}) {
       opts.body = JSON.stringify(body);
     }
   }
-  const res = await fetch(path, opts);
+  const ms = timeout !== undefined ? timeout : (raw ? 0 : DEFAULT_TIMEOUT_MS);
+  const ctrl = ms > 0 ? new AbortController() : null;
+  if (ctrl) opts.signal = ctrl.signal;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), ms) : null;
+
+  let res;
+  try {
+    res = await fetch(path, opts);
+  } catch (e) {
+    if (timer) clearTimeout(timer);
+    if (e && e.name === "AbortError") {
+      const te = new Error("Request timed out — the controller didn't respond in time. Try again.");
+      te.status = 0; te.timeout = true;
+      throw te;
+    }
+    throw e; // network/DNS error — surfaced to the caller as-is
+  }
+  if (timer) clearTimeout(timer);
+
+  // Session expired / not authenticated: fire the global handler so every screen
+  // reacts the same way. Skip the login endpoint itself (a wrong password is a 401
+  // that must NOT be treated as an expired session).
+  if (res.status === 401 && path !== "/api/login" && _onUnauthorized) {
+    try { _onUnauthorized(); } catch { /* never let the handler mask the error */ }
+  }
+
   if (raw) return res;
   let data = null;
   const text = await res.text();

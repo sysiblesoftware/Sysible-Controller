@@ -262,6 +262,7 @@ class LoginRequest(BaseModel):
 _LOGIN_MAX_ATTEMPTS = int(os.getenv("SYSIBLE_WEBGUI_LOGIN_MAX_ATTEMPTS", "8"))
 _LOGIN_WINDOW_S = int(os.getenv("SYSIBLE_WEBGUI_LOGIN_WINDOW", "300"))
 _login_attempts: dict[str, list] = {}
+_login_attempts_lock = threading.Lock()  # guards _login_attempts across worker threads
 
 # The controller admin token is a privileged bearer credential. We keep it in
 # the session cookie but ENCRYPTED with a server-side key (the same 0600 key
@@ -390,10 +391,13 @@ def _client_ip(request: Request) -> str:
 def _throttle_check(ip: str):
     import time
     now = time.time()
-    hits = [t for t in _login_attempts.get(ip, []) if now - t < _LOGIN_WINDOW_S]
-    _login_attempts[ip] = hits
-    if len(hits) >= _LOGIN_MAX_ATTEMPTS:
-        retry = int(_LOGIN_WINDOW_S - (now - hits[0]))
+    with _login_attempts_lock:
+        hits = [t for t in _login_attempts.get(ip, []) if now - t < _LOGIN_WINDOW_S]
+        _login_attempts[ip] = hits
+        over = len(hits) >= _LOGIN_MAX_ATTEMPTS
+        first = hits[0] if hits else now
+    if over:
+        retry = int(_LOGIN_WINDOW_S - (now - first))
         raise HTTPException(
             status_code=429,
             detail=f"Too many login attempts. Try again in {max(retry, 1)} seconds.",
@@ -402,7 +406,8 @@ def _throttle_check(ip: str):
 
 def _throttle_record_failure(ip: str):
     import time
-    _login_attempts.setdefault(ip, []).append(time.time())
+    with _login_attempts_lock:
+        _login_attempts.setdefault(ip, []).append(time.time())
 
 
 @app.post("/api/login")
@@ -442,7 +447,8 @@ def login(body: LoginRequest, request: Request):
                    f"its API key and TLS cert (see 'sysible_controller webgui logs').",
         )
 
-    _login_attempts.pop(ip, None)  # clear on success
+    with _login_attempts_lock:
+        _login_attempts.pop(ip, None)  # clear on success
     # Drop any pre-login session identifier so a fixed/known cookie can't be
     # carried into the authenticated session (session-fixation hardening).
     request.session.clear()

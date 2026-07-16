@@ -640,6 +640,21 @@ def init_db():
     """)
 
     # -----------------------------------------------------
+    # Login throttle (durable brute-force lockout). Persisted so a process
+    # restart / crash-loop does NOT wipe accumulated failures or an active
+    # lockout (the previous in-memory dict reset on every restart). `key` is
+    # the throttle bucket (per-username for admin login); `fails` is a JSON
+    # array of recent failure timestamps; `until` is the lockout expiry.
+    # -----------------------------------------------------
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS login_throttle (
+        key TEXT PRIMARY KEY,
+        fails TEXT,
+        until REAL
+    )
+    """)
+
+    # -----------------------------------------------------
     # Activity log: a human-readable, attributed feed of actions the
     # controller carried out - "<admin> <description> on <host>" - for the
     # Live Activity & Logs view. username is the UNFORGEABLE initiating
@@ -1847,6 +1862,70 @@ def delete_admin_tokens_for_user(username):
     conn = _connect()
     cur = conn.cursor()
     cur.execute("DELETE FROM admin_tokens WHERE username=?", (username,))
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Durable login throttle — persisted brute-force lockout that survives a
+# controller restart / crash-loop (the previous in-memory dict did not).
+# ---------------------------------------------------------------------------
+def login_throttle_locked_for(key):
+    """Seconds remaining on `key`'s lockout, or 0 if not locked."""
+    if not key:
+        return 0
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT until FROM login_throttle WHERE key=?", (key,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return 0
+    remaining = (row[0] or 0) - time.time()
+    return int(remaining) if remaining > 0 else 0
+
+
+def login_throttle_record_failure(key, window_s, max_failures, lockout_s):
+    """Record one failed attempt for `key`; if it reaches `max_failures` within
+    `window_s`, set a `lockout_s` lockout. Returns the lockout seconds now in
+    effect (0 if not yet locked). Atomic under the connection."""
+    if not key:
+        return 0
+    now = time.time()
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT fails, until FROM login_throttle WHERE key=?", (key,))
+    row = cur.fetchone()
+    try:
+        fails = json.loads(row[0]) if row and row[0] else []
+    except (ValueError, TypeError):
+        fails = []
+    until = (row[1] if row else 0) or 0
+    fails = [t for t in fails if isinstance(t, (int, float)) and now - t < window_s]
+    fails.append(now)
+    locked = 0
+    if len(fails) >= max_failures:
+        until = now + lockout_s
+        fails = []
+        locked = lockout_s
+    elif until > now:
+        locked = int(until - now)
+    cur.execute(
+        "INSERT INTO login_throttle (key, fails, until) VALUES (?, ?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET fails=excluded.fails, until=excluded.until",
+        (key, json.dumps(fails), until))
+    conn.commit()
+    conn.close()
+    return locked
+
+
+def login_throttle_clear(key):
+    """Clear a key's throttle state — called on a successful login."""
+    if not key:
+        return
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM login_throttle WHERE key=?", (key,))
     conn.commit()
     conn.close()
 

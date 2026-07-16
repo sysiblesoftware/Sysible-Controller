@@ -2234,14 +2234,13 @@ def admin_setup(body: AdminSetupRequest):
 
 # Defense-in-depth brute-force throttle for the GUI admin login. This
 # endpoint is already behind the API key (so it isn't a remote guessing
-# target without that secret), but a lenient per-IP lockout adds a second
-# layer at no real usability cost. In-memory: per-process, resets on
-# restart, never persists anything about an attempt.
+# target without that secret), but a lenient lockout adds a second layer at no
+# real usability cost. Backed by the DB (login_throttle table) so the lockout
+# SURVIVES a controller restart / crash-loop — an attacker can no longer reset
+# accumulated failures by bouncing the process.
 _ADMIN_LOGIN_MAX_FAILURES = 10
 _ADMIN_LOGIN_WINDOW_S = 15 * 60
 _ADMIN_LOGIN_LOCKOUT_S = 10 * 60
-_admin_login_state = {}
-_admin_login_lock = threading.Lock()
 
 # Decoy credential: when the submitted username doesn't exist we still run a full
 # PBKDF2 verify against this fixed hash so the response time is the same as for a
@@ -2250,34 +2249,29 @@ _admin_login_lock = threading.Lock()
 _DECOY_SALT, _DECOY_HASH = portal_auth.hash_password(secrets.token_hex(16))
 
 
-def _admin_login_locked_for(ip):
-    if not ip:
-        return 0
-    with _admin_login_lock:
-        st = _admin_login_state.get(ip)
-        if not st:
-            return 0
-        remaining = st.get("until", 0) - time.time()
-        return int(remaining) if remaining > 0 else 0
+def _admin_login_locked_for(key):
+    from backend import db
+    try:
+        return db.login_throttle_locked_for(key)
+    except Exception:
+        return 0  # never let a throttle-store hiccup block a legitimate login
 
 
-def _admin_login_record_failure(ip):
-    if not ip:
-        return
-    now = time.time()
-    with _admin_login_lock:
-        st = _admin_login_state.setdefault(ip, {"fails": [], "until": 0})
-        st["fails"] = [t for t in st["fails"] if now - t < _ADMIN_LOGIN_WINDOW_S]
-        st["fails"].append(now)
-        if len(st["fails"]) >= _ADMIN_LOGIN_MAX_FAILURES:
-            st["until"] = now + _ADMIN_LOGIN_LOCKOUT_S
-            st["fails"] = []
+def _admin_login_record_failure(key):
+    from backend import db
+    try:
+        db.login_throttle_record_failure(
+            key, _ADMIN_LOGIN_WINDOW_S, _ADMIN_LOGIN_MAX_FAILURES, _ADMIN_LOGIN_LOCKOUT_S)
+    except Exception:
+        pass
 
 
-def _admin_login_clear(ip):
-    if ip:
-        with _admin_login_lock:
-            _admin_login_state.pop(ip, None)
+def _admin_login_clear(key):
+    from backend import db
+    try:
+        db.login_throttle_clear(key)
+    except Exception:
+        pass
 
 
 @app.post("/admin/login", dependencies=[Depends(require_api_key)])

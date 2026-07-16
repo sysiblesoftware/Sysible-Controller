@@ -298,7 +298,12 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=$BASE
 Environment=PYTHONPATH=$BASE
-ExecStart=$VENV/bin/uvicorn backend.app:app --host 0.0.0.0 --port 9000 --ssl-keyfile $KEY_FILE --ssl-certfile $CERT_FILE --log-level info
+# Bind address for the controller API. Defaults to 0.0.0.0 because remote agents
+# connect here — but this port also carries the admin/console surface (behind the
+# root-only API key). HARDENING: set SYSIBLE_CONTROLLER_BIND to a specific NIC IP
+# before install to bind only that interface, and firewall :9000 to your management
+# + agent networks. (Resolved at install time; edit this ExecStart to change later.)
+ExecStart=$VENV/bin/uvicorn backend.app:app --host ${SYSIBLE_CONTROLLER_BIND:-0.0.0.0} --port 9000 --ssl-keyfile $KEY_FILE --ssl-certfile $CERT_FILE --log-level info
 Restart=always
 RestartSec=5
 User=root

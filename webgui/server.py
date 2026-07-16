@@ -110,14 +110,22 @@ try:
 except ValueError:
     _MAX_SSH_UPLOAD_BYTES = 100 * 1024 * 1024
 
-# Mark the cookie Secure when we're behind TLS (set by webgui_manager when the
-# controller has certs). same_site="strict" is right for an admin console:
-# the cookie is never attached to cross-site requests, which closes CSRF on
-# the state-changing POSTs without needing a separate token.
-_HTTPS_ONLY = os.getenv("SYSIBLE_WEBGUI_HTTPS_ONLY", "0") == "1"
-# Only trust X-Forwarded-For (for the login throttle's client-IP) when a trusted
-# reverse proxy is actually in front; otherwise the header is client-spoofable.
+# Only trust X-Forwarded-For/Host (for the login throttle's client-IP and the CSRF
+# host check) when a trusted reverse proxy is actually in front; otherwise the header
+# is client-spoofable.
 _TRUST_PROXY = os.getenv("SYSIBLE_WEBGUI_TRUSTED_PROXY", "0") == "1"
+# Session-cookie Secure flag. Enterprise-safe default: ON. The controller serves HTTPS
+# (self-signed certs are generated at install) and any real deployment terminates TLS at
+# the app or a reverse proxy, so the session cookie MUST carry the Secure attribute — an
+# insecure default let it ride a plain-HTTP request where a network sniffer could lift it.
+# A deliberate plain-HTTP dev/lab run opts OUT with SYSIBLE_WEBGUI_ALLOW_INSECURE_COOKIE=1
+# (which also makes login work over http://). same_site="strict" is the primary CSRF
+# control; csrf_origin_guard below is a defense-in-depth backstop.
+_ALLOW_INSECURE_COOKIE = os.getenv("SYSIBLE_WEBGUI_ALLOW_INSECURE_COOKIE", "0") == "1"
+_HTTPS_ONLY = (not _ALLOW_INSECURE_COOKIE) or os.getenv("SYSIBLE_WEBGUI_HTTPS_ONLY", "0") == "1" or _TRUST_PROXY
+if _ALLOW_INSECURE_COOKIE and not (os.getenv("SYSIBLE_WEBGUI_HTTPS_ONLY", "0") == "1" or _TRUST_PROXY):
+    _log.warning("SYSIBLE_WEBGUI_ALLOW_INSECURE_COOKIE=1: session cookie 'Secure' flag is OFF. "
+                 "Use only for plain-HTTP dev/lab — never in production.")
 app.add_middleware(
     SessionMiddleware,
     secret_key=_SECRET,
@@ -126,6 +134,31 @@ app.add_middleware(
     same_site="strict",
     max_age=_SESSION_MAX_AGE,
 )
+
+
+# State-changing HTTP methods carry a same-origin backstop: SameSite=Strict already keeps
+# the session cookie off cross-site requests, but an explicit Origin/Referer check is the
+# canonical CSRF control and closes the gap on any client that mishandles SameSite. If the
+# browser sent an Origin (or Referer) on a mutating /api call, its host must match ours; a
+# forged cross-site POST carries the attacker's origin and is refused. Absent both headers,
+# SameSite=Strict remains the control, so we allow (keeps non-browser/loopback tooling OK).
+_CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
+
+
+@app.middleware("http")
+async def csrf_origin_guard(request: Request, call_next):
+    if request.method not in _CSRF_SAFE_METHODS and request.url.path.startswith("/api/"):
+        source = request.headers.get("origin") or request.headers.get("referer") or ""
+        if source:
+            host = ((_TRUST_PROXY and request.headers.get("x-forwarded-host")) or
+                    request.headers.get("host") or "")
+            try:
+                from urllib.parse import urlparse
+                if urlparse(source).netloc != host:
+                    return JSONResponse({"detail": "Cross-origin request rejected."}, status_code=403)
+            except Exception:
+                return JSONResponse({"detail": "Cross-origin request rejected."}, status_code=403)
+    return await call_next(request)
 
 
 @app.middleware("http")

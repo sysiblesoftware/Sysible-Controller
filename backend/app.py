@@ -130,10 +130,31 @@ from backend.remote_routes import (
 
 # docs_url/redoc_url disabled: the interactive Swagger/ReDoc consoles are
 # an unauthenticated map of the whole API (and a ready-made request
-# builder) for anyone who can reach the port. openapi_url is kept because
-# `sysible_controller`'s readiness self-check fetches /openapi.json to
-# confirm the running process is current code.
-app = FastAPI(title="Sysible Controller", docs_url=None, redoc_url=None)
+# builder) for anyone who can reach the port. openapi_url is disabled too and
+# re-served loopback-only below: the only consumer is `sysible_controller`'s
+# readiness self-check, a local curl to 127.0.0.1 — so remote callers get 404
+# instead of a full map of the control-plane API.
+app = FastAPI(title="Sysible Controller", docs_url=None, redoc_url=None, openapi_url=None)
+
+
+def _clamp_limit(limit, lo: int = 1, hi: int = 1000) -> int:
+    """Bound an operator-supplied list `limit` so a huge value can't force an
+    unbounded result set / memory spike. Non-numeric falls back to the max."""
+    try:
+        return max(lo, min(int(limit), hi))
+    except (TypeError, ValueError):
+        return hi
+
+
+@app.get("/openapi.json", include_in_schema=False)
+def _openapi_loopback(request: Request):
+    """Serve the OpenAPI schema ONLY to a loopback caller (the readiness self-check
+    in `sysible_controller`). The schema maps the entire control plane, so a remote
+    caller — direct or via a proxy — gets a 404, not a request-builder blueprint."""
+    client = request.client.host if request.client else ""
+    if client not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(status_code=404, detail="Not found")
+    return app.openapi()
 
 # Log which directory + commit is actually running, so a wrong-directory deploy is
 # obvious in `journalctl -u sysible-backend` (see backend/build_info.py).
@@ -1072,7 +1093,7 @@ def get_activity_log_route(limit: int = 200, since_id: int = 0):
     the read-only 'auditor' role (see require_activity_viewer). The controller
     service log below stays superuser-only. `since_id` lets the GUI poll for
     only new rows."""
-    return {"entries": get_activity_log(limit=limit, since_id=since_id)}
+    return {"entries": get_activity_log(limit=_clamp_limit(limit), since_id=since_id)}
 
 
 @app.get("/controller-log", dependencies=[Depends(require_api_key), Depends(require_superuser)])
@@ -2064,7 +2085,7 @@ def remove_portal_credentials_route(body: RemovePortalCredentialsRequest):
 
 @app.get("/portal/login-history", dependencies=[Depends(require_api_key)])
 def get_portal_login_history_route(limit: int = 200):
-    return {"history": get_portal_login_history(limit)}
+    return {"history": get_portal_login_history(_clamp_limit(limit))}
 
 
 @app.get("/portal/sessions", dependencies=[Depends(require_api_key)])
@@ -2531,7 +2552,7 @@ def reset_administrator_password_route(username: str, body: ResetAdministratorPa
 @app.get("/admin/audit-log", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def get_admin_audit_log_route(limit: int = 200):
     # Superuser-gated: login attempts and administrator-account changes.
-    return {"entries": get_admin_audit_log(limit)}
+    return {"entries": get_admin_audit_log(_clamp_limit(limit))}
 
 
 # =========================================================

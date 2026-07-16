@@ -74,6 +74,21 @@ export default function Connect() {
     finally { setBusy(""); }
   }
 
+  async function removeAllSsh() {
+    if (!window.confirm(
+      "Remove ALL SSH host records?\n\n" +
+      "This deletes every SSH connection — pure-SSH hosts AND the legacy “Agent+SSH” " +
+      "shadow records — and un-pins their host keys. Agent enrollments are NOT affected. " +
+      "You'll lose SSH terminal/ping access to any non-agent host.")) return;
+    setBusy("wipe-ssh"); setErr(""); setSel(null);
+    try {
+      await api.deleteAllSshHosts();
+      setChecked([]);
+      loadHosts();
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(""); }
+  }
+
   return (
     <div className="three-pane">
       {/* LEFT: managed hosts */}
@@ -102,6 +117,14 @@ export default function Connect() {
             setCollapsed(Object.fromEntries(groups.map(([e]) => [e, true])))}>Collapse All</button>
           <button className="btn ghost sm" onClick={() => setCollapsed({})}>Expand All</button>
         </div>
+        {hosts.length > 0 && (
+          <div className="ctl-row">
+            <button className="btn ghost sm danger" disabled={busy === "wipe-ssh"}
+                    title="Delete every SSH connection record (pure-SSH hosts and legacy Agent+SSH shadows). Agent enrollments are not affected."
+                    onClick={removeAllSsh}>
+              {busy === "wipe-ssh" ? <span className="spin" /> : "Remove all SSH hosts"}</button>
+          </div>
+        )}
         <div className="host-tree">
           {hosts.length === 0 && <div className="faint" style={{ padding: 8 }}>No hosts enrolled.</div>}
           {groups.map(([env, list]) => {

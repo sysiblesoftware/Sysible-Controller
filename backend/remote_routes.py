@@ -601,6 +601,27 @@ def delete_host(name: str):
     return {"deleted": True}
 
 
+@router.delete("/hosts", dependencies=[Depends(require_superuser)])
+def delete_all_hosts():
+    """Forget EVERY standalone SSH host record (and un-pin each host key) in one shot —
+    the "remove all SSH hosts" cleanup for phasing SSH connections out. This clears the
+    SSH connection inventory only, including the legacy "Agent + SSH" shadow records;
+    agent enrollments themselves are untouched (they live in a separate table). Superuser
+    only. New agent enrollments no longer create SSH shadows, so this stays clear."""
+    with _HOSTS_LOCK:
+        hosts = load_hosts()
+        names = list(hosts.keys())
+        ips = [h.get("ip") for h in hosts.values() if isinstance(h, dict)]
+        save_hosts({})
+    for ip in ips:
+        if ip:
+            try:
+                _forget_known_host(ip)
+            except Exception:
+                pass
+    return {"deleted": len(names), "hosts": names}
+
+
 @router.post("/hosts/{name}/environment", dependencies=[Depends(require_superuser)])
 def set_host_environment(name: str, body: SetEnvironmentRequest):
     """Re-tag an already-connected SSH host's environment without

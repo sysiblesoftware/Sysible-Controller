@@ -182,6 +182,7 @@ export const api = {
   // pinned host key) that `removeHost` (the agent path) never touches.
   deleteSshHost: (name) =>
     req(`/api/ssh-host/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  deleteAllSshHosts: () => req(`/api/ssh-hosts`, { method: "DELETE" }),
   setHostEnvironment: (hostId, environment) =>
     req(`/api/host/${encodeURIComponent(hostId)}/environment`, { method: "POST", body: { environment } }),
   createEnvironment: (name) => req("/api/environments", { method: "POST", body: { name } }),

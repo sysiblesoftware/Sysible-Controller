@@ -1929,6 +1929,14 @@ def delete_ssh_host(name: str, request: Request,
     return _superuser_request("DELETE", f"/remote/hosts/{name}", request)
 
 
+@app.delete("/api/ssh-hosts")
+def delete_all_ssh_hosts(request: Request, user: str = Depends(require_superuser_session)):
+    """Forget ALL standalone SSH host records at once — the SSH phase-out cleanup.
+    Superuser-only. Clears both pure-SSH connections AND the legacy "Agent + SSH"
+    shadow records; agent enrollments are untouched."""
+    return _superuser_request("DELETE", "/remote/hosts", request)
+
+
 class HostEnvRequest(BaseModel):
     environment: str = ""
 

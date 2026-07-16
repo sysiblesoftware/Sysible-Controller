@@ -45,3 +45,31 @@ def test_delete_ssh_host_proxies_to_controller():
     finally:
         w._superuser_request = orig
         w.app.dependency_overrides.pop(w.require_superuser_session, None)
+
+
+def test_delete_all_ssh_hosts_requires_auth():
+    r = client.delete("/api/ssh-hosts",
+                      headers={"origin": "http://testserver", "host": "testserver"})
+    assert r.status_code in (401, 403)
+
+
+def test_delete_all_ssh_hosts_proxies_to_controller():
+    """The bulk cleanup delegates to the controller's DELETE /remote/hosts (no name)."""
+    calls = []
+
+    def fake_superuser_request(method, path, request, **kw):
+        calls.append((method, path))
+        return {"deleted": 3, "hosts": ["a", "b", "c"]}
+
+    orig = w._superuser_request
+    w.app.dependency_overrides[w.require_superuser_session] = lambda: "root"
+    w._superuser_request = fake_superuser_request
+    try:
+        r = client.delete("/api/ssh-hosts",
+                          headers={"origin": "http://testserver", "host": "testserver"})
+        assert r.status_code == 200, r.text
+        assert r.json()["deleted"] == 3
+        assert calls == [("DELETE", "/remote/hosts")]
+    finally:
+        w._superuser_request = orig
+        w.app.dependency_overrides.pop(w.require_superuser_session, None)

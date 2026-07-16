@@ -304,6 +304,24 @@ cmd_update() {
         _write_update_status failed "Update blocked: untracked files in $SRC collide with the incoming update. On the host run: cd $SRC && sudo git -c safe.directory=\$PWD clean -fd (removes untracked cruft; keeps ignored dist/ and node_modules/), then retry update. Reversible alt: stash push --include-untracked."
         exit 1
       fi
+      # TRACKED local modifications ("Your local changes to the following files
+      # would be overwritten by merge") — the checkout has edits to files the update
+      # also changes. A ref-store repair can't fix this either. On a deploy box these
+      # are often site edits (values.yaml, Dockerfile) tangled with accidental ones,
+      # so we NEVER auto-discard (data loss) — give the reversible stash remedy and
+      # the inspect-then-discard alternative, and stop.
+      if printf '%s' "$_pull_out" | grep -q 'Your local changes to the following files would be overwritten'; then
+        echo "ERROR: update blocked — this checkout has LOCAL MODIFICATIONS to tracked files that the update also changes."
+        echo "       A ref-store repair can't fix this. First see what changed:"
+        echo "         cd $SRC && sudo git -c safe.directory=\"\$PWD\" status && sudo git -c safe.directory=\"\$PWD\" diff --stat"
+        echo "       Reversible — stash your edits (recoverable), then re-run the update:"
+        echo "         cd $SRC && sudo git -c safe.directory=\"\$PWD\" stash push -m pre-update && sudo sysible_controller update"
+        echo "         # reapply afterwards if you still need them: sudo git -c safe.directory=\"\$PWD\" stash pop"
+        echo "       Or discard the local edits entirely (destructive — ONLY if they're unwanted):"
+        echo "         cd $SRC && sudo git -c safe.directory=\"\$PWD\" checkout -- <file>...   # or: reset --hard @{u}"
+        _write_update_status failed "Update blocked: tracked files in $SRC are locally modified and collide with the incoming update. On the host: cd $SRC && sudo git -c safe.directory=\$PWD stash push -m pre-update (reversible), then retry update; reapply with 'stash pop'. Or discard with 'git checkout -- <file>' / 'git reset --hard @{u}' if unwanted."
+        exit 1
+      fi
       # A common, non-fatal failure is a corrupted ref store — e.g.
       #   "fetching ref refs/remotes/origin/main failed: reference already exists"
       # — a loose remote-tracking ref colliding with packed-refs, usually left by

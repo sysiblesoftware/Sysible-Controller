@@ -2,10 +2,8 @@
 The agent bundle ships two lifecycle scripts alongside run_agent.sh:
 
   - disenroll_agent.sh   removes the agent from a host AND tells the controller to
-                         drop the enrollment. Its controller-notify step delegates to
-                         `agent.py --disenroll` so it reuses the agent's own connection
-                         path (pinned cert, controller failover) instead of a hand-rolled
-                         POST that couldn't reach a controller only reachable indirectly.
+                         drop the enrollment (self-disenroll authenticated by this
+                         host's own host_id+agent_secret).
   - migrate_agent.sh     repoints an installed agent at a different controller (IP change,
                          DNS cutover, failover) without reinstalling.
 
@@ -49,13 +47,13 @@ def test_generated_scripts_are_valid_bash(script):
     assert p.returncode == 0, f"{script} failed bash -n:\n{p.stderr}"
 
 
-def test_disenroll_notifies_via_the_agent():
-    # The notify step must call the agent's --disenroll mode (reuses the agent's own
-    # connection path), not embed a plain requests.post that can't route indirectly.
+def test_disenroll_notifies_the_controller():
+    # The notify step performs an authenticated self-disenroll (host_id+agent_secret)
+    # against the /agents/{host_id}/disenroll endpoint before local teardown.
     src = _bundle().read("disenroll_agent.sh").decode()
-    assert '"$AGENT_PY" --disenroll' in src    # delegates to the agent's own mode
-    assert 'AGENT_PY="/opt/sysible-agent/agent.py"' in src
-    assert "requests.post" not in src          # the old hand-rolled POST is gone
+    assert "requests.post" in src
+    assert "/disenroll" in src
+    assert "agent_secret" in src
 
 
 def test_migrate_repoints_controller_and_restarts():
@@ -66,10 +64,3 @@ def test_migrate_repoints_controller_and_restarts():
     # A no-token migration must KEEP local state (same-DB failover re-attaches);
     # state is only cleared when a fresh token is supplied.
     assert 'rm -f "$STATE_FILE"' in src
-
-
-def test_agent_source_has_disenroll_mode():
-    # The bundled agent.py must actually implement what disenroll_agent.sh invokes.
-    src = _bundle().read("agent.py").decode()
-    assert "def disenroll_self" in src
-    assert '"--disenroll" in sys.argv' in src

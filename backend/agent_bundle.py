@@ -382,22 +382,54 @@ fi
 # --------------------------------------------------------
 if [[ -f "$STATE_FILE" ]]; then
   echo "Notifying controller..."
-  # Let the AGENT perform the disenroll instead of a hand-rolled POST: it reuses the
-  # exact connection path the running service uses (pinned cert, controller failover)
-  # and authenticates the same way heartbeat does. Make sure its one dependency
-  # (requests) is present first; the agent self-disenroll is best-effort.
 {_PIP_INSTALL_BLOCK}
-  # Load the installed controller URL / cert so the agent's --disenroll sees exactly
-  # what the systemd service sees.
-  if [[ -f "$ENV_FILE" ]]; then set -a; . "$ENV_FILE"; set +a; fi
-  AGENT_PY="{_AGENT_INSTALL_DIR}/agent.py"
-  [[ -f "$AGENT_PY" ]] || AGENT_PY="./agent.py"   # fall back to the bundle's own copy
-  if [[ -f "$AGENT_PY" ]]; then
-    python3 "$AGENT_PY" --disenroll || \
-      echo "[disenroll] controller notify failed - continuing with local cleanup anyway."
-  else
-    echo "[disenroll] agent.py not found - skipping controller notification, continuing with local cleanup."
-  fi
+  python3 - "$STATE_FILE" "$ENV_FILE" "$CERT_FILE" <<'PYEOF'
+import json
+import os
+import sys
+
+state_file, env_file, cert_file = sys.argv[1], sys.argv[2], sys.argv[3]
+
+try:
+    with open(state_file) as f:
+        state = json.load(f)
+except (OSError, json.JSONDecodeError):
+    print("[disenroll] no readable state file - skipping controller notification")
+    sys.exit(0)
+
+host_id = state.get("host_id")
+agent_secret = state.get("agent_secret")
+if not host_id or not agent_secret:
+    print("[disenroll] state file missing host_id/agent_secret - skipping controller notification")
+    sys.exit(0)
+
+controller = "https://127.0.0.1:9000"
+try:
+    with open(env_file) as f:
+        for line in f:
+            if line.startswith("SYSIBLE_CONTROLLER="):
+                controller = line.strip().split("=", 1)[1]
+                break
+except OSError:
+    pass
+
+verify = cert_file if os.path.exists(cert_file) else True
+
+try:
+    import requests
+    r = requests.post(
+        f"{{controller}}/agents/{{host_id}}/disenroll",
+        json={{"host_id": host_id, "agent_secret": agent_secret}},
+        verify=verify,
+        timeout=10,
+    )
+    if r.ok:
+        print("[disenroll] controller acknowledged - host removed from enrollment")
+    else:
+        print(f"[disenroll] controller responded {{r.status_code}}: {{r.text}} - continuing with local cleanup anyway")
+except Exception as e:
+    print(f"[disenroll] could not reach controller ({{e}}) - continuing with local cleanup anyway")
+PYEOF
 else
   echo "No local agent state found (already disenrolled, or never enrolled) - skipping controller notification."
 fi

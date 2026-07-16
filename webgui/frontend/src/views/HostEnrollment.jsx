@@ -397,10 +397,10 @@ export default function HostEnrollment() {
               Revoke Checked
             </button>
             <span className="faint">{checked.length} checked</span>
-            <button className={"btn sm " + (enrollPaused ? "" : "ghost")} onClick={toggleEnrollPause}
+            <button className={"btn sm " + (enrollPaused ? "" : "ghost danger")} onClick={toggleEnrollPause}
                     disabled={!!busy} style={{ marginLeft: "auto" }}
                     title="Stop the controller accepting any new enrollments — the emergency brake for a runaway that re-appears faster than you can delete it. Existing agents keep running.">
-              {enrollPaused ? "▶ Resume Enrollment" : "⏸ Pause Enrollment"}
+              {enrollPaused ? "Resume Enrollment" : "Pause Enrollment"}
             </button>
           </div>
           {enrollPaused && (

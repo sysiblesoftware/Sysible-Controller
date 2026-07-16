@@ -1176,9 +1176,15 @@ def _pty_bridge(state, sid, user, cols, rows):
     import pty as _pty
     import select as _select
     import signal as _signal
-    shell = os.environ.get("SHELL") or "/bin/bash"
-    if not os.path.exists(shell):
-        shell = "/bin/sh"
+    # Prefer bash for the interactive terminal. Under systemd the agent's own
+    # $SHELL is typically /bin/sh, which would drop the operator into a bare POSIX
+    # shell (no history, no tab-completion) — the /bin/sh people see on
+    # agent/bastion-enrolled hosts. Use $SHELL only if it's a real installed shell;
+    # otherwise bash if present, then /bin/sh as the last resort.
+    shell = "/bin/bash" if os.path.exists("/bin/bash") else "/bin/sh"
+    env_shell = os.environ.get("SHELL")
+    if env_shell and env_shell not in ("/bin/sh", "/usr/bin/sh") and os.path.exists(env_shell):
+        shell = env_shell
 
     # Resolve the operator's account in the PARENT (before fork) so the child
     # does no NSS lookup. None => run as the agent (root).

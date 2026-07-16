@@ -329,11 +329,29 @@ def _forget_ssh_for_deleted_agent(deleted_host_id, agent):
         pass
 
 
+def _agent_ssh_shadow_enabled():
+    """Whether an agent host should ALSO be auto-registered as an SSH connection
+    (the "Agent + SSH" shadow record). OFF by default: agent hosts are fully
+    manageable over the agent's own outbound channel — including the web terminal,
+    which streams a local PTY over that channel and needs no inbound SSH — so the
+    shadow record is redundant and only clutters the inventory with a second entry
+    per host that (before this) couldn't be individually deleted. We are phasing
+    SSH connections out; set SYSIBLE_AGENT_SSH_TERMINAL=1 to restore the legacy
+    auto-SSH behaviour."""
+    return os.getenv("SYSIBLE_AGENT_SSH_TERMINAL", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
 def _maybe_enroll_agent_ssh(host_id, hostname, ip, environment, force=False):
     """Queue the one-time SSH-enable command on an agent host, unless we
     already have an SSH connection for it or an attempt is already
     pending. force=True (a fresh /enroll) always re-queues - the
-    operator may have just installed sshd after a prior 'sshd_missing'."""
+    operator may have just installed sshd after a prior 'sshd_missing'.
+
+    No-op unless the legacy auto-SSH shadow is explicitly enabled
+    (SYSIBLE_AGENT_SSH_TERMINAL=1) — see _agent_ssh_shadow_enabled()."""
+    if not _agent_ssh_shadow_enabled():
+        return
     if not hostname or not ip:
         return
     if ssh_host_exists(hostname):

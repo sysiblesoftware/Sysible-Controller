@@ -1920,6 +1920,15 @@ def enroll_ssh(body: EnrollRequest, request: Request, user: str = Depends(requir
     return _superuser_request("POST", "/remote/enroll-ssh", request, json=payload)
 
 
+@app.delete("/api/ssh-host/{name}")
+def delete_ssh_host(name: str, request: Request,
+                    user: str = Depends(require_superuser_session)):
+    """Forget a standalone SSH host record (and its pinned host key). Superuser-only.
+    Removes ONLY the SSH connection record — an agent enrolled for the same box is
+    untouched. Fills the gap where pure-SSH hosts couldn't be deleted from anywhere."""
+    return _superuser_request("DELETE", f"/remote/hosts/{name}", request)
+
+
 class HostEnvRequest(BaseModel):
     environment: str = ""
 

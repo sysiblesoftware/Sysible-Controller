@@ -240,6 +240,20 @@ function SelectedHost({ host, onTerminal, onChanged, onErr }) {
   useEffect(() => { setEnv(host.environment || ""); }, [host]);
 
   async function disenroll() {
+    // A pure-SSH host has no Sysible agent to tear down — the agent-oriented
+    // removeHost() never touches the SSH connection record, which is why these
+    // used to be undeletable. Route them to the dedicated SSH-forget path.
+    if (!host.has_agent) {
+      if (!window.confirm(
+        `Forget SSH host ${host.label}? This removes the SSH connection record ` +
+        `(and its pinned host key) from the controller. Nothing is changed on the ` +
+        `host itself; you can re-connect it later from “SSH to a New Host”.`)) return;
+      setBusy("rm"); onErr("");
+      try { await api.deleteSshHost(host.id); onChanged(true); }
+      catch (e) { onErr(e.message); }
+      finally { setBusy(""); }
+      return;
+    }
     if (!window.confirm(
       `Disenroll ${host.label}? This removes the host from the controller. ` +
       `The agent on the host keeps running until you stop/uninstall it there, ` +
@@ -267,7 +281,7 @@ function SelectedHost({ host, onTerminal, onChanged, onErr }) {
         <div className="row">
           <button className="btn sm" onClick={onTerminal}>Open Terminal</button>
           <button className="btn sm danger" disabled={busy === "rm"} onClick={disenroll}>
-            {busy === "rm" ? <span className="spin" /> : "Disenroll Host"}
+            {busy === "rm" ? <span className="spin" /> : host.has_agent ? "Disenroll Host" : "Forget SSH Host"}
           </button>
         </div>
       </div>

@@ -1403,7 +1403,40 @@ def loop(state):
 # =========================================================
 # MAIN
 # =========================================================
+def disenroll_self():
+    """Best-effort self-disenroll: tell the controller to drop THIS host's enrollment,
+    reusing the agent's own connection path (pinned cert, controller failover) so it
+    authenticates exactly as heartbeat does. Called by disenroll_agent.sh before it
+    removes the local state file (the only proof of this host's identity). Never raises:
+    the local teardown must proceed even if the controller can't be reached."""
+    state = load_state()
+    if not state or not state.get("host_id") or not state.get("agent_secret"):
+        print("[agent] no local enrollment state — nothing to tell the controller.")
+        return
+    host_id = state["host_id"]
+    try:
+        r = _request("POST", "/agents/{}/disenroll".format(host_id),
+                     json={"host_id": host_id, "agent_secret": state["agent_secret"]},
+                     timeout=15)
+        code = getattr(r, "status_code", 0)
+        if code and code < 300:
+            print("[agent] controller acknowledged disenrollment — host removed.")
+        else:
+            print("[agent] controller responded {}: {} — local cleanup will still run."
+                  .format(code, str(getattr(r, "text", ""))[:200]))
+    except Exception as e:
+        print("[agent] could not reach the controller to disenroll ({}); "
+              "local cleanup will still run.".format(e))
+
+
 def main():
+    # `agent.py --disenroll`: notify the controller and exit (no heartbeat loop). This
+    # is what disenroll_agent.sh invokes so the removal is a clean, authenticated
+    # self-disenroll through the agent's normal connection path.
+    if "--disenroll" in sys.argv[1:]:
+        disenroll_self()
+        return
+
     state = load_state()
 
     if not state or "agent_secret" not in state:

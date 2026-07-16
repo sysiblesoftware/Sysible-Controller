@@ -1465,14 +1465,16 @@ _register(Action(name="sub_suse_deregister", tool="Distro Subscription & Licensi
 # ----------------------------------------------------------------------
 _LAYOUT: dict[str, list] = {
     "Firewall Administration": [
-        ("Firewalld", "Install a Firewall", ["fw_install_firewalld", "fw_install_ufw"]),
-        ("Firewalld", "Service State", ["fw_status", "fw_set_enabled", "fw_reload"]),
+        # Each backend's installer lives with that backend's service controls, so
+        # "install firewalld" sits under Firewalld and "install ufw" under ufw —
+        # not lumped into one out-of-place "install a firewall" group.
+        ("Firewalld", "Service State", ["fw_status", "fw_install_firewalld", "fw_set_enabled", "fw_reload"]),
         ("Firewalld", "Default Zone", ["fw_set_default_zone"]),
         ("Ports", "List Ports", ["fw_list_ports", "fw_list_all_ports"]),
         ("Ports", "Open / Close Ports", ["fw_open_port", "fw_close_port"]),
         ("Zones", "Zones", ["fw_list_zones", "fw_create_zone", "fw_delete_zone"]),
         ("Rich Rules", "Rich Rules", ["fw_list_rich", "fw_add_rich", "fw_remove_rich"]),
-        ("ufw", "Service State", ["fw_ufw_status", "fw_ufw_set_enabled"]),
+        ("ufw", "Service State", ["fw_install_ufw", "fw_ufw_status", "fw_ufw_set_enabled"]),
         ("ufw", "Rules", ["fw_ufw_add_rule", "fw_ufw_delete_rule"]),
         ("ufw", "Defaults & Reset", ["fw_ufw_default", "fw_ufw_reset"]),
         ("nftables", "Ruleset", ["fw_nft_ruleset", "fw_nft_flush"]),

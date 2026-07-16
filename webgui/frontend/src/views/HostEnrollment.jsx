@@ -176,20 +176,41 @@ export default function HostEnrollment() {
       `Set ${checked.length} host(s) to ${required ? "password sudo" : "passwordless (NOPASSWD)"}.`);
   }
 
+  // Run `op(id)` for every checked host with bounded concurrency, NEVER aborting
+  // the whole batch when one host fails or hangs. Returns the failures so the
+  // caller can report "did N of M". This is what makes bulk actions usable on a
+  // pile of offline zombies — the old for-await loop stopped at the first error,
+  // so one stuck host left the rest untouched (the "buttons don't work" report).
+  async function bulkOp(ids, op, concurrency = 8) {
+    const failures = [];
+    let i = 0;
+    const worker = async () => {
+      while (i < ids.length) {
+        const id = ids[i++];
+        try { await op(id); }
+        catch (e) { failures.push(`${id}: ${e?.message || e}`); }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, ids.length) }, worker));
+    return failures;
+  }
+
+  function summarize(ids, failures, verb) {
+    const done = ids.length - failures.length;
+    if (!failures.length) return null;
+    throw new Error(`${verb} ${done} of ${ids.length}. ${failures.length} failed:\n` +
+      failures.slice(0, 12).join("\n") + (failures.length > 12 ? `\n…and ${failures.length - 12} more` : ""));
+  }
+
   async function disenrollChecked() {
     if (checked.length === 0) { setErr("Check one or more hosts first."); return; }
-    if (!window.confirm(`Disenroll ${checked.length} host(s)? This removes them from the controller. Each agent keeps running on its host until you stop/uninstall it there (run disenroll_agent.sh on the host), and can re-enroll unless you Force Delete (which purges its enrollment token).`)) return;
+    if (!window.confirm(`Disenroll ${checked.length} host(s)? This removes them from the controller. Each agent keeps running on its host until you stop/uninstall it there (run disenroll_agent.sh on the host), and can re-enroll unless you Force Delete (which purges its enrollment token).\n\nNote: a graceful disenroll waits for each host's agent to tear itself down — for OFFLINE hosts use Force Delete instead, it's immediate.`)) return;
+    const ids = [...checked];
     await run(async () => {
-      const warnings = [];
-      for (const id of checked) {
-        const r = await api.removeHost(id);
-        const t = r && r.teardown;
-        if (t && !t.ok) warnings.push(`${t.host || id}: ${t.error || t.stderr || "agent service teardown did not confirm"}`);
-      }
+      const failures = await bulkOp(ids, (id) => api.removeHost(id));
       setChecked([]);
-      if (warnings.length) throw new Error("Disenrolled, but service teardown was not confirmed on:\n" + warnings.join("\n"));
-    }, `Disenrolled ${checked.length} host(s).`,
-      `Disenrolling ${checked.length} host(s)…`);
+      summarize(ids, failures, "Disenrolled");
+    }, `Disenrolled ${ids.length} host(s).`, `Disenrolling ${ids.length} host(s)…`);
   }
 
   async function forceDeleteChecked() {
@@ -198,15 +219,33 @@ export default function HostEnrollment() {
       `Force-delete ${checked.length} host(s) from the console?\n\n` +
       "Use this for ZOMBIE agents — a broken build that keeps heartbeating but " +
       "can't cleanly disenroll. This drops the controller record immediately " +
-      "WITHOUT waiting for the agent to tear itself down, and locks out its " +
-      "secret on the next heartbeat.\n\n" +
+      "WITHOUT waiting for the agent to tear itself down, purges its enrollment " +
+      "token, and locks out its secret on the next heartbeat.\n\n" +
       "The agent process may still be running on the host — stop it there with " +
       "disenroll_agent.sh (or kill its service) afterwards. Continue?")) return;
+    const ids = [...checked];
     await run(async () => {
-      for (const id of checked) await api.removeHost(id, true);
+      const failures = await bulkOp(ids, (id) => api.removeHost(id, true));
       setChecked([]);
-    }, `Force-deleted ${checked.length} host(s) from the console.`,
-      `Force-deleting ${checked.length} host(s)…`);
+      summarize(ids, failures, "Force-deleted");
+    }, `Force-deleted ${ids.length} host(s) from the console.`,
+      `Force-deleting ${ids.length} host(s)…`);
+  }
+
+  async function revokeChecked() {
+    if (checked.length === 0) { setErr("Check one or more hosts first."); return; }
+    if (!window.confirm(
+      `Revoke ${checked.length} host(s)?\n\n` +
+      "Each agent is locked out immediately — it can't heartbeat, poll, or report — " +
+      "but the inventory record is KEPT (unlike Force Delete). Use this to stop a " +
+      "runaway/compromised fleet in one click without losing the records; Restore " +
+      "or Force-Delete them afterwards. Continue?")) return;
+    const ids = [...checked];
+    await run(async () => {
+      const failures = await bulkOp(ids, (id) => api.revokeHost(id));
+      setChecked([]);
+      summarize(ids, failures, "Revoked");
+    }, `Revoked ${ids.length} host(s).`, `Revoking ${ids.length} host(s)…`);
   }
 
   async function revokeHost(a, e) {
@@ -334,8 +373,12 @@ export default function HostEnrollment() {
           <div className="row" style={{ marginTop: 10, alignItems: "center", gap: 8 }}>
             <button className="btn danger sm" onClick={disenrollChecked} disabled={!!busy}>Disenroll Host(s)</button>
             <button className="btn ghost sm danger" onClick={forceDeleteChecked} disabled={!!busy}
-                    title="Force-remove a zombie/broken-build host from the console without waiting for its agent to tear down">
+                    title="Force-remove a zombie/broken-build host from the console without waiting for its agent to tear down — purges its enroll token too">
               Force Delete
+            </button>
+            <button className="btn ghost sm danger" onClick={revokeChecked} disabled={!!busy}
+                    title="Lock out the checked agents immediately (no heartbeat/poll/report) but KEEP their records — the one-click emergency stop for a runaway or compromised fleet">
+              Revoke Checked
             </button>
             <span className="faint">{checked.length} checked</span>
           </div>

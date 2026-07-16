@@ -502,6 +502,14 @@ def enroll(req: EnrollRequest):
 
         agent_secret = secrets.token_hex(24)
 
+        # Bind/consume the token BEFORE inserting the agent row. If the row insert
+        # fails (e.g. transient DB lock), the token is already bound to this
+        # host_id, so a retry with the same token resolves back to it and updates
+        # the one row — rather than the reverse order, where a row could exist
+        # with an unbound token and the next fresh-uuid enroll would spawn a
+        # duplicate. (Both live inside _ENROLL_LOCK.)
+        consume_enroll_token(req.token, host_id)
+
         create_or_update_agent(
             host_id,
             req.hostname,
@@ -512,8 +520,6 @@ def enroll(req: EnrollRequest):
             agent_secret,
             req.ip
         )
-
-        consume_enroll_token(req.token, host_id)
 
         # Re-seal the integrity baseline for this (re-)enrollment. The baseline is
         # keyed by host_id and SURVIVES disenroll, but a re-enroll reuses the same

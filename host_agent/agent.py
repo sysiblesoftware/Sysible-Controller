@@ -247,6 +247,34 @@ def load_state():
         return None
 
 
+def _stable_host_id():
+    """A host_id that stays the SAME across restarts even when the agent's state
+    file can't be persisted (a read-only or ephemeral state dir, a non-root agent
+    that can't write STATE_FILE, a wiped tmpfs). It is derived from the machine's
+    own stable identity, so a crash-looping agent that lost its state re-enrolls
+    onto the SAME inventory row rather than minting a fresh uuid every cycle — the
+    'runaway enrollment' that fills the console with <uuid> hosts. Falls back to a
+    random uuid only when no stable machine identifier is readable at all."""
+    seed = None
+    for path in ("/etc/machine-id", "/var/lib/dbus/machine-id",
+                 "/sys/class/dmi/id/product_uuid"):
+        try:
+            with open(path, "r") as f:
+                v = (f.read() or "").strip()
+            if v:
+                seed = v
+                break
+        except OSError:
+            pass
+    if not seed:
+        # Hostname is stable on most hosts; only when even that is empty do we
+        # give up and mint a random id (the pre-fix behaviour, flood-prone).
+        seed = socket.gethostname() or str(uuid.uuid4())
+    # Namespaced UUIDv5: a well-formed, deterministic id that doesn't leak the
+    # raw machine-id into the inventory.
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, "sysible-agent:" + seed))
+
+
 def clear_state():
     """Wipe the cached host_id/agent_secret so the next run looks like
     a fresh install and goes through register() again instead of
@@ -282,7 +310,10 @@ def register():
         sys.exit(1)
 
     state = load_state() or {}
-    host_id = state.get("host_id") or str(uuid.uuid4())
+    # A machine-derived, deterministic id when we have no persisted one, so a
+    # host that can't save its state re-enrolls onto the SAME row instead of a
+    # new uuid every restart (runaway enrollment).
+    host_id = state.get("host_id") or _stable_host_id()
 
     payload = {
         "token": token,
@@ -302,7 +333,17 @@ def register():
         "agent_secret": data["agent_secret"],
     }
 
-    save_state(state)
+    # A persist failure must NOT crash the process (which, under systemd
+    # Restart=always, becomes the crash-loop that drives runaway re-enrollment).
+    # The identity is now machine-derived, so re-enrolling with an unwritable
+    # state dir is idempotent on host_id — we only lose secret continuity across
+    # restarts. Log it loudly so the operator fixes the state dir.
+    try:
+        save_state(state)
+    except OSError as e:
+        print("[agent] WARNING: could not persist state to", STATE_FILE, "-", e,
+              "- the agent will keep running, but its secret will rotate on every "
+              "restart until the state dir is writable.", file=sys.stderr)
 
     print("[agent] enrolled:", state["host_id"])
 

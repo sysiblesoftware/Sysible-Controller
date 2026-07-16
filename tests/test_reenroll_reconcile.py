@@ -97,6 +97,39 @@ def test_bound_token_reenroll_of_revoked_host_is_blocked(controller, enroll_toke
     assert again.status_code == 403
 
 
+def test_empty_hostname_reenroll_adopts_own_stale_record_by_ip(controller, enroll_token):
+    # A bastion/minimal host that reports an EMPTY hostname used to spawn a duplicate
+    # <uuid> row on re-enroll (the old dedup required a non-empty hostname match), and
+    # the original record went offline. The box must adopt its own stale record by IP
+    # when it reports no hostname of its own.
+    ip = "172.16.5.40"
+    r1 = _enroll(controller, enroll_token(), "rocky-community-id", "rocky-community00", ip)
+    assert r1.status_code == 200
+    old_id = r1.json()["host_id"]
+
+    conn = db._connect(); conn.execute(
+        "UPDATE agents SET last_seen=? WHERE host_id=?", (time.time() - 10_000, old_id))
+    conn.commit(); conn.close()
+
+    # Re-enroll via bastion: fresh random host_id, EMPTY hostname, same IP.
+    r2 = _enroll(controller, enroll_token(), "98647310-eb00-new-random", "", ip)
+    assert r2.status_code == 200
+    assert r2.json()["host_id"] == old_id          # adopted, not duplicated
+    assert len(_agents_at_ip(ip)) == 1             # no second row
+
+
+def test_empty_hostname_does_not_hijack_live_named_host(controller, enroll_token):
+    # SECURITY: an empty-hostname claim must not seize a LIVE record at the same IP.
+    ip = "172.16.5.41"
+    r1 = _enroll(controller, enroll_token(), "live-named-id", "livenamed", ip)
+    assert r1.status_code == 200
+    # Still live (no last_seen backdating) — an empty-hostname enroll at this IP
+    # must create a distinct record, never adopt the live one.
+    r2 = _enroll(controller, enroll_token(), "empty-claimant", "", ip)
+    assert r2.status_code == 200
+    assert r2.json()["host_id"] != "live-named-id"
+
+
 def test_live_host_is_not_hijacked_by_same_ip_enroll(controller, enroll_token):
     ip = "10.0.0.50"
     r1 = _enroll(controller, enroll_token(), "live-id", "livehost", ip)

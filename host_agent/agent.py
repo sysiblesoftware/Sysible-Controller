@@ -275,6 +275,32 @@ def _stable_host_id():
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, "sysible-agent:" + seed))
 
 
+def _hostname():
+    """A stable, NON-EMPTY hostname for enrollment. socket.gethostname() comes back
+    empty on some minimal/container/bastion-enrolled hosts, and an empty hostname
+    breaks the controller's same-box dedup (it keys re-enroll adoption on
+    hostname+IP) — so the box spawns a DUPLICATE inventory row instead of adopting
+    its own record. Fall back through the FQDN, /etc/hostname, then a machine-id
+    label so the same box always reports the SAME name."""
+    for getter in (socket.gethostname, socket.getfqdn):
+        try:
+            v = (getter() or "").strip()
+        except Exception:
+            v = ""
+        if v and v.lower() not in ("localhost", "localhost.localdomain", "(none)"):
+            return v
+    try:
+        with open("/etc/hostname", "r") as f:
+            v = (f.read() or "").strip()
+        if v:
+            return v
+    except OSError:
+        pass
+    # Last resort: a label derived from the stable machine id, so it's at least
+    # consistent across re-enrolls of this box rather than empty.
+    return "host-" + _stable_host_id().split("-")[0]
+
+
 def clear_state():
     """Wipe the cached host_id/agent_secret so the next run looks like
     a fresh install and goes through register() again instead of
@@ -318,7 +344,7 @@ def register():
     payload = {
         "token": token,
         "host_id": host_id,
-        "hostname": socket.gethostname(),
+        "hostname": _hostname(),
         "platform": platform.system(),
         "kernel": platform.release(),
         "ip": _local_ip(),

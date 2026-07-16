@@ -310,8 +310,9 @@ def _find_supersedable_agent(hostname, ip, exclude_host_id):
     identity takeover). A revoked host must be re-issued from the console instead
     (the enroll revoked-guard enforces that). We also require the hostname to
     match, not IP alone, so a bare IP claim can't seize an unrelated record."""
-    if not ip or not hostname:
+    if not ip:
         return None
+    in_host = (hostname or "").strip()
     now = time.time()
     candidates = []
     for a in list_agents():
@@ -319,7 +320,13 @@ def _find_supersedable_agent(hostname, ip, exclude_host_id):
             continue
         if (a.get("ip") or "") != ip:
             continue
-        if a.get("hostname") != hostname:      # same box only — never IP alone
+        # Same box: when BOTH sides report a hostname they must match (a bare IP
+        # claim can't seize an unrelated record). But an agent that reports NO
+        # hostname (empty — some minimal/bastion hosts) must still adopt its own
+        # offline record at this IP instead of spawning a duplicate, so fall back
+        # to IP alone in that case.
+        a_host = (a.get("hostname") or "").strip()
+        if in_host and a_host and a_host != in_host:
             continue
         if a.get("revoked"):                   # never resurrect a revoked host
             continue

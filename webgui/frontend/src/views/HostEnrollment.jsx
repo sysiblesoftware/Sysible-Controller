@@ -33,6 +33,7 @@ export default function HostEnrollment() {
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState("");   // in-progress label for host actions
   const [copied, setCopied] = useState(false);
+  const [curlUseIp, setCurlUseIp] = useState(false);   // curl one-liner: address by IP (no DNS) vs hostname
   const [portPort, setPortPort] = useState("");
   const [portalBusy, setPortalBusy] = useState("");
   const [tab, setTab] = useState("hosts");
@@ -306,8 +307,15 @@ export default function HostEnrollment() {
     }, "", `Reissuing ${name}…`);
   }
 
-  // curl one-liner (built from portal status + controller config)
-  const curlHost = cfg.address || "<this machine's address>";
+  // curl one-liner (built from portal status + controller config).
+  // The controller may be addressed by hostname OR IP. If the console is configured
+  // with a hostname, a target host with no DNS for it can't resolve it — so when an IP
+  // is also known, offer a toggle to build the command against the IP instead (curl
+  // uses -k, so the self-signed cert not covering the IP doesn't matter).
+  const curlHostName = cfg.hostname || (cfg.address_mode !== "ip" ? cfg.address : "") || "";
+  const curlIp = cfg.ip || "";
+  const curlHost = (curlUseIp && curlIp) ? curlIp
+    : (curlHostName || curlIp || "<this machine's address>");
   const curlPort = portPort || portal.configured_port || portal.port || 8090;
   const curlUser = portal.credentials_configured ? portal.username : "<username>";
   const curlCmd =
@@ -516,6 +524,13 @@ export default function HostEnrollment() {
             portal login (curl -u). Replace <code>&lt;password&gt;</code> with the real portal password; <code>-k</code> skips
             the self-signed-cert check; the install step needs sudo.
           </p>
+          {curlIp && curlHostName && (
+            <label className="faint" style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+              <input type="checkbox" checked={curlUseIp} onChange={(e) => setCurlUseIp(e.target.checked)} />
+              Address the controller by IP ({curlIp}) instead of hostname ({curlHostName}) — use this when the
+              target host has no DNS for the hostname.
+            </label>
+          )}
           <div className="cmd-preview" style={{ whiteSpace: "pre-wrap" }}>{curlCmd}</div>
           <button className="btn sm ghost" style={{ marginTop: 8 }}
                   onClick={() => navigator.clipboard?.writeText(curlCmd).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })}>

@@ -4,6 +4,13 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Added
+- **Headless-install curl one-liner: address the controller by IP.** When the console is
+  configured with a hostname but a target host has no DNS for it, the curl command failed
+  to resolve. The "Enroll a Host" tab now offers a checkbox to build the command against
+  the controller's IP instead of its hostname (curl already uses `-k`, so the self-signed
+  cert not covering the IP is fine). Shown whenever both a hostname and an IP are known.
+
 ### Fixed
 - **Install: default admin seeding is fail-soft and honest.** The installer's default
   superuser seed now runs as one Python call that catches DB errors (printing an

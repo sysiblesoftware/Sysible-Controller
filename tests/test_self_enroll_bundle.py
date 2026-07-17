@@ -16,6 +16,17 @@ def test_self_enroll_bundle_requires_api_key(controller):
     assert r.status_code in (401, 403)
 
 
+def test_self_enroll_bundle_works_with_api_key_after_admin_exists(controller, make_admin):
+    # Regression: the installer self-enrolls the controller with ONLY the root-only
+    # admin API key (no superuser LOGIN token) — and it does so AFTER the admin
+    # account already exists. The route must stay authorized by the API key alone;
+    # gating it with require_superuser as well makes it 401 on every install (a
+    # token-less superuser check is only allowed while zero admins exist).
+    make_admin("someadmin", "superuser")     # an admin now exists
+    r = controller.get("/self-enroll-bundle", headers=key_headers())  # API key only
+    assert r.status_code == 200, r.text
+
+
 def test_self_enroll_bundle_is_loopback_zip(controller):
     r = controller.get("/self-enroll-bundle", headers=key_headers())
     assert r.status_code == 200

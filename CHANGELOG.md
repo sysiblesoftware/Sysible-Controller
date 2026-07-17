@@ -152,13 +152,12 @@ Console reliability &amp; hardening (audit follow-through):
   operator can listen on a single management/agent NIC instead of all interfaces;
   firewalling `:9000` remains the primary control (documented in SECURITY.md).
   `install_sysible.sh`, `SECURITY.md`.
-- **A restarting / re-enrolled host no longer crash-loops on a 409.** A host that
-  re-enrolls presenting its OWN identity now SUPERSEDES its still-live record (the old
-  agent secret is invalidated) instead of being refused until the record goes stale —
-  so a stateless restart or a hand re-enroll always gets back in. The anti-hijack guard
-  is preserved: a replayed/stolen token that resolves to a DIFFERENT live host than the
-  caller claimed is still refused, and `SYSIBLE_REENROLL_BLOCK_LIVE=1` restores the
-  strict refuse-while-online behaviour. `backend/app.py`.
+- **Re-enrolling a still-online host gives a clearer, actionable 409.** A live host
+  can't be re-enrolled in place — a fresh enroll token echoes the caller's requested
+  host_id, so allowing it would let a token holder overwrite a live host's secret and
+  hijack it. The message now says what to do: wait for the host to go offline (a genuine
+  restart re-enrolls fine once its record goes stale, ~5 min), or Force Delete its record
+  first, then enroll fresh. `backend/app.py`.
 
 ## 3.0.1 — 2026-07-10
 

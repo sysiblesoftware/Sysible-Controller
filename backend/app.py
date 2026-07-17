@@ -521,36 +521,32 @@ def enroll(req: EnrollRequest):
                            "if the agent is still installed; a reimaged host must be "
                            "Force-Deleted and enrolled fresh.",
                 )
-            # (b) The bound host is still recently heartbeating. A re-enroll here
-            #     SUPERSEDES it: the fresh registration below issues a new
-            #     agent_secret (invalidating the old one) and re-seals the integrity
-            #     baseline, so a genuinely restarting / reinstalled host — or one an
-            #     admin re-enrolled by hand — can always get back in, instead of
-            #     crash-looping on a 409 until its record happens to go stale. The
-            #     old shared secret is replaced (a stale agent, if any, is cleanly
-            #     locked out and must itself re-enroll). Set
-            #     SYSIBLE_REENROLL_BLOCK_LIVE=1 to restore the old strict behaviour.
+            # (b) The bound host is still actively heartbeating — refuse re-enrollment
+            #     while it is online. This is a HARD security boundary, NOT a UX nicety:
+            #     a FRESH enroll token echoes the caller's requested host_id verbatim
+            #     (resolve_enroll_token_host), and host_id is a non-secret,
+            #     machine-derivable identifier, so any holder of a fresh token who knows
+            #     a victim's host_id could otherwise overwrite a LIVE host's agent secret
+            #     and take it over (new secret => real host locked out). A genuine
+            #     restart / reinstall re-enrolls fine once the old agent is gone
+            #     (last_seen goes stale, ~5 min); to re-enroll a still-online host on
+            #     purpose, Force Delete its record first (superuser-gated — purges the
+            #     record and its enroll token), then enroll fresh.
+            #     NOTE: do NOT "supersede when req.host_id == resolved host_id" — that
+            #     comparison is a tautology for a fresh token (resolve echoes the input),
+            #     so it authenticates nothing and reintroduces the takeover. A safe
+            #     live-host supersede would require proof of possession of the existing
+            #     identity (the current agent_secret / a signature from the registered
+            #     key), which a state-less re-enroll doesn't have anyway.
             last_seen = existing.get("last_seen") or 0
-            still_live = time.time() - last_seen < _REENROLL_LIVE_HOST_GRACE_S
-            # Supersede only when the caller presents the SAME identity it's re-binding
-            # (its own host_id resolves back to itself). That's the real host restarting
-            # or being re-enrolled by hand. A token REUSE that resolves to a DIFFERENT
-            # live host than the caller CLAIMED (req.host_id != resolved) is a takeover
-            # attempt — a stolen/replayed token trying to hijack an online agent — and is
-            # still refused. SYSIBLE_REENROLL_BLOCK_LIVE=1 refuses even the same-identity
-            # case (strictest).
-            same_identity = bool(req.host_id) and req.host_id == host_id
-            strict = os.getenv("SYSIBLE_REENROLL_BLOCK_LIVE", "0").strip().lower() in ("1", "true", "yes", "on")
-            if still_live and (strict or not same_identity):
+            if time.time() - last_seen < _REENROLL_LIVE_HOST_GRACE_S:
                 raise HTTPException(
                     status_code=409,
-                    detail="A live agent is already enrolled for this host; "
-                           "re-enrollment is blocked while it is online.",
+                    detail="A live agent is already enrolled for this host and is still "
+                           "online, so re-enrollment is blocked (this stops a token holder "
+                           "from hijacking a live host). Wait until it goes offline, or "
+                           "Force Delete its record first, then enroll again.",
                 )
-            if still_live:
-                log_activity("enrollment", req.hostname or host_id,
-                             f"Re-enroll supersedes a still-live agent for host {host_id} "
-                             f"— the old agent secret is invalidated.", "")
 
         # Community-edition host cap (no-op in an unlimited/Enterprise build).
         # Keyed on host_id: a new agent host_id always counts against the cap,

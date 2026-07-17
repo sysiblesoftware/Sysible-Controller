@@ -61,29 +61,16 @@ def test_same_stable_host_id_new_token_does_not_duplicate(controller, enroll_tok
     assert len(_rows(hid)) == 1, "a stable host_id must never spawn a duplicate row"
 
 
-def test_live_stable_host_reenroll_supersedes_not_duplicated(controller, enroll_token):
+def test_live_stable_host_reenroll_is_blocked_not_duplicated(controller, enroll_token):
     hid = "stable-host-live"
-    r1 = _enroll(controller, enroll_token(), hid)
-    assert r1.status_code == 200
-    secret1 = r1.json()["agent_secret"]
-    # Still live (just enrolled) → a re-enroll now SUPERSEDES: it succeeds, issues a
-    # FRESH secret (the old one is invalidated), and crucially adds NO duplicate row.
-    # This is what lets a restarting / hand-re-enrolled host get back in instead of
-    # crash-looping on a 409 until its record goes stale.
-    r2 = _enroll(controller, enroll_token(), hid)
-    assert r2.status_code == 200, r2.text
-    assert r2.json()["agent_secret"] != secret1  # old secret invalidated
-    assert len(_rows(hid)) == 1                   # never a duplicate
-
-
-def test_reenroll_block_live_env_restores_strict_409(controller, enroll_token, monkeypatch):
-    monkeypatch.setenv("SYSIBLE_REENROLL_BLOCK_LIVE", "1")
-    hid = "stable-host-strict"
     assert _enroll(controller, enroll_token(), hid).status_code == 200
-    # With the opt-in strict flag, a live re-enroll is refused (old behaviour).
+    # This IS the fresh-token takeover attempt: a FRESH token + the (non-secret,
+    # machine-derivable) host_id of a still-LIVE host. It must be refused — otherwise a
+    # token holder could overwrite the live host's agent secret and hijack it. A genuine
+    # restart re-enrolls fine once the old agent goes stale (that path isn't blocked).
     r2 = _enroll(controller, enroll_token(), hid)
     assert r2.status_code == 409
-    assert len(_rows(hid)) == 1
+    assert len(_rows(hid)) == 1              # never a duplicate
 
 
 def test_token_is_bound_before_row_exists(controller, enroll_token):

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "../api.js";
+import { api, noteRawStatus } from "../api.js";
 
 // Sysible Controller Settings: administrators, password policy, controller
 // address/port, license, and the admin audit log.
@@ -358,6 +358,7 @@ function ControllerCfg() {
             setErr(""); setMsg(""); setBusy(true);
             try {
               const res = await fetch(api.agentBundleUrl(), { credentials: "include" });
+              noteRawStatus(res.status);  // bypasses req(); bounce to login on 401
               if (!res.ok) {
                 let d = ""; try { d = (await res.json()).detail || ""; } catch { /* not JSON */ }
                 throw new Error(d || `Bundle regeneration failed (HTTP ${res.status}).`);

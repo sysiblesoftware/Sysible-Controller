@@ -8,6 +8,26 @@
 // back to the login screen instead of leaving the user on a dead, half-loaded UI.
 let _onUnauthorized = null;
 export function setUnauthorizedHandler(fn) { _onUnauthorized = fn; }
+function _fireUnauthorized() {
+  if (_onUnauthorized) { try { _onUnauthorized(); } catch { /* never let the handler mask the error */ } }
+}
+
+// Some surfaces bypass req() — direct fetch() downloads (which need the raw Response
+// for blob handling) and the terminal WebSocket. They must funnel into the SAME
+// bounce-to-login handler, otherwise an expired session there just shows an error and
+// strands the user. These two helpers are how they do it:
+
+// For a raw fetch() response: bounce if it's a 401.
+export function noteRawStatus(status) {
+  if (status === 401) _fireUnauthorized();
+}
+
+// For a surface with no HTTP status to read (a WebSocket that closed on a policy
+// violation): re-check the session out-of-band. Routes through req(), so a dead
+// session fires the handler and the app returns to login; a live session is a no-op.
+export async function revalidateSession() {
+  try { await req("/api/me"); } catch { /* the 401 path in req() already fired the handler */ }
+}
 
 // Default per-request timeout (ms) for JSON calls. Guards against a hung controller
 // wedging a caller's busy/spinner state forever. `raw` responses (streams, uploads,
@@ -47,9 +67,7 @@ async function req(path, { method = "GET", body, headers, raw = false, timeout }
   // Session expired / not authenticated: fire the global handler so every screen
   // reacts the same way. Skip the login endpoint itself (a wrong password is a 401
   // that must NOT be treated as an expired session).
-  if (res.status === 401 && path !== "/api/login" && _onUnauthorized) {
-    try { _onUnauthorized(); } catch { /* never let the handler mask the error */ }
-  }
+  if (res.status === 401 && path !== "/api/login") _fireUnauthorized();
 
   if (raw) return res;
   let data = null;

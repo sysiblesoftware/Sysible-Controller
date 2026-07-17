@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { api } from "../api.js";
+import { api, noteRawStatus } from "../api.js";
 
 // Upload a file to / download a file from one host. Works for both agent-managed
 // hosts (transfer rides through the agent) and pure-SSH hosts (SFTP) — the BFF
@@ -42,6 +42,7 @@ export default function FileTransfer({ host, onErr }) {
     setBusy("dn"); setMsg(""); setErr("");
     try {
       const resp = await fetch(api.downloadUrl(host.id, path), { credentials: "include" });
+      noteRawStatus(resp.status);  // this fetch bypasses req(); bounce to login on 401
       if (!resp.ok) {
         let detail = `Download failed (${resp.status})`;
         try { const j = await resp.json(); if (j && j.detail) detail = j.detail; } catch { /* not JSON */ }

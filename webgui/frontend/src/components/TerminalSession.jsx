@@ -2,7 +2,7 @@ import React, { useEffect, useImperativeHandle, useRef, useState, forwardRef } f
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
-import { terminalWsUrl } from "../api.js";
+import { terminalWsUrl, revalidateSession } from "../api.js";
 
 // One independent browser terminal: its own xterm instance + websocket to one
 // host. Exposes imperative controls (send sudo password, font zoom, clear) so a
@@ -101,9 +101,15 @@ const TerminalSession = forwardRef(function TerminalSession({ hostId, label, act
       }
     };
     ws.onerror = () => onStatus && onStatus("error:websocket");
-    ws.onclose = () => {
+    ws.onclose = (e) => {
       onStatus && onStatus("disconnected");
-      if (!ready) term.writeln("\r\n\x1b[31mCould not connect — the controller closed the terminal connection.\x1b[0m");
+      if (!ready) {
+        term.writeln("\r\n\x1b[31mCould not connect — the controller closed the terminal connection.\x1b[0m");
+        // A policy close (1008) before the session ever opened means the BFF rejected
+        // the handshake — most often an expired/revoked login. The WS bypasses req(),
+        // so re-check the session out-of-band: if it's gone, the app returns to login.
+        if (e && e.code === 1008) revalidateSession();
+      }
     };
     term.onData((d) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "i", d })); });
 

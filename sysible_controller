@@ -576,8 +576,10 @@ cmd_destroy() {
     echo "   - PURGE: also delete /tmp DB backups and the source checkout"
     [[ -n "$SRC" ]] && echo "            ($SRC)"
   fi
+  echo "   - remove THIS machine's own Sysible agent (the controller self-enrolls"
+  echo "     itself; that local agent is torn down so it doesn't crash-loop)"
   echo ""
-  echo " Enrolled hosts' agents are NOT touched by this - their own"
+  echo " OTHER enrolled hosts' agents are NOT touched by this - their own"
   echo " sysible-agent systemd services keep running and will just start"
   echo " failing to reach this controller. Disenroll hosts first (or run"
   echo " disenroll_agent.sh on each one) if you want them cleaned up too."
@@ -598,6 +600,19 @@ cmd_destroy() {
   systemctl disable --now "${WEBGUI_SERVICE}.service" 2>/dev/null
   rm -f "/etc/systemd/system/$SERVICE.service" "/etc/systemd/system/${WEBGUI_SERVICE}.service"
   systemctl daemon-reload
+
+  # Remove THIS machine's own self-enrolled agent (the controller enrolls itself as a
+  # managed host at /opt/sysible-agent). Without this it keeps crash-looping under
+  # systemd Restart=always trying to reach the now-deleted controller. Only the LOCAL
+  # agent is removed; other hosts' agents are untouched.
+  AGENT_DIR="/opt/sysible-agent"
+  if systemctl list-unit-files 2>/dev/null | grep -q '^sysible-agent\.service' || [[ -e "$AGENT_DIR" ]]; then
+    echo "Removing this machine's Sysible agent (sysible-agent)..."
+    systemctl disable --now sysible-agent.service 2>/dev/null
+    rm -f /etc/systemd/system/sysible-agent.service
+    systemctl daemon-reload
+    rm -rf "$AGENT_DIR"
+  fi
 
   DB_FILE="$BASE/backend/sysible.db"
   if [[ -f "$DB_FILE" && "$PURGE" != "1" ]]; then

@@ -12,6 +12,12 @@ All notable changes to the Sysible Controller are recorded here.
   cert not covering the IP is fine). Shown whenever both a hostname and an IP are known.
 
 ### Fixed
+- **`destroy` now removes this machine's own self-enrolled agent.** The controller enrolls
+  itself as a managed host (`/opt/sysible-agent`); `destroy` tore down the backend/console
+  but left that local agent, which then crash-looped under systemd Restart=always trying to
+  reach the deleted controller (repeated "409 A live agent is already enrolled…"). Destroy
+  now stops, disables, and removes the local `sysible-agent` service and directory. Other
+  hosts' agents are still untouched.
 - **Install: default admin seeding is fail-soft and honest.** The installer's default
   superuser seed now runs as one Python call that catches DB errors (printing an
   explicit warning instead of being silently misreported as "administrators already

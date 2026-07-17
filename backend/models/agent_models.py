@@ -82,6 +82,14 @@ class EnrollRequest(BaseModel):
     platform: Optional[str] = Field(default=None, max_length=_SHORT_MAX)
     kernel: Optional[str] = Field(default=None, max_length=_SHORT_MAX)
     ip: Optional[str] = Field(default=None, max_length=_HOSTNAME_MAX)
+    # Proof of possession of the EXISTING identity, for a re-enroll that lands on an
+    # already-registered host_id. An agent that still holds its saved agent_secret
+    # presents it here so the controller can confirm the caller IS the incumbent host
+    # before overwriting its credential — closing the offline-host takeover where a
+    # bearer-token holder re-binds a host they don't control. A brand-new host, or a
+    # reinstall that legitimately lost its secret, omits it and instead uses an
+    # admin-issued reissue token.
+    prev_agent_secret: Optional[str] = Field(default=None, max_length=_ID_MAX)
 
     _v_ip = field_validator("ip")(classmethod(_validate_agent_addr))
     _v_hostname = field_validator("hostname")(classmethod(_validate_agent_hostname))

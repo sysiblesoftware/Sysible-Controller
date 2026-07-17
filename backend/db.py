@@ -295,6 +295,15 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
+    # A reissue token is an admin-authorized credential to RE-BIND an already-enrolled
+    # host_id (bound at generation). Ordinary enroll tokens can only ever create a NEW
+    # host; re-binding an existing record additionally requires proof of possession
+    # (the current agent_secret) or one of these reissue tokens. See the enroll handler.
+    try:
+        cur.execute("ALTER TABLE enroll_tokens ADD COLUMN reissue INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+
     # -----------------------------------------------------
     # Enrollment control (single row, id=1) — a kill-switch for /agents/enroll.
     # When paused, the controller refuses all new enrollments. This is the
@@ -1122,9 +1131,18 @@ def delete_environment(name):
 # corrected back to the original one on a within-window reuse.
 # =========================================================
 
-# 7 days - matches the user-facing "...unless it's been 7 days or
-# more" requirement for re-using a token tied to the same host.
-ENROLL_TOKEN_REUSE_WINDOW = 7 * 24 * 60 * 60
+# Grace window during which the SAME host may re-present its already-bound token
+# (e.g. a disenroll immediately followed by re-running the same bundle) and land
+# back on its original inventory row instead of spawning a duplicate. Shortened
+# from 7 days to 24h by default and made tunable: a bound token scraped from a
+# log/bundle is a bearer credential, so the shorter this window, the less time a
+# captured token stays replayable. Re-binding still requires authorization (a
+# reissue token or the current agent_secret) — see the enroll handler.
+try:
+    ENROLL_TOKEN_REUSE_WINDOW = int(
+        os.getenv("SYSIBLE_ENROLL_TOKEN_REUSE_HOURS", "24")) * 60 * 60
+except ValueError:
+    ENROLL_TOKEN_REUSE_WINDOW = 24 * 60 * 60
 try:
     ENROLL_TOKEN_VALID_DAYS = int(os.getenv("SYSIBLE_ENROLL_TOKEN_VALID_DAYS", "30"))
 except ValueError:
@@ -1194,13 +1212,59 @@ def create_enroll_token(token):
     VALUES (?, ?, ?, 0)
     """,
     (
-        token,
+        _token_at_rest(token),
         created,
         expires
     ))
 
     conn.commit()
     conn.close()
+
+
+def create_reissue_token(token, host_id):
+    """Mint an admin-authorized REISSUE token, pre-bound to an existing host_id.
+
+    Ordinary enroll tokens can only create a brand-new host; re-binding an
+    already-enrolled host_id (e.g. after a reinstall that wiped the agent's
+    saved secret) requires either the current agent_secret or one of these
+    tokens. Stored hashed and single-use like any enroll token, but marked
+    reissue=1 and bound to host_id at generation so the enroll handler can
+    authorize the re-bind of exactly that host and no other."""
+    conn = _connect()
+    cur = conn.cursor()
+    created = time.time()
+    expires = created + (ENROLL_TOKEN_VALID_DAYS * 24 * 60 * 60)
+    cur.execute("""
+    INSERT INTO enroll_tokens (token, created, expires, used, bound_host_id, reissue)
+    VALUES (?, ?, ?, 0, ?, 1)
+    """, (_token_at_rest(token), created, expires, host_id))
+    conn.commit()
+    conn.close()
+
+
+def enroll_token_authorizes_rebind(token, host_id):
+    """True if `token` is a valid, unexpired admin REISSUE token bound to `host_id`
+    — i.e. an administrator explicitly authorized re-binding this specific existing
+    host. Used, unknown, expired, non-reissue, or differently-bound tokens return
+    False. This is the authorization gate that lets a reinstalled host reclaim its
+    inventory row without letting a bearer-token holder hijack an arbitrary host."""
+    if not token or not host_id:
+        return False
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT expires, used, bound_host_id, reissue FROM enroll_tokens WHERE token=?",
+        (_token_at_rest(token),))
+    row = cur.fetchone()
+    conn.close()
+    if row is None:
+        return False
+    expires, used, bound_host_id, reissue = row
+    if not reissue or used:
+        return False
+    if time.time() > (expires or 0):
+        return False
+    return bound_host_id == host_id
 
 
 def validate_enroll_token(token):
@@ -1212,7 +1276,7 @@ def validate_enroll_token(token):
     FROM enroll_tokens
     WHERE token=?
     """,
-    (token,))
+    (_token_at_rest(token),))
 
     row = cur.fetchone()
 
@@ -1249,7 +1313,7 @@ def resolve_enroll_token_host(token, requested_host_id):
     conn = _connect()
     cur = conn.cursor()
 
-    cur.execute("SELECT bound_host_id FROM enroll_tokens WHERE token=?", (token,))
+    cur.execute("SELECT bound_host_id FROM enroll_tokens WHERE token=?", (_token_at_rest(token),))
     row = cur.fetchone()
 
     conn.close()
@@ -1262,8 +1326,8 @@ def resolve_enroll_token_host(token, requested_host_id):
 
 def invalidate_enroll_tokens_for_host(host_id):
     """Delete every enrollment token bound to this host_id so it can't be reused to
-    re-enroll (within the 7-day reuse window). Called on a FORCE removal, which is
-    the "make this host gone for good" action: without this, a still-running zombie
+    re-enroll (within the reuse window). Called on a FORCE removal, which is the
+    "make this host gone for good" action: without this, a still-running zombie
     agent whose token is baked into sysible_agent.env just re-enrolls onto the same
     host_id and the record you deleted reappears. Returns the number removed."""
     if not host_id:
@@ -1278,19 +1342,29 @@ def invalidate_enroll_tokens_for_host(host_id):
 
 
 def consume_enroll_token(token, host_id):
+    """Atomically claim an enroll token for host_id. Returns True exactly once for a
+    valid, still-claimable token; False if it was already consumed by a concurrent
+    request (a different host_id). Single-use is enforced by the DB with a conditional
+    UPDATE — NOT merely by a process-local lock — so two replicas racing the same
+    token can't both enroll (mirrors consume_relay_token)."""
     # closing(): release the writer even if the UPDATE raises, so a locked-DB
     # error on the enroll path can't leak the single WAL writer.
     with contextlib.closing(_connect()) as conn:
         cur = conn.cursor()
 
+        # used=0 → a fresh first claim; bound_host_id=host_id → the same host
+        # re-presenting its own token within the reuse window (idempotent re-bind).
+        # Any other case (used=1 bound to a DIFFERENT host) claims 0 rows → False.
         cur.execute("""
         UPDATE enroll_tokens
         SET used=1, bound_host_id=?, last_used=?
-        WHERE token=?
+        WHERE token=? AND (used=0 OR bound_host_id=?)
         """,
-        (host_id, time.time(), token))
+        (host_id, time.time(), _token_at_rest(token), host_id))
 
+        claimed = cur.rowcount == 1
         conn.commit()
+        return claimed
 
 
 # =========================================================

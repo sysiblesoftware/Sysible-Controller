@@ -350,6 +350,14 @@ def register():
         "ip": _local_ip(),
     }
 
+    # Proof of possession: if we still hold a saved agent_secret for this host, send
+    # it so the controller can confirm we ARE the incumbent agent and let us re-enroll
+    # onto our own row. A host that legitimately lost its secret (reimaged) omits this
+    # and instead uses an admin-issued reissue token. (A brand-new host has no secret
+    # and lands on a fresh host_id, so this is simply absent there.)
+    if state.get("agent_secret") and state.get("host_id"):
+        payload["prev_agent_secret"] = state["agent_secret"]
+
     r = _request("POST", "/agents/enroll", json=payload, timeout=15)
     _raise_with_detail(r)
     data = r.json()

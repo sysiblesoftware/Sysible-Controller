@@ -183,6 +183,10 @@ export const api = {
   restoreHost: (hostId) =>
     req(`/api/host/${encodeURIComponent(hostId)}/restore`, { method: "POST" }),
   enrollToken: () => req("/api/enroll-token", { method: "POST" }),
+  // Mint a host-bound reissue token to re-enroll an EXISTING host after a reinstall
+  // that wiped its agent secret (a bare enroll token is refused for re-binding).
+  reissueToken: (hostId) =>
+    req("/api/enroll-token/reissue", { method: "POST", body: { host_id: hostId } }),
   // Runaway kill-switch: pause/resume all new agent enrollment (superuser).
   enrollmentPause: () => req("/api/enrollment-pause"),
   setEnrollmentPause: (paused) =>

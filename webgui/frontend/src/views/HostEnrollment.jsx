@@ -287,6 +287,25 @@ export default function HostEnrollment() {
     await run(async () => { await api.restoreHost(idOf(a)); }, `Restored ${name}; its agent resumes on the next heartbeat.`, `Restoring ${name}…`);
   }
 
+  async function reissueHost(a, e) {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    const name = a.hostname || a.host_id;
+    if (!window.confirm(
+      `Reissue enrollment for ${name}?\n\n` +
+      "Re-enrolling an existing host (after a reinstall that wiped its agent secret) " +
+      "is refused with an ordinary token, so a leaked token can't hijack a host. This " +
+      "mints a single-use token bound to THIS host only. Run the agent with it on the " +
+      "reinstalled machine to reclaim this same record. Continue?")) return;
+    await run(async () => {
+      const r = await api.reissueToken(idOf(a));
+      const tok = r && (r.token || (r.data && r.data.token));
+      if (tok) {
+        try { await navigator.clipboard.writeText(tok); } catch { /* clipboard optional */ }
+        setMsg(`Reissue token for ${name} (copied): ${tok} — run the agent on the reinstalled host with this token to reclaim its record. Single-use; expires per policy.`);
+      }
+    }, "", `Reissuing ${name}…`);
+  }
+
   // curl one-liner (built from portal status + controller config)
   const curlHost = cfg.address || "<this machine's address>";
   const curlPort = portPort || portal.configured_port || portal.port || 8090;
@@ -377,6 +396,8 @@ export default function HostEnrollment() {
                           <button className="btn ghost sm" title="Un-revoke in place, keeping the existing secret — the still-installed agent resumes immediately (no re-enroll)" onClick={(e) => restoreHost(a, e)}>Restore</button>}
                         {!a.revoked && a.integrity_quarantined &&
                           <button className="btn ghost sm" title="Rebaseline: clear the quarantine and resume dispatch (use after a legitimate change)" onClick={(e) => resumeHost(a, e)}>Resume</button>}
+                        {!a.revoked &&
+                          <button className="btn ghost sm" title="Mint a single-use token bound to THIS host to re-enroll it after a reinstall that wiped its agent secret (a plain token can't re-bind an existing host)" onClick={(e) => reissueHost(a, e)}>Reissue</button>}
                         {!a.revoked &&
                           <button className="btn outline-danger sm" title="Hard lock-out: revoke this agent's secret until re-enrolled" onClick={(e) => revokeHost(a, e)}>Revoke</button>}
                       </span>

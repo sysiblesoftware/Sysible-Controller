@@ -149,6 +149,13 @@ def generate_enroll_token():
     return _request("POST", "/admin/enroll-token/generate")
 
 
+def reissue_enroll_token(host_id):
+    """Mint a host-bound REISSUE token that authorizes re-enrolling ONE existing host
+    (e.g. after a reinstall that wiped the agent's saved secret). Ordinary re-enroll of
+    an existing host is refused without it, so a bearer token can't hijack a host."""
+    return _request("POST", "/admin/enroll-token/reissue", json={"host_id": host_id})
+
+
 def get_agents():
     return _request("GET", "/agents").get("agents", [])
 

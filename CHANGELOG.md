@@ -2,6 +2,37 @@
 
 All notable changes to the Sysible Controller are recorded here.
 
+## Unreleased
+
+### Security — agent re-enrollment hardening
+
+Closes an offline-host identity-takeover gap found by an independent audit of the
+`POST /agents/enroll` path. Live-host and revoked-host protections were already sound;
+these changes extend the same rigor to the offline case and to token single-use.
+
+- **Re-binding an existing host now requires authorization.** A bearer enrollment token
+  alone can no longer overwrite an already-enrolled host's agent secret — closing the
+  path where a leaked/replayed token plus a host's (machine-derivable, non-secret)
+  `host_id` or spoofed hostname+IP could seize an *offline* host and lock out the real
+  agent. Re-enrolling an existing record now requires one of: the current `agent_secret`
+  (the agent presents it automatically when it still holds saved state), or an
+  admin-issued **reissue token** bound to that one host. Gated by
+  `SYSIBLE_ENROLL_REQUIRE_REBIND_AUTH` (default on). A clean disenroll deletes the record,
+  so the normal disenroll → re-enroll lifecycle is unchanged; only an *unclean* wipe
+  (record still present) now needs a reissue.
+- **Reissue enrollment (console + API).** New per-host **Reissue** action mints a
+  single-use, host-bound token to reclaim exactly that record after a reinstall.
+  `POST /admin/enroll-token/reissue` (superuser + localhost, audited).
+- **Enrollment tokens are single-use at the database.** `consume_enroll_token` now
+  claims the token with a conditional `UPDATE … WHERE token=? AND (used=0 OR bound_host_id=?)`
+  and checks the row count, so two requests racing the same token can't both enroll a
+  host — it no longer relies solely on a process-local lock (mirrors the relay-token path).
+- **Community enrollment tokens are hashed at rest** (SHA-256), matching Enterprise and
+  the console/admin token storage — a leaked Community DB/backup no longer yields
+  directly replayable enroll tokens. Existing unused tokens must be re-minted after upgrade.
+- **Shorter, tunable token reuse window** — default 7 days → 24h, via
+  `SYSIBLE_ENROLL_TOKEN_REUSE_HOURS`.
+
 ## 3.0.2 — 2026-07-16
 
 A fleet-management and reliability release on top of 3.0.1: a much sturdier host

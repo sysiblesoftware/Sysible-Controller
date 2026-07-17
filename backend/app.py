@@ -12,6 +12,8 @@ from backend.agent_bundle import mint_agent_bundle, detect_local_ips, resolve_co
 from backend.auth import require_api_key, require_superuser, require_activity_viewer, acting_admin_name
 from backend.db import (
     create_enroll_token,
+    create_reissue_token,
+    enroll_token_authorizes_rebind,
     validate_enroll_token,
     resolve_enroll_token_host,
     consume_enroll_token,
@@ -238,6 +240,39 @@ async def generate_token(request: Request):
         "token": token,
         "valid_days": ENROLL_TOKEN_VALID_DAYS
     }
+
+
+@app.post("/admin/enroll-token/reissue", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+async def reissue_token(request: Request, body: dict = Body(...),
+                        acting: str = Depends(acting_admin_name)):
+    """Mint a REISSUE token that authorizes re-binding one EXISTING host_id.
+
+    Re-enrolling an already-registered host (e.g. after a reinstall that wiped the
+    agent's saved secret) is otherwise refused: a bearer enroll token alone must not
+    be able to take over a host's identity. An administrator issues this host-bound,
+    single-use token deliberately, hands it to the reinstalled host, and enrollment
+    then re-binds exactly that host_id and no other. Superuser + localhost gated and
+    audited, like token generation."""
+    client_ip = request.client.host
+    if client_ip not in ["127.0.0.1", "::1", "localhost"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    host_id = (body.get("host_id") or "").strip() if isinstance(body, dict) else ""
+    if not host_id:
+        raise HTTPException(status_code=400, detail="host_id is required.")
+    if not _find_agent(host_id):
+        raise HTTPException(
+            status_code=404,
+            detail="No such enrolled host. Reissue is for re-binding an EXISTING host; "
+                   "use Generate token to enroll a brand-new host.")
+
+    token = secrets.token_hex(16)
+    create_reissue_token(token, host_id)
+    log_admin_audit("enroll_token_reissued", acting,
+                    f"reissue token minted to re-bind host {host_id}")
+
+    from backend.db import ENROLL_TOKEN_VALID_DAYS
+    return {"token": token, "host_id": host_id, "valid_days": ENROLL_TOKEN_VALID_DAYS}
 
 
 @app.get("/admin/enrollment-pause", dependencies=[Depends(require_api_key), Depends(require_superuser)])
@@ -521,31 +556,51 @@ def enroll(req: EnrollRequest):
                            "if the agent is still installed; a reimaged host must be "
                            "Force-Deleted and enrolled fresh.",
                 )
-            # (b) The bound host is still actively heartbeating — refuse re-enrollment
-            #     while it is online. This is a HARD security boundary, NOT a UX nicety:
-            #     a FRESH enroll token echoes the caller's requested host_id verbatim
-            #     (resolve_enroll_token_host), and host_id is a non-secret,
-            #     machine-derivable identifier, so any holder of a fresh token who knows
-            #     a victim's host_id could otherwise overwrite a LIVE host's agent secret
-            #     and take it over (new secret => real host locked out). A genuine
-            #     restart / reinstall re-enrolls fine once the old agent is gone
-            #     (last_seen goes stale, ~5 min); to re-enroll a still-online host on
-            #     purpose, Force Delete its record first (superuser-gated — purges the
-            #     record and its enroll token), then enroll fresh.
+            # (b) Re-binding an EXISTING host's identity requires proof that the caller
+            #     is authorized to take it over — a bearer enroll token alone is NOT
+            #     enough. A fresh token echoes the caller's requested host_id verbatim
+            #     (resolve_enroll_token_host) and host_id is a non-secret,
+            #     machine-derivable identifier, so without this gate any token holder
+            #     who knows (or computes) a victim's host_id could overwrite its
+            #     agent_secret and take it over — locking out the real host, whether it
+            #     is online OR merely offline. Authorization is one of:
+            #       P1  the caller presents the CURRENT agent_secret (it genuinely IS
+            #           the incumbent host — e.g. a deliberate secret refresh), or
+            #       P3  an administrator minted a REISSUE token bound to this exact
+            #           host_id (the supported path for a reinstall that lost its
+            #           secret; mint it from the console / the reissue endpoint).
+            #     Absent proof, an online host is refused (409) and an offline one is
+            #     refused (403) directing the operator to Reissue or Force Delete —
+            #     never a silent takeover. (EE additionally accepts a signature from the
+            #     host's registered key as proof; see its enroll handler.)
             #     NOTE: do NOT "supersede when req.host_id == resolved host_id" — that
             #     comparison is a tautology for a fresh token (resolve echoes the input),
-            #     so it authenticates nothing and reintroduces the takeover. A safe
-            #     live-host supersede would require proof of possession of the existing
-            #     identity (the current agent_secret / a signature from the registered
-            #     key), which a state-less re-enroll doesn't have anyway.
-            last_seen = existing.get("last_seen") or 0
-            if time.time() - last_seen < _REENROLL_LIVE_HOST_GRACE_S:
+            #     so it authenticates nothing and reintroduces the takeover.
+            proven = False
+            if req.prev_agent_secret:
+                cur_secret = get_agent_secret(host_id)
+                if cur_secret and secrets.compare_digest(req.prev_agent_secret, cur_secret):
+                    proven = True   # P1: holds the incumbent secret
+            if not proven and enroll_token_authorizes_rebind(req.token, host_id):
+                proven = True       # P3: admin-authorized reissue token for this host
+
+            if not proven and _ENROLL_REQUIRE_REBIND_AUTH:
+                last_seen = existing.get("last_seen") or 0
+                if time.time() - last_seen < _REENROLL_LIVE_HOST_GRACE_S:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="A live agent is already enrolled for this host and is "
+                               "still online, so re-enrollment is blocked (this stops a "
+                               "token holder from hijacking a live host). Wait until it "
+                               "goes offline, or Force Delete its record first.",
+                    )
                 raise HTTPException(
-                    status_code=409,
-                    detail="A live agent is already enrolled for this host and is still "
-                           "online, so re-enrollment is blocked (this stops a token holder "
-                           "from hijacking a live host). Wait until it goes offline, or "
-                           "Force Delete its record first, then enroll again.",
+                    status_code=403,
+                    detail="This host_id is already enrolled. Re-enrolling an existing "
+                           "host requires authorization — either the current agent "
+                           "credential, or an admin-issued reissue token for this host "
+                           "(console: host → Reissue enrollment). To replace it "
+                           "outright, Force Delete the record first, then enroll fresh.",
                 )
 
         # Community-edition host cap (no-op in an unlimited/Enterprise build).
@@ -561,8 +616,16 @@ def enroll(req: EnrollRequest):
         # host_id, so a retry with the same token resolves back to it and updates
         # the one row — rather than the reverse order, where a row could exist
         # with an unbound token and the next fresh-uuid enroll would spawn a
-        # duplicate. (Both live inside _ENROLL_LOCK.)
-        consume_enroll_token(req.token, host_id)
+        # duplicate. (Both live inside _ENROLL_LOCK.) The claim is atomic at the DB
+        # (conditional UPDATE), so even if a second replica raced past validate with
+        # the same fresh token, only one claim wins; the loser gets 409 here rather
+        # than both enrolling distinct hosts off one token.
+        if not consume_enroll_token(req.token, host_id):
+            raise HTTPException(
+                status_code=409,
+                detail="This enrollment token was just claimed by another host. "
+                       "Generate a fresh token and try again.",
+            )
 
         create_or_update_agent(
             host_id,
@@ -742,6 +805,13 @@ try:
     _REENROLL_LIVE_HOST_GRACE_S = int(os.getenv("SYSIBLE_REENROLL_LIVE_HOST_GRACE_S", "300"))
 except ValueError:
     _REENROLL_LIVE_HOST_GRACE_S = 300
+
+# Require proof-of-possession (current agent_secret) or an admin reissue token before
+# re-binding an ALREADY-ENROLLED host_id. Default ON — this closes the offline-host
+# takeover where a bearer enroll-token holder overwrites a host's credential. It can be
+# set to "0" as a temporary escape hatch during a fleet migration that predates the
+# reissue flow, but leaving it off re-opens the takeover, so keep it on in production.
+_ENROLL_REQUIRE_REBIND_AUTH = os.getenv("SYSIBLE_ENROLL_REQUIRE_REBIND_AUTH", "1") != "0"
 
 # Reclaim tasks stuck in 'dispatched' (the host was handed the command but its
 # result never came back — lost in transit, or the agent died on receipt) so they

@@ -2740,6 +2740,16 @@ def enroll_token(request: Request, user: str = Depends(require_login)):
     return _wrap(lambda: _as_admin(request, lambda: api.generate_enroll_token()))
 
 
+@app.post("/api/enroll-token/reissue")
+def reissue_enroll_token(body: dict, request: Request,
+                         user: str = Depends(require_superuser_session)):
+    """Mint a host-bound reissue token to re-enroll ONE existing host after a reinstall
+    that wiped its agent secret. Superuser-only: re-binding a host's identity is a
+    privileged action, so this is gated the same as generating a bundle."""
+    host_id = (body.get("host_id") or "").strip() if isinstance(body, dict) else ""
+    return _wrap(lambda: _as_admin(request, lambda: api.reissue_enroll_token(host_id)))
+
+
 @app.get("/api/enrollment-pause")
 def get_enrollment_pause(request: Request, user: str = Depends(require_login)):
     """Whether new agent enrollment is paused (the runaway kill-switch)."""

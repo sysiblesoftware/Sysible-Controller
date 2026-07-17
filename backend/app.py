@@ -521,18 +521,36 @@ def enroll(req: EnrollRequest):
                            "if the agent is still installed; a reimaged host must be "
                            "Force-Deleted and enrolled fresh.",
                 )
-            # (b) The bound host is still actively heartbeating — a live agent
-            #     already holds this identity and has no reason to re-enroll, so
-            #     a re-bind here would hijack it (new secret => real host locked
-            #     out). A genuine reinstall only happens once the old agent is
-            #     gone (last_seen goes stale).
+            # (b) The bound host is still recently heartbeating. A re-enroll here
+            #     SUPERSEDES it: the fresh registration below issues a new
+            #     agent_secret (invalidating the old one) and re-seals the integrity
+            #     baseline, so a genuinely restarting / reinstalled host — or one an
+            #     admin re-enrolled by hand — can always get back in, instead of
+            #     crash-looping on a 409 until its record happens to go stale. The
+            #     old shared secret is replaced (a stale agent, if any, is cleanly
+            #     locked out and must itself re-enroll). Set
+            #     SYSIBLE_REENROLL_BLOCK_LIVE=1 to restore the old strict behaviour.
             last_seen = existing.get("last_seen") or 0
-            if time.time() - last_seen < _REENROLL_LIVE_HOST_GRACE_S:
+            still_live = time.time() - last_seen < _REENROLL_LIVE_HOST_GRACE_S
+            # Supersede only when the caller presents the SAME identity it's re-binding
+            # (its own host_id resolves back to itself). That's the real host restarting
+            # or being re-enrolled by hand. A token REUSE that resolves to a DIFFERENT
+            # live host than the caller CLAIMED (req.host_id != resolved) is a takeover
+            # attempt — a stolen/replayed token trying to hijack an online agent — and is
+            # still refused. SYSIBLE_REENROLL_BLOCK_LIVE=1 refuses even the same-identity
+            # case (strictest).
+            same_identity = bool(req.host_id) and req.host_id == host_id
+            strict = os.getenv("SYSIBLE_REENROLL_BLOCK_LIVE", "0").strip().lower() in ("1", "true", "yes", "on")
+            if still_live and (strict or not same_identity):
                 raise HTTPException(
                     status_code=409,
                     detail="A live agent is already enrolled for this host; "
                            "re-enrollment is blocked while it is online.",
                 )
+            if still_live:
+                log_activity("enrollment", req.hostname or host_id,
+                             f"Re-enroll supersedes a still-live agent for host {host_id} "
+                             f"— the old agent secret is invalidated.", "")
 
         # Community-edition host cap (no-op in an unlimited/Enterprise build).
         # Keyed on host_id: a new agent host_id always counts against the cap,

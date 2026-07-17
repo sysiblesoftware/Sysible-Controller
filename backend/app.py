@@ -1070,7 +1070,13 @@ def _controller_update_available():
         remote, rbranch = up.split("/", 1)
         ls = _git("ls-remote", remote, rbranch, timeout=tmo)
         if ls.returncode != 0:
-            return {"checked": False, "reason": "git ls-remote failed (network or auth)",
+            # Surface the ACTUAL git error (auth prompt, unknown host, TLS, proxy,
+            # permission denied…) so the operator can act on it, instead of a generic
+            # "network or auth". Trimmed and single-lined for the UI.
+            detail = " ".join((ls.stderr or ls.stdout or "").split())[:200]
+            return {"checked": False,
+                    "reason": f"git ls-remote {remote} {rbranch} failed"
+                              + (f": {detail}" if detail else " (network or auth)"),
                     "current": cur, "branch": branch}
         remote_sha = (ls.stdout.split() or [""])[0].strip()
         if not remote_sha:

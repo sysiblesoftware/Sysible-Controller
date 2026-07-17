@@ -12,6 +12,10 @@ All notable changes to the Sysible Controller are recorded here.
   cert not covering the IP is fine). Shown whenever both a hostname and an IP are known.
 
 ### Fixed
+- **"Check for updates" now shows the real git error.** When the update check couldn't
+  reach the remote it reported a generic "git ls-remote failed (network or auth)". It now
+  includes git's actual stderr (auth prompt, unknown host, TLS/proxy, permission denied),
+  so you can see and fix why the check failed.
 - **`destroy` now removes this machine's own self-enrolled agent.** The controller enrolls
   itself as a managed host (`/opt/sysible-agent`); `destroy` tore down the backend/console
   but left that local agent, which then crash-looped under systemd Restart=always trying to

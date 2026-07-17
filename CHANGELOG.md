@@ -4,6 +4,15 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Fixed
+- **Install: default admin seeding is fail-soft and honest.** The installer's default
+  superuser seed now runs as one Python call that catches DB errors (printing an
+  explicit warning instead of being silently misreported as "administrators already
+  exist"), retries while the datastore comes up, and generates the first-login password
+  with a DB-free fallback. On SQLite this is belt-and-suspenders; it matters most on
+  Enterprise/Postgres, where a not-yet-ready or unreachable database could otherwise
+  leave a fresh install with no console login and no password shown.
+
 ### Security — agent re-enrollment hardening
 
 Closes an offline-host identity-takeover gap found by an independent audit of the

@@ -342,23 +342,49 @@ fi
 # random password, flagged must-change. Printed once at the end of install.
 # =========================================================
 DEFAULT_ADMIN_USER="admin"
-DEFAULT_ADMIN_PASS="$($VENV/bin/python -c 'from backend.policy import generate_compliant_password; from backend.db import get_admin_password_policy; print(generate_compliant_password(get_admin_password_policy()))')"
-# Pass the generated password via the ENV (/proc/<pid>/environ is owner-only),
-# not argv (/proc/<pid>/cmdline is world-readable), so it isn't exposed in `ps`.
-SEEDED_ADMIN="$(SYSIBLE_SEED_PASS="$DEFAULT_ADMIN_PASS" $VENV/bin/python - "$DEFAULT_ADMIN_USER" <<'PY'
-import os
-import sys
-from backend.db import count_administrators, add_administrator
-from backend import portal_auth
-if count_administrators() == 0:
-    salt, h = portal_auth.hash_password(os.environ["SYSIBLE_SEED_PASS"])
+DEFAULT_ADMIN_PASS=""
+# Seed the default superuser. Everything DB-touching (count, password-policy read,
+# insert) lives in ONE Python call that catches errors and prints an explicit
+# "dberror" instead of dying silently — a silent miss used to be misreported below as
+# "admins already exist", which would hide a fresh install left with no console login.
+# The password is generated inside that call (with a DB-free fallback) and returned on
+# stdout line 2, so it never touches argv (/proc/<pid>/cmdline is world-readable).
+SEEDED_ADMIN="dberror"
+for _try in $(seq 1 15); do
+  _seed_out="$($VENV/bin/python - "$DEFAULT_ADMIN_USER" <<'PY'
+import sys, secrets, string
+try:
+    from backend.db import count_administrators, add_administrator
+    from backend import portal_auth
+    if count_administrators() != 0:
+        print("exists"); sys.exit(0)
+    try:
+        from backend.policy import generate_compliant_password
+        from backend.db import get_admin_password_policy
+        pw = generate_compliant_password(get_admin_password_policy())
+    except Exception:
+        pw = "".join(secrets.choice(string.ascii_letters + string.digits)
+                     for _ in range(20)) + "!aA1"
+    salt, h = portal_auth.hash_password(pw)
     add_administrator(sys.argv[1], h, salt, must_change_password=1,
                       created_by="installer", role="superuser")
-    print("created")
-else:
-    print("exists")
+    print("created"); print(pw)
+except Exception as e:
+    sys.stderr.write("admin seed: %s\n" % e)
+    print("dberror")
 PY
 )"
+  _seed_status="$(printf '%s\n' "$_seed_out" | sed -n 1p)"
+  if [[ "$_seed_status" == "created" ]]; then
+    SEEDED_ADMIN="created"
+    DEFAULT_ADMIN_PASS="$(printf '%s\n' "$_seed_out" | sed -n 2p)"
+    break
+  elif [[ "$_seed_status" == "exists" ]]; then
+    SEEDED_ADMIN="exists"
+    break
+  fi
+  sleep 2   # datastore not reachable yet — wait and retry
+done
 
 # =========================================================
 # INSTALL THE WEB CONSOLE AS ITS OWN SYSTEMD SERVICE
@@ -472,10 +498,20 @@ if [[ "$SEEDED_ADMIN" == "created" ]]; then
   echo -e "${R} Change it after first login (Settings -> My Account). This is shown${Z}"
   echo -e "${R} only once - copy it now.${Z}"
   echo ""
-else
+elif [[ "$SEEDED_ADMIN" == "exists" ]]; then
   echo ""
   echo " Administrators already exist, so no default was created. To set a web"
   echo " console login password, run:  sudo sysible_controller reset-admin"
+  echo ""
+else
+  # DB was unreachable while seeding — do NOT claim admins already exist (that would
+  # hide a fresh install left with no console login). Tell the operator plainly.
+  R='\033[1;91m'; Z='\033[0m'
+  echo ""
+  echo -e "${R} WARNING: could not create the default web-console admin — the database${Z}"
+  echo -e "${R} was not reachable during install. No console login exists yet. Check that${Z}"
+  echo -e "${R} the datastore is up and the controller can reach it, then run:${Z}"
+  echo -e "${R}     sudo sysible_controller reset-admin${Z}"
   echo ""
 fi
 echo "Run: sudo sysible_controller start  &&  sudo sysible_controller webgui start"

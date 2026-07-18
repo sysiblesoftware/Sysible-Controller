@@ -20,6 +20,9 @@ All notable changes to the Sysible Controller are recorded here.
   240/60s, `SYSIBLE_ENROLL_RATE_MAX`) sheds an enrollment storm before it takes the enroll
   lock. Generous by default so legitimate mass rollout (even behind one NAT) is
   unaffected; set to 0 to disable.
+- **Identifier validators reject a leading `-`** (usernames, nmcli connection names) — the
+  option-injection shape — matching the package-name validator. Benign (these tools have
+  no command-executing option, so it was never RCE), kept for consistency.
 
 ### Added
 - **Headless-install curl one-liner: address the controller by IP.** When the console is

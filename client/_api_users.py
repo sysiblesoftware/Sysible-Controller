@@ -357,7 +357,19 @@ def _hash_password(password: str):
         return None
 
 
+def _reject_leading_dash(username: str):
+    """Reject a username beginning with '-'. shlex.quote stops shell metacharacters but
+    a leading dash makes useradd/usermod/userdel/chage parse the value as an OPTION
+    instead of an operand. Linux usernames can't start with '-' anyway, so this only
+    blocks the option-injection shape — defense-in-depth (these tools have no
+    command-executing option, so it was never RCE), keeping the validators consistent
+    with _api_security's."""
+    if (username or "").strip().startswith("-"):
+        raise ValueError("Invalid username: cannot begin with '-'.")
+
+
 def cmd_create_user(username: str, password: str = "", shell: str = "/bin/bash") -> str:
+    _reject_leading_dash(username)
     u = shlex.quote(username)
     sh = shlex.quote(shell or "/bin/bash")
     # `useradd -m` should create and populate the home directory, but a few
@@ -390,14 +402,17 @@ def cmd_create_user(username: str, password: str = "", shell: str = "/bin/bash")
 # `$(id)` would command-substitute inside the double-quoted string, exactly the
 # injection cmd_set_sudo's comment warns about; the caller already knows the user).
 def cmd_delete_user(username: str) -> str:
+    _reject_leading_dash(username)
     return f'userdel -r {shlex.quote(username)} && echo "User deleted (home directory removed)."'
 
 
 def cmd_lock_user(username: str) -> str:
+    _reject_leading_dash(username)
     return f'usermod -L {shlex.quote(username)} && echo "User locked — password authentication is now disabled."'
 
 
 def cmd_unlock_user(username: str) -> str:
+    _reject_leading_dash(username)
     return f'usermod -U {shlex.quote(username)} && echo "User unlocked — password authentication is re-enabled."'
 
 
@@ -461,6 +476,7 @@ def cmd_kill_user_sessions(username: str) -> str:
 
 
 def cmd_force_password_reset(username: str) -> str:
+    _reject_leading_dash(username)
     return f"chage -d 0 {shlex.quote(username)}"
 
 
@@ -488,6 +504,7 @@ def cmd_set_account_expiration(username: str, expire_date: str = "") -> str:
 
 
 def cmd_set_user_shell(username: str, shell: str) -> str:
+    _reject_leading_dash(username)
     return f"usermod -s {shlex.quote(shell)} {shlex.quote(username)}"
 
 

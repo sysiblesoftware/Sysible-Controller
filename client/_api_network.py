@@ -88,6 +88,11 @@ def _validate_connection_name(name: str) -> str:
     name = (name or "").strip()
     if not name:
         raise ValueError("Connection name is required (use Show Connections to find it).")
+    if name.startswith("-"):
+        # A leading dash would be parsed by nmcli as an OPTION, not the connection
+        # operand (defense-in-depth — nmcli has no exec option here, so it was never
+        # RCE; this keeps the identifier validators consistent).
+        raise ValueError("Invalid connection name: cannot begin with '-'.")
     return name
 
 

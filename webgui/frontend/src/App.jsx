@@ -17,6 +17,7 @@ import Alerts from "./views/Alerts.jsx";
 import FleetQuery from "./views/FleetQuery.jsx";
 import Topology from "./views/Topology.jsx";
 import UpdatesBadge from "./components/UpdatesBadge.jsx";
+import HealthBanner from "./components/HealthBanner.jsx";
 import SudoModal from "./components/SudoModal.jsx";
 import StandaloneTerminal from "./components/StandaloneTerminal.jsx";
 
@@ -369,6 +370,7 @@ export default function App() {
           </div>
         </div>
         <div className="main-scroll">
+          {isSuper && <HealthBanner />}
           {view === null && <Dashboard role={role} edition={edition}
             onOpen={(section, opts) => go(section, opts || null)} />}
           {view === "topology" && <Topology onOpen={(section, opts) => go(section, opts || null)} />}

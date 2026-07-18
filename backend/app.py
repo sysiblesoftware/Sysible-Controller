@@ -1365,6 +1365,119 @@ def get_activity_log_route(limit: int = 200, since_id: int = 0):
     return {"entries": get_activity_log(limit=_clamp_limit(limit), since_id=since_id)}
 
 
+def _cert_fingerprints(path):
+    """SHA-256 fingerprints (hex) of every certificate in a PEM file, as a
+    frozenset. Parses the DER so PEM whitespace/ordering differences don't
+    produce false mismatches. Returns None if the file is missing or can't
+    be read/parsed (best-effort — a warning must never be a false alarm just
+    because the controller service user can't read a path)."""
+    import hashlib
+    from pathlib import Path
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+        raw = Path(path).read_bytes()
+    except Exception:
+        return None
+    fps = set()
+    marker = b"-----BEGIN CERTIFICATE-----"
+    try:
+        idx = raw.find(marker)
+        while idx != -1:
+            nxt = raw.find(marker, idx + len(marker))
+            block = raw[idx:] if nxt == -1 else raw[idx:nxt]
+            try:
+                cert = x509.load_pem_x509_certificate(block)
+                der = cert.public_bytes(serialization.Encoding.DER)
+                fps.add(hashlib.sha256(der).hexdigest())
+            except Exception:
+                pass
+            idx = nxt
+    except Exception:
+        return None
+    return frozenset(fps) if fps else None
+
+
+def _health_warnings():
+    """Cheap, defensive fleet-health signals for the console warning banner.
+    Each detector is independently wrapped so a failure in one can't blank the
+    others or throw. Returns a list of {id, severity, title, detail, hint}."""
+    warnings = []
+
+    # --- Stale pinned TLS cert (the classic "agents can't check in after a
+    # controller cert regen / reinstall / new-IP reissue" outage). Compare what
+    # the controller now hands out for pinning (trust.crt, falling back to the
+    # serving leaf) against the cert the controller's own loopback agent has
+    # pinned locally. If they diverge, every agent pinning the old cert will
+    # fail TLS verification until re-deployed.
+    try:
+        from backend import tls_manager
+        expected_src = tls_manager.TRUST_FILE if tls_manager.TRUST_FILE.exists() \
+            else tls_manager.CERT_FILE
+        expected = _cert_fingerprints(expected_src)
+        pinned_path = os.getenv("SYSIBLE_CA_CERT", "/etc/sysible/controller.crt")
+        pinned = _cert_fingerprints(pinned_path)
+        # Only warn when BOTH are readable and genuinely differ — an unreadable
+        # pinned file (permissions, not co-located) means "can't tell", not "drift".
+        if expected and pinned and expected != pinned:
+            warnings.append({
+                "id": "tls_cert_pin_drift",
+                "severity": "critical",
+                "title": "Controller TLS certificate changed — agents can't check in",
+                "detail": ("The controller is now serving a TLS certificate that "
+                           "differs from the one agents pinned. Agents that pinned "
+                           "the old certificate will fail to connect (TLS verify) "
+                           "until they receive the new one."),
+                "hint": ("Refresh the pinned cert on each host: copy the controller's "
+                         "current cert to the agent's pinned path (default "
+                         "/etc/sysible/controller.crt) and restart sysible-agent, or "
+                         "re-enroll with a fresh bundle. Remote hosts also need the "
+                         "new controller address if it moved."),
+            })
+    except Exception:
+        pass
+
+    # --- Mass host silence. A high fraction of enrolled hosts going stale at
+    # once is the fleet-wide symptom of the outage above (cert drift, address
+    # change, controller down), distinct from a single host being powered off.
+    try:
+        now = time.time()
+        stale_after = int(os.getenv("SYSIBLE_HEALTH_OFFLINE_S",
+                                    str(max(300, _REENROLL_LIVE_HOST_GRACE_S))))
+        agents = [a for a in list_agents() if not a.get("revoked")]
+        total = len(agents)
+        offline = [a for a in agents
+                   if (now - (a.get("last_seen") or 0)) > stale_after]
+        n_off = len(offline)
+        if total >= 2 and n_off >= 2 and (n_off / total) >= 0.5:
+            mins = max(1, stale_after // 60)
+            warnings.append({
+                "id": "hosts_offline",
+                "severity": "warning",
+                "title": f"{n_off} of {total} hosts have stopped checking in",
+                "detail": (f"{n_off} of {total} enrolled hosts have not reported in "
+                           f"over {mins} min. When most of the fleet goes quiet at "
+                           "once it usually points at a controller-side change — a "
+                           "regenerated TLS certificate, a moved controller address, "
+                           "or the controller being down."),
+                "hint": ("Check the controller service and its TLS cert first; if the "
+                         "cert or address changed, re-deploy the pinned cert/bundle to "
+                         "the affected hosts."),
+            })
+    except Exception:
+        pass
+
+    return warnings
+
+
+@app.get("/admin/health-warnings",
+         dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def health_warnings_route():
+    """Operational warnings for the console banner: stale/mismatched pinned TLS
+    cert and mass host silence. Cheap enough to poll; read-only and defensive."""
+    return {"warnings": _health_warnings()}
+
+
 @app.get("/controller-log", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def get_controller_log_route(lines: int = 400):
     """Recent controller (sysible-backend) log lines from the journal, for

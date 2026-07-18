@@ -444,6 +444,11 @@ def get_controller_log(lines: int = 400):
     return _request("GET", "/controller-log", params={"lines": lines}).get("log", "")
 
 
+def health_warnings():
+    """Operational warning banners (stale pinned TLS cert, mass host silence)."""
+    return _request("GET", "/admin/health-warnings")
+
+
 def get_portal_status():
     return _request("GET", "/portal/status")
 

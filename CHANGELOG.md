@@ -4,6 +4,26 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Added — console health-warning banner ("agents can't check in")
+
+A superuser-only warning banner across every console view that catches the outage class
+where the fleet silently stops checking in, backed by a cheap read-only
+`GET /admin/health-warnings` endpoint (defensive — each detector is independently wrapped
+and degrades to "no warning" rather than a false alarm):
+
+- **Stale / mismatched pinned TLS certificate** — the classic "agents stopped checking in
+  after a controller cert regen / reinstall / new-IP reissue." The controller compares the
+  cert it now hands out for pinning (`trust.crt`, falling back to the serving leaf) against
+  the cert its own loopback agent has pinned locally (`SYSIBLE_CA_CERT`, default
+  `/etc/sysible/controller.crt`); if the SHA-256 fingerprints diverge, every agent pinning
+  the old cert will fail TLS verification until re-deployed — so the banner says so, with
+  the fix (refresh the pinned cert / re-enroll).
+- **Mass host silence** — a high fraction of enrolled hosts going stale at once (the
+  fleet-wide symptom of cert drift, a moved controller address, or the controller being
+  down), distinct from a single host powered off.
+
+Banners are dismissible for the session; the console polls on load and every 60 s.
+
 ### Security
 - **Package management: option-injection → root RCE closed.** A package field like
   `nginx -o DPkg::Pre-Invoke::=<cmd>` was parsed by apt/dnf as an OPTION rather than a

@@ -2142,6 +2142,11 @@ def controller_log(lines: int = 400, request: Request = None, user: str = Depend
     return _wrap(lambda: _as_admin(request, lambda: api.get_controller_log(lines=lines)))
 
 
+@app.get("/api/health-warnings")
+def health_warnings_route(request: Request, user: str = Depends(require_superuser_session)):
+    return _wrap(lambda: _as_admin(request, lambda: api.health_warnings()))
+
+
 # ----------------------------------------------------------------------
 # Settings — administrators, password policy, controller config, license, audit
 # ----------------------------------------------------------------------

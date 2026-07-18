@@ -139,6 +139,66 @@ from backend.remote_routes import (
 app = FastAPI(title="Sysible Controller", docs_url=None, redoc_url=None, openapi_url=None)
 
 
+def _max_request_bytes() -> int:
+    """Global request-body ceiling for the controller API. The high-volume agent
+    endpoints (heartbeat snapshot, task result, metrics) otherwise accept an
+    UNBOUNDED JSON body that Starlette buffers into RAM before validation, so a
+    single authenticated/compromised agent could exhaust memory. 16 MiB is far above
+    any legitimate heartbeat/result yet bounds the blast radius. Set
+    SYSIBLE_MAX_REQUEST_BYTES=0 to disable."""
+    try:
+        v = int(os.getenv("SYSIBLE_MAX_REQUEST_BYTES", str(16 * 1024 * 1024)))
+        return v if v >= 0 else 16 * 1024 * 1024
+    except (TypeError, ValueError):
+        return 16 * 1024 * 1024
+
+
+class _BodyLimitMiddleware:
+    """Reject an over-large request body BEFORE it is buffered into memory. Checks a
+    declared Content-Length up front (the common case — `requests`/`httpx` always set
+    it) and returns 413; for a chunked/mis-declared body it counts bytes as they
+    stream and cuts the stream off once the cap is crossed, so memory stays bounded."""
+
+    def __init__(self, app, max_bytes: int):
+        self.app = app
+        self.max_bytes = int(max_bytes)
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or self.max_bytes <= 0:
+            return await self.app(scope, receive, send)
+        for k, v in scope.get("headers") or []:
+            if k == b"content-length":
+                try:
+                    if int(v) > self.max_bytes:
+                        return await self._too_large(send)
+                except ValueError:
+                    pass
+                break
+        seen = {"n": 0}
+        cap = self.max_bytes
+
+        async def _guarded_receive():
+            message = await receive()
+            if message.get("type") == "http.request":
+                seen["n"] += len(message.get("body", b"") or b"")
+                if seen["n"] > cap:
+                    # Stop the app buffering more; the handler sees end-of-stream.
+                    return {"type": "http.disconnect"}
+            return message
+
+        return await self.app(scope, _guarded_receive, send)
+
+    async def _too_large(self, send):
+        await send({"type": "http.response.start", "status": 413,
+                    "headers": [(b"content-type", b"application/json"),
+                                (b"cache-control", b"no-store")]})
+        await send({"type": "http.response.body",
+                    "body": b'{"detail":"Request body too large."}'})
+
+
+app.add_middleware(_BodyLimitMiddleware, max_bytes=_max_request_bytes())
+
+
 def _clamp_limit(limit, lo: int = 1, hi: int = 1000) -> int:
     """Bound an operator-supplied list `limit` so a huge value can't force an
     unbounded result set / memory spike. Non-numeric falls back to the max."""
@@ -485,8 +545,53 @@ def _consume_ssh_enable_result(host_id, result_str):
 _RESERVED_HOST_IDS = {"*"}
 
 
+# Coarse in-process per-IP flood guard for /agents/enroll (see _enroll_rate_limited).
+_ENROLL_RATE = {}          # ip -> list[float] recent request timestamps
+_ENROLL_RATE_LOCK = threading.Lock()
+
+
+def _enroll_rate_limited(ip):
+    """Return retry-after seconds if `ip` has exceeded the enroll flood limit, else 0.
+
+    Allows up to SYSIBLE_ENROLL_RATE_MAX requests per SYSIBLE_ENROLL_RATE_WINDOW
+    seconds per SOURCE IP (default 240 / 60s) — high enough for a legitimate staggered
+    mass rollout, even many hosts behind one NAT, but it caps a pathological flood that
+    would otherwise hold the enroll lock and starve the threadpool. In-process guard;
+    the DB enroll-token consume stays the authoritative anti-replay.
+    Set SYSIBLE_ENROLL_RATE_MAX=0 to disable."""
+    if not ip:
+        return 0
+    try:
+        maxn = int(os.getenv("SYSIBLE_ENROLL_RATE_MAX", "240"))
+    except (TypeError, ValueError):
+        maxn = 240
+    if maxn <= 0:
+        return 0
+    try:
+        window = int(os.getenv("SYSIBLE_ENROLL_RATE_WINDOW", "60"))
+    except (TypeError, ValueError):
+        window = 60
+    if window <= 0:
+        return 0
+    now = time.time()
+    cutoff = now - window
+    with _ENROLL_RATE_LOCK:
+        hits = [t for t in _ENROLL_RATE.get(ip, ()) if t >= cutoff]
+        if len(hits) >= maxn:
+            _ENROLL_RATE[ip] = hits
+            return max(1, int(hits[0] + window - now))
+        hits.append(now)
+        _ENROLL_RATE[ip] = hits
+        # Bound memory: drop IPs with no recent hits once the table grows large.
+        if len(_ENROLL_RATE) > 10000:
+            for k in [k for k, v in list(_ENROLL_RATE.items())
+                      if not v or v[-1] < cutoff]:
+                _ENROLL_RATE.pop(k, None)
+        return 0
+
+
 @app.post("/agents/enroll")
-def enroll(req: EnrollRequest):
+def enroll(req: EnrollRequest, request: Request):
     # Plain `def` (threadpooled) for the same reason as heartbeat below: the
     # body is all blocking DB/token work and shouldn't occupy the event loop.
 
@@ -498,6 +603,16 @@ def enroll(req: EnrollRequest):
     if hid_in and (hid_in in _RESERVED_HOST_IDS or
                    not all(c.isalnum() or c in "._-" for c in hid_in)):
         raise HTTPException(status_code=400, detail="Invalid host_id.")
+
+    # Coarse per-source-IP flood guard: shed an enrollment storm before it takes the
+    # enroll lock and expensive token validation (a compromised/looping source can't
+    # starve the threadpool). Generous by default so legitimate mass rollout is fine.
+    _retry_after = _enroll_rate_limited(request.client.host if request.client else "")
+    if _retry_after:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many enrollment attempts from this source; retry shortly.",
+            headers={"Retry-After": str(_retry_after)})
 
     # Emergency brake: when an admin has paused enrollment (the runaway
     # kill-switch), refuse ALL new enrollments so a crash-looping/re-provisioning

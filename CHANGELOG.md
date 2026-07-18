@@ -13,6 +13,13 @@ All notable changes to the Sysible Controller are recorded here.
 - **Repository URL CRLF injection closed.** Adding a repository now rejects CR/LF in the
   URL/source line, so it can no longer write a second `[trusted=yes]` apt source into
   `sources.list.d`.
+- **Request-body size cap** on the controller API (default 16 MiB,
+  `SYSIBLE_MAX_REQUEST_BYTES`), so an unbounded agent heartbeat/result body can't be
+  buffered into memory to exhaust the controller.
+- **Enroll flood guard**: a per-source-IP rate limit on `/agents/enroll` (default
+  240/60s, `SYSIBLE_ENROLL_RATE_MAX`) sheds an enrollment storm before it takes the enroll
+  lock. Generous by default so legitimate mass rollout (even behind one NAT) is
+  unaffected; set to 0 to disable.
 
 ### Added
 - **Headless-install curl one-liner: address the controller by IP.** When the console is

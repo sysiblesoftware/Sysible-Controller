@@ -13,6 +13,13 @@ All notable changes to the Sysible Controller are recorded here.
 - **Repository URL CRLF injection closed.** Adding a repository now rejects CR/LF in the
   URL/source line, so it can no longer write a second `[trusted=yes]` apt source into
   `sources.list.d`.
+- **Onboarding-portal bind address is configurable.** The self-service portal (default
+  :8090) that serves agent bundles was hardcoded to bind `0.0.0.0`; it now honours
+  `SYSIBLE_PORTAL_HOST` (default `0.0.0.0`, unchanged) so a multi-homed / segmented
+  controller can pin it to a management interface or to `127.0.0.1` behind a reverse
+  proxy. The portal stays TLS + login-gated with single-use, host-capped bundle tokens —
+  this narrows the network attack surface (it doesn't close an auth hole; every
+  bundle/file route is already authenticated).
 - **Request-body size cap** on the controller API (default 16 MiB,
   `SYSIBLE_MAX_REQUEST_BYTES`), so an unbounded agent heartbeat/result body can't be
   buffered into memory to exhaust the controller.

@@ -43,6 +43,16 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_PORTAL_PORT = int(os.getenv("SYSIBLE_PORTAL_PORT", "8090"))
 
+# Bind address for the self-service onboarding portal. It defaults to 0.0.0.0
+# because its whole purpose is to hand agent bundles to hosts being onboarded over
+# the network — but on a multi-homed / segmented controller an operator can pin it
+# to a single management interface (e.g. 10.0.0.5), or to 127.0.0.1 to serve it only
+# behind a reverse proxy. The portal is TLS + login-gated (session cookie or
+# Basic-auth with brute-force lockout) and every bundle carries a fresh SINGLE-USE,
+# host-capped enrollment token, so this narrows the network attack surface rather
+# than closing an auth hole.
+DEFAULT_PORTAL_HOST = (os.getenv("SYSIBLE_PORTAL_HOST", "0.0.0.0") or "0.0.0.0").strip()
+
 RUN_DIR = Path(os.getenv("SYSIBLE_RUN_DIR", str(PROJECT_ROOT / "run")))
 PORTAL_PID_FILE = RUN_DIR / "portal.pid"
 PORTAL_PORT_FILE = RUN_DIR / "portal.port"
@@ -113,7 +123,11 @@ def _log_tail(n=20):
 
 
 def _wait_for_health(port, deadline):
-    url = f"https://127.0.0.1:{port}/health"
+    # Probe the loopback when bound to all interfaces (the common case); otherwise
+    # probe the exact bind address, since a specific-interface bind may not answer
+    # on 127.0.0.1.
+    probe_host = "127.0.0.1" if DEFAULT_PORTAL_HOST in ("0.0.0.0", "", "::") else DEFAULT_PORTAL_HOST
+    url = f"https://{probe_host}:{port}/health"
 
     # Verify against the same cert we just told uvicorn to serve,
     # rather than skipping verification - this doubles as a check that
@@ -203,7 +217,7 @@ def start(port=None):
         [
             sys.executable, "-m", "uvicorn",
             "backend.portal_app:app",
-            "--host", "0.0.0.0",
+            "--host", DEFAULT_PORTAL_HOST,
             "--port", str(port),
             "--ssl-keyfile", str(KEY_FILE),
             "--ssl-certfile", str(CERT_FILE),

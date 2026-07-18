@@ -20,6 +20,14 @@ All notable changes to the Sysible Controller are recorded here.
   proxy. The portal stays TLS + login-gated with single-use, host-capped bundle tokens —
   this narrows the network attack surface (it doesn't close an auth hole; every
   bundle/file route is already authenticated).
+
+### Fixed
+- **Agent: exponential reconnect backoff.** When the controller is unreachable (it was
+  renumbered onto a new IP, a firewall/network change cut the host off, or the controller
+  service is down), the agent's poll and heartbeat loops now back off from
+  `SYSIBLE_POLL_INTERVAL` up to `SYSIBLE_CONN_BACKOFF_MAX` (60s) instead of retrying every
+  ~1.5s forever — much less log spam and CPU/network churn during an outage — and snap
+  back to the normal cadence the instant a request succeeds.
 - **Request-body size cap** on the controller API (default 16 MiB,
   `SYSIBLE_MAX_REQUEST_BYTES`), so an unbounded agent heartbeat/result body can't be
   buffered into memory to exhaust the controller.

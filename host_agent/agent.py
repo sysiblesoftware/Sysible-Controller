@@ -88,6 +88,29 @@ STATE_FILE = os.getenv("SYSIBLE_AGENT_STATE", "/var/lib/sysible/agent_state.json
 # back to back) doesn't pay this delay between each one either.
 POLL_INTERVAL = float(os.getenv("SYSIBLE_POLL_INTERVAL", "1.5"))
 
+# Reconnect backoff. When the controller is UNREACHABLE (e.g. it was renumbered
+# onto a new IP, or a network/firewall change cut this host off), retrying every
+# POLL_INTERVAL forever just spams the log and burns CPU/network. Instead the poll
+# and heartbeat loops back off exponentially from POLL_INTERVAL up to
+# CONN_BACKOFF_MAX, and snap back to POLL_INTERVAL the instant a request succeeds.
+CONN_BACKOFF_MAX = float(os.getenv("SYSIBLE_CONN_BACKOFF_MAX", "60"))
+_conn_fail_count = 0
+
+
+def _note_conn_result(ok):
+    """Record whether a controller request actually reached the controller, so the
+    poll/heartbeat loops can back off while it's unreachable and recover instantly."""
+    global _conn_fail_count
+    _conn_fail_count = 0 if ok else min(_conn_fail_count + 1, 20)
+
+
+def _current_poll_delay():
+    """POLL_INTERVAL when healthy; exponentially longer (capped at CONN_BACKOFF_MAX)
+    while every controller candidate is unreachable."""
+    if _conn_fail_count <= 0:
+        return POLL_INTERVAL
+    return min(POLL_INTERVAL * (2 ** min(_conn_fail_count, 8)), CONN_BACKOFF_MAX)
+
 # How often the agent samples and reports performance metrics (load, memory,
 # worst-disk %). Deliberately decoupled from POLL_INTERVAL: heartbeats fire
 # every ~1.5s, but a metrics row only needs to land roughly once a minute -
@@ -180,8 +203,10 @@ def _request(method, path, **kwargs):
             print(f"[agent] switched to controller candidate: {candidate}")
             CONTROLLER = candidate
 
+        _note_conn_result(True)   # a candidate answered — reset reconnect backoff
         return r
 
+    _note_conn_result(False)      # every candidate was unreachable — back off
     raise last_exc
 
 
@@ -1069,7 +1094,7 @@ def _heartbeat_loop(state):
             heartbeat(state)
         except Exception as e:               # incl. UnknownHostError — the task loop handles exit
             print("[agent] heartbeat thread:", e)
-        time.sleep(POLL_INTERVAL)
+        time.sleep(_current_poll_delay())
 
 
 # =========================================================
@@ -1405,7 +1430,7 @@ def loop(state):
         # round-trip of heartbeat()+fetch_tasks() itself still bounds
         # how tight this loop can spin either way.
         if not ran_task:
-            time.sleep(POLL_INTERVAL)
+            time.sleep(_current_poll_delay())
 
 
 # =========================================================

@@ -359,9 +359,22 @@ def cmd_list_env_and_aliases() -> str:
 
 
 def _pkg_quote_list(text: str) -> str:
-    """Splits whitespace-separated package names and shell-quotes each
-    one individually."""
-    return " ".join(shlex.quote(t) for t in text.split())
+    """Split whitespace-separated package names and shell-quote each one.
+
+    Rejects any token beginning with '-'. shlex.quote stops shell-metacharacter
+    injection but NOT *option* injection: a token like ``-o`` would otherwise be
+    parsed by apt-get/dnf as an OPTION rather than a package operand
+    (``-o DPkg::Pre-Invoke=<cmd>`` runs an arbitrary command as root and hides it
+    from the command-policy scan of the built string). Callers additionally place
+    a ``--`` end-of-options separator before the operands as a second layer."""
+    out = []
+    for tok in (text or "").split():
+        if tok.startswith("-"):
+            raise ValueError(
+                f"Invalid package name {tok!r}: package names cannot begin with "
+                "'-' (it would be interpreted as a command-line option).")
+        out.append(shlex.quote(tok))
+    return " ".join(out)
 
 
 _SAFE_REPO_ALIAS_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -399,9 +412,9 @@ def cmd_install_packages(names: str) -> str:
     if not pkgs:
         raise ValueError("Specify at least one package name.")
     return _pkgmgr_dispatch(
-        rpm_cmd=f'"$PKGMGR" install -y {pkgs}',
-        zypper_cmd=f'zypper --non-interactive install {pkgs}',
-        apt_cmd=f'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y {pkgs}',
+        rpm_cmd=f'"$PKGMGR" install -y -- {pkgs}',
+        zypper_cmd=f'zypper --non-interactive install -- {pkgs}',
+        apt_cmd=f'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y -- {pkgs}',
     )
 
 
@@ -428,9 +441,9 @@ def cmd_remove_packages(names: str) -> str:
     if not pkgs:
         raise ValueError("Specify at least one package name.")
     return _pkgmgr_dispatch(
-        rpm_cmd=f'"$PKGMGR" remove -y {pkgs}',
-        zypper_cmd=f'zypper --non-interactive remove {pkgs}',
-        apt_cmd=f'DEBIAN_FRONTEND=noninteractive apt-get remove -y {pkgs}',
+        rpm_cmd=f'"$PKGMGR" remove -y -- {pkgs}',
+        zypper_cmd=f'zypper --non-interactive remove -- {pkgs}',
+        apt_cmd=f'DEBIAN_FRONTEND=noninteractive apt-get remove -y -- {pkgs}',
     )
 
 
@@ -468,9 +481,9 @@ def cmd_update_packages(names: str = "", flags: str = "") -> str:
     rf = _rpm_update_flags(flags)
     if pkgs:
         return _pkgmgr_dispatch(
-            rpm_cmd=f'"$PKGMGR" update -y{rf} {pkgs}',
-            zypper_cmd=f'zypper --non-interactive update {pkgs}',
-            apt_cmd=f'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --only-upgrade -y {pkgs}',
+            rpm_cmd=f'"$PKGMGR" update -y{rf} -- {pkgs}',
+            zypper_cmd=f'zypper --non-interactive update -- {pkgs}',
+            apt_cmd=f'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --only-upgrade -y -- {pkgs}',
         )
     return _pkgmgr_dispatch(
         rpm_cmd=f'"$PKGMGR" upgrade -y{rf}',

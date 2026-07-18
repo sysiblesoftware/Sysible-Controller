@@ -30,6 +30,12 @@ def cmd_add_repository(url: str, alias: str = "") -> str:
     url = (url or "").strip()
     if not url:
         raise ValueError("Repository URL or source line is required.")
+    if "\n" in url or "\r" in url:
+        # shlex.quote preserves an embedded newline inside its single-quoted arg,
+        # and `echo {q_url} > sources.list.d/<alias>.list` would then write a
+        # SECOND, attacker-chosen apt source line (e.g. a [trusted=yes] repo).
+        # Reject CR/LF, matching cmd_create_repository below.
+        raise ValueError("Repository URL / source line must be a single line (no newlines).")
     q_url = shlex.quote(url)
     alias = (alias or "").strip()
 

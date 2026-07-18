@@ -4,6 +4,16 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Security
+- **Package management: option-injection → root RCE closed.** A package field like
+  `nginx -o DPkg::Pre-Invoke::=<cmd>` was parsed by apt/dnf as an OPTION rather than a
+  package name (arbitrary command as root). Package tokens beginning with `-` are now
+  rejected, and install/remove/update place a `--` end-of-options separator before the
+  operands.
+- **Repository URL CRLF injection closed.** Adding a repository now rejects CR/LF in the
+  URL/source line, so it can no longer write a second `[trusted=yes]` apt source into
+  `sources.list.d`.
+
 ### Added
 - **Headless-install curl one-liner: address the controller by IP.** When the console is
   configured with a hostname but a target host has no DNS for it, the curl command failed

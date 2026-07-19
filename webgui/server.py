@@ -2770,6 +2770,28 @@ def set_enrollment_pause(body: dict, request: Request,
     return _wrap(lambda: _as_admin(request, lambda: api.set_enrollment_pause(paused, actor=user)))
 
 
+@app.get("/api/enroll-allowlist")
+def get_enroll_allowlist(request: Request, user: str = Depends(require_login)):
+    """The enrollment source-IP allowlist (empty == all sources allowed)."""
+    return _wrap(lambda: _as_admin(request, lambda: api.get_enroll_allowlist()))
+
+
+@app.post("/api/enroll-allowlist")
+def add_enroll_allowlist(body: dict, request: Request,
+                         user: str = Depends(require_superuser_session)):
+    """Add an allowed source CIDR/IP to the enrollment allowlist (superuser)."""
+    cidr = (body.get("cidr") or "") if isinstance(body, dict) else ""
+    note = (body.get("note") or "") if isinstance(body, dict) else ""
+    return _wrap(lambda: _as_admin(request, lambda: api.add_enroll_allowlist(cidr, note)))
+
+
+@app.delete("/api/enroll-allowlist/{entry_id}")
+def remove_enroll_allowlist(entry_id: int, request: Request,
+                            user: str = Depends(require_superuser_session)):
+    """Remove an enrollment-allowlist entry by id (superuser)."""
+    return _wrap(lambda: _as_admin(request, lambda: api.remove_enroll_allowlist(entry_id)))
+
+
 @app.get("/api/agent-bundle")
 def agent_bundle(request: Request, user: str = Depends(require_superuser_session)):
     """Download the ready-to-run agent bundle (tar.gz) the desktop's Host

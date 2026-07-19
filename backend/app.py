@@ -356,6 +356,42 @@ def set_enrollment_pause_route(body: dict = Body(...),
     return get_enrollment_control()
 
 
+@app.get("/admin/enroll-allowlist", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def get_enroll_allowlist_route():
+    """The enrollment source-IP allowlist. Empty == all sources allowed (a valid
+    token is still required); a non-empty list restricts which networks may enroll."""
+    from backend.db import list_enroll_allowlist
+    return {"entries": list_enroll_allowlist()}
+
+
+@app.post("/admin/enroll-allowlist", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def add_enroll_allowlist_route(body: dict = Body(...), acting: str = Depends(acting_admin_name)):
+    """Add an allowed source CIDR (or bare IP) to the enrollment allowlist.
+    Superuser-gated, audited."""
+    from backend.db import add_enroll_allowlist_cidr, list_enroll_allowlist
+    cidr = (body.get("cidr") or "").strip() if isinstance(body, dict) else ""
+    note = (body.get("note") or "").strip() if isinstance(body, dict) else ""
+    try:
+        norm = add_enroll_allowlist_cidr(cidr, note, actor=acting)
+    except ValueError:
+        raise HTTPException(status_code=400,
+                            detail=f"Not a valid CIDR or IP address: {cidr!r}")
+    log_admin_audit("enroll_allowlist_add", acting,
+                    f"allow {norm}" + (f" ({note})" if note else ""))
+    return {"entries": list_enroll_allowlist()}
+
+
+@app.delete("/admin/enroll-allowlist/{entry_id}",
+            dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def remove_enroll_allowlist_route(entry_id: int, acting: str = Depends(acting_admin_name)):
+    """Remove an enrollment-allowlist entry by id. Superuser-gated, audited.
+    Removing the last entry re-opens enrollment to all sources (token still required)."""
+    from backend.db import remove_enroll_allowlist_cidr, list_enroll_allowlist
+    if remove_enroll_allowlist_cidr(entry_id, actor=acting):
+        log_admin_audit("enroll_allowlist_remove", acting, f"entry {entry_id}")
+    return {"entries": list_enroll_allowlist()}
+
+
 # =========================================================
 # AGENT ENROLLMENT (agent-facing: authenticated by one-time token)
 #
@@ -607,12 +643,24 @@ def enroll(req: EnrollRequest, request: Request):
     # Coarse per-source-IP flood guard: shed an enrollment storm before it takes the
     # enroll lock and expensive token validation (a compromised/looping source can't
     # starve the threadpool). Generous by default so legitimate mass rollout is fine.
-    _retry_after = _enroll_rate_limited(request.client.host if request.client else "")
+    _client_ip = request.client.host if request.client else ""
+    _retry_after = _enroll_rate_limited(_client_ip)
     if _retry_after:
         raise HTTPException(
             status_code=429,
             detail="Too many enrollment attempts from this source; retry shortly.",
             headers={"Retry-After": str(_retry_after)})
+
+    # Source-IP allowlist: a non-empty allowlist restricts WHICH networks may
+    # enroll a new host (the token is still required on top). Empty == allow all
+    # (backward compatible); loopback is always allowed (self-enroll / BFF). This
+    # narrows the leaked-bundle exposure — a valid token can't be presented from an
+    # off-subnet source. Managed from Settings → Enrollment Access.
+    from backend.db import enroll_ip_allowed
+    if not enroll_ip_allowed(_client_ip):
+        raise HTTPException(
+            status_code=403,
+            detail="Enrollment from this network is not permitted.")
 
     # Emergency brake: when an admin has paused enrollment (the runaway
     # kill-switch), refuse ALL new enrollments so a crash-looping/re-provisioning

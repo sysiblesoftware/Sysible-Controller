@@ -192,6 +192,11 @@ export const api = {
   enrollmentPause: () => req("/api/enrollment-pause"),
   setEnrollmentPause: (paused) =>
     req("/api/enrollment-pause", { method: "POST", body: { paused } }),
+  enrollAllowlist: () => req("/api/enroll-allowlist"),
+  addEnrollAllowlist: (cidr, note) =>
+    req("/api/enroll-allowlist", { method: "POST", body: { cidr, note } }),
+  removeEnrollAllowlist: (id) =>
+    req(`/api/enroll-allowlist/${id}`, { method: "DELETE" }),
   // Cache-buster so a repeat download after a controller hostname/IP change
   // can't be served from the browser cache (server also sends no-store).
   agentBundleUrl: () => `/api/agent-bundle?t=${Date.now()}`,

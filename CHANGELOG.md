@@ -4,6 +4,26 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Added — enrollment source-IP allowlist (Settings → Enrollment Access)
+
+A console-managed allowlist that restricts which source networks may enroll a NEW host on
+`POST /agents/enroll`. The one-time enrollment token is still required on top — the
+allowlist narrows *where* a valid token may be presented from, so a leaked-but-unused
+bundle can't enroll a rogue host from an off-subnet source. Managed from a new
+**Settings → Enrollment Access** tab (add/remove CIDRs with notes; audited).
+
+- **Empty == allow all** (backward compatible); a non-empty list restricts enrollment to
+  the listed CIDRs. **Loopback is always allowed** (controller self-enroll / the BFF).
+- Accepts IPv4/IPv6 CIDRs or a bare IP (stored as /32 or /128). An unparseable source with
+  a non-empty allowlist **fails closed** (denied).
+- Enforced at the socket-peer IP (`request.client.host` — not a spoofable
+  `X-Forwarded-For`). For behind-a-bastion hosts this is the relay/tunnel peer, which is
+  what you allow. **Only the open, token-gated enroll path is gated** — steady-state agent
+  traffic (heartbeat/tasks/results, authenticated by the agent secret) is unaffected, so a
+  wrong CIDR can't lock out the existing fleet.
+- New `GET/POST/DELETE /admin/enroll-allowlist` (superuser); a denied enroll returns 403
+  "Enrollment from this network is not permitted."
+
 ### Added — `sysible_controller disenroll` (force-remove a host from the controller side)
 
 A new CLI subcommand that force-removes an enrolled host from the controller itself —

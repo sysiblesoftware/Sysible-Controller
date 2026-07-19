@@ -210,6 +210,22 @@ def set_enrollment_pause(paused: bool, actor: str = ""):
                     json={"paused": bool(paused), "actor": actor})
 
 
+def get_enroll_allowlist():
+    """The enrollment source-IP allowlist (empty == all sources allowed)."""
+    return _request("GET", "/admin/enroll-allowlist")
+
+
+def add_enroll_allowlist(cidr: str, note: str = ""):
+    """Add an allowed source CIDR/IP to the enrollment allowlist. Superuser-only."""
+    return _request("POST", "/admin/enroll-allowlist",
+                    json={"cidr": cidr, "note": note})
+
+
+def remove_enroll_allowlist(entry_id):
+    """Remove an enrollment-allowlist entry by id. Superuser-only."""
+    return _request("DELETE", f"/admin/enroll-allowlist/{entry_id}")
+
+
 def revoke_agent(host_id: str):
     """Hard lock-out: revoke the host's agent secret so it can't heartbeat,
     poll, or report until an admin re-enrolls it. Superuser-only on the backend.

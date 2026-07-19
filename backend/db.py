@@ -1,5 +1,6 @@
 import contextlib
 import hashlib
+import ipaddress
 import json
 import os
 import socket
@@ -317,6 +318,27 @@ def init_db():
         id INTEGER PRIMARY KEY CHECK (id = 1),
         paused INTEGER DEFAULT 0,
         updated REAL,
+        actor TEXT
+    )
+    """)
+
+    # -----------------------------------------------------
+    # Enrollment IP allowlist (source-CIDR gate for /agents/enroll)
+    # A NON-EMPTY list restricts which source networks may enroll a new
+    # host — the token is still required on top, this just narrows WHERE
+    # a valid token may be presented from (a leaked bundle can't enroll
+    # from an off-subnet source). EMPTY == allow all (backward compatible),
+    # and loopback is always allowed (self-enroll / the console BFF).
+    # Managed from Settings → Enrollment Access. Steady-state agent traffic
+    # (heartbeat/tasks/results) is deliberately NOT gated by this — only the
+    # open, token-gated enroll path is.
+    # -----------------------------------------------------
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS enroll_allowlist (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cidr TEXT UNIQUE,
+        note TEXT,
+        created REAL,
         actor TEXT
     )
     """)
@@ -1188,6 +1210,79 @@ def set_enrollment_paused(paused, actor=None):
     conn.commit()
     conn.close()
     return bool(paused)
+
+
+def _normalize_cidr(value):
+    """Validate and canonicalize a CIDR or bare IP (v4 or v6). A bare address
+    becomes a host route (/32 or /128). Raises ValueError on anything unparseable
+    so the caller can return a 400 rather than storing junk that never matches."""
+    v = (value or "").strip()
+    if not v:
+        raise ValueError("empty CIDR")
+    return str(ipaddress.ip_network(v, strict=False))
+
+
+def list_enroll_allowlist():
+    """All enrollment-allowlist entries: [{id, cidr, note, created, actor}]."""
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, cidr, note, created, actor FROM enroll_allowlist ORDER BY id")
+        rows = [dict(r) for r in cur.fetchall()]
+    except sqlite3.Error:
+        rows = []
+    conn.close()
+    return rows
+
+
+def add_enroll_allowlist_cidr(cidr, note=None, actor=None):
+    """Add (or update the note on) an allowed source CIDR. Returns the normalized
+    CIDR string. Raises ValueError for an invalid CIDR/IP."""
+    norm = _normalize_cidr(cidr)
+    note = (note or "").strip() or None
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO enroll_allowlist (cidr, note, created, actor) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(cidr) DO UPDATE SET note=excluded.note",
+        (norm, note, time.time(), actor))
+    conn.commit()
+    conn.close()
+    return norm
+
+
+def remove_enroll_allowlist_cidr(entry_id, actor=None):
+    """Delete an allowlist entry by row id. Returns True if a row was removed."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM enroll_allowlist WHERE id=?", (entry_id,))
+    conn.commit()
+    changed = cur.rowcount
+    conn.close()
+    return changed > 0
+
+
+def enroll_ip_allowed(ip):
+    """Whether `ip` is permitted to enroll a new host. EMPTY allowlist => allow all
+    (backward compatible). Loopback is always allowed (self-enroll / the BFF). A
+    NON-empty allowlist with an unparseable source IP fails CLOSED (deny)."""
+    rows = list_enroll_allowlist()
+    if not rows:
+        return True
+    try:
+        addr = ipaddress.ip_address((ip or "").strip())
+    except ValueError:
+        return False
+    if addr.is_loopback:
+        return True
+    for r in rows:
+        try:
+            if addr in ipaddress.ip_network(r["cidr"], strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def create_enroll_token(token):

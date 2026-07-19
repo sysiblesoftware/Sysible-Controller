@@ -9,7 +9,8 @@ export default function Settings({ initialTab }) {
     <div>
       <div className="tabs" style={{ marginBottom: 16 }}>
         {[["admins", "Administrators"], ["me", "My Account"], ["policy", "Password Policy"],
-          ["controller", "Controller"], ["tls", "TLS / Certificates"], ["license", "License"], ["audit", "Audit Log"]].map(([k, l]) => (
+          ["controller", "Controller"], ["enrollacl", "Enrollment Access"], ["tls", "TLS / Certificates"],
+          ["license", "License"], ["audit", "Audit Log"]].map(([k, l]) => (
           <button key={k} className={tab === k ? "active" : ""} onClick={() => setTab(k)}>{l}</button>
         ))}
       </div>
@@ -17,6 +18,7 @@ export default function Settings({ initialTab }) {
       {tab === "me" && <MyAccount />}
       {tab === "policy" && <PasswordPolicy />}
       {tab === "controller" && <><ControllerCfg /><SoftwareUpdate /></>}
+      {tab === "enrollacl" && <EnrollAllowlist />}
       {tab === "tls" && <Tls />}
       {tab === "license" && <License />}
       {tab === "audit" && <Audit />}
@@ -992,6 +994,113 @@ function Tls() {
         {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
         {err && <div className="error-box">{err}</div>}
       </form>
+    </div>
+  );
+}
+
+function EnrollAllowlist() {
+  const [entries, setEntries] = useState(null);
+  const [cidr, setCidr] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useErr(); const [msg, setMsg] = useState("");
+
+  const load = () => api.enrollAllowlist()
+    .then((d) => setEntries(d.entries || []))
+    .catch((e) => setErr(e.message));
+  useEffect(() => { load(); }, []);
+
+  async function add(e) {
+    e.preventDefault();
+    const c = cidr.trim();
+    if (!c) return;
+    setErr(""); setMsg(""); setBusy(true);
+    try {
+      const d = await api.addEnrollAllowlist(c, note.trim());
+      setEntries(d.entries || []);
+      setMsg(`Added ${c}.`); setCidr(""); setNote("");
+    } catch (e2) { setErr(e2.message); } finally { setBusy(false); }
+  }
+
+  async function remove(entry) {
+    if (!window.confirm(`Remove ${entry.cidr} from the enrollment allowlist?`
+      + ((entries && entries.length === 1)
+        ? "\n\nThis is the last entry — removing it re-opens enrollment to ALL source networks (a valid token is still required)."
+        : ""))) return;
+    setErr(""); setMsg("");
+    try {
+      const d = await api.removeEnrollAllowlist(entry.id);
+      setEntries(d.entries || []);
+      setMsg(`Removed ${entry.cidr}.`);
+    } catch (e) { setErr(e.message); }
+  }
+
+  const open = entries && entries.length === 0;
+
+  return (
+    <div className="card" style={{ maxWidth: 640 }}>
+      <strong>Enrollment Access — source IP allowlist</strong>
+      <div className="faint" style={{ marginTop: 6 }}>
+        Restrict which source networks may enroll a NEW host on <code>/agents/enroll</code>.
+        A one-time enrollment token is still required on top of this — the allowlist just
+        narrows <em>where</em> a token may be presented from, so a leaked bundle can't enroll
+        from an off-subnet source. Already-enrolled agents (heartbeat/tasks) are unaffected.
+        The controller (loopback) is always allowed.
+      </div>
+
+      {entries === null ? (
+        <div className="muted" style={{ marginTop: 10 }}>Loading…</div>
+      ) : (
+        <>
+          <div style={{ marginTop: 12, padding: "8px 12px", borderRadius: 6,
+            border: "1px solid " + (open ? "#e0a83a" : "#3a8f5a"),
+            background: open ? "rgba(224,168,58,0.12)" : "rgba(58,143,90,0.12)" }}>
+            {open
+              ? "⚠ Allowlist is EMPTY — any source with a valid token can enroll. Add a CIDR to restrict it."
+              : `🔒 Restricted — only the ${entries.length} network(s) below (plus loopback) may enroll.`}
+          </div>
+
+          {entries.length > 0 && (
+            <table className="tbl" style={{ marginTop: 12, width: "100%" }}>
+              <thead><tr><th>CIDR / IP</th><th>Note</th><th></th></tr></thead>
+              <tbody>
+                {entries.map((en) => (
+                  <tr key={en.id}>
+                    <td><code>{en.cidr}</code></td>
+                    <td className="muted">{en.note || "—"}</td>
+                    <td style={{ textAlign: "right" }}>
+                      <button className="btn sm danger" onClick={() => remove(en)}>Remove</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <form onSubmit={add} style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span className="faint">CIDR or IP</span>
+              <input value={cidr} onChange={(e) => setCidr(e.target.value)}
+                placeholder="192.168.8.0/24" style={{ width: 200 }} />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 160 }}>
+              <span className="faint">Note (optional)</span>
+              <input value={note} onChange={(e) => setNote(e.target.value)}
+                placeholder="e.g. lab subnet" />
+            </label>
+            <button className="btn" type="submit" disabled={busy || !cidr.trim()}>
+              {busy ? <span className="spin" /> : "Add"}
+            </button>
+          </form>
+          <div className="faint" style={{ marginTop: 8 }}>
+            Accepts IPv4/IPv6 CIDRs or a bare IP (stored as a /32 or /128). For behind-a-bastion
+            hosts, allow the <em>relay's</em> address — the controller sees the tunnel peer, not the agent.
+          </div>
+        </>
+      )}
+
+      {msg && <div className="ok-box" style={{ marginTop: 10 }}>{msg}</div>}
+      {err && <div className="error-box" style={{ marginTop: 10 }}>{err}</div>}
     </div>
   );
 }

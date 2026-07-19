@@ -4,6 +4,31 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Security — hardening from the Fortune-100 audit
+
+Remediation of the adversarially-verified findings from the pre-release security audit:
+
+- **Agent secret hashed at rest (was cleartext).** The per-host `agent_secret` — the only
+  bearer credential the DB stored verbatim — is now stored as its SHA-256 like every other
+  token/key, so a DB-snapshot leak yields no directly-replayable agent credential. A legacy
+  plaintext row is accepted once and transparently upgraded to the hash on the agent's next
+  authenticated call, so no already-enrolled host is locked out. *(CWE-312)*
+- **Session invalidation on self-service credential change.** `/admin/credentials` and
+  `/admin/force-password-change` now revoke the account's other live admin tokens, matching
+  the admin-reset path — a stolen session no longer survives a password change. *(CWE-613)*
+- **Forced-password-change gate on superuser BFF surfaces.** `require_superuser_session` now
+  enforces `must_change_password` (like `require_operator`), so a superuser on a temporary
+  credential can't drive superuser-only screens until they rotate it. *(CWE-620)*
+- **Request-body size limit on the console BFF.** The internet-facing console now bounds
+  request bodies (above the legitimate upload ceiling), closing an unauthenticated
+  memory-exhaustion vector on `POST /api/login`. *(CWE-770)*
+- **Controller-side superuser gate on portal file-mutation routes** (delete upload, stage
+  download, delete download) — defense-in-depth matching their sibling portal routes. *(CWE-862)*
+- **Login error no longer leaks the internal controller address/TLS details** on the
+  unauthenticated `/api/login` path — logged server-side, generic message returned. *(CWE-209)*
+- **`Cache-Control: no-store` on authenticated console responses** so sensitive fleet JSON
+  isn't retained by a shared/proxy cache or browser history. *(CWE-525)*
+
 ### Changed — agent bundles and the controller address are now IP-only
 
 Agent bundles no longer bake in a hostname for the controller — they use its **IP** so

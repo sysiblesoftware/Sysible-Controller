@@ -25,7 +25,7 @@ from backend.db import (
     get_host_snapshot,
     list_agents,
     delete_agent,
-    get_agent_secret,
+    agent_secret_matches,
     revoke_agent,
     is_agent_revoked,
     agent_exists,
@@ -260,9 +260,7 @@ def verify_agent(host_id: str, agent_secret: str):
             detail="Agent secret revoked — re-enroll this host to restore it.",
         )
 
-    expected = get_agent_secret(host_id)
-
-    if not expected or not secrets.compare_digest(agent_secret, expected):
+    if not agent_secret_matches(host_id, agent_secret):
         raise HTTPException(status_code=401, detail="Invalid agent secret")
 
 
@@ -740,10 +738,8 @@ def enroll(req: EnrollRequest, request: Request):
             #     comparison is a tautology for a fresh token (resolve echoes the input),
             #     so it authenticates nothing and reintroduces the takeover.
             proven = False
-            if req.prev_agent_secret:
-                cur_secret = get_agent_secret(host_id)
-                if cur_secret and secrets.compare_digest(req.prev_agent_secret, cur_secret):
-                    proven = True   # P1: holds the incumbent secret
+            if req.prev_agent_secret and agent_secret_matches(host_id, req.prev_agent_secret):
+                proven = True   # P1: holds the incumbent secret
             if not proven and enroll_token_authorizes_rebind(req.token, host_id):
                 proven = True       # P3: admin-authorized reissue token for this host
 
@@ -2917,6 +2913,14 @@ def change_admin_credentials(body: ChangeAdminCredentialsRequest):
     if not changed:
         raise HTTPException(status_code=400, detail="Enter a new username or a new password to change.")
 
+    # Invalidate every live admin token for this account after a credential change,
+    # matching the admin-reset path — a password change must not leave other
+    # already-issued sessions valid (resolve_admin_token can't retroactively catch
+    # them). The caller re-authenticates with the new credentials on their next call.
+    delete_admin_tokens_for_user(body.username)
+    if new_username != body.username:
+        delete_admin_tokens_for_user(new_username)
+
     log_admin_audit("credentials_changed", new_username, "self-service username/password change")
 
     return {"username": new_username, "status": "updated"}
@@ -2947,6 +2951,11 @@ def force_admin_password_change(body: ForcePasswordChangeRequest):
 
     salt, password_hash = portal_auth.hash_password(body.new_password)
     update_administrator_password(body.username, password_hash, salt, must_change_password=0)
+
+    # Drop any tokens issued against the temporary/expired credential so the forced
+    # change can't leave a pre-rotation session valid — the admin re-logs in with the
+    # new password (matching the reset path).
+    delete_admin_tokens_for_user(body.username)
 
     log_admin_audit("forced_password_change_completed", body.username, "")
 
@@ -3054,7 +3063,7 @@ def fetch_portal_upload_route(filename: str):
     return FileResponse(path, filename=path.name)
 
 
-@app.delete("/portal/files/uploads/{filename}", dependencies=[Depends(require_api_key)])
+@app.delete("/portal/files/uploads/{filename}", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def delete_portal_upload_route(filename: str):
 
     try:
@@ -3074,7 +3083,7 @@ def list_portal_downloads_route():
     return {"files": portal_files.list_downloads()}
 
 
-@app.post("/portal/files/downloads", dependencies=[Depends(require_api_key)])
+@app.post("/portal/files/downloads", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 async def stage_portal_download_route(file: UploadFile = File(...)):
 
     data = await file.read()
@@ -3087,7 +3096,7 @@ async def stage_portal_download_route(file: UploadFile = File(...)):
     return {"status": "staged", "filename": saved_as}
 
 
-@app.delete("/portal/files/downloads/{filename}", dependencies=[Depends(require_api_key)])
+@app.delete("/portal/files/downloads/{filename}", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def delete_portal_download_route(filename: str):
 
     try:

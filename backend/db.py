@@ -1,5 +1,6 @@
 import contextlib
 import hashlib
+import hmac
 import ipaddress
 import json
 import os
@@ -755,11 +756,46 @@ def create_or_update_agent(
         kernel,
         status,
         last_seen,
-        agent_secret,
+        # Store only the SHA-256 of the agent secret at rest — the same hash-at-rest
+        # treatment every other bearer credential gets (admin/enroll/portal tokens,
+        # API keys). A leaked DB snapshot then yields no directly-replayable agent
+        # credential. Hash only when a secret is actually supplied (enroll); a None
+        # here would otherwise be hashed to a fixed value instead of staying NULL.
+        _token_at_rest(agent_secret) if agent_secret else agent_secret,
         ip
     ))
 
     conn.commit()
+
+
+def _upgrade_agent_secret_hash(host_id, hashed):
+    with contextlib.closing(_connect()) as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE agents SET agent_secret=? WHERE host_id=?", (hashed, host_id))
+        conn.commit()
+
+
+def agent_secret_matches(host_id, presented):
+    """Constant-time check of a presented agent secret against the hash stored at
+    rest. Transparently upgrades a legacy row that still holds the plaintext secret
+    (accept once, then re-store the hash) so no already-enrolled agent is locked out
+    by the move to hash-at-rest. Returns True on match."""
+    if not presented:
+        return False
+    stored = get_agent_secret(host_id)
+    if not stored:
+        return False
+    if hmac.compare_digest(_token_at_rest(presented), stored):
+        return True
+    # Legacy plaintext row: accept once, then upgrade in place so the cleartext
+    # secret does not survive another heartbeat.
+    if hmac.compare_digest(presented, stored):
+        try:
+            _upgrade_agent_secret_hash(host_id, _token_at_rest(presented))
+        except Exception:
+            pass
+        return True
+    return False
 
 
 def update_agent_heartbeat(host_id, ip=None, hostname=None, agent_version=None):

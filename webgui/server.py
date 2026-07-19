@@ -126,6 +126,56 @@ _HTTPS_ONLY = (not _ALLOW_INSECURE_COOKIE) or os.getenv("SYSIBLE_WEBGUI_HTTPS_ON
 if _ALLOW_INSECURE_COOKIE and not (os.getenv("SYSIBLE_WEBGUI_HTTPS_ONLY", "0") == "1" or _TRUST_PROXY):
     _log.warning("SYSIBLE_WEBGUI_ALLOW_INSECURE_COOKIE=1: session cookie 'Secure' flag is OFF. "
                  "Use only for plain-HTTP dev/lab — never in production.")
+class _BodyLimitMiddleware:
+    """Reject an over-large request body BEFORE Starlette buffers it — the same guard
+    the controller API carries. The BFF is the internet-facing service and has an
+    unauthenticated POST /api/login, so without this an oversized body is a trivial
+    unauthenticated memory-exhaustion DoS. Checks a declared Content-Length up front
+    (returns 413), and byte-counts a chunked/mis-declared body to stay bounded."""
+    def __init__(self, app, max_bytes):
+        self.app = app
+        self.max_bytes = int(max_bytes)
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or self.max_bytes <= 0:
+            return await self.app(scope, receive, send)
+        for k, v in scope.get("headers") or []:
+            if k == b"content-length":
+                try:
+                    if int(v) > self.max_bytes:
+                        return await self._too_large(send)
+                except ValueError:
+                    pass
+                break
+        seen = {"n": 0}
+        cap = self.max_bytes
+
+        async def _guarded_receive():
+            message = await receive()
+            if message.get("type") == "http.request":
+                seen["n"] += len(message.get("body", b"") or b"")
+                if seen["n"] > cap:
+                    return {"type": "http.disconnect"}
+            return message
+        return await self.app(scope, _guarded_receive, send)
+
+    async def _too_large(self, send):
+        await send({"type": "http.response.start", "status": 413,
+                    "headers": [(b"content-type", b"application/json"),
+                                (b"cache-control", b"no-store")]})
+        await send({"type": "http.response.body", "body": b'{"detail":"Request body too large."}'})
+
+
+# Global ceiling must sit ABOVE the largest legitimate upload (the file-transfer /
+# package routes cap themselves at _MAX_SSH_UPLOAD_BYTES), so it bounds memory without
+# rejecting a valid upload. Everything else (e.g. the unauthenticated /api/login body)
+# is then bounded too, closing the unbounded-body DoS. Override with the env var.
+try:
+    _MAX_BFF_BODY_BYTES = int(os.getenv("SYSIBLE_WEBGUI_MAX_REQUEST_BYTES",
+                                        str(_MAX_SSH_UPLOAD_BYTES + 4096)))
+except ValueError:
+    _MAX_BFF_BODY_BYTES = _MAX_SSH_UPLOAD_BYTES + 4096
+
 app.add_middleware(
     SessionMiddleware,
     secret_key=_SECRET,
@@ -134,6 +184,9 @@ app.add_middleware(
     same_site="strict",
     max_age=_SESSION_MAX_AGE,
 )
+# Registered LAST so it wraps OUTERMOST (Starlette applies add_middleware in reverse),
+# rejecting oversized bodies before SessionMiddleware or any handler buffers them.
+app.add_middleware(_BodyLimitMiddleware, max_bytes=_MAX_BFF_BODY_BYTES)
 
 
 # State-changing HTTP methods carry a same-origin backstop: SameSite=Strict already keeps
@@ -181,6 +234,12 @@ async def security_headers(request: Request, call_next):
     if _HTTPS_ONLY:
         resp.headers.setdefault(
             "Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    # Authenticated console responses carry sensitive fleet data (host inventory,
+    # posture, sudo scopes, /api/me). Mark them uncacheable so a shared/proxy cache
+    # or browser history can't retain them after logout. Static assets under /assets
+    # keep their own long-cache headers (set by the file handler, not overridden here).
+    if not request.url.path.startswith("/assets"):
+        resp.headers.setdefault("Cache-Control", "no-store")
     return resp
 
 
@@ -247,6 +306,13 @@ def require_superuser_session(request: Request):
     _revalidate_session(request)
     if request.session.get("role") != "superuser":
         raise HTTPException(status_code=403, detail="This action requires a superuser account.")
+    # Same forced-password-change gate as require_operator: a superuser still on a
+    # temporary/reset credential must not be able to drive superuser-only surfaces
+    # (portal, TLS install, enrollment ACLs) until they rotate it. The
+    # change-credentials route is require_login, so it stays reachable to clear the flag.
+    if request.session.get("must_change_password"):
+        raise HTTPException(status_code=403,
+                            detail="You must change your temporary password before performing this action.")
     return user
 
 
@@ -438,13 +504,15 @@ def login(body: LoginRequest, request: Request):
     except Exception as e:
         # Could NOT reach the controller (down, wrong base URL, unreadable API
         # key, or TLS verification failed) — this is NOT a wrong password, so
-        # don't throttle and don't claim "invalid credentials". Surface the
-        # real cause so it's diagnosable.
+        # don't throttle and don't claim "invalid credentials". Log the real cause
+        # server-side, but do NOT leak it to this UNAUTHENTICATED endpoint: the raw
+        # exception discloses the internal controller address/port and TLS details.
+        _log.warning("login: controller round-trip failed: %s", e)
         raise HTTPException(
             status_code=502,
-            detail=f"Could not reach the controller to verify the login: {e}. "
-                   f"Check the controller is running and the web console can read "
-                   f"its API key and TLS cert (see 'sysible_controller webgui logs').",
+            detail="Could not reach the controller to verify the login. "
+                   "Check the controller is running and the web console can read "
+                   "its API key and TLS cert (see 'sysible_controller webgui logs').",
         )
 
     with _login_attempts_lock:

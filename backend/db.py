@@ -1474,15 +1474,23 @@ def get_controller_config():
     row = cur.fetchone()
 
     if row is None:
-        # First read - seed a sane default (this machine's own
-        # hostname, the controller's standard port) rather than
-        # leaving the admin staring at blank fields. Left unconfigured
-        # (configured=0) since the admin hasn't actually saved
-        # anything yet - this hostname may not even be reachable from
-        # other hosts on the network.
-        hostname = socket.gethostname()
+        # First read - seed a sane IP-based default rather than leaving the admin
+        # staring at blank fields. IP-only by design: a bundle must never bake in a
+        # hostname (that assumes DNS is set up on every managed host). Seed the
+        # first detected NIC IP in "ip" mode, or "all" if none is detectable yet.
+        # Left unconfigured (configured=0) since the admin hasn't saved anything.
+        hostname = ""
         ip = ""
-        address_mode = "hostname"
+        try:
+            from backend.agent_bundle import detect_local_ips
+            _detected = detect_local_ips()
+        except Exception:
+            _detected = []
+        if _detected:
+            ip = _detected[0]
+            address_mode = "ip"
+        else:
+            address_mode = "all"
         port = 9000
         configured = 0
 
@@ -1493,7 +1501,9 @@ def get_controller_config():
         conn.commit()
     else:
         hostname, ip, address_mode, port, configured = row
-        address_mode = address_mode or "hostname"
+        # Legacy "hostname" mode is migrated to IP on read — never surface a
+        # hostname as the baked-in bundle address.
+        address_mode = address_mode or ("ip" if ip else "all")
 
     conn.close()
 
@@ -1503,10 +1513,12 @@ def get_controller_config():
     # this controller's current NICs (see backend/agent_bundle.py's
     # resolve_controller_addresses), so there's nothing meaningful to
     # put here.
+    # Never surface a hostname as the bundle address — IP-only by design. A legacy
+    # "hostname" config falls back to the stored IP (blank until re-saved).
     if address_mode == "all":
         address = ""
     else:
-        address = ip if address_mode == "ip" else hostname
+        address = ip
 
     return {
         "hostname": hostname or "",

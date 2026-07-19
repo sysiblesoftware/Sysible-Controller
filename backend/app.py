@@ -1974,21 +1974,15 @@ def get_controller_config_route():
 @app.post("/controller-config", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def set_controller_config_route(body: SetControllerConfigRequest):
 
-    hostname = body.hostname.strip()
+    # IP-ONLY by design: agent bundles never bake in a hostname (that assumes DNS
+    # is configured on every managed host). A legacy "hostname" mode is coerced to
+    # "ip", and any hostname value is dropped.
     ip = body.ip.strip()
-    address_mode = body.address_mode if body.address_mode in ("hostname", "ip", "all") else "hostname"
-
-    # "all" mode needs neither field - every detected local IP is what
-    # ships in the bundle, computed fresh at download time (see
-    # resolve_controller_addresses), not typed in here.
-    if address_mode != "all" and not hostname and not ip:
-        raise HTTPException(status_code=400, detail="Hostname and IP cannot both be empty")
-
-    if address_mode == "hostname" and not hostname:
-        raise HTTPException(status_code=400, detail="Hostname is selected but empty")
+    hostname = ""
+    address_mode = body.address_mode if body.address_mode in ("ip", "all") else "ip"
 
     if address_mode == "ip" and not ip:
-        raise HTTPException(status_code=400, detail="IP Address is selected but empty")
+        raise HTTPException(status_code=400, detail="Enter the controller's IP address (or choose 'all detected IPs').")
 
     if address_mode == "all" and not detect_local_ips():
         raise HTTPException(

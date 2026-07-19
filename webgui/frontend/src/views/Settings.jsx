@@ -295,8 +295,8 @@ function ControllerCfg() {
   async function save() {
     setErr(""); setMsg(""); setBusy(true);
     try {
-      const res = await api.setControllerConfig({ hostname: cfg.hostname || "", ip: cfg.ip || "",
-        address_mode: cfg.address_mode || "hostname", port: Number(cfg.port) || 9000 });
+      const res = await api.setControllerConfig({ hostname: "", ip: cfg.ip || "",
+        address_mode: cfg.address_mode === "all" ? "all" : "ip", port: Number(cfg.port) || 9000 });
       let m = "Saved. Existing agents keep their current address until updated.";
       // The controller regenerates the self-signed cert when the address changes;
       // surface that so the admin knows to restart + redistribute trust.
@@ -330,21 +330,28 @@ function ControllerCfg() {
           )}
         </div>
       )}
+      <p className="faint" style={{ marginTop: 0, marginBottom: 10 }}>
+        The controller is addressed by <b>IP</b> so agents never depend on DNS being configured
+        on each host. Choose a single IP, or ship every detected NIC address.
+      </p>
       <label className="field"><span>Address mode</span>
-        <select value={cfg.address_mode || "hostname"} onChange={set("address_mode")}>
-          <option value="hostname">hostname</option><option value="ip">ip</option>
+        <select value={cfg.address_mode === "all" ? "all" : "ip"} onChange={set("address_mode")}>
+          <option value="ip">Single IP</option>
+          <option value="all">All detected IPs</option>
         </select></label>
-      <label className="field"><span>Hostname</span><input value={cfg.hostname || ""} onChange={set("hostname")} /></label>
-      <label className="field"><span>IP</span>
-        <div className="row"><input style={{ flex: 1 }} value={cfg.ip || ""} onChange={set("ip")} />
-          <button className="btn ghost sm" type="button" onClick={async () => {
-            try { const d = await api.localIps(); const ip = (d.ips || [])[0];
-              if (ip) setCfg((c) => ({ ...c, ip })); } catch (e) { setErr(e.message); } }}>Detect Local IPs</button></div>
-      </label>
+      {cfg.address_mode !== "all" && (
+        <label className="field"><span>IP address</span>
+          <div className="row"><input style={{ flex: 1 }} value={cfg.ip || ""} placeholder="192.168.8.5"
+            onChange={set("ip")} />
+            <button className="btn ghost sm" type="button" onClick={async () => {
+              try { const d = await api.localIps(); const ip = (d.ips || [])[0];
+                if (ip) setCfg((c) => ({ ...c, ip })); } catch (e) { setErr(e.message); } }}>Detect Local IPs</button></div>
+        </label>
+      )}
       <label className="field"><span>Port</span><input type="number" value={cfg.port || 9000} onChange={set("port")} /></label>
       <div className="row" style={{ marginTop: 14, gap: 8 }}>
         <button className="btn" disabled={busy} onClick={save}>{busy ? <span className="spin" /> : "Save"}</button>
-        <button className="btn ghost" disabled={busy} title="Rebuild the self-signed TLS certificate so its SAN matches the current hostname/IP, then restart the backend to serve it. Use after changing the address."
+        <button className="btn ghost" disabled={busy} title="Rebuild the self-signed TLS certificate so its SAN matches the current IP, then restart the backend to serve it. Use after changing the address."
           onClick={async () => {
             if (!window.confirm("Regenerate the self-signed TLS certificate for the current address and restart the controller backend? Agents must then trust the new certificate (redistribute trust.crt / re-download the agent bundle).")) return;
             setErr(""); setMsg(""); setBusy(true);
@@ -355,7 +362,7 @@ function ControllerCfg() {
             finally { setBusy(false); }
           }}>Regenerate self-signed cert</button>
         <button className="btn ghost" disabled={busy}
-          title="Re-mint a fresh agent bundle for the CURRENT controller address/port with a new single-use enrollment token, and download it. Use after changing the controller hostname/IP or regenerating the cert."
+          title="Re-mint a fresh agent bundle for the CURRENT controller address/port with a new single-use enrollment token, and download it. Use after changing the controller IP or regenerating the cert."
           onClick={async () => {
             setErr(""); setMsg(""); setBusy(true);
             try {
@@ -381,7 +388,7 @@ function ControllerCfg() {
         </button>
       </div>
       <p className="faint" style={{ marginTop: 6 }}>
-        After changing the controller hostname/IP: Save, then <b>Regenerate self-signed cert</b> (reissues for the
+        After changing the controller IP: Save, then <b>Regenerate self-signed cert</b> (reissues for the
         new address and restarts), then <b>Regenerate agent bundle</b> and re-run it on your hosts so they trust and reach the new address.
         (Every bundle is freshly built for the current address with a new single-use enrollment token.)
       </p>

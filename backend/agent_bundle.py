@@ -69,12 +69,20 @@ def resolve_controller_addresses(config: dict) -> list[str]:
     detect_local_ips() every time a bundle is downloaded rather than
     once at save time - if the controller's NICs change later, the next
     download just picks that up instead of shipping a stale list."""
+    # IP-ONLY by design: a bundle must never bake in a hostname, because that
+    # assumes DNS is configured on every managed host — the exact fragility that
+    # strands agents after a rename / DNS change. "all" ships every NIC IP; "ip"
+    # ships the one configured IP. A legacy "hostname" config is transparently
+    # migrated to IP here (prefer the stored IP, else every detected NIC IP) so an
+    # old install keeps producing working bundles without ever emitting a hostname.
     mode = config.get("address_mode")
     if mode == "all":
         return detect_local_ips()
-    if mode == "ip":
-        return [config["ip"]] if config.get("ip") else []
-    return [config["hostname"]] if config.get("hostname") else []
+    if mode == "ip" and config.get("ip"):
+        return [config["ip"]]
+    if config.get("ip"):
+        return [config["ip"]]
+    return detect_local_ips()
 
 
 _CERT_INSTALL_DIR = "/etc/sysible"

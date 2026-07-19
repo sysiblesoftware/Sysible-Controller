@@ -4,6 +4,18 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Changed — agent bundles and the controller address are now IP-only
+
+Agent bundles no longer bake in a hostname for the controller — they use its **IP** so
+agents never depend on DNS being configured on each managed host (the failure mode that
+strands agents after a rename or DNS change). Settings → Controller now offers only
+**Single IP** or **All detected IPs**; the hostname field and "hostname" address mode are
+gone. A legacy install whose config was in "hostname" mode is transparently migrated to
+IP on read (prefers the stored IP, else every detected NIC address), so existing installs
+keep producing working bundles without emitting a hostname. Controller self-enroll already
+used the loopback address and is unaffected. `POST /controller-config` coerces any
+"hostname" mode to "ip" and ignores a supplied hostname.
+
 ### Added — enrollment source-IP allowlist (Settings → Enrollment Access)
 
 A console-managed allowlist that restricts which source networks may enroll a NEW host on

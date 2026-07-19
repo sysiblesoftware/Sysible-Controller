@@ -86,7 +86,11 @@ export default function Topology({ onOpen }) {
       const hasCrit = (hh.disk >= 90) || CRIT_FLAGS.some((k) => flags[k] === true);
       return {
         id: h.id, label: h.label, env: h.environment || "Unassigned",
-        kind: h.type_text || "", address: h.address, isController: !!h.is_controller,
+        // The reliable is_controller flag is computed on the AGENT record (GET /agents,
+        // _is_controller_host by name+IP); the merged-hosts source may not carry it, which
+        // would draw the controller's own self-managed host as an ordinary host under an
+        // environment (a duplicate "controller"). Trust either source.
+        kind: h.type_text || "", address: h.address, isController: !!(ag.is_controller || h.is_controller),
         online: hh.online, verdict: hh.verdict, disk: hh.disk, mem: hh.mem,
         agentVersion: ag.agent_version, ip, gateway: gw,
         subnet: subnetOf(ip), revoked: !!ag.revoked, quarantined: !!ag.integrity_quarantined,

@@ -1610,6 +1610,23 @@ def _controller_identity():
         ips.update(detect_local_ips())
     except Exception:
         pass
+    # Also fold in the operator-configured controller address (the same identity
+    # baked into agent bundles). The OS hostname / NIC-detected IPs can diverge
+    # from how the controller is actually addressed — e.g. after a LAN renumber or
+    # on a multi-homed box — which would stop the controller recognising its OWN
+    # self-managed host (drawing it as a duplicate managed host in the topology).
+    # DNS-free: this only reads the stored config row.
+    try:
+        from backend.db import get_controller_config
+        _cfg = get_controller_config() or {}
+        _chn = (_cfg.get("hostname") or "").strip().lower()
+        if _chn:
+            names.add(_chn); names.add(_chn.split(".")[0])
+        _cip = (_cfg.get("ip") or "").strip()
+        if _cip:
+            ips.add(_cip)
+    except Exception:
+        pass
     val = (names, ips)
     _CTRL_IDENTITY_CACHE["val"] = val
     _CTRL_IDENTITY_CACHE["ts"] = now

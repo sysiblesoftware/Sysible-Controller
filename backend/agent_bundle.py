@@ -383,7 +383,7 @@ fi
 if [[ -f "$STATE_FILE" ]]; then
   echo "Notifying controller..."
 {_PIP_INSTALL_BLOCK}
-  python3 - "$STATE_FILE" "$ENV_FILE" "$CERT_FILE" <<'PYEOF'
+  if python3 - "$STATE_FILE" "$ENV_FILE" "$CERT_FILE" <<'PYEOF'
 import json
 import os
 import sys
@@ -427,9 +427,12 @@ try:
         print("[disenroll] controller acknowledged - host removed from enrollment")
     else:
         print(f"[disenroll] controller responded {{r.status_code}}: {{r.text}} - continuing with local cleanup anyway")
+        sys.exit(3)
 except Exception as e:
     print(f"[disenroll] could not reach controller ({{e}}) - continuing with local cleanup anyway")
+    sys.exit(3)
 PYEOF
+  then NOTIFY_OK=1; else NOTIFY_OK=0; fi
 else
   echo "No local agent state found (already disenrolled, or never enrolled) - skipping controller notification."
 fi
@@ -477,6 +480,18 @@ fi
 
 echo
 echo "Agent disenrolled and removed from this host."
+
+# If the controller notification didn't get through, the host's row is still on the
+# controller. Point the operator at the one-liner that force-removes it from the
+# controller side (uses the live TLS cert, so it works even when this host's pinned
+# cert had drifted — the usual reason the notify above failed).
+if [[ "${{NOTIFY_OK:-1}}" != "1" ]]; then
+  echo
+  echo "NOTE: the controller was NOT notified, so it may still list this host."
+  echo "      Finish the cleanup ON THE CONTROLLER with:"
+  echo "        sudo sysible_controller disenroll --name \\"$(hostname)\\""
+  echo "      (or --ip <this host's IP>, or the host_id shown in Host Enrollment)."
+fi
 """
 
 

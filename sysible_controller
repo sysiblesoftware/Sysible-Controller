@@ -5,7 +5,7 @@
 # script's own lifetime. This wraps `systemctl` for that service and
 # the web console service.
 #
-# Usage: sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|destroy}
+# Usage: sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|self-enroll|disenroll|destroy}
 
 BASE="/opt/sysible"
 VENV="$BASE/venv"
@@ -171,6 +171,201 @@ cmd_self_enroll() {
     return 1
   fi
   echo "Controller self-enrolled — it will appear in the fleet shortly (Host Enrollment)."
+}
+
+# Force-remove an enrolled host from THIS controller — the operator escape hatch for
+# when the normal disenroll can't complete: a stale pinned TLS cert (the agent can't
+# verify the controller), an offline/zombie agent, or a graceful disenroll that keeps
+# re-enrolling. Talks to the controller's OWN API over loopback using the LIVE serving
+# cert, so it works even when every agent's pinned cert has drifted. Defaults to a FORCE
+# removal (purges the host's enrollment token so a still-running agent can't re-enroll);
+# pass --keep-token for a plain removal. Falls back to a direct database delete if the
+# controller API is unreachable.
+#
+#   sudo sysible_controller disenroll --self             # this controller's own host record
+#   sudo sysible_controller disenroll --name rocky-02
+#   sudo sysible_controller disenroll --ip 192.168.8.42
+#   sudo sysible_controller disenroll <host_id>
+#   sudo sysible_controller disenroll --self --dry-run   # preview only
+_disenroll_usage() {
+  cat >&2 <<'EOF'
+Usage: sysible_controller disenroll (--self | --name NAME | --ip IP | --host-id ID | <host_id>) [options]
+
+Force-remove an enrolled host from this controller. Talks to the controller over
+loopback with the live TLS cert, so it works even when an agent's pinned cert has
+drifted. Defaults to a FORCE removal (purges the host's enrollment token so a
+still-running agent can't re-enroll).
+
+  --self          This controller's own managed-host record
+  --name NAME     Match by hostname
+  --ip IP         Match by IP address
+  --host-id ID    Match by exact host_id (also accepted positionally)
+  --keep-token    Plain removal — leave the enrollment token valid (host may re-enroll)
+  --dry-run       Show what would be removed; change nothing
+  -y, --yes       Don't prompt for confirmation
+EOF
+}
+
+# Filter the /agents roster (JSON on stdin) to host_id<TAB>hostname<TAB>ip lines.
+# The program is passed with -c (NOT a heredoc) so the piped roster stays on stdin.
+_DISENROLL_FILTER_PY='
+import json, sys
+mode = sys.argv[1]
+value = sys.argv[2] if len(sys.argv) > 2 else ""
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+agents = data.get("agents", []) if isinstance(data, dict) else (data or [])
+v = value.strip().lower()
+for a in agents:
+    if not isinstance(a, dict):
+        continue
+    hid = str(a.get("host_id") or "")
+    hn = str(a.get("hostname") or "")
+    ip = str(a.get("ip") or "")
+    if mode == "self":
+        hit = bool(a.get("is_controller"))
+    elif mode == "host_id":
+        hit = hid.lower() == v
+    elif mode == "name":
+        hit = hn.lower() == v
+    elif mode == "ip":
+        hit = ip == value.strip()
+    else:
+        hit = False
+    if hit:
+        print("\t".join([hid, hn, ip]))
+'
+_disenroll_filter() {
+  local pybin="$1" mode="$2" value="$3"
+  "$pybin" -c "$_DISENROLL_FILTER_PY" "$mode" "$value"
+}
+
+# Last-resort direct database removal (controller API unreachable).
+_disenroll_db_fallback() {
+  local pybin="$1" mode="$2" value="$3" dry="$4"
+  if [[ "$mode" == "self" ]]; then
+    echo "ERROR: --self resolves the controller's own record via the API, which is unreachable." >&2
+    echo "       Start the controller ('sysible_controller start') and retry, or use --name/--ip/<host_id>." >&2
+    return 1
+  fi
+  local tool="$BASE/tools/unenroll_agent.py"
+  [[ -f "$tool" ]] || tool="$(dirname "$0")/tools/unenroll_agent.py"
+  if [[ ! -f "$tool" ]]; then
+    echo "ERROR: direct-removal helper not found (tools/unenroll_agent.py); cannot fall back." >&2
+    return 1
+  fi
+  local args=()
+  case "$mode" in
+    name)    args=(--name "$value") ;;
+    ip)      args=(--ip "$value") ;;
+    host_id) args=("$value") ;;
+  esac
+  [[ "$dry" == "1" ]] && args+=(--dry-run)
+  "$pybin" "$tool" "${args[@]}"
+}
+
+cmd_disenroll() {
+  _require_root disenroll
+  shift  # drop the "disenroll" subcommand
+
+  local selector="" value="" assume_yes=0 dry_run=0 keep_token=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --self)       selector="self" ;;
+      --name)       selector="name";    value="$2"; shift ;;
+      --name=*)     selector="name";    value="${1#*=}" ;;
+      --ip)         selector="ip";      value="$2"; shift ;;
+      --ip=*)       selector="ip";      value="${1#*=}" ;;
+      --host-id|-i) selector="host_id"; value="$2"; shift ;;
+      --host-id=*)  selector="host_id"; value="${1#*=}" ;;
+      -y|--yes)     assume_yes=1 ;;
+      --dry-run)    dry_run=1 ;;
+      --keep-token) keep_token=1 ;;
+      -h|--help)    _disenroll_usage; return 0 ;;
+      -*)           echo "Unknown option: $1" >&2; _disenroll_usage; return 1 ;;
+      *)            selector="host_id"; value="$1" ;;
+    esac
+    shift
+  done
+
+  if [[ -z "$selector" ]]; then _disenroll_usage; return 1; fi
+  if [[ "$selector" != "self" && -z "$value" ]]; then
+    echo "ERROR: --$selector needs a value." >&2; return 1
+  fi
+
+  local PYBIN="python3"
+  [[ -x "$VENV/bin/python" ]] && PYBIN="$VENV/bin/python"
+
+  local key; key="$(cat "$BASE/api_key.txt" 2>/dev/null)"
+  local base="https://127.0.0.1:$PORT"
+
+  # Pull the roster over loopback with the LIVE serving cert (immune to any agent
+  # pinned-cert drift). If the controller API can't be reached, fall back to the DB.
+  local roster rc
+  roster="$(curl -fsS --cacert "$CERT_FILE" -H "X-API-Key: $key" "$base/agents" 2>/dev/null)"; rc=$?
+  if [[ $rc -ne 0 || -z "$roster" ]]; then
+    echo "Controller API not reachable on $base — falling back to a direct database removal."
+    _disenroll_db_fallback "$PYBIN" "$selector" "$value" "$dry_run"
+    return $?
+  fi
+
+  local matches
+  matches="$(printf '%s' "$roster" | _disenroll_filter "$PYBIN" "$selector" "$value")"
+  if [[ -z "$matches" ]]; then
+    echo "No enrolled host matches --$selector${value:+ $value}."
+    echo "Tip: list enrolled hosts with"
+    echo "  curl -s --cacert $CERT_FILE -H \"X-API-Key: \$(cat $BASE/api_key.txt)\" $base/agents | ${PYBIN} -m json.tool"
+    return 1
+  fi
+
+  local n; n="$(printf '%s\n' "$matches" | grep -c .)"
+  if [[ "$n" -gt 1 ]]; then
+    echo "Multiple hosts match — narrow it down with --host-id <id>:" >&2
+    printf '%s\n' "$matches" | awk -F'\t' '{printf "  %-38s %-24s %s\n", $1, $2, $3}' >&2
+    return 2
+  fi
+
+  local host_id hostname ip
+  host_id="$(printf '%s' "$matches" | cut -f1)"
+  hostname="$(printf '%s' "$matches" | cut -f2)"
+  ip="$(printf '%s' "$matches" | cut -f3)"
+
+  local pt=1; [[ "$keep_token" == "1" ]] && pt=0
+  local mode_desc="Force-remove (purges the enrollment token so it can't re-enroll)"
+  [[ "$pt" == "0" ]] && mode_desc="Remove (keeps the enrollment token — the host may re-enroll)"
+
+  echo "Target host: ${hostname:-?}${ip:+  ($ip)}  [$host_id]"
+  echo "Action:      $mode_desc"
+  if [[ "$dry_run" == "1" ]]; then echo "(dry run — nothing changed)"; return 0; fi
+
+  if [[ "$assume_yes" != "1" ]]; then
+    read -r -p "Disenroll this host from the controller? [y/N] " ans
+    case "$ans" in y|Y|yes|YES) ;; *) echo "Aborted."; return 1 ;; esac
+  fi
+
+  local out drc
+  out="$(curl -fsS -X DELETE --cacert "$CERT_FILE" -H "X-API-Key: $key" \
+        "$base/agents/$host_id?purge_token=$pt" 2>&1)"; drc=$?
+  if [[ $drc -ne 0 ]]; then
+    echo "ERROR: the controller refused the removal: $out" >&2
+    echo "Trying a direct database removal instead..."
+    _disenroll_db_fallback "$PYBIN" "host_id" "$host_id" 0
+    return $?
+  fi
+  echo "Removed '${hostname:-$host_id}' from the controller."
+
+  # If we just removed THIS controller's own agent record, stop the local agent so
+  # it doesn't keep hammering the controller (with the token purged it can't
+  # re-enroll anyway). Full local file cleanup is the bundle's disenroll_agent.sh.
+  if [[ "$selector" == "self" ]]; then
+    if systemctl list-unit-files sysible-agent.service >/dev/null 2>&1; then
+      echo "Stopping the local agent (sysible-agent)…"
+      systemctl disable --now sysible-agent.service >/dev/null 2>&1 || true
+      echo "Local agent stopped. To also remove its files, run the bundle's disenroll_agent.sh."
+    fi
+  fi
 }
 
 cmd_stop() {
@@ -655,9 +850,10 @@ case "$1" in
   webgui)  cmd_webgui "$@" ;;
   reset-admin) cmd_reset_admin "$@" ;;
   self-enroll) cmd_self_enroll ;;
+  disenroll) cmd_disenroll "$@" ;;
   destroy) cmd_destroy ;;
   *)
-    echo "Usage: sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|self-enroll|destroy}"
+    echo "Usage: sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|self-enroll|disenroll|destroy}"
     exit 1
     ;;
 esac

@@ -4,6 +4,31 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Added — `sysible_controller disenroll` (force-remove a host from the controller side)
+
+A new CLI subcommand that force-removes an enrolled host from the controller itself —
+the operator escape hatch for when the normal (agent-initiated or console) disenroll
+can't complete: a **stale pinned TLS cert** (the agent can't verify the controller after
+a cert regen / reinstall / new-IP reissue), an offline or zombie agent, or a graceful
+disenroll that keeps re-enrolling.
+
+- Talks to the controller's own API over loopback using the **live serving cert**, so it
+  works even when every agent's pinned cert has drifted (the exact failure that leaves a
+  host stuck in the roster).
+- Resolves the target by `--self` (the controller's own managed-host record, via the
+  `is_controller` flag), `--name`, `--ip`, or an exact `host_id`; refuses ambiguous
+  matches and asks for `--host-id`.
+- Defaults to a **FORCE** removal (purges the enrollment token so a still-running agent
+  can't re-enroll — the reason a graceful disenroll appears to "not work"); `--keep-token`
+  opts out. `--dry-run` previews; `-y` skips the prompt.
+- Falls back to a direct database removal (`tools/unenroll_agent.py`) if the controller
+  API is unreachable. For `--self` it also stops the local `sysible-agent` afterward.
+
+Also: the bundle's `disenroll_agent.sh` now detects when the controller notification
+didn't get through and prints a follow-up telling the operator to finish the cleanup with
+`sysible_controller disenroll` on the controller — so a remote host whose notify failed
+(drifted cert / moved controller) no longer silently leaves an orphaned row.
+
 ### Added — console health-warning banner ("agents can't check in")
 
 A superuser-only warning banner across every console view that catches the outage class

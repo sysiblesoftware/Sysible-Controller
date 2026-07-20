@@ -153,6 +153,14 @@ def _max_request_bytes() -> int:
         return 16 * 1024 * 1024
 
 
+# Ceiling for a single staged portal-download file (the multipart body bypasses the
+# global JSON body limit above). Bounds the in-memory read in stage_portal_download_route.
+try:
+    _PORTAL_STAGE_MAX_BYTES = int(os.getenv("SYSIBLE_PORTAL_FILE_MAX_BYTES", str(100 * 1024 * 1024)))
+except (TypeError, ValueError):
+    _PORTAL_STAGE_MAX_BYTES = 100 * 1024 * 1024
+
+
 class _BodyLimitMiddleware:
     """Reject an over-large request body BEFORE it is buffered into memory. Checks a
     declared Content-Length up front (the common case — `requests`/`httpx` always set
@@ -2684,6 +2692,17 @@ def admin_login(body: AdminLoginRequest, request: Request):
         log_admin_audit("login_failed", username, "Invalid username or password")
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
+    # Transparently upgrade a legacy/under-cost password hash to the current PBKDF2
+    # cost now that we hold the plaintext and it verified — so no under-cost hash
+    # (and the enumeration timing asymmetry it creates vs the fixed-cost decoy) lingers.
+    if admin is not None and portal_auth.needs_rehash(admin.get("password_hash")):
+        try:
+            _salt, _hash = portal_auth.hash_password(body.password)
+            update_administrator_password(username, _hash, _salt,
+                                          must_change_password=admin.get("must_change_password", 0))
+        except Exception:
+            pass
+
     _admin_login_clear(throttle_key)
     record_administrator_login(username)
     log_admin_audit("login_success", username, "")
@@ -3084,9 +3103,24 @@ def list_portal_downloads_route():
 
 
 @app.post("/portal/files/downloads", dependencies=[Depends(require_api_key), Depends(require_superuser)])
-async def stage_portal_download_route(file: UploadFile = File(...)):
+async def stage_portal_download_route(request: Request, file: UploadFile = File(...)):
 
-    data = await file.read()
+    # Bounded read so a single staged upload can't drive unbounded memory: reject an
+    # oversized declared Content-Length up front, and cap the actual read so a
+    # mis-declared/chunked body can't exceed the ceiling either.
+    _max = _PORTAL_STAGE_MAX_BYTES
+    _clen = request.headers.get("content-length")
+    if _clen:
+        try:
+            if int(_clen) > _max + 4096:
+                raise HTTPException(status_code=413,
+                                    detail=f"File exceeds the {_max}-byte staging limit.")
+        except ValueError:
+            pass
+    data = await file.read(_max + 1)
+    if len(data) > _max:
+        raise HTTPException(status_code=413,
+                            detail=f"File exceeds the {_max}-byte staging limit.")
 
     try:
         saved_as = portal_files.save_download(file.filename, data)

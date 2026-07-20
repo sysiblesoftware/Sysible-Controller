@@ -28,6 +28,14 @@ import re
 import select
 import shlex
 import stat as stat_module
+
+# Ceiling for a single SFTP file download buffered into controller memory (getfo reads
+# the whole file into RAM, then getvalue() copies it). Bounds the blast radius of a
+# superuser fetching a huge/pseudo file. Override with SYSIBLE_SFTP_DOWNLOAD_MAX_BYTES.
+try:
+    _SFTP_DOWNLOAD_MAX_BYTES = int(os.getenv("SYSIBLE_SFTP_DOWNLOAD_MAX_BYTES", str(100 * 1024 * 1024)))
+except (TypeError, ValueError):
+    _SFTP_DOWNLOAD_MAX_BYTES = 100 * 1024 * 1024
 import subprocess
 import threading
 import time
@@ -1635,10 +1643,24 @@ def download_file(name: str, path: str, request: Request):
 
         if stat_module.S_ISDIR(st.st_mode):
             raise HTTPException(status_code=400, detail="That remote path is a directory, not a file")
+        # Require a REGULAR file — a device/pipe/proc pseudo-file (e.g. /dev/zero,
+        # /proc/kcore) reports size 0 but streams unbounded, hanging the read.
+        if not stat_module.S_ISREG(st.st_mode):
+            raise HTTPException(status_code=400, detail="That remote path is not a regular file")
+        # Bound the in-memory read so a huge remote file can't exhaust controller RAM
+        # (getfo buffers the whole file, then getvalue() copies it again).
+        _max = _SFTP_DOWNLOAD_MAX_BYTES
+        if getattr(st, "st_size", 0) and st.st_size > _max:
+            raise HTTPException(status_code=413,
+                                detail=f"Remote file is {st.st_size} bytes, over the "
+                                       f"{_max}-byte download limit.")
 
         buf = io.BytesIO()
         sftp.getfo(path, buf)
         data = buf.getvalue()
+        if len(data) > _max:   # mis-declared size — cut it off
+            raise HTTPException(status_code=413,
+                                detail=f"Remote file exceeds the {_max}-byte download limit.")
     except HTTPException:
         raise
     except Exception as e:

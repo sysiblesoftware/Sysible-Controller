@@ -513,9 +513,16 @@ async def cli_bundle(request: Request):
             status_code=409, media_type="text/plain",
         )
 
-    valid = secrets.compare_digest(user, creds["username"]) and portal_auth.verify_password(
-        pw, creds.get("password_salt"), creds.get("password_hash")
-    )
+    # Always run one PBKDF2 verify (real hash on a username match, decoy otherwise) so a
+    # wrong username costs the same time as a wrong password — no short-circuit timing
+    # oracle for username enumeration, matching the /login handler.
+    user_ok = secrets.compare_digest(user, creds["username"])
+    if user_ok:
+        pw_ok = portal_auth.verify_password(pw, creds.get("password_salt"), creds.get("password_hash"))
+    else:
+        portal_auth.verify_password(pw, _PORTAL_DECOY_SALT, _PORTAL_DECOY_HASH)
+        pw_ok = False
+    valid = user_ok and pw_ok
     if not valid:
         _record_login_failure(ip)
         log_portal_event("login_failed", user, ip)

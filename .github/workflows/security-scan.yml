@@ -1,0 +1,45 @@
+name: security-scan
+
+# Continuous supply-chain gate: a NEW CVE in a pinned dependency must surface even
+# when nobody is pushing code. Runs weekly, on demand, and on dependency changes.
+# Delivers the pip-audit + SBOM the requirements.txt header calls for.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # Mondays 06:00 UTC
+  workflow_dispatch:
+  push:
+    paths:
+      - "requirements*.txt"
+      - ".github/workflows/security-scan.yml"
+  pull_request:
+    paths:
+      - "requirements*.txt"
+
+permissions:
+  contents: read
+
+jobs:
+  deps:
+    name: dependency advisories (pip-audit) + SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Audit pinned dependencies for known CVEs
+        run: |
+          python -m pip install --upgrade pip pip-audit cyclonedx-bom
+          pip-audit -r requirements.txt --strict --desc
+      - name: Generate CycloneDX SBOM
+        if: always()
+        run: |
+          cyclonedx-py requirements requirements.txt -o sbom.cdx.json || \
+            cyclonedx-py -r -i requirements.txt -o sbom.cdx.json
+      - name: Upload SBOM artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json

@@ -76,6 +76,22 @@ def verify_password(password: str, salt_hex: str, expected_hash_hex: str) -> boo
     return hmac.compare_digest(actual_digest, expected_digest)
 
 
+def needs_rehash(expected_hash_hex: str) -> bool:
+    """True if a stored hash was made at less than the current PBKDF2 cost (a legacy
+    bare-digest hash, or a lower explicit iteration count). Callers re-hash the
+    just-verified password on a successful login so no under-cost hash — and the
+    timing asymmetry it creates against the decoy — persists."""
+    if not expected_hash_hex:
+        return False
+    if "$" not in expected_hash_hex:
+        return True  # legacy bare digest == LEGACY_PBKDF2_ITERATIONS
+    iters_str, _, _ = expected_hash_hex.partition("$")
+    try:
+        return int(iters_str) < PBKDF2_ITERATIONS
+    except ValueError:
+        return True
+
+
 def _pbkdf2(password: str, salt_hex: str, iterations: int) -> str:
     salt_bytes = bytes.fromhex(salt_hex)
     derived = hashlib.pbkdf2_hmac(

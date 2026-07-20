@@ -29,6 +29,22 @@ Remediation of the adversarially-verified findings from the pre-release security
 - **`Cache-Control: no-store` on authenticated console responses** so sensitive fleet JSON
   isn't retained by a shared/proxy cache or browser history. *(CWE-525)*
 
+Follow-up sweep of the remaining low-severity findings:
+
+- **Constant-time `/cli/bundle` auth** — always runs one PBKDF2 verify (real or decoy) so a
+  wrong username costs the same as a wrong password, closing a username-enumeration timing
+  oracle (matches the `/login` handler). *(CWE-208)*
+- **Legacy password hashes upgraded on login** — a successful admin login whose stored hash
+  is below the current PBKDF2 cost is transparently re-hashed, so no under-cost hash (and
+  the timing asymmetry it creates vs the fixed-cost decoy) lingers. *(CWE-208)*
+- **Bounded reads on two file paths** — the portal download-staging upload and the SSH/SFTP
+  file download now enforce a size ceiling (and the SFTP path requires a regular file), so a
+  superuser can't drive unbounded controller memory with a huge or pseudo-file. *(CWE-770)*
+- **Supply-chain gate delivered** — `.github/workflows/security-scan.yml` (weekly + on
+  dependency change) runs `pip-audit` and publishes a CycloneDX SBOM, and
+  `scripts/security_scan.sh` runs the same locally — the gate the `requirements.txt` header
+  had promised. *(CWE-1104)*
+
 ### Changed — agent bundles and the controller address are now IP-only
 
 Agent bundles no longer bake in a hostname for the controller — they use its **IP** so

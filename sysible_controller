@@ -880,6 +880,66 @@ cmd_destroy() {
   rm -f "$0"
 }
 
+cmd_rotate_api_key() {
+  # Generate a fresh controller admin API key, replacing $BASE/api_key.txt (0600),
+  # and restart the services so both the backend and the web console load it. Use
+  # after a suspected key exposure. The key is a PRIVILEGED bearer credential (it
+  # authorizes the entire admin API), so it is printed ONCE here and never logged.
+  _require_root "rotate-api-key"
+  local key_file="$BASE/api_key.txt"
+  if [[ ! -d "$BASE" ]]; then
+    echo "ERROR: $BASE not found - is the controller installed here?" >&2
+    exit 1
+  fi
+  local newkey
+  newkey="$("$VENV/bin/python" -c 'import secrets; print(secrets.token_hex(32))' 2>/dev/null)"
+  if [[ -z "$newkey" ]]; then
+    echo "ERROR: could not generate a new key." >&2
+    exit 1
+  fi
+  # Write privately: create the replacement at 0600 before any bytes land, then
+  # atomically move it over the old key so it is never world-readable, even briefly.
+  local tmp="$key_file.new.$$"
+  if ! ( umask 077; printf '%s\n' "$newkey" > "$tmp" ); then
+    echo "ERROR: could not write the new key to $BASE." >&2
+    exit 1
+  fi
+  chmod 600 "$tmp" 2>/dev/null
+  mv -f "$tmp" "$key_file"
+  chmod 600 "$key_file" 2>/dev/null
+  echo "New admin API key written to $key_file. Restarting services to load it ..."
+  # The key is resolved at import time, so BOTH services must restart to pick it up.
+  cmd_restart >/dev/null 2>&1 || true
+  systemctl is-enabled sysible-webgui >/dev/null 2>&1 && systemctl restart sysible-webgui >/dev/null 2>&1 || true
+  local R='\033[1;91m' Z='\033[0m'
+  echo "==================================================================="
+  echo -e "${R} Controller admin API key rotated. New key (shown once):${Z}"
+  echo -e "${R}     $newkey${Z}"
+  echo " Update any external client/automation that sends X-API-Key. The web"
+  echo " console re-reads the key automatically now that it has restarted."
+  echo "==================================================================="
+}
+
+cmd_revoke_enroll_tokens() {
+  # Invalidate every minted-but-unclaimed enrollment token. Use if a token may have
+  # leaked (a pasted curl one-liner, a CI log). Already-claimed tokens are left alone
+  # so a legitimate host's within-window re-enroll still works.
+  _require_root "revoke-enroll-tokens"
+  local n
+  n="$("$VENV/bin/python" - "$BASE" <<'PY' 2>/dev/null
+import sys
+sys.path.insert(0, sys.argv[1])
+from backend.db import purge_unconsumed_enroll_tokens
+print(purge_unconsumed_enroll_tokens())
+PY
+)"
+  if [[ -z "$n" ]]; then
+    echo "ERROR: could not revoke tokens (is the controller installed at $BASE?)." >&2
+    exit 1
+  fi
+  echo "Revoked $n unconsumed enrollment token(s). Mint a fresh one from Host Enrollment when needed."
+}
+
 case "$1" in
   start)   cmd_start ;;
   stop)    cmd_stop ;;
@@ -889,11 +949,13 @@ case "$1" in
   logs)    cmd_logs ;;
   webgui)  cmd_webgui "$@" ;;
   reset-admin) cmd_reset_admin "$@" ;;
+  rotate-api-key) cmd_rotate_api_key ;;
+  revoke-enroll-tokens) cmd_revoke_enroll_tokens ;;
   self-enroll) cmd_self_enroll ;;
   disenroll) cmd_disenroll "$@" ;;
   destroy) cmd_destroy ;;
   *)
-    echo "Usage: sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|self-enroll|disenroll|destroy}"
+    echo "Usage: sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|rotate-api-key|revoke-enroll-tokens|self-enroll|disenroll|destroy}"
     exit 1
     ;;
 esac

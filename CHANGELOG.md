@@ -4,6 +4,20 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Security — post-assessment hardening (batch 1)
+
+- **Admin API-key rotation on demand** (`sysible_controller rotate-api-key`). Generates
+  a fresh key, replaces `api_key.txt` atomically at 0600, and restarts the backend +
+  console so both reload it. Gives an operator a one-command response to a suspected
+  key exposure instead of hand-editing the file. Key is printed once, never logged.
+- **Revoke unclaimed enrollment tokens** (`sysible_controller revoke-enroll-tokens` →
+  `db.purge_unconsumed_enroll_tokens()`). Invalidates every minted-but-unclaimed enroll
+  token in one action if one may have leaked (pasted curl one-liner, CI log), while
+  leaving already-claimed tokens intact so a legitimate re-enroll window still works.
+- **Tightened Content-Security-Policy** on the console: explicit `script-src 'self'`
+  and `object-src 'none'` (scripts previously fell back to `default-src`; plugins were
+  already blocked implicitly — now explicit). `webgui/server.py`.
+
 ### Fixed
 
 - **`self-enroll` re-adds the controller after a DB reset instead of falsely reporting

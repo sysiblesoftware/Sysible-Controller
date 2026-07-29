@@ -1472,6 +1472,24 @@ def invalidate_enroll_tokens_for_host(host_id):
     return n
 
 
+def purge_unconsumed_enroll_tokens():
+    """Delete every enrollment token that has NOT yet been claimed (used=0).
+
+    A minted-but-undelivered token is a 30-day (default) bearer that lets any host
+    inside the IP allowlist enroll. If a token leaks — pasted into a shared log, a
+    CI artifact, a chat — this lets an operator invalidate every outstanding one in
+    a single action without waiting for expiry. Already-claimed tokens are left
+    intact so a legitimate host's within-window re-enroll (disenroll → re-run bundle)
+    still works. Returns the number removed."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM enroll_tokens WHERE used=0")
+    n = cur.rowcount
+    conn.commit()
+    conn.close()
+    return n
+
+
 def consume_enroll_token(token, host_id):
     """Atomically claim an enroll token for host_id. Returns True exactly once for a
     valid, still-claimable token; False if it was already consumed by a concurrent

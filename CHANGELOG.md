@@ -12,6 +12,11 @@ All notable changes to the Sysible Controller are recorded here.
   authorization-by-obscurity. A single `canSeeView(key, role)` predicate now drives
   the nav filter, every top-level render gate, and a redirect effect that bounces a
   forbidden view back to the dashboard, so the three can no longer drift apart.
+- **User & Group Administration password fields are masked.** The Create-User and
+  Set-Password inputs rendered the typed password as plain on-screen text
+  (`type="text"`), leaving it shoulder-surfable. They now mask by default with an
+  explicit **Show/Hide** toggle alongside the existing **Generate** button.
+  `webgui/frontend/src/views/UserGroupPage.jsx`.
 
 ### Security — hardening from the Fortune-100 audit
 

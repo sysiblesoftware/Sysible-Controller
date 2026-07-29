@@ -21,6 +21,23 @@ function genPassword(len = 16) {
   return out.sort(() => Math.random() - 0.5).join("");
 }
 
+// A password entry field masked by default (so a set/reset password is not left
+// shoulder-surfable on screen), with an explicit Show/Hide toggle and the
+// existing Generate button. `extra` renders alongside (e.g. a Set button).
+function PasswordField({ value, onChange, extra }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="row">
+      <input style={{ flex: 1 }} type={show ? "text" : "password"} autoComplete="new-password"
+             value={value} onChange={onChange} />
+      <button className="btn ghost sm" type="button" aria-pressed={show}
+              onClick={() => setShow((s) => !s)}>{show ? "Hide" : "Show"}</button>
+      <button className="btn ghost sm" type="button" onClick={() => onChange({ target: { value: genPassword() } })}>Generate</button>
+      {extra}
+    </div>
+  );
+}
+
 const LockIcon = () => (
   <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
     <path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5Zm3 8H9V6a3 3 0 0 1 6 0Z" />
@@ -390,8 +407,7 @@ function CreateUser({ checked, run, running }) {
       <div className="muted">Creates the account on every currently checked host ({checked.length}).</div>
       <Field label="Username" value={u} onChange={(e) => setU(e.target.value)} />
       <label className="field"><span>Password (optional)</span>
-        <div className="row"><input style={{ flex: 1 }} type="text" value={pw} onChange={(e) => setPw(e.target.value)} />
-          <button className="btn ghost sm" type="button" onClick={() => setPw(genPassword())}>Generate</button></div>
+        <PasswordField value={pw} onChange={(e) => setPw(e.target.value)} />
       </label>
       <Field label="Shell" value={sh} onChange={(e) => setSh(e.target.value)} />
       <button className="btn" style={{ marginTop: 14 }} disabled={running || !u.trim() || checked.length === 0}
@@ -475,9 +491,8 @@ function Password({ user, targets, run, running }) {
     <div>
       <h3 style={{ margin: "0 0 8px" }}>Password — {user}</h3>
       <label className="field"><span>New password</span>
-        <div className="row"><input style={{ flex: 1 }} type="text" value={pw} onChange={(e) => setPw(e.target.value)} />
-          <button className="btn ghost sm" type="button" onClick={() => setPw(genPassword())}>Generate</button>
-          <button className="btn sm" disabled={running || !pw} onClick={() => run("user_set_password", targets, { username: user, password: pw }, `Set password for ${user}`)}>Set</button></div>
+        <PasswordField value={pw} onChange={(e) => setPw(e.target.value)}
+          extra={<button className="btn sm" disabled={running || !pw} onClick={() => run("user_set_password", targets, { username: user, password: pw }, `Set password for ${user}`)}>Set</button>} />
       </label>
       <button className="btn sm ghost" style={{ marginTop: 10 }} disabled={running}
               onClick={() => run("user_force_reset", targets, { username: user }, `Force reset for ${user}`)}>Force password reset at next login</button>

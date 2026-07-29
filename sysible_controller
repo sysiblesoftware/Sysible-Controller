@@ -116,23 +116,63 @@ cmd_start() {
 cmd_self_enroll() {
   _require_root self-enroll
   local agent_dir="/opt/sysible-agent"
-
+  local agent_on_disk=0
   if systemctl is-enabled sysible-agent >/dev/null 2>&1 || [[ -f "$agent_dir/agent.py" ]]; then
-    echo "Controller is already enrolled as a managed host (agent at $agent_dir)."
-    return 0
+    agent_on_disk=1
   fi
+
   if [[ ! -f "$CERT_FILE" ]]; then
+    [[ "$agent_on_disk" == "1" ]] && { echo "Controller agent already present at $agent_dir."; return 0; }
     echo "ERROR: TLS certificate not found at $CERT_FILE - run the installer first." >&2
     return 1
   fi
   local key
   key="$(cat "$BASE/api_key.txt" 2>/dev/null)"
   if [[ -z "$key" ]]; then
+    [[ "$agent_on_disk" == "1" ]] && { echo "Controller agent already present at $agent_dir."; return 0; }
     echo "ERROR: admin API key not found at $BASE/api_key.txt." >&2
     return 1
   fi
-  # The controller mints the single-use enrollment token, so it must be up.
-  if ! curl -s --cacert "$CERT_FILE" "https://127.0.0.1:$PORT/" >/dev/null 2>&1; then
+
+  # Is the controller reachable on loopback right now? (It mints the single-use token.)
+  local controller_up=0
+  curl -s --cacert "$CERT_FILE" "https://127.0.0.1:$PORT/" >/dev/null 2>&1 && controller_up=1
+
+  # Decide whether we actually need to (re)enroll. The old gate trusted on-disk
+  # presence ALONE, so after a DB reset or `disenroll --self` — both of which can
+  # leave $agent_dir on disk while the controller no longer holds a host row — this
+  # wrongly reported "already enrolled" and the controller never reappeared in the
+  # fleet. Now we ask the controller's OWN API whether this host is a live member
+  # before skipping; if it isn't, we re-enroll even though the files exist on disk.
+  if [[ "$agent_on_disk" == "1" ]]; then
+    if [[ "$controller_up" != "1" ]]; then
+      # Can't verify membership while the controller is down; don't churn the agent
+      # on every `start`. It gets re-checked the next time the controller is up.
+      echo "Controller agent already present at $agent_dir."
+      return 0
+    fi
+    local state_file="${SYSIBLE_AGENT_STATE:-/var/lib/sysible/agent_state.json}"
+    local sid=""
+    if [[ -f "$state_file" ]]; then
+      sid="$(python3 -c 'import json,sys
+try:
+    print(json.load(open(sys.argv[1])).get("host_id",""))
+except Exception:
+    pass' "$state_file" 2>/dev/null)"
+    fi
+    if [[ -n "$sid" ]] && curl -fsS --cacert "$CERT_FILE" -H "X-API-Key: $key" \
+         "https://127.0.0.1:$PORT/agents" 2>/dev/null | grep -qF -- "\"$sid\""; then
+      echo "Controller is already enrolled as a managed host and present in the fleet."
+      return 0
+    fi
+    echo "Controller agent is on disk but is NOT a live member of the fleet (DB reset"
+    echo "or self-disenroll) - re-enrolling so it reappears in the console ..."
+    systemctl disable --now sysible-agent.service >/dev/null 2>&1 || true
+    rm -f "$state_file" 2>/dev/null || true
+  fi
+
+  # From here we (re)enroll, which needs the controller up.
+  if [[ "$controller_up" != "1" ]]; then
     echo "Controller isn't responding on https://127.0.0.1:$PORT - start it first, then re-run: sudo sysible_controller self-enroll" >&2
     return 1
   fi

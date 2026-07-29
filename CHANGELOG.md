@@ -6,6 +6,14 @@ All notable changes to the Sysible Controller are recorded here.
 
 ### Fixed
 
+- **`self-enroll` re-adds the controller after a DB reset instead of falsely reporting
+  "already enrolled".** The gate decided the controller was enrolled purely from the
+  on-disk agent (`/opt/sysible-agent/agent.py`), which survives a datastore reset or a
+  `disenroll --self` even though the controller's host row is gone — so it short-circuited
+  and the controller never reappeared in the console, while the leftover agent crash-looped
+  on a spent single-use token. `self-enroll` now asks the controller's own `/agents` API
+  whether this host is a live fleet member and re-enrolls (fresh bundle + token) when it
+  isn't, clearing the stale agent first. `sysible_controller`.
 - **Login page shows the real Sysible logo, and autofilled fields respect the theme.**
   The sign-in card rendered a generic "S" monogram instead of the product logo; it now
   shows the full logo lockup (with a graceful fallback to the monogram if the image is

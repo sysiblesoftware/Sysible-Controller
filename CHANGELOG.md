@@ -4,6 +4,15 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Fixed — UX audit (view authorization, not just hiding)
+
+- **Console view access is now enforced, not merely hidden.** The left-nav already
+  omitted screens a role may not use, but a hand-typed or bookmarked `?view=` URL
+  (e.g. an auditor opening `?view=settings`) still rendered the privileged screen —
+  authorization-by-obscurity. A single `canSeeView(key, role)` predicate now drives
+  the nav filter, every top-level render gate, and a redirect effect that bounces a
+  forbidden view back to the dashboard, so the three can no longer drift apart.
+
 ### Security — hardening from the Fortune-100 audit
 
 Remediation of the adversarially-verified findings from the pre-release security audit:

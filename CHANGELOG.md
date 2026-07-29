@@ -4,6 +4,16 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Fixed
+
+- **`sysible_controller` CLI is no longer installed root-only.** The installer set the
+  command executable with `chmod +x`, which under a hardened root `umask` (e.g. `077`)
+  only adds *owner* execute — leaving `/usr/local/bin/sysible_controller` as `rwx------`,
+  so a non-root user got "command not found"/"Permission denied" instead of the usage
+  banner. It is now installed `755` (privileged subcommands still self-gate with
+  `_require_root`). Existing installs can fix in place:
+  `sudo chmod 755 /usr/local/bin/sysible_controller`. `install_sysible.sh`.
+
 ### Fixed — UX audit (view authorization, not just hiding)
 
 - **Console view access is now enforced, not merely hidden.** The left-nav already

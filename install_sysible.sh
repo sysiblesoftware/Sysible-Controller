@@ -430,7 +430,13 @@ chmod +x "$BASE/start_webgui.sh" 2>/dev/null || true
 # =========================================================
 echo "Installing sysible_controller CLI to /usr/local/bin/sysible_controller..."
 cp -f "$BASE/sysible_controller" /usr/local/bin/sysible_controller
-chmod +x /usr/local/bin/sysible_controller
+# Explicit 755, not `chmod +x`: under a hardened root umask (e.g. 077) the freshly
+# copied file is 600 and a bare `+x` only adds OWNER execute (the other bits are
+# masked out), leaving the command root-only (rwx------). That makes it undiscoverable
+# to non-root users, who then see "Permission denied"/"command not found" instead of
+# the usage banner. The CLI itself gates every privileged subcommand with _require_root,
+# and its source ships in the repo, so world-readable/executable is correct here.
+chmod 755 /usr/local/bin/sysible_controller
 
 # =========================================================
 # RUNTIME DIR (portal.pid, last_update.{json,log}, web-console secret)

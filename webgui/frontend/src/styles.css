@@ -164,6 +164,20 @@ input, select, textarea {
   border: 1px solid var(--field-border); border-radius: 5px; font-size: 14px; outline: none;
 }
 input:focus, select:focus, textarea:focus { border-color: var(--btn-border); }
+/* Browser autofill paints the field with ITS OWN color-scheme background (Chrome on
+   an OS-dark browser viewing our light theme fills an olive box, ignoring --field).
+   Pin autofilled inputs to the app's own field colors so they match the active theme
+   in both light and dark. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--text);
+  -webkit-box-shadow: 0 0 0 1000px var(--field) inset;
+  box-shadow: 0 0 0 1000px var(--field) inset;
+  caret-color: var(--text);
+  transition: background-color 9999s ease-in-out 0s;
+}
 /* Placeholders often double as the field's only label, so keep them readable
    (the UA default is well under WCAG AA on our field backgrounds). */
 ::placeholder { color: var(--text-dim); opacity: 1; }
@@ -199,6 +213,11 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
   justify-content: center; font-weight: 700; color: #fff; font-size: 18px; }
 .brand h1 { font-size: 22px; margin: 0; font-weight: 700; }
 .brand .sub { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
+/* Login card: the full logo lockup, centered, above the form. */
+.brand-login { flex-direction: column; align-items: center; gap: 0; }
+.brand-logo { display: block; width: 100%; max-width: 220px; height: auto;
+  border-radius: 10px; margin: 2px auto 2px; }
+.brand-fallback { display: flex; align-items: center; gap: 12px; }
 
 /* ---------- App shell: left rail + main ---------- */
 .shell { display: flex; height: 100%; }

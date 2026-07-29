@@ -1,6 +1,32 @@
 import React, { useState } from "react";
 import { api } from "../api.js";
 
+// The full Sysible Controller logo lockup, with a graceful fallback to the "S"
+// monogram + wordmark if the image can't load. The PNG carries a near-white
+// baked background (not transparent), so it blends into the light-theme card and
+// reads as a framed logo tile on the dark-theme card — visible in BOTH themes,
+// unlike a plain white-on-transparent mark that would vanish on the light card.
+function Brand() {
+  return (
+    <div className="brand brand-login">
+      <img
+        className="brand-logo"
+        src="/sysible_logo.png"
+        alt="Sysible Controller"
+        onError={(e) => {
+          e.currentTarget.style.display = "none";
+          const fb = e.currentTarget.nextElementSibling;
+          if (fb) fb.style.display = "flex";
+        }}
+      />
+      <div className="brand-fallback" style={{ display: "none" }}>
+        <div className="brand-mark">S</div>
+        <h1>Sysible Controller</h1>
+      </div>
+    </div>
+  );
+}
+
 export default function Login({ onLoggedIn }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -24,10 +50,7 @@ export default function Login({ onLoggedIn }) {
   return (
     <div className="login-wrap">
       <form className="login-card" onSubmit={submit}>
-        <div className="brand">
-          <div className="brand-mark">S</div>
-          <h1>Sysible Controller</h1>
-        </div>
+        <Brand />
         <p className="muted" style={{ marginTop: 4 }}>
           Sign in with your controller administrator account.
         </p>

@@ -6,6 +6,13 @@ All notable changes to the Sysible Controller are recorded here.
 
 ### Fixed
 
+- **Login page shows the real Sysible logo, and autofilled fields respect the theme.**
+  The sign-in card rendered a generic "S" monogram instead of the product logo; it now
+  shows the full logo lockup (with a graceful fallback to the monogram if the image is
+  missing), styled to read correctly on both the light and dark card. Separately,
+  browser-autofilled username/password fields no longer render as an olive box in light
+  mode — autofilled inputs are now pinned to the app's own field colors in both themes.
+  `webgui/frontend/src/views/Login.jsx`, `webgui/frontend/src/styles.css`.
 - **`sysible_controller` CLI is no longer installed root-only.** The installer set the
   command executable with `chmod +x`, which under a hardened root `umask` (e.g. `077`)
   only adds *owner* execute — leaving `/usr/local/bin/sysible_controller` as `rwx------`,

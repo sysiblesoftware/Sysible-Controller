@@ -23,6 +23,8 @@ from backend.db import (
     get_metric_samples,
     upsert_host_snapshot,
     get_host_snapshot,
+    upsert_host_health,
+    get_all_host_health,
     list_agents,
     delete_agent,
     agent_secret_matches,
@@ -940,6 +942,21 @@ def heartbeat(req: HeartbeatRequest):
             )
         except Exception:
             pass
+        # Latest fleet-health reading (newer agents attach failed/sysd/oom so the
+        # dashboard can render health without a live probe). Best-effort; a miss
+        # just means that host gets live-probed next sweep.
+        try:
+            upsert_host_health(
+                req.host_id, time.time(),
+                _num("disk", int), _num("mem", int), _num("load1", float),
+                _num("cores", int), _num("failed", int), _num("oom", int),
+                _num("uptime", int),
+                (req.metrics.get("sysd") or None),
+                (req.metrics.get("mount") or None),
+                req.metrics.get("units") or [],
+            )
+        except Exception:
+            pass
 
     # Persist the latest rich detail snapshot if attached (newer agents only).
     # Stored as one row per host (overwritten), feeding the per-host drill-down.
@@ -1612,6 +1629,15 @@ def get_metrics_timeseries(window: int = 3600):
     samples are reported by the agents themselves on heartbeat."""
     hosts = get_metric_samples(window)
     return {"hosts": hosts, "window": window, "now": time.time()}
+
+
+@app.get("/metrics/fleet-health", dependencies=[Depends(require_api_key)])
+def get_fleet_health_readings_route():
+    """Latest fleet-HEALTH reading for every host, keyed by host_id, from what the
+    agents reported on heartbeat (disk/mem/load + failed-units/systemd/OOM). Lets
+    the console render the dashboard health donut without a live probe per host.
+    Read-only; the console computes the verdict + freshness from these."""
+    return {"hosts": get_all_host_health(), "now": time.time()}
 
 
 @app.get("/metrics/snapshot/{host_id}", dependencies=[Depends(require_api_key)])

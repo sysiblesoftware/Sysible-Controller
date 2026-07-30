@@ -201,6 +201,13 @@ def get_host_snapshot(host_id):
     return _request("GET", f"/metrics/snapshot/{quote(str(host_id), safe='')}")
 
 
+def get_fleet_health_readings():
+    """Latest fleet-health reading per host from heartbeat data (disk/mem/load +
+    failed-units/systemd/OOM), so the dashboard can render health without a live
+    probe. Returns {"hosts": {host_id: {...}}, "now": float}."""
+    return _request("GET", "/metrics/fleet-health")
+
+
 def get_edition():
     """Edition + host-cap info, e.g. {"edition": "community", "host_limit": 10,
     "host_count": 3}. host_limit is None on an unlimited (Enterprise) build.

@@ -759,12 +759,55 @@ def _parse_sysmetrics(text):
 # dashboard at once each launched an independent fleet-wide sweep — at scale the
 # GET blocked on batches × per-host-timeout and starved the thread pool. A short
 # TTL coalesces a burst of loads into one sweep; ?refresh=1 forces a fresh one.
-_HEALTH_CACHE = {"ts": 0.0, "hosts": None}
+_HEALTH_CACHE = {"ts": 0.0, "hosts": None, "access": 0.0}
 try:
     _HEALTH_TTL = float(os.getenv("SYSIBLE_FLEET_HEALTH_TTL", "15"))
 except ValueError:
     _HEALTH_TTL = 15.0
+# How stale a heartbeat-reported health reading may be before we fall back to a
+# live probe for that host. Agents report metrics every METRICS_INTERVAL (60s
+# default), so ~2 intervals keeps the donut fresh while still serving almost
+# everything from the heartbeat instead of probing the fleet on every load.
+try:
+    _HEALTH_STORE_MAX_AGE = float(os.getenv("SYSIBLE_HEALTH_STORE_MAX_AGE", "120"))
+except ValueError:
+    _HEALTH_STORE_MAX_AGE = 120.0
 _HEALTH_LOCK = threading.Lock()
+
+
+def _health_verdict(disk, failed, sysd, oom):
+    """OK/WARNING/CRITICAL from the raw signals — the SAME thresholds the on-host
+    cmd_metrics_snapshot() shell applies, so a heartbeat-derived reading grades
+    identically to a live probe."""
+    try:
+        d = int(disk)
+    except (TypeError, ValueError):
+        d = 0
+    f = int(failed or 0)
+    o = int(oom or 0)
+    v = "OK"
+    if d >= 80 or f >= 1 or sysd == "degraded" or o >= 1:
+        v = "WARNING"
+    if d >= 90 or f >= 3:
+        v = "CRITICAL"
+    return v
+
+
+def _health_from_stored(base, hr):
+    """Build a fleet-health reading from a stored heartbeat reading `hr` (same
+    shape a live probe returns), computing the verdict server-side."""
+    disk = hr.get("disk")
+    failed = hr.get("failed") or 0
+    sysd = hr.get("sysd") or ""
+    oom = hr.get("oom") or 0
+    return {
+        **base, "online": True, "ok": True, "error": None, "from": "heartbeat",
+        "verdict": _health_verdict(disk, failed, sysd, oom),
+        "disk": disk, "mount": hr.get("mount") or "/", "mem": hr.get("mem"),
+        "load1": hr.get("load1"), "cores": hr.get("cores") or 1, "failed": failed,
+        "uptime": hr.get("uptime") or 0, "sysd": sysd, "units": hr.get("units") or [],
+        "oom": oom,
+    }
 
 
 @app.get("/api/fleet-health")
@@ -778,6 +821,8 @@ def fleet_health(refresh: int = 0, user: str = Depends(require_login)):
     import concurrent.futures
     import time as _t
 
+    _HEALTH_CACHE["access"] = _t.time()   # mark active use (drives background priming)
+
     def _fresh():
         return (not refresh) and _HEALTH_CACHE["hosts"] is not None \
             and (_t.time() - _HEALTH_CACHE["ts"]) < _HEALTH_TTL
@@ -790,7 +835,7 @@ def fleet_health(refresh: int = 0, user: str = Depends(require_login)):
         # lock — serve its result instead of re-sweeping.
         if _fresh():
             return {"hosts": _HEALTH_CACHE["hosts"], "cached": True, "ts": _HEALTH_CACHE["ts"]}
-        return _fleet_health_sweep()
+        return _fleet_health_sweep(force_live=bool(refresh))
 
 
 def _sweep_workers(n):
@@ -805,7 +850,7 @@ def _sweep_workers(n):
     return min(max(1, cap), max(1, n))
 
 
-def _fleet_health_sweep():
+def _fleet_health_sweep(force_live=False):
     import concurrent.futures
     import time as _t
     try:
@@ -819,6 +864,18 @@ def _fleet_health_sweep():
         last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
     except Exception:
         last_seen = {}
+    # Latest per-host health the agents reported on heartbeat. This is what lets
+    # the sweep serve most hosts WITHOUT a live probe: a host whose agent reported
+    # health recently (sysd present, ts fresh) is graded from that reading; only
+    # stale/missing hosts (or ?refresh=1) fall back to the live command dispatch.
+    # Best-effort — if the controller call fails, health_readings is empty and
+    # every host is live-probed (the pre-existing behaviour).
+    health_readings = {}
+    if not force_live:
+        try:
+            health_readings = (api.get_fleet_health_readings() or {}).get("hosts") or {}
+        except Exception:
+            health_readings = {}
     now = _t.time()
     cmd = api.cmd_metrics_snapshot()
 
@@ -843,6 +900,13 @@ def _fleet_health_sweep():
         # out the task timeout on a host that won't answer.
         if aid is not None and not online:
             return {**base, "online": False, "ok": False, "verdict": "OFFLINE", "error": "offline"}
+        # FAST PATH: an online host whose agent reported health on a recent
+        # heartbeat is graded from that reading — no live probe, no agent
+        # round-trip. `sysd` present marks an agent new enough to report the full
+        # health signal; a null/too-old reading falls through to the live probe.
+        hr = health_readings.get(aid) if aid else None
+        if hr and hr.get("sysd") and (now - (hr.get("ts") or 0)) <= _HEALTH_STORE_MAX_AGE:
+            return _health_from_stored(base, hr)
         # The metrics command is read-only and runs as the agent (root) / SSH
         # user with no sudo, so it must NOT be gated on a stored become-password.
         # Clear the password-sudo flag on a copy of the entry so run_on_entry
@@ -1131,6 +1195,47 @@ def fleet_posture(refresh: int = 0, user: str = Depends(require_login)):
         _POSTURE_CACHE["hosts"] = hosts
         _POSTURE_CACHE["ts"] = now
         return {"hosts": hosts, "cached": False, "ts": now}
+
+
+def _prime_caches_loop():
+    """Keep the fleet-health (and posture) caches warm WHILE the dashboard is in
+    active use, so an interactive load is a cache hit instead of waiting on a
+    sweep. Gated on recent access (the health cache's `access` stamp, set by
+    fleet_health) so it goes silent — no background probing at all — once nobody
+    is watching. Health refresh is nearly free now (heartbeat-served); posture
+    still dispatches, so it refreshes on its own slower cadence. Best-effort:
+    every error is swallowed and retried next tick. Disable with
+    SYSIBLE_BACKGROUND_PRIME=0."""
+    import time as _pt
+    try:
+        active_window = float(os.getenv("SYSIBLE_PRIME_ACTIVE_WINDOW", "300"))
+    except ValueError:
+        active_window = 300.0
+    health_every = max(5.0, _HEALTH_TTL)
+    posture_every = max(60.0, _POSTURE_TTL * 0.8)
+    last_posture = 0.0
+    while True:
+        try:
+            _pt.sleep(health_every)
+            if (_pt.time() - _HEALTH_CACHE.get("access", 0.0)) > active_window:
+                continue   # dashboard idle → don't probe the fleet in the background
+            try:
+                with _HEALTH_LOCK:
+                    _fleet_health_sweep()
+            except Exception:
+                pass
+            if (_pt.time() - last_posture) >= posture_every:
+                last_posture = _pt.time()
+                try:
+                    fleet_posture(refresh=0, user="__prime__")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+
+if os.getenv("SYSIBLE_BACKGROUND_PRIME", "1").lower() not in ("0", "false", "no", "off"):
+    threading.Thread(target=_prime_caches_loop, name="sysible-cache-prime", daemon=True).start()
 
 
 @app.get("/api/host-posture/{host_id}")

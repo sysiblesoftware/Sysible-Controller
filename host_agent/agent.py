@@ -866,6 +866,56 @@ def _read_top_procs(prev_pids, total_delta, ncores):
 _prev_sample = {}
 
 
+_UNIT_SUFFIXES = (".service", ".socket", ".mount", ".timer", ".target",
+                  ".path", ".scope", ".automount", ".swap", ".slice")
+
+
+def _collect_health_signals(mounts):
+    """Best-effort systemd + OOM health signals, gathered on the metrics tick so the
+    controller can render the dashboard fleet-health verdict straight from the
+    heartbeat instead of dispatching a live probe to every host. Mirrors exactly
+    the signals cmd_metrics_snapshot() computes — failed-unit names/count, overall
+    systemd state, OOM-kill count, and the worst-disk mount. Non-systemd or
+    restricted hosts degrade gracefully (sysd=None), and the controller then falls
+    back to a live probe for that host, so this never makes health WRONG."""
+    def _run(argv):
+        try:
+            # universal_newlines (not text=) so this stays Python 3.6-safe for SLES.
+            return subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                  timeout=8, universal_newlines=True).stdout or ""
+        except Exception:
+            return ""
+
+    # Failed units: the first real-unit-looking token per line (robust across
+    # systemd versions and the '●' bullet), same scan the shell snapshot uses.
+    units = []
+    for line in _run(["systemctl", "--failed", "--no-legend", "--plain"]).splitlines():
+        for tok in line.split():
+            if tok.endswith(_UNIT_SUFFIXES):
+                units.append(tok)
+                break
+    # `is-system-running` is the authority for whether systemd exists here; if it
+    # yields nothing, treat this as a non-systemd/unknown host → sysd=None so the
+    # controller live-probes rather than trusting a partial reading.
+    sysd = _run(["systemctl", "is-system-running"]).strip() or None
+    oom = 0
+    if sysd is not None:
+        for line in _run(["dmesg", "-t"]).splitlines():
+            low = line.lower()
+            if "out of memory" in low or "killed process" in low or "oom-killer" in low:
+                oom += 1
+    # Worst-disk mount name (pairs with the scalar `disk` %) from the per-mount detail.
+    mount, worst = None, -1
+    for m in (mounts or []):
+        try:
+            pct = int(m.get("pct"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if pct > worst:
+            worst, mount = pct, m.get("mount")
+    return {"failed": len(units), "units": units[:4], "sysd": sysd, "oom": oom, "mount": mount}
+
+
 def _collect_metrics():
     """Build the heartbeat's performance payload: scalar time-series metrics
     plus a rich detail snapshot. Best-effort throughout - any single failure is
@@ -961,11 +1011,27 @@ def _collect_metrics():
     if load1 is None and mem is None and disk is None and cpu_pct is None:
         return None
 
+    # System uptime (seconds) — parity with the live snapshot's `uptime`.
+    uptime = None
+    try:
+        with open("/proc/uptime") as f:
+            uptime = int(float(f.read().split()[0]))
+    except (OSError, ValueError, IndexError):
+        pass
+
+    # systemd / OOM health signals, so the controller can serve the fleet-health
+    # verdict from this heartbeat instead of live-probing every host each load.
+    health = _collect_health_signals(mounts)
+
     metrics = {
         "load1": load1, "load5": load5, "load15": load15, "cores": cores,
         "cpu": cpu_pct, "mem": mem, "swap": swap, "disk": disk,
         "net_rx": net_rx, "net_tx": net_tx, "io_r": io_r, "io_w": io_w,
-        "procs": proc_count,
+        "procs": proc_count, "uptime": uptime,
+        # Fleet-health signals (see _collect_health_signals): failed-unit count +
+        # names, overall systemd state, OOM-kills, worst-disk mount.
+        "failed": health["failed"], "units": health["units"],
+        "sysd": health["sysd"], "oom": health["oom"], "mount": health["mount"],
     }
     snapshot = {
         "percpu": percpu_pct,

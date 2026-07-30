@@ -268,6 +268,24 @@ def init_db():
     """)
 
     # -----------------------------------------------------
+    # Latest fleet-HEALTH reading per host (one row, overwritten each metrics
+    # heartbeat). Lets the dashboard's fleet-health donut render straight from
+    # what the agent already reports — disk/mem/load + failed-units/systemd/OOM —
+    # instead of dispatching a live probe to every host on each load. `sysd` is
+    # NULL for agents that predate this (or non-systemd hosts); the controller
+    # then falls back to a live probe for that host, so health is never degraded.
+    # -----------------------------------------------------
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS host_health (
+        host_id TEXT PRIMARY KEY,
+        ts REAL NOT NULL,
+        disk INTEGER, mem INTEGER, load1 REAL, cores INTEGER,
+        failed INTEGER, oom INTEGER, uptime INTEGER,
+        sysd TEXT, mount TEXT, units TEXT
+    )
+    """)
+
+    # -----------------------------------------------------
     # Enrollment Tokens
     #
     # bound_host_id/last_used (migrated in below) let an already-used
@@ -995,6 +1013,52 @@ def get_host_snapshot(host_id):
     if not row:
         return None
     return {"ts": row["ts"], "data": row["data"]}
+
+
+def upsert_host_health(host_id, ts, disk, mem, load1, cores, failed, oom,
+                       uptime, sysd, mount, units):
+    """Store the LATEST fleet-health reading for one host (one row, overwritten).
+    `units` is a list of failed-unit names, stored as JSON. Called from the
+    heartbeat handler when the agent attaches health signals; lets the dashboard
+    read health without a live probe. Best-effort at the call site."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO host_health "
+        "(host_id, ts, disk, mem, load1, cores, failed, oom, uptime, sysd, mount, units) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (host_id, float(ts), disk, mem, load1, cores, failed, oom, uptime,
+         sysd, mount, json.dumps(units or [])),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_all_host_health():
+    """Latest fleet-health reading for EVERY host, keyed by host_id, in one query
+    (so the dashboard sweep can serve health without fanning out to the fleet):
+        {host_id: {ts, disk, mem, load1, cores, failed, oom, uptime, sysd, mount, units[]}}
+    `units` is decoded back to a list. Rows whose agent didn't report health
+    (sysd NULL) are still returned; the caller decides to live-probe those."""
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT host_id, ts, disk, mem, load1, cores, failed, oom, uptime, "
+                "sysd, mount, units FROM host_health")
+    rows = cur.fetchall()
+    conn.close()
+    out = {}
+    for r in rows:
+        try:
+            units = json.loads(r["units"]) if r["units"] else []
+        except (ValueError, TypeError):
+            units = []
+        out[r["host_id"]] = {
+            "ts": r["ts"], "disk": r["disk"], "mem": r["mem"], "load1": r["load1"],
+            "cores": r["cores"], "failed": r["failed"], "oom": r["oom"],
+            "uptime": r["uptime"], "sysd": r["sysd"], "mount": r["mount"], "units": units,
+        }
+    return out
 
 
 def get_metric_samples(window_s=3600):

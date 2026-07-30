@@ -518,8 +518,13 @@ cmd_update() {
   if [[ -d "$SRC/.git" ]] && command -v git >/dev/null 2>&1; then
     echo "Pulling latest code (git) ..."
     _git() { git -C "$SRC" -c safe.directory="$SRC" "$@"; }
-    _pull_out="$(_git pull --ff-only 2>&1)"; _pull_rc=$?
-    printf '%s\n' "$_pull_out"
+    # --quiet keeps the update log clean: it drops git's noisy per-branch fetch
+    # summary ("From github.com … * [new branch] dependabot/…") and progress
+    # chatter — the bulk of what the operator was seeing — while any real error
+    # still goes to stderr (captured here and classified structurally below). A
+    # clean fast-forward is silent, so only echo the output when there is some.
+    _pull_out="$(_git pull --quiet --ff-only 2>&1)"; _pull_rc=$?
+    [[ -n "$_pull_out" ]] && printf '%s\n' "$_pull_out"
     if [[ $_pull_rc -ne 0 ]]; then
       # An untracked-file collision ("untracked working tree files would be overwritten
       # by merge") is NOT a ref-store problem — the checkout has untracked files shadowing
@@ -573,8 +578,8 @@ cmd_update() {
       _git remote prune origin 2>&1 || true
       _git for-each-ref --format='%(refname)' refs/remotes/origin 2>/dev/null \
         | while read -r _r; do _git update-ref -d "$_r" 2>/dev/null || true; done
-      _git fetch --prune origin 2>&1 || true
-      if ! _git pull --ff-only 2>&1; then
+      _git fetch --prune --quiet origin 2>&1 || true
+      if ! _git pull --quiet --ff-only 2>&1; then
         # A previous interrupted update can leave a half-finished merge/rebase/
         # cherry-pick that blocks every later pull. Aborting returns the checkout to
         # its pre-operation state (SAFE — no commits or working-tree edits are lost),
@@ -585,7 +590,7 @@ cmd_update() {
           _git rebase --abort 2>/dev/null || true
           _git cherry-pick --abort 2>/dev/null || true
         fi
-        if _git pull --ff-only 2>&1; then
+        if _git pull --quiet --ff-only 2>&1; then
           echo "Recovered from an interrupted operation; update continues."
         else
           # Classify the blocker STRUCTURALLY, not by matching git's English error

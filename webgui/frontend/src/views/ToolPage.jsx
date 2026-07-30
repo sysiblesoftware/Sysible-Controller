@@ -20,8 +20,8 @@ const GROUP_HELP = {
 // Within a group the parameter fields are SHARED across that group's actions
 // (rendered once), and each action is a button that uses them — matching the
 // desktop's "one Service name field + a row of action buttons" pattern.
-export default function ToolPage({ tool, hosts, onRefreshHosts }) {
-  const [targets, setTargets] = useState([]);
+export default function ToolPage({ tool, hosts, onRefreshHosts, prefill }) {
+  const [targets, setTargets] = useState(prefill?.host ? [prefill.host] : []);
   const [groupParams, setGroupParams] = useState({}); // { [groupKey]: { [param]: value } }
   const [results, setResults] = useState([]);          // newest first
   const [runningAction, setRunningAction] = useState("");
@@ -31,6 +31,12 @@ export default function ToolPage({ tool, hosts, onRefreshHosts }) {
   const [activeResult, setActiveResult] = useState(0); // which result tab is shown
   const [role, setRole] = useState("");
   useEffect(() => { api.me().then((d) => setRole(d.role || "")).catch(() => {}); }, []);
+  // Deep-link support: a "Fix →" action from the per-host posture view can open a
+  // tool with a host pre-selected. Add it to the target set (idempotent) so the
+  // operator lands ready to run without re-picking the host they came from.
+  useEffect(() => {
+    if (prefill?.host) setTargets((t) => (t.includes(prefill.host) ? t : [...t, prefill.host]));
+  }, [prefill]);
 
   // Tool actions run through the host's Sysible agent, so only agent-managed
   // hosts are valid targets here. Pure-SSH connection records (no agent) are

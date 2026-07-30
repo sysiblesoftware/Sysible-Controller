@@ -1134,6 +1134,15 @@ def _probe_posture(e, cmd, last_seen, now):
     # isn't root) - root-only checks (shadow, sshd -T, SUID scans) read blank, so
     # the result can't be trusted as "clean". Agent hosts run as root (privileged).
     limited = bool(p) and (p.get("meta") or {}).get("privileged") == "0"
+    # Surface the EOL / unsupported-OS determination as a first-class posture row
+    # (os.eol = yes/no) so the per-host view both SHOWS it and can offer a
+    # remediation (Fix → OS Release Upgrade). The dashboard already computes this
+    # flag from the same _eol_status table; this just exposes it on the row too.
+    if p and isinstance(p.get("os"), dict):
+        try:
+            p["os"]["eol"] = "yes" if _eol_status(p["os"].get("distro"), p["os"].get("version")) else "no"
+        except Exception:
+            pass
     return {
         **base,
         "online": True if p else online,

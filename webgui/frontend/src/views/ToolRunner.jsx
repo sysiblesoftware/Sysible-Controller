@@ -116,7 +116,7 @@ export default function ToolRunner({ openTool, openTab, openPrefill, onConsumed,
           : Custom
             ? <Custom initialTab={open.tab} prefill={open.prefill} hosts={hosts} onRefreshHosts={loadHosts} />
             : tool
-              ? <ToolPage tool={tool} hosts={hosts} onRefreshHosts={loadHosts} />
+              ? <ToolPage tool={tool} hosts={hosts} onRefreshHosts={loadHosts} prefill={open.prefill} />
               : <div className="empty">This tool isn't available.</div>}
       </div>
     );

@@ -32,6 +32,7 @@ const SECTIONS = [
     "os.distro": "Distribution ID", "os.name": "Release", "os.version": "Version",
     "os.kernel": "Kernel", "os.arch": "Architecture", "os.uptime_s": "Uptime",
     "os.boot_epoch": "Booted", "sub.rhsm": "RHEL subscription", "sub.ubuntu_pro": "Ubuntu Pro",
+    "os.eol": "End-of-life / unsupported OS",
     "reboot.required": "Reboot required" } },
   { title: "Security & Hardening", cats: ["mac", "sec", "fw"], labels: {
     "mac.selinux": "SELinux", "mac.apparmor": "AppArmor", "sec.fips": "FIPS mode",
@@ -108,6 +109,7 @@ function evalStatus(fullKey, v) {
   const s = (v == null ? "" : String(v)).trim().toLowerCase();
   switch (fullKey) {
     case "reboot.required": return s === "1" ? "bad" : "good";
+    case "os.eol": return s === "yes" ? "bad" : s === "no" ? "good" : "none";
     case "fw.active": return s === "1" ? "good" : "bad";
     case "mac.selinux": return s === "enforcing" ? "good" : s === "permissive" ? "warn" : s === "disabled" ? "warn" : "none";
     case "mac.apparmor": return s === "enabled" ? "good" : s === "disabled" ? "warn" : "none";
@@ -137,6 +139,7 @@ function evalStatus(fullKey, v) {
 
 function fmtValue(fullKey, v) {
   if (v === "" || v == null) return "—";
+  if (fullKey === "os.eol") return v === "yes" ? "EOL / unsupported" : v === "no" ? "Supported" : v;
   if (fullKey === "os.uptime_s") return fmtUptime(v);
   if (fullKey === "os.boot_epoch") { const d = new Date(parseInt(v, 10) * 1000); return isNaN(d) ? v : d.toLocaleString(); }
   if (fullKey === "fw.active" || fullKey === "reboot.required" || fullKey === "net.ip_forward" ||
@@ -157,6 +160,10 @@ function fmtValue(fullKey, v) {
 const ACTIONS = {
   "reboot.required": { kind: "run", label: "Reboot host", confirm: "Reboot this host now?",
                        refreshAfter: true, run: (hostId) => api.fleet("reboot", [hostId]) },
+  // No in-place fix for an EOL OS — send the operator to the release-upgrade tool
+  // with this host pre-selected so they can assess + upgrade it.
+  "os.eol": { kind: "tool", tool: "OS Release Upgrade",
+    prefill: (posture, hostId) => ({ host: hostId }) },
   "cert.expiring_30d": { kind: "tool", tool: "Certificate Management" },
   "cert.nearest_days": { kind: "tool", tool: "Certificate Management" },
   "fw.active": { kind: "tool", tool: "Firewall Administration" },

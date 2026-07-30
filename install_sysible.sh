@@ -330,9 +330,21 @@ fi
 MTLS_ENV_FILE="$BASE/mtls.env"
 if [[ "$MTLS_ENABLED" == "1" ]]; then
   if [[ -z "$MTLS_CA" || ! -f "$MTLS_CA" ]]; then
-    echo "WARNING: --mtls requested but --mtls-ca is missing or unreadable ('$MTLS_CA')."
-    echo "         Skipping mTLS setup so the controller can still start; re-run with a"
-    echo "         valid --mtls-ca=/path/to/client-ca.crt to enable it."
+    if [[ "$MTLS_MODE" == "optional" ]]; then
+      echo "WARNING: --mtls (optional) requested but --mtls-ca is missing or unreadable"
+      echo "         ('$MTLS_CA'). Skipping mTLS setup; re-run with a valid"
+      echo "         --mtls-ca=/path/to/client-ca.crt to enable it."
+    else
+      # FAIL CLOSED: the operator explicitly asked for REQUIRED client-cert auth.
+      # Silently continuing without it would leave them believing mTLS is on when
+      # it is not, so refuse rather than start server-auth-only.
+      echo "ERROR: --mtls (required) needs a readable --mtls-ca, but '$MTLS_CA' is" >&2
+      echo "       missing or unreadable. Refusing to continue WITHOUT the client-cert" >&2
+      echo "       auth you asked for. Provide the CA and re-run, or use" >&2
+      echo "       --mtls-mode=optional for a staged rollout that logs but still admits" >&2
+      echo "       certless clients." >&2
+      exit 1
+    fi
   else
     case "$MTLS_MODE" in
       optional) _REQS=1 ;;

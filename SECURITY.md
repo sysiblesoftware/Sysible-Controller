@@ -74,7 +74,11 @@ the controller safely.
   controller with `--mtls-mode=optional`; (3) once all clients present certs,
   re-run with `--mtls-mode=required`. Each change is a controller restart
   (uvicorn reads TLS once at start). Turn it off by emptying/removing
-  `mtls.env` and restarting.
+  `mtls.env` and restarting. **Fail-closed:** if you request `required` mTLS
+  but the CA is missing/unreadable, the installer (and the container entrypoint)
+  refuse to proceed rather than silently starting server-auth-only — so you
+  never believe client-cert auth is on when it isn't. `--mtls-mode=optional`
+  with a missing CA warns and continues (staged rollout).
 
 **Authentication & secrets**
 - Admin API key: 256-bit random, stored at `/opt/sysible/api_key.txt`
@@ -93,6 +97,14 @@ the controller safely.
   one. A removed/disenrolled host can be **force-deleted** from the console even
   if its agent is a zombie that won't tear down; deleting the record
   invalidates the secret on the next heartbeat.
+- **Optional enroll source allowlist** (`enroll_ip_allowed`) and a per-IP
+  enrollment flood guard key on the **real socket peer** (never a spoofable
+  `X-Forwarded-For`). Deployment note: run the controller so it **terminates TLS
+  itself** (the default). If you front it with a reverse proxy that re-originates
+  the connection, every enroll appears to come from the proxy (loopback), which
+  is always allowed — so the allowlist and per-IP flood guard would no longer
+  distinguish real clients. Terminate TLS on the controller, or restrict enroll
+  reachability at the network layer, to keep those controls effective.
 - **Credentials at rest are owner-only.** The controller's SQLite database
   (administrator password hashes, agent bearer secrets, live login tokens),
   the API key, the TLS private key, the sudo-store key, and the SSH keys all
@@ -247,18 +259,30 @@ the controller safely.
   trimming).
 - **Tamper-evident hash chain.** Both logs are hash-chained: each row's digest
   covers the previous row's digest plus its own content, so editing,
-  reordering, deleting a middle row, or truncating the tail is detectable.
-  `GET /activity-log/verify` (superuser/auditor) recomputes both chains and
-  reports the first break with its row id. When a secret-vault master key is
-  resolvable the digest is a **keyed HMAC-SHA256** — unforgeable without the
-  key, so even controller root editing SQLite directly can't recompute a valid
-  chain; without a key it degrades to plain SHA-256 (still tamper-evident, but
-  forgeable), and `verify` reports `keyed:false` so you can tell which posture
-  you're in. Trimming the oldest rows for retention is not a break — the chain
-  verifies forward from the oldest retained row. Rows that predate the upgrade
-  are hash-chained once, in insertion order, by a one-time backfill on first
-  start. For a fully independent system of record, still **forward the logs to
-  an external SIEM/log aggregator**.
+  reordering, or deleting a middle row breaks the chain. `GET
+  /activity-log/verify` (superuser/auditor) recomputes both chains and reports
+  the first break with its row id. When a secret-vault master key is resolvable
+  the digest is a **keyed HMAC-SHA256**; without a key it degrades to plain
+  SHA-256 (still tamper-evident, but forgeable), and `verify` reports
+  `keyed:false` so you can tell which posture you're in. Trimming the oldest
+  rows for retention is not a break — the chain verifies forward from the oldest
+  retained row. Rows that predate the upgrade are hash-chained once, on first
+  start.
+  - **Know the trust boundary.** The keyed HMAC is only *unforgeable* when the
+    master key lives **off-box** (`SYSIBLE_SECRET_KEY` / `SYSIBLE_SECRET_KEY_CMD`
+    → KMS/Vault). In the zero-config default the key is a `0600` file next to the
+    database, so a root / full-DB-write attacker can read it and recompute the
+    whole chain — "tamper-evident against root" requires the off-box key. Deploy
+    the recommended posture (off-box key) for genuine unforgeability. The same
+    off-box key is what makes the at-rest agent-secret encryption resistant to a
+    host-filesystem compromise.
+  - **Tail truncation.** Deleting rows off the *end* of the chain is caught only
+    by a high-water mark (`audit_chain_head`) that lives in the same database, so
+    a full DB-write attacker can truncate and rewrite the mark together. The
+    keyed HMAC still stops forging or reordering *retained* rows, but the
+    guarantee "the newest N records can't be silently dropped" is delivered only
+    by shipping events to an append-only external store. **Forward the logs to an
+    external SIEM/log aggregator** and treat that as the authoritative record.
 
 ## Deploying safely — read this
 

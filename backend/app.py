@@ -139,6 +139,39 @@ from backend.remote_routes import (
 app = FastAPI(title="Sysible Controller", docs_url=None, redoc_url=None, openapi_url=None)
 
 
+# ---------------------------------------------------------------------------
+# Scrub a per-host agent secret from access logs. Current agents send the secret
+# in the X-Agent-Secret header (never logged), but the poll/pty endpoints also
+# accept it as a `?agent_secret=` query param for backward compatibility with
+# older field agents — and a secret in the URL lands in the uvicorn access log
+# (and any TLS-terminating proxy log) in cleartext. Redact it there so the
+# compat fallback can't leak a bearer secret into logs.
+# ---------------------------------------------------------------------------
+import logging as _logging
+import re as _re_log
+
+
+class _RedactAgentSecretFilter(_logging.Filter):
+    _PAT = _re_log.compile(r"(agent_secret=)[^&\s\"']+", _re_log.IGNORECASE)
+
+    def filter(self, record):
+        try:
+            if record.args:
+                args = tuple(
+                    self._PAT.sub(r"\1[redacted]", a) if isinstance(a, str) and "agent_secret=" in a.lower() else a
+                    for a in record.args
+                )
+                record.args = args
+            if isinstance(record.msg, str) and "agent_secret=" in record.msg.lower():
+                record.msg = self._PAT.sub(r"\1[redacted]", record.msg)
+        except Exception:
+            pass
+        return True
+
+
+_logging.getLogger("uvicorn.access").addFilter(_RedactAgentSecretFilter())
+
+
 def _max_request_bytes() -> int:
     """Global request-body ceiling for the controller API. The high-volume agent
     endpoints (heartbeat snapshot, task result, metrics) otherwise accept an

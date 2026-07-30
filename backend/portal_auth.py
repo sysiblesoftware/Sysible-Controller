@@ -73,6 +73,15 @@ def verify_password(password: str, salt_hex: str, expected_hash_hex: str) -> boo
         iters, expected_digest = LEGACY_PBKDF2_ITERATIONS, expected_hash_hex
 
     actual_digest = _pbkdf2(password, salt_hex, iters)
+    # Constant-cost verify. A legacy (200k) hash otherwise completes ~3x faster than
+    # the 600k decoy run for an unknown username, so timing a WRONG password
+    # distinguishes "real account still on the legacy cost" from "no such user" — a
+    # user-enumeration oracle (a correct password upgrades the hash, but an attacker
+    # only ever submits wrong ones, so the upgrade never fires for them). Burn the
+    # iteration shortfall so a legacy-account verify costs the same ~PBKDF2_ITERATIONS
+    # as a current-account verify and the unknown-user decoy. Cheap: one login's worth.
+    if iters < PBKDF2_ITERATIONS:
+        _pbkdf2(password, salt_hex, PBKDF2_ITERATIONS - iters)
     return hmac.compare_digest(actual_digest, expected_digest)
 
 

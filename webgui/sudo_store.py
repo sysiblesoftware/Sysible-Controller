@@ -59,17 +59,35 @@ def _derived_key():
         return None
 
 
+def _read_key_nofollow():
+    """Read the key file WITHOUT following a symlink — matching the O_NOFOLLOW write
+    path below and secret_vault's read path. A local attacker who can pre-plant a
+    symlink at run/webgui_sudo.key must not be able to redirect this read to a file
+    they control (or to slurp an arbitrary file in as the key). Returns bytes, or
+    None if the file is missing, is a symlink, or can't be read — the caller then
+    fails closed (never stores plaintext) rather than trusting a redirected read."""
+    try:
+        fd = os.open(str(_KEY_FILE), os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        return os.read(fd, 4096).strip()
+    finally:
+        os.close(fd)
+
+
 def _legacy_key(create=True):
     """The co-located run/webgui_sudo.key. With create=False it is only returned
     when it already exists (used on the read path so a status/read never mints a
     fresh legacy key once the store has migrated to a master-derived key)."""
     if not _HAVE_FERNET:
         return None
+    existing = _read_key_nofollow()
+    if existing:
+        return existing
+    if not create:
+        return None
     try:
-        if _KEY_FILE.exists():
-            return _KEY_FILE.read_bytes().strip()
-        if not create:
-            return None
         _RUN_DIR.mkdir(parents=True, exist_ok=True)
         key = Fernet.generate_key()
         # Create the key file 0600 FROM THE START. The old write_bytes()+chmod
@@ -83,8 +101,8 @@ def _legacy_key(create=True):
             os.close(fd)
         return key
     except FileExistsError:
-        # Another process created it in the race — read theirs.
-        return _KEY_FILE.read_bytes().strip()
+        # Another process created it in the race — read theirs (no-follow).
+        return _read_key_nofollow()
     except OSError:
         return None
 

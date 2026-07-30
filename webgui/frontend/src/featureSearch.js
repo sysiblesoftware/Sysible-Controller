@@ -31,6 +31,8 @@ export const REGISTRY = [
     keywords: ["cron job", "add cron job", "systemd timer", "scheduled task", "schedule a task"] },
   { title: "Host Software Management", section: "sysadmin", tool: "Host Software Management",
     keywords: ["install package", "remove package", "update package", "query package", "verify package", "clean package cache", "upgrade packages", "search package"] },
+  { title: "OS Release Upgrade", section: "sysadmin", tool: "OS Release Upgrade",
+    keywords: ["release upgrade", "distro upgrade", "distribution upgrade", "major upgrade", "upgrade os", "upgrade distro", "leapp", "do-release-upgrade", "dnf system-upgrade", "zypper dup", "zypper migration", "rocky 8 to 9", "rhel upgrade", "fedora upgrade", "ubuntu release upgrade", "suse migration", "opensuse leap upgrade", "next release"] },
   { title: "Repository Management", section: "sysadmin", tool: "Repository Management",
     keywords: ["add repository", "add a repo", "enable repository", "disable repository", "remove repository", "repo to all hosts"] },
   { title: "Network Management", section: "sysadmin", tool: "Network Management",

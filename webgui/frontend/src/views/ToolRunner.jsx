@@ -32,6 +32,7 @@ const TOOLS = [
   ["Cron & Systemd Timers", "View, add, and remove cron jobs, and view, create, start/stop, enable/disable, and delete systemd timers.", "clock", "ico-amber"],
   ["Environment & Shell", "Set and remove persistent, system-wide environment variables and shell aliases across managed hosts (via /etc/profile.d drop-ins for new login shells).", "cogs", "ico-teal"],
   ["Host Software Management", "Detect each host's package manager, then install, remove, update, query, verify, and clean packages across dnf/yum, zypper, and apt hosts alike.", "box", "ico-teal"],
+  ["OS Release Upgrade", "Move a host to its next major/distribution release with the right mechanism per distro — Leapp (RHEL/Rocky/Alma), dnf system-upgrade (Fedora), do-release-upgrade (Ubuntu), and zypper migration/dup (SUSE/openSUSE). Assess first; nothing auto-reboots.", "level-up", "ico-crimson"],
   ["Repository Management", "List, add, enable, disable, and remove software repositories across dnf/yum, zypper, and apt hosts.", "code-branch", "ico-rose"],
   ["Network Management", "Diagnose connectivity and DNS, inspect ports and capture packets, and configure IP/DHCP/DNS/gateway/routing/hostname/bonding/teaming/VLANs/bridges/MTU across managed hosts.", "network-wired", "ico-sky"],
   ["File System Management", "Create/remove directories, copy/move/rename files, manage ownership/permissions/ACLs and links, mount/unmount/resize/repair filesystems, configure /etc/fstab and quotas, and archive/compress files across managed hosts.", "hdd", "ico-indigo"],

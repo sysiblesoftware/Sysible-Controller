@@ -605,3 +605,217 @@ def cmd_list_installed_packages() -> str:
         "rpm -qa --qf '%{NAME}\\n' 2>/dev/null; "
         'else echo "Neither dpkg nor rpm found on this host."; fi'
     )
+
+
+# ----------------------------------------------------------------------
+# Major / distribution release upgrade (leapp, dnf system-upgrade,
+# do-release-upgrade, zypper migration / dup)
+# ----------------------------------------------------------------------
+# A `target` release/codename is interpolated into the shell (--releasever=,
+# --target, leap $releasever). It is therefore STRICTLY whitelisted: it must
+# start alphanumeric and contain only letters, digits, dot, dash or underscore.
+# That set covers every real value ("9", "9.4", "40", "15.6", "noble") and
+# excludes spaces and every shell metacharacter, so `target` can never inject
+# shell. Anything else is rejected before it reaches a command string.
+_RELEASE_TARGET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
+
+
+def _validate_release_target(target: str) -> str:
+    """Return the trimmed target if it is empty or matches the whitelist; raise
+    otherwise. Per-distro *requiredness* is enforced in the generated script (it
+    depends on the host's distro, only known at run time), so empty is allowed
+    here — format is all we can safely check up front."""
+    t = (target or "").strip()
+    if not t:
+        return ""
+    if not _RELEASE_TARGET_RE.match(t):
+        raise ValueError(
+            "Invalid target release. Use only letters, digits, dot, dash or "
+            "underscore — e.g. '9', '9.4', '40', '15.6', or an Ubuntu codename "
+            "like 'noble'."
+        )
+    return t
+
+
+def _release_upgrade_script(target: str, assess: bool) -> str:
+    """Build a distro-aware major/release-upgrade (or, when ``assess`` is True, a
+    non-destructive pre-flight assessment) script.
+
+    The mechanism is chosen from /etc/os-release at run time because it varies by
+    distro *family*, which `dnf`-vs-`zypper`-vs-`apt` alone can't distinguish:
+      * RHEL family (rhel/rocky/almalinux/centos/oracle) -> Leapp
+      * Fedora                                           -> dnf system-upgrade (needs target releasever)
+      * Ubuntu                                           -> do-release-upgrade
+      * Debian                                           -> not automated (guidance only; sources-list rewrite)
+      * openSUSE Leap                                    -> zypper dup at --releasever (needs target)
+      * openSUSE Tumbleweed                              -> zypper dup (rolling; no target)
+      * SLES/SLED                                        -> zypper migration (needs SCC/RMT registration)
+
+    Nothing here auto-reboots: RHEL/Fedora stage the transaction and print the
+    reboot command; the operator (or a follow-up rollout) reboots deliberately.
+    `target` is whitelisted by _validate_release_target() so it is safe to inline.
+    """
+    t = _validate_release_target(target)
+    mode = "assess" if assess else "upgrade"
+    # `set -e` is deliberately omitted: several assessment commands (e.g.
+    # `do-release-upgrade -c`) return non-zero benignly, and each branch does its
+    # own error handling.
+    return f'''MODE={mode}
+TARGET="{t}"
+if [ ! -r /etc/os-release ]; then echo "Cannot detect OS: /etc/os-release is missing." >&2; exit 1; fi
+. /etc/os-release
+echo "Current OS: ${{PRETTY_NAME:-${{ID:-unknown}}}}"
+
+# Resolve the distro family (explicit IDs first, then ID_LIKE as a fallback).
+family=unknown
+case "${{ID:-}}" in
+  fedora) family=fedora ;;
+  rhel|centos|rocky|almalinux|ol|oracle|scientific) family=rhel ;;
+  ubuntu) family=ubuntu ;;
+  debian|raspbian) family=debian ;;
+  opensuse-leap|opensuse|opensuse-microos) family=leap ;;
+  opensuse-tumbleweed) family=tumbleweed ;;
+  sles|sled|suse) family=sles ;;
+  *)
+    case " ${{ID_LIKE:-}} " in
+      *rhel*|*centos*|*fedora*) family=rhel ;;
+      *suse*) family=leap ;;
+      *ubuntu*) family=ubuntu ;;
+      *debian*) family=debian ;;
+    esac ;;
+esac
+echo "Upgrade family: $family (mode: $MODE)"
+echo
+
+need_target() {{
+  if [ -z "$TARGET" ]; then
+    echo "This host ($family) needs an explicit target version — re-run with the Target field set (e.g. $1)." >&2
+    exit 2
+  fi
+}}
+
+case "$family" in
+  rhel)
+    PKGMGR="$(command -v dnf 2>/dev/null || command -v yum 2>/dev/null)"
+    if [ -z "$PKGMGR" ]; then echo "No dnf/yum found — cannot run Leapp." >&2; exit 1; fi
+    if ! "$PKGMGR" install -y leapp-upgrade; then
+      echo "Could not install leapp-upgrade. Ensure the OS repos/subscription that ship Leapp are enabled." >&2
+      exit 1
+    fi
+    if [ "$MODE" = assess ]; then
+      echo "Running Leapp pre-upgrade assessment (no changes to the running system)…"
+      leapp preupgrade ${{TARGET:+--target "$TARGET"}} || true
+      echo
+      echo "Review the report and resolve every inhibitor BEFORE upgrading:"
+      echo "  /var/log/leapp/leapp-report.txt"
+    else
+      echo "Running Leapp upgrade (this refuses to proceed if inhibitors remain)…"
+      leapp upgrade ${{TARGET:+--target "$TARGET"}}
+      echo
+      echo "Leapp staged the upgrade. REBOOT to run the actual upgrade transaction:"
+      echo "  sudo shutdown -r now"
+      echo "The first boot runs the RPM transaction in the upgrade initramfs — do NOT interrupt it."
+    fi
+    ;;
+
+  fedora)
+    need_target "40"
+    if [ "$MODE" = assess ]; then
+      echo "Plan: dnf system-upgrade to Fedora $TARGET. Assessment refreshes metadata only."
+      dnf -y --refresh check-update >/dev/null 2>&1 || true
+      echo "Ready. Run the upgrade action to download Fedora $TARGET, then reboot to apply."
+    else
+      dnf -y --refresh upgrade
+      dnf -y install dnf-plugin-system-upgrade || dnf -y install dnf5-plugin-system-upgrade || true
+      dnf -y system-upgrade download --releasever="$TARGET"
+      echo
+      echo "Downloaded Fedora $TARGET. Apply it with a reboot into the offline upgrade:"
+      echo "  sudo dnf system-upgrade reboot"
+    fi
+    ;;
+
+  ubuntu)
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y update-manager-core >/dev/null 2>&1 || true
+    if [ "$MODE" = assess ]; then
+      echo "Checking for an available Ubuntu release upgrade…"
+      if do-release-upgrade -c; then :; else
+        echo "No new release offered (or /etc/update-manager/release-upgrades Prompt= policy blocks it)."
+      fi
+    else
+      apt-get update && apt-get -y upgrade
+      echo "Starting do-release-upgrade (non-interactive)…"
+      do-release-upgrade -f DistUpgradeViewNonInteractive
+    fi
+    ;;
+
+  debian)
+    echo "Debian has no do-release-upgrade. Major-version upgrades are done by:" >&2
+    echo "  1) point /etc/apt/sources.list (and sources.list.d/*) at the new codename (e.g. bookworm)" >&2
+    echo "  2) apt-get update && apt-get -y upgrade && apt-get -y full-upgrade" >&2
+    echo "Sysible does not auto-rewrite Debian sources — run this through your change process." >&2
+    [ "$MODE" = assess ] && exit 0 || exit 2
+    ;;
+
+  tumbleweed)
+    zypper --non-interactive refresh
+    if [ "$MODE" = assess ]; then
+      echo "openSUSE Tumbleweed is rolling — assessing with a dry-run dup…"
+      zypper --non-interactive dup --dry-run
+    else
+      zypper --non-interactive dup
+      echo
+      echo "Distribution upgrade applied. Reboot to boot the new kernel: sudo shutdown -r now"
+    fi
+    ;;
+
+  leap)
+    need_target "15.6"
+    zypper --releasever="$TARGET" refresh
+    if [ "$MODE" = assess ]; then
+      echo "Assessing openSUSE Leap $TARGET distribution upgrade (dry-run)…"
+      zypper --releasever="$TARGET" --non-interactive dup --dry-run --allow-vendor-change
+    else
+      zypper --releasever="$TARGET" --non-interactive dup --allow-vendor-change
+      echo
+      echo "Distribution upgrade to Leap $TARGET applied. Reboot to boot the new kernel: sudo shutdown -r now"
+    fi
+    ;;
+
+  sles)
+    if ! command -v zypper >/dev/null 2>&1; then echo "zypper not found." >&2; exit 1; fi
+    if [ "$MODE" = assess ]; then
+      echo "Assessing SLES migration (needs SCC/RMT registration). Available targets:"
+      zypper --non-interactive migration --dry-run || {{
+        echo "Migration query failed — confirm the system is registered (SUSEConnect --status-text)." >&2; exit 1; }}
+    else
+      echo "Running SLES migration (zypper migration)…"
+      zypper --non-interactive migration --auto-agree-with-licenses
+      echo
+      echo "Migration complete. Reboot to boot the new kernel: sudo shutdown -r now"
+    fi
+    ;;
+
+  *)
+    echo "Release upgrade is not supported/automated for this distro (ID=${{ID:-unknown}})." >&2
+    exit 1
+    ;;
+esac'''
+
+
+def cmd_release_upgrade_check(target: str = "") -> str:
+    """Non-destructive pre-flight assessment of a major/distribution upgrade:
+    detects the distro family and runs its assessment step (Leapp preupgrade,
+    do-release-upgrade -c, zypper dup --dry-run, …). RHEL's Leapp path installs
+    the leapp-upgrade tooling to produce its report; nothing else changes the
+    running system, and nothing reboots."""
+    return _release_upgrade_script(target, assess=True)
+
+
+def cmd_release_upgrade(target: str = "") -> str:
+    """Perform a major/distribution release upgrade with the right mechanism for
+    the host's distro (Leapp, dnf system-upgrade, do-release-upgrade, zypper
+    migration/dup). Fedora and openSUSE Leap require an explicit `target`
+    version; RHEL/Ubuntu/Tumbleweed/SLES auto-select. Nothing auto-reboots — the
+    RPM-family paths stage the transaction and print the reboot command."""
+    return _release_upgrade_script(target, assess=False)

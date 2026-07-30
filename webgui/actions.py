@@ -253,6 +253,38 @@ _register(Action(
     label="Clean package cache", params=[],
     build=lambda p: api.cmd_clean_package_cache()))
 
+# ---- Tool: OS Release Upgrade ----------------------------------------
+# Major / distribution version upgrades (RHEL 8->9 via Leapp, Fedora via
+# dnf system-upgrade, Ubuntu via do-release-upgrade, openSUSE/SLES via
+# zypper dup / migration). Kept OUT of "Host Software Management" (which is
+# package-level patching) because it's a distinct, higher-blast-radius
+# operation. The builders pick the mechanism from the host's /etc/os-release.
+_relup_target = Param(
+    "target", "Target version", required=False,
+    help="Required for Fedora and openSUSE Leap (e.g. 40, 15.6). "
+         "RHEL/Ubuntu/Tumbleweed/SLES auto-select the next release; an Ubuntu "
+         "codename (e.g. noble) is also accepted.",
+    placeholder="e.g. 9.4, 40, 15.6, noble")
+_register(Action(
+    name="relup_check", tool="OS Release Upgrade",
+    label="Pre-flight assessment (safe)",
+    description="Detect the host's distro and run its NON-destructive pre-upgrade "
+                "assessment — Leapp preupgrade, do-release-upgrade -c, or zypper "
+                "dup --dry-run. Does not reboot; RHEL installs the Leapp tooling "
+                "to produce its report.",
+    params=[_relup_target],
+    build=lambda p: api.cmd_release_upgrade_check(_s(p, "target"))))
+_register(Action(
+    name="relup_run", tool="OS Release Upgrade",
+    label="Upgrade to next release",
+    danger=True,
+    description="Perform a major/distribution upgrade with the right mechanism per "
+                "distro (Leapp, dnf system-upgrade, do-release-upgrade, zypper "
+                "migration/dup). Assess first. Nothing auto-reboots — the RPM-family "
+                "paths stage the transaction and print the reboot command.",
+    params=[_relup_target],
+    build=lambda p: api.cmd_release_upgrade(_s(p, "target"))))
+
 # ---- Tool: Repository Management --------------------------------------
 _register(Action(
     name="repo_list", tool="Repository Management", label="List repositories",
@@ -1482,6 +1514,10 @@ _LAYOUT: dict[str, list] = {
         ("nftables", "Rules", ["fw_nft_add_rule", "fw_nft_delete_rule"]),
         ("iptables", "Rules", ["fw_iptables_list", "fw_iptables_save",
                                "fw_iptables_add", "fw_iptables_delete", "fw_iptables_flush"]),
+    ],
+    "OS Release Upgrade": [
+        ("Release Upgrade", "1. Assess (safe, run first)", ["relup_check"]),
+        ("Release Upgrade", "2. Upgrade to next release", ["relup_run"]),
     ],
     "Network Management": [
         ("Diagnostics", "Show", ["net_ip", "net_devices", "net_routes", "net_connections", "net_listening"]),

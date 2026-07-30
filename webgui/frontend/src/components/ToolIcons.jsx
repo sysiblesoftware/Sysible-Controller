@@ -22,6 +22,7 @@ const P = {
   "users-cog": <><circle cx="8" cy="8" r="3" /><path d="M2 20c0-3 3-5 6-5 1 0 2 .2 3 .6" /><circle cx="17" cy="16" r="2.5" /><path d="M17 12v1.5M17 18.5V20M13 16h1.5M19.5 16H21" /></>,
   "id-card": <><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="8" cy="11" r="2" /><path d="M5 16c0-1.5 1.5-2.5 3-2.5s3 1 3 2.5M14 9h4M14 12h4M14 15h2" /></>,
   bolt: <><path d="M13 3L4 14h6l-1 7 9-11h-6z" /></>,
+  "level-up": <><path d="M4 4h16" /><path d="M12 21V8" /><path d="M6 14l6-6 6 6" /></>,
 };
 
 export default function ToolIcon({ name, size = 22 }) {

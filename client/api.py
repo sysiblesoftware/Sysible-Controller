@@ -107,6 +107,26 @@ def _headers():
 
 _SESSION = requests.Session()
 
+# Optional CLIENT certificate for mutual TLS. When the controller is started with
+# --mtls it requires callers to present a cert signed by its client-CA; set
+# SYSIBLE_CLIENT_CERT (plus SYSIBLE_CLIENT_KEY, unless the cert file already bundles
+# the key) so this BFF/CLI presents one. Attached at the session level so it covers
+# ping(), every _request(), and _download_binary(). OFF by default: with neither var
+# set the session is byte-for-byte the previous behaviour (server-auth TLS only), so
+# a non-mTLS controller is unaffected — and a client cert can be pre-provisioned
+# before the server enforces mTLS, enabling a two-phase rollout. _VERIFY (server-auth
+# pinning) is orthogonal and unchanged.
+_CLIENT_CERT = os.getenv("SYSIBLE_CLIENT_CERT")
+_CLIENT_KEY = os.getenv("SYSIBLE_CLIENT_KEY")
+if _CLIENT_CERT and os.path.exists(_CLIENT_CERT):
+    if _CLIENT_KEY and os.path.exists(_CLIENT_KEY):
+        _SESSION.cert = (_CLIENT_CERT, _CLIENT_KEY)
+    else:
+        _SESSION.cert = _CLIENT_CERT
+elif _CLIENT_CERT:
+    print(f"[api] warning: SYSIBLE_CLIENT_CERT set but not found at {_CLIENT_CERT}; "
+          "not presenting a client certificate.")
+
 
 def ping():
     try:

@@ -54,6 +54,28 @@ the controller safely.
   removing a host forgets its pinned key so a legitimate rebuild can re-enroll
   at the same IP.
 
+- **Controller-layer RBAC.** Role enforcement is on the controller, not only
+  the web console: every privileged route resolves the caller's admin token
+  against the controller's own DB (`require_superuser` / `require_activity_viewer`
+  dependencies) and refuses the read-only `auditor` role at the task-dispatch
+  path — so holding the API key alone doesn't grant a role the token lacks. The
+  actor attributed in the audit log and the run-as identity handed to the agent
+  come from that validated token, never a client-supplied field.
+- **Optional mutual TLS (client certificates).** Off by default. For a
+  hardened deployment the controller API on :9000 can require every caller to
+  present a client certificate signed by a CA you control, so a leaked API key
+  alone can't reach the API from an unprovisioned host. Enable it at install
+  with `--mtls --mtls-ca=/path/to/client-ca.crt` (add `--mtls-mode=optional`
+  for a staged rollout that logs but still accepts certless clients); this
+  writes `/opt/sysible/mtls.env`, which the systemd unit sources to pass
+  `--ssl-cert-reqs`/`--ssl-ca-certs` to uvicorn. The console/CLI present their
+  cert via `SYSIBLE_CLIENT_CERT` (+ `SYSIBLE_CLIENT_KEY`). Recommended rollout:
+  (1) issue client certs and set those vars on the BFF/CLI; (2) start the
+  controller with `--mtls-mode=optional`; (3) once all clients present certs,
+  re-run with `--mtls-mode=required`. Each change is a controller restart
+  (uvicorn reads TLS once at start). Turn it off by emptying/removing
+  `mtls.env` and restarting.
+
 **Authentication & secrets**
 - Admin API key: 256-bit random, stored at `/opt/sysible/api_key.txt`
   mode `600` (root-only), compared in constant time. Never sent to a

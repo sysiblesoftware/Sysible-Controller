@@ -32,20 +32,34 @@ fi
 RESTRICT_FIREWALL=0
 AGENT_CIDR=""
 ADMIN_CIDR=""
+# Optional mutual-TLS (client-certificate auth) on the controller API :9000.
+# OFF by default; enabled with --mtls (or SYSIBLE_MTLS_ENABLED=1). Requires a CA
+# that signed the client certs the BFF/CLI will present.
+MTLS_ENABLED="${SYSIBLE_MTLS_ENABLED:-0}"
+MTLS_CA="${SYSIBLE_MTLS_CA:-}"
+MTLS_MODE="${SYSIBLE_MTLS_MODE:-required}"   # required|optional
 for arg in "$@"; do
   case "$arg" in
     --restrict-firewall) RESTRICT_FIREWALL=1 ;;
     --agent-cidr=*)      AGENT_CIDR="${arg#*=}" ;;
     --admin-cidr=*)      ADMIN_CIDR="${arg#*=}" ;;
+    --mtls)              MTLS_ENABLED=1 ;;
+    --mtls-ca=*)         MTLS_CA="${arg#*=}"; MTLS_ENABLED=1 ;;
+    --mtls-mode=*)       MTLS_MODE="${arg#*=}" ;;
     -h|--help)
       echo "Usage: $0 [--restrict-firewall --agent-cidr=CIDR[,CIDR] --admin-cidr=CIDR[,CIDR]]"
+      echo "          [--mtls --mtls-ca=/path/to/client-ca.crt [--mtls-mode=required|optional]]"
       echo "  --restrict-firewall  scope opened ports to the given CIDRs (default: open to all)"
       echo "  --agent-cidr=CIDR    source(s) allowed to reach the agent API on :9000"
       echo "  --admin-cidr=CIDR    source(s) allowed to reach the web console on :8800"
+      echo "  --mtls               require client certificates on the controller API :9000"
+      echo "  --mtls-ca=PATH       CA that signed the client certs (required with --mtls)"
+      echo "  --mtls-mode=MODE     required (default) rejects certless clients; optional logs only"
       exit 0 ;;
     *) echo "WARNING: ignoring unknown argument '$arg'" ;;
   esac
 done
+case "$MTLS_ENABLED" in 1|true|yes|on|TRUE|Yes|On) MTLS_ENABLED=1 ;; *) MTLS_ENABLED=0 ;; esac
 if [[ "$RESTRICT_FIREWALL" == "1" && -z "$AGENT_CIDR" && -z "$ADMIN_CIDR" ]]; then
   echo "WARNING: --restrict-firewall given without --agent-cidr/--admin-cidr;"
   echo "         nothing to scope, so ports will be opened to all as usual."
@@ -303,6 +317,45 @@ if [[ -f "$CERT_FILE" && ! -f "$TRUST_FILE" ]]; then
 fi
 
 # =========================================================
+# OPTIONAL MUTUAL TLS (client-certificate auth) on the API :9000
+# The systemd unit sources $BASE/mtls.env at runtime and passes
+# $SYSIBLE_MTLS_ARGS to uvicorn. We only WRITE that file when --mtls is
+# requested (never delete it on a plain redeploy, so an operator's manual
+# mTLS config survives), and we validate the CA first so a fresh install can't
+# be left unable to start. Turn mTLS OFF by emptying/removing mtls.env and
+# restarting. The clients that call the API (BFF/CLI) must present a cert signed
+# by this CA — set SYSIBLE_CLIENT_CERT / SYSIBLE_CLIENT_KEY for them (see
+# client/api.py and SECURITY.md).
+# =========================================================
+MTLS_ENV_FILE="$BASE/mtls.env"
+if [[ "$MTLS_ENABLED" == "1" ]]; then
+  if [[ -z "$MTLS_CA" || ! -f "$MTLS_CA" ]]; then
+    echo "WARNING: --mtls requested but --mtls-ca is missing or unreadable ('$MTLS_CA')."
+    echo "         Skipping mTLS setup so the controller can still start; re-run with a"
+    echo "         valid --mtls-ca=/path/to/client-ca.crt to enable it."
+  else
+    case "$MTLS_MODE" in
+      optional) _REQS=1 ;;
+      required|*) _REQS=2 ;;
+    esac
+    # Copy the CA into the cert dir (0644) so it lives with the other TLS material
+    # and survives the source checkout going away.
+    MTLS_CA_DEST="$CERT_DIR/mtls_ca.crt"
+    cp -f "$MTLS_CA" "$MTLS_CA_DEST"
+    chmod 644 "$MTLS_CA_DEST"
+    printf '%s\n' \
+      "# Sysible controller mutual-TLS args for uvicorn (managed by install_sysible.sh --mtls)." \
+      "# Empty this file (or remove it) and restart to turn mTLS OFF." \
+      "SYSIBLE_MTLS_ARGS=--ssl-cert-reqs $_REQS --ssl-ca-certs $MTLS_CA_DEST" \
+      > "$MTLS_ENV_FILE"
+    chmod 600 "$MTLS_ENV_FILE"
+    echo "Mutual TLS ENABLED (mode=$MTLS_MODE): clients must present a cert signed by"
+    echo "  $MTLS_CA_DEST. Configure SYSIBLE_CLIENT_CERT/SYSIBLE_CLIENT_KEY on the console"
+    echo "  and any CLI/agent that calls the API, then restart the backend."
+  fi
+fi
+
+# =========================================================
 # PROVISION THE ADMIN API KEY
 # Every admin/API endpoint requires this key (X-API-Key header).
 # Generate it now (mode 600) so it exists with the right
@@ -338,12 +391,17 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=$BASE
 Environment=PYTHONPATH=$BASE
+# Optional mutual-TLS args, sourced at RUNTIME from mtls.env if present (the '-'
+# makes a missing file a no-op). Empty/absent => mTLS OFF (server-auth TLS only).
+# Managed by 'install_sysible.sh --mtls'; see SECURITY.md. Single-\$ so systemd
+# splits it into separate uvicorn args on whitespace.
+EnvironmentFile=-$BASE/mtls.env
 # Bind address for the controller API. Defaults to 0.0.0.0 because remote agents
 # connect here — but this port also carries the admin/console surface (behind the
 # root-only API key). HARDENING: set SYSIBLE_CONTROLLER_BIND to a specific NIC IP
 # before install to bind only that interface, and firewall :9000 to your management
 # + agent networks. (Resolved at install time; edit this ExecStart to change later.)
-ExecStart=$VENV/bin/uvicorn backend.app:app --host ${SYSIBLE_CONTROLLER_BIND:-0.0.0.0} --port 9000 --ssl-keyfile $KEY_FILE --ssl-certfile $CERT_FILE --log-level info
+ExecStart=$VENV/bin/uvicorn backend.app:app --host ${SYSIBLE_CONTROLLER_BIND:-0.0.0.0} --port 9000 --ssl-keyfile $KEY_FILE --ssl-certfile $CERT_FILE \$SYSIBLE_MTLS_ARGS --log-level info
 Restart=always
 RestartSec=5
 User=root

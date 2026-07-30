@@ -45,6 +45,8 @@ export default function Topology({ onOpen }) {
   const drag = useRef(null);        // background pan
   const nodeDrag = useRef(null);    // dragging a single node / hub / controller
   const svgRef = useRef(null);
+  const userAdjusted = useRef(false);   // once the user pans/zooms, stop auto-fitting
+  const lastFitSig = useRef("");        // structural signature we last fit to
 
   const load = useCallback(() => {
     if (inFlight.current) return;
@@ -181,6 +183,44 @@ export default function Topology({ onOpen }) {
   }, [laid, center]);
   const hoverObj = hover ? nodeById[hover] : null;
 
+  // Fit-to-view: center + scale the whole graph (controller + hubs + hosts) into
+  // the viewport. The radial layout pins the controller at the viewBox centre, so
+  // with few groups the content sits off to one side and hosts run past an edge —
+  // this reframes it so everything is visible. Padding leaves room for the labels
+  // that sit below/around each node.
+  const fitView = useCallback(() => {
+    const pts = [[laid.ctrl.x, laid.ctrl.y]];
+    laid.hubs.forEach((h) => pts.push([h.x, h.y]));
+    laid.nodes.forEach((n) => pts.push([n.x, n.y]));
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [x, y] of pts) {
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+    if (!Number.isFinite(minX)) return;
+    const padX = 80, padTop = 46, padBottom = 66;   // labels hang below the nodes
+    minX -= padX; maxX += padX; minY -= padTop; maxY += padBottom;
+    const cw = Math.max(1, maxX - minX), ch = Math.max(1, maxY - minY);
+    const s = Math.max(0.3, Math.min(3, Math.min(W / cw, H / ch)));
+    const bcx = (minX + maxX) / 2, bcy = (minY + maxY) / 2;
+    setView({ s, tx: W / 2 - s * bcx, ty: H / 2 - s * bcy });
+  }, [laid]);
+
+  // Re-fit only when the STRUCTURE changes (group set / lens / collapse / which
+  // hosts exist) — not on every 10 s value refresh, and never after the user has
+  // panned or zoomed themselves.
+  const fitSig = useMemo(() =>
+    lens + "|" + laid.hubs.map((h) => h.key + (h.collapsed ? "c" : "")).join(",")
+         + "|" + laid.nodes.map((n) => n.id).join(","),
+    [lens, laid]);
+  useEffect(() => {
+    if (laid.hubs.length === 0) return;           // nothing to frame yet
+    if (userAdjusted.current) return;             // respect a manual pan/zoom
+    if (fitSig === lastFitSig.current) return;    // structure unchanged
+    lastFitSig.current = fitSig;
+    fitView();
+  }, [fitSig, fitView, laid.hubs.length]);
+
   const counts = useMemo(() => {
     let on = 0, off = 0, crit = 0;
     for (const n of all) { if (n.isController) continue; if (n.online === false) off++; else if (n.online) on++; if (n.hasCrit && n.online !== false) crit++; }
@@ -190,12 +230,16 @@ export default function Topology({ onOpen }) {
   const toggleGroup = (key) => setCollapsed((c) => ({ ...c, [key]: !c[key] }));
   const collapseAll = () => setCollapsed(Object.fromEntries(groups.map((g) => [g.key, true])));
   const expandAll = () => setCollapsed({});
-  const zoom = (f) => setView((v) => {
-    const s = Math.max(0.4, Math.min(3, v.s * f));
-    return { s, tx: v.tx + (v.s - s) * cx, ty: v.ty + (v.s - s) * cy };
-  });
-  // Reset view AND any manual node positions back to the computed layout.
-  const resetView = () => { setView({ s: 1, tx: 0, ty: 0 }); setPositions({}); };
+  const zoom = (f) => {
+    userAdjusted.current = true;
+    setView((v) => {
+      const s = Math.max(0.4, Math.min(3, v.s * f));
+      return { s, tx: v.tx + (v.s - s) * cx, ty: v.ty + (v.s - s) * cy };
+    });
+  };
+  // Reset any manual node positions and re-fit the whole graph to the viewport
+  // (clearing the "user adjusted" flag so the fit effect reframes it).
+  const resetView = () => { userAdjusted.current = false; lastFitSig.current = ""; setPositions({}); };
   const onWheel = (e) => { zoom(e.deltaY < 0 ? 1.12 : 0.89); };
   const onDown = (e) => { drag.current = { x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty }; };
 
@@ -220,6 +264,7 @@ export default function Topology({ onOpen }) {
       return;
     }
     if (!drag.current || !svgRef.current) return;
+    userAdjusted.current = true;   // a manual pan; stop auto-fitting
     const k = svgUnitsPerPx();
     setView((v) => ({ ...v, tx: drag.current.tx + (e.clientX - drag.current.x) * k, ty: drag.current.ty + (e.clientY - drag.current.y) * k }));
   };
@@ -256,7 +301,7 @@ export default function Topology({ onOpen }) {
           <div className="row" style={{ gap: 2 }}>
             <button className="btn ghost sm" onClick={() => zoom(1.2)} title="Zoom in">＋</button>
             <button className="btn ghost sm" onClick={() => zoom(0.83)} title="Zoom out">－</button>
-            <button className="btn ghost sm" onClick={resetView} title="Reset view & node positions">⤢</button>
+            <button className="btn ghost sm" onClick={resetView} title="Fit everything to view & reset node positions">⤢</button>
           </div>
           <label className="checkrow" style={{ margin: 0 }}>
             <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
@@ -336,7 +381,7 @@ export default function Topology({ onOpen }) {
               <span key={k} className="faint"><span className="dot" style={{ background: COLOR[k] }} /> {l}</span>
             ))}
             <span className="faint"><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: "50%", border: `2px solid ${COLOR.CRITICAL}`, verticalAlign: "middle", marginRight: 4 }} /> critical finding / revoked</span>
-            <span className="faint" style={{ marginLeft: "auto" }}>solid = agent · dashed = SSH · drag a node to move it · drag the background to pan · scroll to zoom · click a cluster to collapse · ⤢ resets</span>
+            <span className="faint" style={{ marginLeft: "auto" }}>solid = agent · dashed = SSH · drag a node to move it · drag the background to pan · scroll to zoom · click a cluster to collapse · ⤢ fits everything to view</span>
           </div>
         </div>
       )}

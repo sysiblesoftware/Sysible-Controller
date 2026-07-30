@@ -60,6 +60,22 @@ def test_regenerate_classifies_numeric_as_ip_not_dns(tmp_certs):
     assert "192.168.1.50" in ips and "192.168.1.50" not in dns
 
 
+def test_tls_info_exposes_sha256_fingerprint(tmp_certs):
+    """get_tls_info surfaces a colon-hex SHA-256 fingerprint matching the DER of the
+    serving cert (the value an admin reads out-of-band for TOFU verification)."""
+    import hashlib
+    from cryptography.hazmat.primitives import serialization
+    cert, _, _ = tmp_certs
+    tls_manager.regenerate_self_signed(hostnames=["ctrl.corp.example"])
+    info = tls_manager.get_tls_info()
+    fp = info.get("sha256_fingerprint")
+    assert fp and fp == fp.upper()
+    assert len(fp.split(":")) == 32          # 32 bytes, colon-separated
+    leaf = tls_manager._load_cert(cert.read_bytes())
+    expected = hashlib.sha256(leaf.public_bytes(serialization.Encoding.DER)).hexdigest().upper()
+    assert fp.replace(":", "") == expected
+
+
 # ---------------------------------------------------------------------------
 # Config-change endpoint triggers regeneration
 # ---------------------------------------------------------------------------

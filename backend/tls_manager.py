@@ -117,6 +117,16 @@ def _public_key_bytes(public_key) -> bytes:
     )
 
 
+def _sha256_fingerprint(leaf: x509.Certificate) -> str:
+    """SHA-256 fingerprint of the cert (DER), as upper-case colon-separated hex —
+    the same form `openssl x509 -fingerprint -sha256` prints. This is the value an
+    admin reads out-of-band to confirm the self-signed cert their agents/browser
+    pinned is the genuine one (trust-on-first-use verification)."""
+    import hashlib
+    digest = hashlib.sha256(leaf.public_bytes(serialization.Encoding.DER)).hexdigest().upper()
+    return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
+
+
 def _cert_metadata(leaf: x509.Certificate, chain_length: int = 0) -> dict:
     now = _utcnow()
     days_remaining = (leaf.not_valid_after_utc - now).days
@@ -126,6 +136,7 @@ def _cert_metadata(leaf: x509.Certificate, chain_length: int = 0) -> dict:
         "not_valid_before": leaf.not_valid_before_utc.isoformat(),
         "not_valid_after": leaf.not_valid_after_utc.isoformat(),
         "serial_number": format(leaf.serial_number, "x"),
+        "sha256_fingerprint": _sha256_fingerprint(leaf),
         "is_self_signed": leaf.subject == leaf.issuer,
         "chain_length": chain_length,
         "days_remaining": days_remaining,

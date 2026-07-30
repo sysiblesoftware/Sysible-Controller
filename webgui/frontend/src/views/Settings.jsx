@@ -981,6 +981,14 @@ function Tls() {
                   <InfoRow label="Days remaining" value={String(info.days_remaining)} />}
                 {info.is_self_signed !== undefined &&
                   <InfoRow label="Self-signed" value={info.is_self_signed ? "Yes" : "No"} />}
+                {info.sha256_fingerprint &&
+                  <InfoRow label="SHA-256 fingerprint" value={info.sha256_fingerprint} />}
+                {info.sha256_fingerprint && info.is_self_signed &&
+                  <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>
+                    Read this fingerprint out-of-band to confirm agents and browsers pinned the
+                    genuine self-signed certificate. It changes when the certificate is
+                    regenerated or replaced — redistribute the trust bundle afterwards.
+                  </div>}
               </>
             )}
         </div>

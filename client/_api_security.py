@@ -311,11 +311,31 @@ def _sshd_bin_fragment(var: str = "SSHDBIN") -> str:
     )
 
 
+def _sshd_privsep_dir_fragment() -> str:
+    """Ensure the sshd privilege-separation directory exists before `sshd -t`.
+
+    On Debian/Ubuntu (and others) `sshd -t` FAILS with 'Missing privilege
+    separation directory: /run/sshd' when that directory is absent — a runtime
+    dir the systemd unit's RuntimeDirectory normally creates, but which can be
+    missing at config-test time (a cleared /run, sshd started outside systemd,
+    a fresh boot state). That made a perfectly VALID hardening config get
+    rejected and rolled back.
+
+    Creating it — root-owned, 0755, exactly what sshd itself uses — lets a good
+    config validate. It does NOT bypass validation: `sshd -t` still runs and a
+    genuinely bad config still fails and is restored. Best-effort: any error is
+    ignored and `sshd -t` then reports the real problem. Harmless on distros that
+    don't use /run/sshd (an empty tmpfs dir cleared at reboot)."""
+    return ("[ -d /run/sshd ] || mkdir -p /run/sshd 2>/dev/null || true; "
+            "chmod 0755 /run/sshd 2>/dev/null || true; ")
+
+
 def cmd_sshd_status() -> str:
     svc = _sshd_service_fragment()
     binf = _sshd_bin_fragment()
+    psd = _sshd_privsep_dir_fragment()
     return (
-        f"{svc}; {binf}; echo \"-- systemctl status $SSHSVC --\" && systemctl status \"$SSHSVC\" --no-pager 2>&1; "
+        f"{svc}; {binf}; {psd}echo \"-- systemctl status $SSHSVC --\" && systemctl status \"$SSHSVC\" --no-pager 2>&1; "
         "echo; echo '-- sshd -t (config syntax check) --' && \"$SSHDBIN\" -t 2>&1 && echo 'sshd config OK.'"
     )
 
@@ -353,6 +373,7 @@ def _build_sshd_set_option_script(key: str, value: str, reload: bool = False) ->
     qk = shlex.quote(key)
     qv = shlex.quote(value)
     binf = _sshd_bin_fragment()
+    psd = _sshd_privsep_dir_fragment()
     if reload:
         # Apply-and-reload: after the new config validates, reload sshd so the
         # change takes effect in one click (a reload keeps existing sessions).
@@ -366,7 +387,7 @@ def _build_sshd_set_option_script(key: str, value: str, reload: bool = False) ->
     else:
         on_ok = f"printf 'sshd_config: %s set to %s. Reload sshd to apply.\\n' {qk} \"$v\""
     return (
-        f"{binf}; "
+        f"{binf}; {psd}"
         f"cp {q_cfg} {q_bak} 2>&1; "
         f"v={qv}; "
         f"sed -i -E '/^[[:space:]]*{key}[[:space:]]/d' {q_cfg}; "
@@ -386,8 +407,9 @@ def cmd_sshd_set_option(key: str, value: str) -> str:
 def cmd_sshd_reload() -> str:
     svc = _sshd_service_fragment()
     binf = _sshd_bin_fragment()
+    psd = _sshd_privsep_dir_fragment()
     return (
-        f"{binf}; if ! \"$SSHDBIN\" -t 2>&1; then echo 'Current sshd_config does not pass validation - not reloading.' >&2; exit 1; fi; "
+        f"{binf}; {psd}if ! \"$SSHDBIN\" -t 2>&1; then echo 'Current sshd_config does not pass validation - not reloading.' >&2; exit 1; fi; "
         f"{svc}; systemctl reload \"$SSHSVC\" 2>&1 && echo 'sshd reloaded.'"
     )
 

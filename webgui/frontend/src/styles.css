@@ -181,7 +181,25 @@ input:-webkit-autofill:active {
 /* Placeholders often double as the field's only label, so keep them readable
    (the UA default is well under WCAG AA on our field backgrounds). */
 ::placeholder { color: var(--text-dim); opacity: 1; }
-input[type="checkbox"] { width: auto; accent-color: var(--accent); }
+/* Draw checkboxes ourselves rather than lean on `accent-color`. A browser on an
+   OS-dark setting paints NATIVE unchecked checkboxes with its own dark color-scheme
+   (the same reason autofill needed pinning above), so in our light theme they showed
+   as solid dark squares. Custom rendering pins them to the app theme: unchecked is the
+   surface colour with a solid border (near-black in light mode), checked is the accent
+   with a white tick — identical in both themes regardless of the OS scheme. */
+input[type="checkbox"] {
+  -webkit-appearance: none; appearance: none;
+  width: 15px; height: 15px; margin: 0; flex: 0 0 auto; padding: 0;
+  border: 1.5px solid var(--border-strong); border-radius: 3px;
+  background: var(--bg-raise); cursor: pointer; position: relative; vertical-align: middle;
+}
+:root[data-theme="light"] input[type="checkbox"] { border-color: #1b1e25; background: #ffffff; }
+input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
+input[type="checkbox"]:checked::after {
+  content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px;
+  border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 label.field { display: block; margin: 12px 0 0; }
 label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim); font-size: 13px; }
 .checkrow { display: flex; align-items: center; gap: 8px; margin-top: 12px; }

@@ -122,10 +122,14 @@ export default function FileTransfer({ host, onErr }) {
 // don't have to remember and type the full remote path. In "upload" mode a
 // folder is the selection (destination dir); in "download" mode a file is.
 function RemoteBrowse({ host, mode, onPick, onClose, onErr }) {
-  const [dir, setDir] = useState(".");
+  // Start at the filesystem root so the whole disk is reachable. `ls -1Ap` omits
+  // `.`/`..`, so we synthesize a `../` entry (below) to let the operator climb up
+  // from wherever they land — without it the picker can only ever descend.
+  const [dir, setDir] = useState("/");
   const [entries, setEntries] = useState([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [pathInput, setPathInput] = useState("/");
 
   async function list(d) {
     setBusy(true); setErr("");
@@ -138,11 +142,14 @@ function RemoteBrowse({ host, mode, onPick, onClose, onErr }) {
       if (lines.length === 0) { setErr(res.stderr || res.error || "Could not read that directory."); return; }
       const cwd = lines.shift();
       setDir(cwd);
-      setEntries(lines);
+      setPathInput(cwd);
+      // Prepend a parent-directory entry so navigation up the tree is possible
+      // (ls -1Ap never emits `..`); the root has no parent, so skip it there.
+      setEntries(cwd === "/" ? lines : ["../", ...lines]);
     } catch (e) { setErr(e.message); }
     finally { setBusy(false); }
   }
-  useEffect(() => { list("."); /* eslint-disable-next-line */ }, []);
+  useEffect(() => { list("/"); /* eslint-disable-next-line */ }, []);
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", onKey);
@@ -158,6 +165,12 @@ function RemoteBrowse({ host, mode, onPick, onClose, onErr }) {
            style={{ maxWidth: 560, textAlign: "left" }}>
         <h3 style={{ textAlign: "left", marginBottom: 4 }}>{mode === "upload" ? "Choose destination folder" : "Choose file to download"}</h3>
         <div className="faint mono" style={{ fontSize: 12, marginBottom: 8, wordBreak: "break-all" }}>{host.label}:{dir}</div>
+        <form className="row" style={{ gap: 6, marginBottom: 8 }}
+              onSubmit={(e) => { e.preventDefault(); if (pathInput.trim()) list(pathInput.trim()); }}>
+          <input className="mono" style={{ flex: 1, minWidth: 160 }} placeholder="Jump to path (e.g. /var/log or /)"
+                 value={pathInput} onChange={(e) => setPathInput(e.target.value)} />
+          <button type="submit" className="btn ghost sm" disabled={busy}>Go</button>
+        </form>
         {err && <div className="error-box">{err}</div>}
         <div style={{ maxHeight: "46vh", overflowY: "auto", border: "1px solid var(--border)", borderRadius: 6 }}>
           {busy ? <div className="empty" style={{ padding: 20 }}><span className="spin" /></div>

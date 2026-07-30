@@ -575,8 +575,25 @@ cmd_update() {
         | while read -r _r; do _git update-ref -d "$_r" 2>/dev/null || true; done
       _git fetch --prune origin 2>&1 || true
       if ! _git pull --ff-only 2>&1; then
-        echo "ERROR: 'git pull' still failed in $SRC after a ref-store repair - resolve it there, then re-run update."
-        _write_update_status failed "'git pull --ff-only' failed in $SRC even after an automatic ref-store repair (likely local changes or a diverged branch). On the host: cd $SRC && sudo git -c safe.directory=\$PWD status — commit/stash/discard local changes or reset to origin, then retry."
+        # Distinguish a DIVERGED branch (local commits not on origin — often the
+        # operator's own unpushed work) from a plain dirty tree. `reset --hard`
+        # would DESTROY those commits, so never lead with it: if HEAD is ahead of
+        # its upstream, point at the commits and recommend a NON-destructive rebase
+        # first; only mention reset as the explicit discard path.
+        _ahead="$(_git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
+        if [[ "${_ahead:-0}" -gt 0 ]]; then
+          echo "ERROR: update blocked — this checkout has $_ahead local commit(s) NOT on origin (a diverged branch)."
+          echo "       These are usually your OWN unpushed changes — do NOT 'reset --hard' or you'll lose them. See them:"
+          echo "         cd $SRC && sudo git -c safe.directory=\"\$PWD\" log --oneline @{u}..HEAD"
+          echo "       KEEP them and still update — rebase your commits onto origin (non-destructive):"
+          echo "         cd $SRC && sudo git -c safe.directory=\"\$PWD\" pull --rebase && sudo sysible_controller update"
+          echo "       Only if those commits are unwanted, DISCARD them (destructive):"
+          echo "         cd $SRC && sudo git -c safe.directory=\"\$PWD\" reset --hard @{u}"
+          _write_update_status failed "Update blocked: $SRC has $_ahead local commit(s) not on origin (diverged branch — likely your own unpushed work). KEEP + update: cd $SRC && sudo git -c safe.directory=\$PWD pull --rebase, then retry. See them with 'git log @{u}..HEAD'. DISCARD (destructive) only if unwanted: git reset --hard @{u}."
+        else
+          echo "ERROR: 'git pull' still failed in $SRC after a ref-store repair - resolve it there, then re-run update."
+          _write_update_status failed "'git pull --ff-only' failed in $SRC even after an automatic ref-store repair. On the host: cd $SRC && sudo git -c safe.directory=\$PWD status — resolve the local change/conflict, then retry."
+        fi
         exit 1
       fi
       echo "Ref-store repair succeeded; update continues."

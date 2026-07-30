@@ -33,6 +33,7 @@ export default function HostEnrollment() {
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState("");   // in-progress label for host actions
   const [copied, setCopied] = useState(false);
+  const [copiedAnsible, setCopiedAnsible] = useState(false);
   const [curlUseIp, setCurlUseIp] = useState(false);   // curl one-liner: address by IP (no DNS) vs hostname
   const [portPort, setPortPort] = useState("");
   const [portalBusy, setPortalBusy] = useState("");
@@ -324,6 +325,18 @@ export default function HostEnrollment() {
     `&& unzip -o sysible-agent-bundle.zip -d sysible-agent-bundle ` +
     `&& cd sysible-agent-bundle && chmod +x run_agent.sh && sudo ./run_agent.sh`;
 
+  // Mass enrollment: the same portal-authenticated headless install, wrapped as an
+  // Ansible ad-hoc shell command so an operator can enroll a whole inventory group in
+  // one shot. `--become` supplies privilege (so no inner sudo), and the URL's inner
+  // double-quotes are dropped so the whole script fits inside `-a "…"` without a quote
+  // collision. Each host's own curl pulls its own fresh one-time enrollment token.
+  const ansibleCmd =
+    `ansible <group> -i <inventory> --become -m shell -a ` +
+    `"curl -k -sS -f -u '${curlUser}:<password>' -o /tmp/sysible-agent-bundle.zip ` +
+    `https://${curlHost}:${curlPort}/cli/bundle ` +
+    `&& unzip -o /tmp/sysible-agent-bundle.zip -d /tmp/sysible-agent-bundle ` +
+    `&& cd /tmp/sysible-agent-bundle && chmod +x run_agent.sh && ./run_agent.sh"`;
+
   const reachable = `https://${cfg.address || "<controller>"}:${curlPort}`;
 
   const TABS = [["hosts", "Enrolled Hosts"], ["enroll", "Enroll a Host"], ["portal", "Webserver Portal"]];
@@ -540,6 +553,26 @@ export default function HostEnrollment() {
             The curl download needs the Webserver Portal {portal.running
               ? <>running (it is) with a login set.</>
               : <>running — start it and set a login on the <button className="linklike" onClick={() => setTab("portal")}>Webserver Portal</button> tab.</>}
+          </p>
+        </fieldset>
+
+        <fieldset className="tool-group-box"><legend>Mass enrollment (Ansible ad-hoc)</legend>
+          <p className="faint" style={{ marginTop: 0 }}>
+            Enroll a whole inventory group at once — the headless install above, run across every host by Ansible.
+            Replace <code>&lt;group&gt;</code> and <code>&lt;inventory&gt;</code> with your target group and inventory
+            file, and <code>&lt;password&gt;</code> with the real portal password. <code>--become</code> handles privilege
+            escalation (so no <code>sudo</code> in the command); each host pulls its own fresh one-time enrollment token.
+          </p>
+          <div className="cmd-preview" style={{ whiteSpace: "pre-wrap" }}>{ansibleCmd}</div>
+          <button className="btn sm ghost" style={{ marginTop: 8 }}
+                  onClick={() => navigator.clipboard?.writeText(ansibleCmd).then(() => { setCopiedAnsible(true); setTimeout(() => setCopiedAnsible(false), 1500); })}>
+            {copiedAnsible ? "Copied ✓" : "Copy to Clipboard"}
+          </button>
+          <p className="faint" style={{ marginTop: 10 }}>
+            Needs Ansible on the control node with SSH reach to the group, plus the Webserver Portal {portal.running
+              ? <>running (it is) with a login set.</>
+              : <>running with a login set — configure it on the <button className="linklike" onClick={() => setTab("portal")}>Webserver Portal</button> tab.</>}
+            {" "}Add <code>-u</code>/<code>--ask-become-pass</code> or <code>-e</code> vars as your SSH access requires.
           </p>
         </fieldset>
       </div>

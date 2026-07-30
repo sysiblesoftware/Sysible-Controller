@@ -167,9 +167,23 @@ the controller safely.
   secrets; host secrets live in the host's own state file, never in the pushed
   code.
 - "Become" (password) sudo passwords are kept encrypted at rest on the
-  controller (Fernet, `0600` key), namespaced per administrator, and fed
-  to `sudo -S` over stdin only — never on the command line, in the
-  environment, the database, or logs.
+  controller (Fernet), namespaced per administrator, and fed to `sudo -S`
+  over stdin only — never on the command line, in the environment, the
+  database, or logs.
+- **Pluggable key custody.** The controller has a secret vault
+  (`backend/secret_vault.py`) whose master key resolves, highest priority
+  first, from `SYSIBLE_SECRET_KEY` (a Fernet key injected from your platform's
+  secret store), `SYSIBLE_SECRET_KEY_CMD` (a command whose stdout is the key —
+  the hook for fetching it from a KMS/Vault at startup), or a `0600`
+  auto-generated local file (`run/controller_secret.key`, the zero-config
+  default). The sudo-password store derives its key from this master key, so
+  moving the master key off-box (env/KMS) protects those passwords too and
+  nothing sensitive need touch the filesystem. Encryption is **strict by
+  default** (`SYSIBLE_SECRET_REQUIRED=1`): if the configured key source fails
+  to resolve, a write of a new secret is refused rather than stored in
+  cleartext; set `SYSIBLE_SECRET_REQUIRED=0` only for a deliberate dev/degraded
+  setup. Existing values written before a master key was configured keep
+  working (they are re-wrapped under the derived key on their next save).
 - The terminal's **"Send sudo password" button is opt-in per administrator**:
   off by default, granted only by a superuser. The web console enforces it
   server-side (the inject request is refused for accounts that lack the grant),
@@ -201,9 +215,21 @@ the controller safely.
   persisted in cleartext.
 - The activity feed is retained to a configurable depth
   (`SYSIBLE_ACTIVITY_LOG_MAX_ROWS`, ~500k rows by default; `0` disables local
-  trimming). The local store is **not** a tamper-evident system of record —
-  controller root can edit SQLite directly — so for compliance, **forward the
-  logs to an external SIEM/log aggregator** and treat that as authoritative.
+  trimming).
+- **Tamper-evident hash chain.** Both logs are hash-chained: each row's digest
+  covers the previous row's digest plus its own content, so editing,
+  reordering, deleting a middle row, or truncating the tail is detectable.
+  `GET /activity-log/verify` (superuser/auditor) recomputes both chains and
+  reports the first break with its row id. When a secret-vault master key is
+  resolvable the digest is a **keyed HMAC-SHA256** — unforgeable without the
+  key, so even controller root editing SQLite directly can't recompute a valid
+  chain; without a key it degrades to plain SHA-256 (still tamper-evident, but
+  forgeable), and `verify` reports `keyed:false` so you can tell which posture
+  you're in. Trimming the oldest rows for retention is not a break — the chain
+  verifies forward from the oldest retained row. Rows that predate the upgrade
+  are hash-chained once, in insertion order, by a one-time backfill on first
+  start. For a fully independent system of record, still **forward the logs to
+  an external SIEM/log aggregator**.
 
 ## Deploying safely — read this
 

@@ -173,6 +173,16 @@ The installer detects your package manager, deploys the project to `/opt/sysible
 
 The backend and the web console are **separate, independently started** pieces: `sysible_controller start` brings up only the backend, and `sysible_controller webgui start` brings up the browser console.
 
+When it detects an active firewall (firewalld or ufw) the installer opens ports 9000 and 8800 to everyone so a fresh install is reachable. On an internet-exposed controller you usually want them reachable **only from your management network** — pass `--restrict-firewall` with the source CIDR(s) to scope the rules instead:
+
+```bash
+sudo ./install_sysible.sh --restrict-firewall \
+     --agent-cidr=10.0.0.0/8 \            # who may reach the agent API :9000
+     --admin-cidr=10.0.5.0/24             # who may reach the console  :8800
+```
+
+Both CIDR flags accept a comma-separated list and IPv4 or IPv6. A port whose CIDR list is empty in restrict mode is left open (with a warning) rather than silently locked down, so you can never fence yourself out of the console.
+
 ### Updating
 
 The controller runs out of `/opt/sysible`, which the installer **syncs** from your source checkout — so a bare `git pull` in the checkout doesn't change what's running. To pull the latest code and redeploy in one step:

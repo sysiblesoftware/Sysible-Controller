@@ -1417,6 +1417,21 @@ def get_activity_log_route(limit: int = 200, since_id: int = 0):
     return {"entries": get_activity_log(limit=_clamp_limit(limit), since_id=since_id)}
 
 
+@app.get("/activity-log/verify",
+         dependencies=[Depends(require_api_key), Depends(require_activity_viewer)])
+def verify_activity_log_route():
+    """Recompute the tamper-evident hash chain over the activity log AND the admin
+    audit log and report whether each verifies. Each result is
+    {ok, checked, broken_at, keyed} — `ok=false` with `broken_at` pinpoints the
+    first altered/removed row; `keyed=true` means the chain is HMAC-keyed
+    (unforgeable without the master key) rather than merely SHA-256 tamper-evident.
+    Visible to superusers and the read-only auditor role."""
+    from backend.db import verify_activity_chain, verify_admin_audit_chain
+    result = dict(verify_activity_chain())
+    result["admin_audit"] = verify_admin_audit_chain()
+    return result
+
+
 def _cert_fingerprints(path):
     """SHA-256 fingerprints (hex) of every certificate in a PEM file, as a
     frozenset. Parses the DER so PEM whitespace/ordering differences don't

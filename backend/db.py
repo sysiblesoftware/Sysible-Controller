@@ -6,6 +6,7 @@ import json
 import os
 import socket
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -705,7 +706,36 @@ def init_db():
     )
     """)
 
+    # -----------------------------------------------------
+    # Tamper-evident audit chain. Both audit tables get three chain columns
+    # (prev_hash, entry_hash, hash_algo); a high-water-mark table records each
+    # chain's tail so a truncation of the END of the log is detectable (the
+    # prev_hash walk alone can't see a tail cut). Idempotent: the ALTERs are
+    # guarded by table_info, so a re-run on an already-migrated DB is a no-op.
+    # -----------------------------------------------------
+    for _tbl in ("admin_audit_log", "activity_log"):
+        cur.execute("PRAGMA table_info(%s)" % _tbl)
+        _cols = {c[1] for c in cur.fetchall()}
+        if "prev_hash" not in _cols:
+            cur.execute("ALTER TABLE %s ADD COLUMN prev_hash TEXT" % _tbl)
+        if "entry_hash" not in _cols:
+            cur.execute("ALTER TABLE %s ADD COLUMN entry_hash TEXT" % _tbl)
+        if "hash_algo" not in _cols:
+            cur.execute("ALTER TABLE %s ADD COLUMN hash_algo TEXT DEFAULT 'sha256'" % _tbl)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS audit_chain_head (
+        chain TEXT PRIMARY KEY,
+        last_id INTEGER,
+        last_entry_hash TEXT,
+        updated_at REAL
+    )
+    """)
+
     conn.commit()
+    # One-time backfill of the chain over any rows that predate this upgrade, in
+    # insertion (id) order, so the WHOLE retained history verifies — not just rows
+    # written afterwards. Only runs while a table has rows but none are hashed yet.
+    _backfill_audit_chains(conn)
     conn.close()
 
 
@@ -2197,36 +2227,290 @@ def _redact_secrets(command):
     return out
 
 
+# ---------------------------------------------------------------------------
+# Tamper-evident audit chain (activity_log + admin_audit_log)
+#
+# Each appended row's hash covers the PREVIOUS row's hash plus this row's own
+# content, so editing, reordering or deleting a retained row breaks the chain
+# and verify_*_chain() reports the first break. When a controller secret-vault
+# master key is resolvable the digest is a keyed HMAC-SHA256 — unforgeable
+# without the key, so even an attacker with DB write access can't recompute a
+# valid chain; without a key it degrades to plain SHA-256 (tamper-EVIDENT, but
+# forgeable). The writes are serialized under a lock so concurrent writers can't
+# fork the chain (two rows sharing one prev_hash). Activity is per-admin-action,
+# not a hot path, so the lock is cheap.
+# ---------------------------------------------------------------------------
+_ACTIVITY_LOCK = threading.Lock()
+_ACTIVITY_GENESIS = "sysible-activity-genesis-v1"
+_ADMIN_AUDIT_LOCK = threading.Lock()
+_ADMIN_AUDIT_GENESIS = "sysible-admin-audit-genesis-v1"
+
+
+def _digest_payload(fields):
+    """INJECTIVE encoding of the row fields: each is length-prefixed (4-byte
+    big-endian) so no field value can be confused with a field boundary (a plain
+    separator join would let a field containing the separator re-split across
+    columns to the same digest)."""
+    import struct as _struct
+    out = bytearray()
+    for f in fields:
+        b = (f or "").encode("utf-8")
+        out += _struct.pack(">I", len(b))
+        out += b
+    return bytes(out)
+
+
+def _audit_key():
+    """The HMAC key for the audit chain (bytes) or None if no master key is
+    resolvable. Isolated so tests can monkeypatch it."""
+    try:
+        from backend import secret_vault
+        return secret_vault.audit_hmac_key()
+    except Exception:
+        return None
+
+
+_AUDIT_UNKEYED_WARNED = False
+
+
+def _warn_audit_unkeyed_once():
+    """Warn once when the chain is being written UNKEYED (plain SHA-256), which is
+    forgeable by anyone with DB write access — so an operator running the keyed
+    posture notices a key outage rather than discovering it only via verify."""
+    global _AUDIT_UNKEYED_WARNED
+    if _AUDIT_UNKEYED_WARNED:
+        return
+    _AUDIT_UNKEYED_WARNED = True
+    import sys
+    print("[audit] WARNING: no master key available — the activity/audit log is being "
+          "written UNKEYED (plain SHA-256) and is forgeable by anyone with DB write "
+          "access. Set SYSIBLE_SECRET_KEY / SYSIBLE_SECRET_KEY_CMD to key the chain.",
+          file=sys.stderr)
+
+
+def _activity_digest(prev_hash, timestamp, username, host, description, command,
+                     algo="sha256", key=None):
+    """Digest over the previous entry's hash plus this row's canonical content. The
+    algo is bound into the payload so a row can't be silently downgraded to the
+    weaker (unkeyed) scheme without changing its hash."""
+    payload = _digest_payload([
+        algo, prev_hash or "", "%.6f" % float(timestamp or 0.0),
+        username or "", host or "", description or "", command or "",
+    ])
+    if algo == "hmac-sha256" and key:
+        return hmac.new(key, payload, hashlib.sha256).hexdigest()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _admin_audit_digest(prev_hash, timestamp, event, username, detail,
+                        algo="sha256", key=None):
+    """Admin-audit counterpart of _activity_digest (event/username/detail)."""
+    payload = _digest_payload([
+        algo, prev_hash or "", "%.6f" % float(timestamp or 0.0),
+        event or "", username or "", detail or "",
+    ])
+    if algo == "hmac-sha256" and key:
+        return hmac.new(key, payload, hashlib.sha256).hexdigest()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _bump_chain_head(chain, last_id, last_entry_hash):
+    """Best-effort advance of a chain's high-water mark, in its OWN short
+    transaction AFTER the append committed. NEVER raises — a failure here must not
+    fail/roll back the audit write it follows. The mark only ADVANCES (WHERE
+    last_id <= ?), and retention trims the OLDEST rows, so a stale mark can only
+    under-report, never raise a false truncation alarm."""
+    if last_id is None:
+        return
+    try:
+        with contextlib.closing(_connect()) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE audit_chain_head SET last_id = ?, last_entry_hash = ?, updated_at = ? "
+                "WHERE chain = ? AND last_id <= ?",
+                (last_id, last_entry_hash, time.time(), chain, last_id))
+            if cur.rowcount == 0:
+                try:
+                    cur.execute(
+                        "INSERT INTO audit_chain_head (chain, last_id, last_entry_hash, updated_at) "
+                        "VALUES (?, ?, ?, ?)", (chain, last_id, last_entry_hash, time.time()))
+                except Exception:
+                    pass
+            conn.commit()
+    except Exception:
+        pass
+
+
+def _chain_head_last_id(chain):
+    """The recorded high-water-mark id for `chain`, or None. Never raises."""
+    try:
+        with contextlib.closing(_connect()) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT last_id FROM audit_chain_head WHERE chain = ?", (chain,))
+            row = cur.fetchone()
+            return int(row[0]) if row and row[0] is not None else None
+    except Exception:
+        return None
+
+
+def _seed_chain_head(conn, chain, last_id, last_entry_hash):
+    """Set a chain's high-water mark during the one-time backfill (uses the passed
+    connection so it participates in init_db's setup). Never raises."""
+    if last_id is None:
+        return
+    try:
+        conn.execute(
+            "INSERT INTO audit_chain_head (chain, last_id, last_entry_hash, updated_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(chain) DO UPDATE SET "
+            "last_id=excluded.last_id, last_entry_hash=excluded.last_entry_hash, "
+            "updated_at=excluded.updated_at",
+            (chain, last_id, last_entry_hash, time.time()))
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _backfill_audit_chains(conn):
+    """One-time: hash-chain any pre-existing audit rows (in id order) so the whole
+    retained history is tamper-evident, then seed the chain high-water marks. Runs
+    only while a table has rows but NONE are hashed yet (the first upgrade); a
+    live, already-chained table is left untouched so a re-run can't rewrite it."""
+    key = _audit_key()
+    algo = "hmac-sha256" if key else "sha256"
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) FROM activity_log")
+    total = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM activity_log WHERE entry_hash IS NOT NULL")
+    hashed = cur.fetchone()[0]
+    if total and not hashed:
+        prev = _ACTIVITY_GENESIS
+        last_id = None
+        for r in cur.execute(
+                "SELECT id, timestamp, username, host, description, command "
+                "FROM activity_log ORDER BY id ASC").fetchall():
+            entry = _activity_digest(prev, r[1], r[2], r[3], r[4], r[5], algo=algo, key=key)
+            conn.execute("UPDATE activity_log SET prev_hash=?, entry_hash=?, hash_algo=? WHERE id=?",
+                         (prev, entry, algo, r[0]))
+            prev, last_id = entry, r[0]
+        conn.commit()
+        _seed_chain_head(conn, "activity", last_id, prev)
+
+    cur.execute("SELECT COUNT(*) FROM admin_audit_log")
+    total = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM admin_audit_log WHERE entry_hash IS NOT NULL")
+    hashed = cur.fetchone()[0]
+    if total and not hashed:
+        prev = _ADMIN_AUDIT_GENESIS
+        last_id = None
+        for r in cur.execute(
+                "SELECT id, timestamp, event, username, detail "
+                "FROM admin_audit_log ORDER BY id ASC").fetchall():
+            entry = _admin_audit_digest(prev, r[1], r[2], r[3], r[4], algo=algo, key=key)
+            conn.execute("UPDATE admin_audit_log SET prev_hash=?, entry_hash=?, hash_algo=? WHERE id=?",
+                         (prev, entry, algo, r[0]))
+            prev, last_id = entry, r[0]
+        conn.commit()
+        _seed_chain_head(conn, "admin_audit", last_id, prev)
+
+
 # --- Activity log (Live Activity & Logs feed) ---
 def log_activity(username, host, description, command=""):
-  with contextlib.closing(_connect()) as conn:  # close even if the write raises
+  ts = time.time()
+  uname = username or "(unknown)"
+  h = host or ""
+  desc = description or ""
+  cmd = _redact_secrets(command or "")
+  entry = None
+  _new_id = None
+  key = _audit_key()
+  algo = "hmac-sha256" if key else "sha256"
+  if not key:
+    _warn_audit_unkeyed_once()
+  with _ACTIVITY_LOCK:
+    with contextlib.closing(_connect()) as conn:  # close even if the write raises
+      cur = conn.cursor()
+      # Chain this row to the most recent one's hash (genesis for the first).
+      cur.execute("SELECT entry_hash FROM activity_log ORDER BY id DESC LIMIT 1")
+      _row = cur.fetchone()
+      prev = (_row[0] if _row and _row[0] else _ACTIVITY_GENESIS)
+      entry = _activity_digest(prev, ts, uname, h, desc, cmd, algo=algo, key=key)
+      cur.execute(
+          "INSERT INTO activity_log (timestamp, username, host, description, command, prev_hash, entry_hash, hash_algo) "
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          (ts, uname, h, desc, cmd, prev, entry, algo),
+      )
+      _new_id = cur.lastrowid
+      conn.commit()
+      # Cap the table so it can't grow unbounded, but keep enough history to be
+      # useful as an audit record. SYSIBLE_ACTIVITY_LOG_MAX_ROWS (default 500000,
+      # ~months of history) tunes it; set 0 to disable trimming when an external
+      # SIEM/export owns retention. Trim by id window off the just-inserted rowid
+      # (indexed range delete of the rows that fell out of the window). Trimming
+      # the OLDEST rows is authorized retention, not tampering — the chain still
+      # verifies forward from the oldest RETAINED row.
+      if _ACTIVITY_LOG_MAX_ROWS > 0:
+          cutoff = cur.lastrowid - _ACTIVITY_LOG_MAX_ROWS
+          if cutoff > 0:
+              cur.execute("DELETE FROM activity_log WHERE id <= ?", (cutoff,))
+              conn.commit()
+  # Advance the chain high-water mark AFTER the append committed — isolated and
+  # best-effort, so it can never fail or roll back the audit write above.
+  _bump_chain_head("activity", _new_id, entry)
+
+
+def verify_activity_chain():
+    """Recompute the hash chain over the retained activity_log and report the
+    first break. Returns {ok, checked, broken_at, keyed}. Trimmed-away history is
+    not a break (verified from the oldest retained hashed row). `keyed` is True
+    only when every checked row is HMAC-keyed — i.e. unforgeable without the
+    master key rather than merely SHA-256 tamper-evident."""
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO activity_log (timestamp, username, host, description, command) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (time.time(), username or "(unknown)", host or "", description or "",
-         _redact_secrets(command or "")),
+        "SELECT id, timestamp, username, host, description, command, prev_hash, entry_hash, hash_algo "
+        "FROM activity_log WHERE entry_hash IS NOT NULL ORDER BY id ASC"
     )
-    conn.commit()
-    # Cap the table so it can't grow unbounded, but keep enough history to be
-    # useful as an audit record. The old 5000-row cap silently discarded
-    # hours-to-days of activity on a busy fleet (a compliance red flag).
-    # SYSIBLE_ACTIVITY_LOG_MAX_ROWS (default 500000, ~months of history) tunes
-    # it; set 0 to disable trimming entirely when an external SIEM/export owns
-    # retention. Compliance note: this local log is NOT a system of record —
-    # forward it to a SIEM for durable, tamper-evident retention.
-    #
-    # Trim by id window off the just-inserted rowid: an indexed range delete of
-    # only the rows that fell out of the window (usually one), NOT a full
-    # `NOT IN (SELECT ... LIMIT cap)` anti-join that would rescan up to `cap`
-    # rows on every insert — at cap=500k that ran a 500k-row scan per log write,
-    # holding the single WAL writer each time. ids are monotonic (INTEGER PRIMARY
-    # KEY), so `id <= lastrowid - cap` keeps the most recent ~cap rows.
-    if _ACTIVITY_LOG_MAX_ROWS > 0:
-        cutoff = cur.lastrowid - _ACTIVITY_LOG_MAX_ROWS
-        if cutoff > 0:
-            cur.execute("DELETE FROM activity_log WHERE id <= ?", (cutoff,))
-            conn.commit()
+    rows = cur.fetchall()
+    conn.close()
+    key = _audit_key()
+    checked = 0
+    expected_prev = None
+    seen_keyed = False
+    all_keyed = True
+    for r in rows:
+        if expected_prev is not None and (r["prev_hash"] or "") != expected_prev:
+            return {"ok": False, "checked": checked, "broken_at": r["id"], "keyed": False}
+        algo = (r["hash_algo"] or "sha256") if "hash_algo" in r.keys() else "sha256"
+        if algo == "hmac-sha256" and not key:
+            return {"ok": False, "checked": checked, "broken_at": r["id"], "keyed": False}
+        # Downgrade defence: once the chain is keyed it must stay keyed — a later
+        # unkeyed row is an attacker rewriting a keyed entry under plain SHA-256.
+        if algo != "hmac-sha256":
+            all_keyed = False
+            if seen_keyed:
+                return {"ok": False, "checked": checked, "broken_at": r["id"], "keyed": False}
+        else:
+            seen_keyed = True
+        recomputed = _activity_digest(r["prev_hash"], r["timestamp"], r["username"],
+                                      r["host"], r["description"], r["command"],
+                                      algo=algo, key=key)
+        if recomputed != (r["entry_hash"] or ""):
+            return {"ok": False, "checked": checked, "broken_at": r["id"], "keyed": False}
+        expected_prev = r["entry_hash"]
+        checked += 1
+    result = {"ok": True, "checked": checked, "broken_at": None,
+              "keyed": bool(checked and all_keyed)}
+    # Tail-truncation: a recorded high-water mark ABOVE the actual tail id means
+    # rows were deleted from the END of the chain (the prev_hash walk can't see a
+    # tail cut). Best-effort; a missing/behind mark never raises a false alarm.
+    _actual_max = rows[-1]["id"] if rows else 0
+    _head_id = _chain_head_last_id("activity")
+    if _head_id is not None and _head_id > _actual_max:
+        result.update({"ok": False, "truncated": True, "broken_at": _actual_max,
+                       "recorded_head_id": _head_id})
+    return result
 
 
 def get_agent_hostname(host_id):
@@ -2350,15 +2634,82 @@ def record_administrator_login(username):
 # ADMIN AUDIT LOG (login + administrator account changes only)
 # =========================================================
 def log_admin_audit(event, username, detail=""):
-    conn = _connect()
-    cur = conn.cursor()
+    ts = time.time()
+    ev = event or ""
+    uname = username or ""
+    det = detail or ""
+    entry = None
+    _new_id = None
+    key = _audit_key()
+    algo = "hmac-sha256" if key else "sha256"
+    if not key:
+        _warn_audit_unkeyed_once()
+    with _ADMIN_AUDIT_LOCK:
+        with contextlib.closing(_connect()) as conn:  # close even if the write raises
+            cur = conn.cursor()
+            # Chain this row to the most recent one's hash (genesis for the first),
+            # so editing or deleting a retained auth/account event breaks the chain.
+            cur.execute("SELECT entry_hash FROM admin_audit_log ORDER BY id DESC LIMIT 1")
+            _row = cur.fetchone()
+            prev = (_row[0] if _row and _row[0] else _ADMIN_AUDIT_GENESIS)
+            entry = _admin_audit_digest(prev, ts, ev, uname, det, algo=algo, key=key)
+            cur.execute(
+                "INSERT INTO admin_audit_log (timestamp, event, username, detail, prev_hash, entry_hash, hash_algo) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (ts, ev, uname, det, prev, entry, algo),
+            )
+            _new_id = cur.lastrowid
+            conn.commit()
+    # Advance the chain high-water mark AFTER the append committed — isolated and
+    # best-effort, so it can never fail or roll back the audit write above.
+    _bump_chain_head("admin_audit", _new_id, entry)
 
-    cur.execute("""
-    INSERT INTO admin_audit_log (timestamp, event, username, detail)
-    VALUES (?, ?, ?, ?)
-    """, (time.time(), event, username, detail))
-    conn.commit()
+
+def verify_admin_audit_chain():
+    """Recompute the hash chain over admin_audit_log and report the first break.
+    Mirrors verify_activity_chain: trimmed history isn't a break, a keyed→unkeyed
+    transition is a break (downgrade defence), and `keyed` is True only when every
+    checked row is HMAC-keyed."""
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, timestamp, event, username, detail, prev_hash, entry_hash, hash_algo "
+        "FROM admin_audit_log WHERE entry_hash IS NOT NULL ORDER BY id ASC"
+    )
+    rows = cur.fetchall()
     conn.close()
+    key = _audit_key()
+    checked = 0
+    expected_prev = None
+    seen_keyed = False
+    all_keyed = True
+    for r in rows:
+        if expected_prev is not None and (r["prev_hash"] or "") != expected_prev:
+            return {"ok": False, "checked": checked, "broken_at": r["id"], "keyed": False}
+        algo = (r["hash_algo"] or "sha256") if "hash_algo" in r.keys() else "sha256"
+        if algo == "hmac-sha256" and not key:
+            return {"ok": False, "checked": checked, "broken_at": r["id"], "keyed": False}
+        if algo != "hmac-sha256":
+            all_keyed = False
+            if seen_keyed:
+                return {"ok": False, "checked": checked, "broken_at": r["id"], "keyed": False}
+        else:
+            seen_keyed = True
+        recomputed = _admin_audit_digest(r["prev_hash"], r["timestamp"], r["event"],
+                                         r["username"], r["detail"], algo=algo, key=key)
+        if recomputed != (r["entry_hash"] or ""):
+            return {"ok": False, "checked": checked, "broken_at": r["id"], "keyed": False}
+        expected_prev = r["entry_hash"]
+        checked += 1
+    result = {"ok": True, "checked": checked, "broken_at": None,
+              "keyed": bool(checked and all_keyed)}
+    _actual_max = rows[-1]["id"] if rows else 0
+    _head_id = _chain_head_last_id("admin_audit")
+    if _head_id is not None and _head_id > _actual_max:
+        result.update({"ok": False, "truncated": True, "broken_at": _actual_max,
+                       "recorded_head_id": _head_id})
+    return result
 
 
 def get_admin_audit_log(limit=200):

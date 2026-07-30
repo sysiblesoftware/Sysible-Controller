@@ -13,6 +13,46 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # =========================================================
+# COMMAND-LINE FLAGS
+# By default the installer opens the controller's ports to everyone once it
+# detects an active firewall (see the firewall section near the end). That is
+# the safe-to-reach default, but on an internet-exposed box you usually want
+# the agent API (:9000) and the console (:8800) reachable ONLY from your
+# management network. --restrict-firewall switches to scoped rules for that.
+#
+#   --restrict-firewall          Scope the opened ports to the CIDRs below
+#                                instead of opening them to the whole world.
+#   --agent-cidr=<cidr[,cidr]>   Source(s) allowed to reach the agent API :9000
+#   --admin-cidr=<cidr[,cidr]>   Source(s) allowed to reach the console :8800
+#
+# Opt-in only: without --restrict-firewall the behaviour is unchanged. A port
+# whose CIDR list is empty in restrict mode is left OPEN (with a warning) rather
+# than silently locked down, so you can never fence yourself out of the console.
+# =========================================================
+RESTRICT_FIREWALL=0
+AGENT_CIDR=""
+ADMIN_CIDR=""
+for arg in "$@"; do
+  case "$arg" in
+    --restrict-firewall) RESTRICT_FIREWALL=1 ;;
+    --agent-cidr=*)      AGENT_CIDR="${arg#*=}" ;;
+    --admin-cidr=*)      ADMIN_CIDR="${arg#*=}" ;;
+    -h|--help)
+      echo "Usage: $0 [--restrict-firewall --agent-cidr=CIDR[,CIDR] --admin-cidr=CIDR[,CIDR]]"
+      echo "  --restrict-firewall  scope opened ports to the given CIDRs (default: open to all)"
+      echo "  --agent-cidr=CIDR    source(s) allowed to reach the agent API on :9000"
+      echo "  --admin-cidr=CIDR    source(s) allowed to reach the web console on :8800"
+      exit 0 ;;
+    *) echo "WARNING: ignoring unknown argument '$arg'" ;;
+  esac
+done
+if [[ "$RESTRICT_FIREWALL" == "1" && -z "$AGENT_CIDR" && -z "$ADMIN_CIDR" ]]; then
+  echo "WARNING: --restrict-firewall given without --agent-cidr/--admin-cidr;"
+  echo "         nothing to scope, so ports will be opened to all as usual."
+  RESTRICT_FIREWALL=0
+fi
+
+# =========================================================
 # DETECT PACKAGE MANAGER / OS FAMILY
 # Sysible Controller itself (this installer's own dependencies)
 # now supports RHEL/CentOS/Fedora (dnf, falling back to yum on
@@ -465,18 +505,70 @@ chmod 700 "$BASE"
 # =========================================================
 BACKEND_PORT=9000
 CONSOLE_PORT=8800
+
+# firewalld: scope a port to a comma-separated CIDR list via rich rules, or -
+# when the list is empty - open it to all with --add-port. A rich rule with a
+# source+port accept only admits that source; the port is NOT globally open
+# unless we also --add-port, so restrict mode deliberately skips --add-port.
+_fwd_port() {  # $1=port  $2=comma-separated CIDRs (may be empty)
+  local port="$1" cidrs="$2"
+  if [[ -z "$cidrs" ]]; then
+    echo "  firewalld: opening ${port}/tcp to all"
+    firewall-cmd --permanent --add-port=${port}/tcp >/dev/null 2>&1 || true
+    return
+  fi
+  local IFS=','; local c fam
+  for c in $cidrs; do
+    [[ -z "$c" ]] && continue
+    fam=ipv4; [[ "$c" == *:* ]] && fam=ipv6
+    echo "  firewalld: allowing ${c} -> ${port}/tcp"
+    firewall-cmd --permanent --add-rich-rule="rule family=${fam} source address=${c} port port=${port} protocol=tcp accept" >/dev/null 2>&1 || true
+  done
+}
+_ufw_port() {  # $1=port  $2=comma-separated CIDRs (may be empty)
+  local port="$1" cidrs="$2"
+  if [[ -z "$cidrs" ]]; then
+    echo "  ufw: opening ${port}/tcp to all"
+    ufw allow ${port}/tcp >/dev/null 2>&1 || true
+    return
+  fi
+  local IFS=','; local c
+  for c in $cidrs; do
+    [[ -z "$c" ]] && continue
+    echo "  ufw: allowing ${c} -> ${port}/tcp"
+    ufw allow from "$c" to any port ${port} proto tcp >/dev/null 2>&1 || true
+  done
+}
+
 if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-  echo "Opening firewalld ports ${BACKEND_PORT}/tcp and ${CONSOLE_PORT}/tcp..."
-  firewall-cmd --permanent --add-port=${BACKEND_PORT}/tcp >/dev/null 2>&1 || true
-  firewall-cmd --permanent --add-port=${CONSOLE_PORT}/tcp >/dev/null 2>&1 || true
+  if [[ "$RESTRICT_FIREWALL" == "1" ]]; then
+    echo "Scoping firewalld ports (restrict mode)..."
+    _fwd_port "$BACKEND_PORT" "$AGENT_CIDR"
+    _fwd_port "$CONSOLE_PORT" "$ADMIN_CIDR"
+  else
+    echo "Opening firewalld ports ${BACKEND_PORT}/tcp and ${CONSOLE_PORT}/tcp..."
+    _fwd_port "$BACKEND_PORT" ""
+    _fwd_port "$CONSOLE_PORT" ""
+  fi
   firewall-cmd --reload >/dev/null 2>&1 || true
 elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi "Status: active"; then
-  echo "Opening ufw ports ${BACKEND_PORT}/tcp and ${CONSOLE_PORT}/tcp..."
-  ufw allow ${BACKEND_PORT}/tcp >/dev/null 2>&1 || true
-  ufw allow ${CONSOLE_PORT}/tcp >/dev/null 2>&1 || true
+  if [[ "$RESTRICT_FIREWALL" == "1" ]]; then
+    echo "Scoping ufw ports (restrict mode)..."
+    _ufw_port "$BACKEND_PORT" "$AGENT_CIDR"
+    _ufw_port "$CONSOLE_PORT" "$ADMIN_CIDR"
+  else
+    echo "Opening ufw ports ${BACKEND_PORT}/tcp and ${CONSOLE_PORT}/tcp..."
+    _ufw_port "$BACKEND_PORT" ""
+    _ufw_port "$CONSOLE_PORT" ""
+  fi
 else
   echo "NOTE: no active firewalld/ufw detected. If a firewall is in front of this host,"
-  echo "      open TCP ${BACKEND_PORT} (agent API) and ${CONSOLE_PORT} (web console) manually."
+  if [[ "$RESTRICT_FIREWALL" == "1" ]]; then
+    echo "      scope TCP ${BACKEND_PORT} (agent API) to ${AGENT_CIDR:-<your agents>} and"
+    echo "      TCP ${CONSOLE_PORT} (web console) to ${ADMIN_CIDR:-<your admins>} manually."
+  else
+    echo "      open TCP ${BACKEND_PORT} (agent API) and ${CONSOLE_PORT} (web console) manually."
+  fi
 fi
 
 echo ""

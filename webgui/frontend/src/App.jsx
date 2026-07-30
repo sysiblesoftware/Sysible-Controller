@@ -108,6 +108,14 @@ const VIEW_KEYS = new Set(
   NAV.filter((n) => n.key && n.key !== "connect" && !n.download).map((n) => n.key),
 );
 const NAV_BY_KEY = Object.fromEntries(NAV.filter((n) => n.key).map((n) => [n.key, n]));
+// In-app DRILL-IN views: reached by clicking into something (e.g. a host from a
+// dashboard finding, a topology node, or a fleet card), NOT from the sidebar — so
+// they're absent from NAV/NAV_BY_KEY. They must be allowed here, or the role
+// redirect below treats them as "unknown view" and bounces every drill-in back to
+// the dashboard (which read as a page "refresh"). Per-host data access is still
+// gated server-side (auth + EE env-scope); HostDetail itself is read-only for
+// auditors via canAct.
+const DRILL_VIEWS = new Set(["host"]);
 
 // Single source of truth for "may this role open this view", used by BOTH the rail
 // filter and the render/redirect below so they can't drift. Superuser-gated views
@@ -117,6 +125,7 @@ const NAV_BY_KEY = Object.fromEntries(NAV.filter((n) => n.key).map((n) => [n.key
 // sysadmin could open Settings/Host Enrollment by URL (?view=settings).
 function canSeeView(key, role) {
   if (key == null) return true;                 // dashboard
+  if (DRILL_VIEWS.has(key)) return true;        // in-app drill-in (e.g. host detail)
   const n = NAV_BY_KEY[key];
   if (!n) return false;                         // unknown view
   if (role === "auditor") return !!n.aud;

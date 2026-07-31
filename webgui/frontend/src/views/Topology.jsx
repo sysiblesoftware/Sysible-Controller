@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
 import { hypervisorBadge } from "../hypervisor.js";
+import { findSupp } from "../suppress.js";
 
 // Fleet topology — a controller-centric map. The controller is the hub; managed
 // hosts cluster around it, grouped either by ENVIRONMENT or by NETWORK segment
@@ -14,6 +15,30 @@ const ACCENT = "#3d7dd8";
 const RANK = { CRITICAL: 0, OFFLINE: 1, WARNING: 2, SUPPRESSED: 3, OK: 4, UNKNOWN: 5 };
 // Posture flags that count as CRITICAL (mirrors the dashboard's critical set).
 const CRIT_FLAGS = ["ssh_root_login", "firewall_disabled", "eol_os", "risky_accounts"];
+
+// Recompute a host's health verdict the way the dashboard's per-host analysis
+// does — from the raw fleet-health signals, honoring suppressions of its two
+// suppressible health findings (disk_critical, failed_units) — so the map's node
+// color matches the dashboard instead of the server's raw verdict (which ignores
+// suppressions). `hh` is the fleet-health reading; isSupp(key)->bool. Returns
+// OFFLINE / CRITICAL / WARNING / SUPPRESSED / OK, or null when status is unknown.
+function healthVerdict(hh, isSupp) {
+  if (hh.online === false) return "OFFLINE";
+  if (hh.online == null && !hh.verdict) return null;   // unknown (e.g. SSH host, no probe)
+  let sev = 9, active = 0, suppressed = 0;
+  const add = (s, key) => {
+    if (key && isSupp(key)) { suppressed++; return; }
+    active++; sev = Math.min(sev, s);
+  };
+  if (hh.ok === false) add(2, null);
+  if ((hh.disk ?? 0) >= 90) add(1, "disk_critical");
+  else if ((hh.disk ?? 0) >= 80) add(2, null);
+  if ((hh.mem ?? 0) >= 90) add(1, null);
+  if ((hh.failed ?? 0) > 0) add(hh.failed >= 3 ? 1 : 2, "failed_units");
+  if ((hh.oom ?? 0) > 0) add(1, null);
+  if (active === 0) return suppressed ? "SUPPRESSED" : "OK";
+  return sev === 1 ? "CRITICAL" : "WARNING";
+}
 
 function statusOf(n) {
   if (n.online === false) return "OFFLINE";
@@ -32,13 +57,14 @@ function worst(hosts) {
 // Last successful fetch, kept at module scope so leaving Topology and coming
 // back paints the previous map INSTANTLY (then refreshes in the background)
 // instead of flashing an empty canvas while every endpoint round-trips again.
-const _snap = { hosts: [], health: [], agents: [], posture: [] };
+const _snap = { hosts: [], health: [], agents: [], posture: [], supps: [] };
 
 export default function Topology({ onOpen }) {
   const [hosts, setHosts] = useState(_snap.hosts);
   const [health, setHealth] = useState(_snap.health);
   const [agents, setAgents] = useState(_snap.agents);
   const [posture, setPosture] = useState(_snap.posture);
+  const [supps, setSupps] = useState(_snap.supps);   // active finding suppressions
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   const [auto, setAuto] = useState(true);
@@ -67,6 +93,9 @@ export default function Topology({ onOpen }) {
                        (e) => setErr(e?.message || "Couldn't load hosts")),
       api.fleetHealth().then((v) => { _snap.health = v.hosts || []; setHealth(_snap.health); }, () => {}),
       api.agents().then((v) => { _snap.agents = v.agents || []; setAgents(_snap.agents); }, () => {}),
+      // Suppressions (cheap) so a node's critical ring clears when its finding is
+      // suppressed — the map must match the dashboard, not re-flag silenced ones.
+      api.suppressions().then((v) => { _snap.supps = v.suppressions || []; setSupps(_snap.supps); }, () => {}),
     ];
     // Posture is only an OVERLAY here — the critical red ring and the network
     // lens's gateway grouping. It's also the heavy call (a full fleet posture
@@ -107,21 +136,32 @@ export default function Topology({ onOpen }) {
       const flags = pr.flags || {};
       const ip = ag.ip || extractIp(h.address);
       const gw = (pr.posture && pr.posture.net && pr.posture.net.gateway) || null;
-      const hasCrit = (hh.disk >= 90) || CRIT_FLAGS.some((k) => flags[k] === true);
+      // Honor suppressions the way the dashboard does, so the map agrees with it.
+      // A finding counts only if firing AND not silenced by an active suppression
+      // (host/env scope; boot_epoch drives the "until next reboot" check). The
+      // node COLOR uses a suppression-aware health verdict (a suppressed disk /
+      // failed-unit finding no longer keeps it amber); the red RING uses the
+      // suppression-filtered sev-1 posture flags.
+      const env = h.environment || "Unassigned";
+      const boot = (pr.posture && pr.posture.os && pr.posture.os.boot_epoch) || null;
+      const isSupp = (key) => !!findSupp(supps, { host: h.label, env, key, bootEpoch: boot });
+      const verdict = healthVerdict(hh, isSupp);
+      const hasCrit = (hh.disk >= 90 && !isSupp("disk_critical")) ||
+        CRIT_FLAGS.some((k) => flags[k] === true && !isSupp(k));
       return {
-        id: h.id, label: h.label, env: h.environment || "Unassigned",
+        id: h.id, label: h.label, env,
         // The reliable is_controller flag is computed on the AGENT record (GET /agents,
         // _is_controller_host by name+IP); the merged-hosts source may not carry it, which
         // would draw the controller's own self-managed host as an ordinary host under an
         // environment (a duplicate "controller"). Trust either source.
         kind: h.type_text || "", address: h.address, isController: !!(ag.is_controller || h.is_controller),
-        online: hh.online, verdict: hh.verdict, disk: hh.disk, mem: hh.mem,
+        online: hh.online, verdict, disk: hh.disk, mem: hh.mem,
         agentVersion: ag.agent_version, ip, gateway: gw,
         subnet: subnetOf(ip), revoked: !!ag.revoked, quarantined: !!ag.integrity_quarantined,
         hasCrit, hypervisor: hh.hyp, vms: hh.vms,
       };
     });
-  }, [hosts, health, agents, posture]);
+  }, [hosts, health, agents, posture, supps]);
 
   const center = useMemo(() => all.find((m) => m.isController) || null, [all]);
 

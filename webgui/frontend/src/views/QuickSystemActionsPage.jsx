@@ -63,7 +63,9 @@ export default function QuickSystemActionsPage({ hosts = [], onRefreshHosts, pre
   // Reboot / power-off: if any checked host is a hypervisor, warn that its guest
   // VMs go down with it before confirming.
   const confirmPower = (action, label, prompt, verb) => {
-    const targetHosts = hosts.filter((h) => targets.includes(h.label));
+    // `targets` are host IDs (HostTree keys its checkboxes by id); match on id,
+    // with label as a fallback in case a caller seeded labels.
+    const targetHosts = hosts.filter((h) => targets.includes(h.id) || targets.includes(h.label));
     const warn = hypervisorFleetWarning(targetHosts, verb);
     confirmRun(action, label, warn ? `${warn}\n\n${prompt}` : prompt);
   };

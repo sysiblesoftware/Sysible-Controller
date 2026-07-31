@@ -1061,12 +1061,36 @@ def get_all_host_health():
     return out
 
 
+# Cap on the number of time-series points returned PER HOST, regardless of
+# window width or how many raw samples the retention window holds. At the 60s
+# metrics cadence a 24h window is ~1440 raw samples/host; without a cap the
+# endpoint's payload (and the client-side render) grew linearly with retention
+# AND fleet size — the "fast when the DB was small, slow now" regression on the
+# Performance view. Downsampling to a fixed budget keeps cost flat: a chart only
+# a few hundred pixels wide can't show more points than this anyway.
+_METRIC_MAX_POINTS = 300
+
+
+def _downsample(samples, max_points=_METRIC_MAX_POINTS):
+    """Reduce an ascending-time sample list to at most `max_points` by keeping
+    every k-th sample (k chosen so the result fits the budget) and always the
+    most recent one, so the tail of the chart stays accurate."""
+    n = len(samples)
+    if n <= max_points:
+        return samples
+    step = (n + max_points - 1) // max_points  # ceil(n/max_points)
+    out = samples[::step]
+    if out[-1] is not samples[-1]:
+        out.append(samples[-1])
+    return out
+
+
 def get_metric_samples(window_s=3600):
     """Return per-host performance time-series within the last `window_s`
     seconds, joined to the agent inventory for hostname/environment. Shape:
     [{host_id, hostname, environment, samples: [{t, load1, cores, mem, disk}, ...]}]
-    with samples in ascending time order. Hosts with no samples in the window
-    are omitted."""
+    with samples in ascending time order, downsampled to <=_METRIC_MAX_POINTS per
+    host. Hosts with no samples in the window are omitted."""
     window_s = max(60, min(int(window_s or 3600), METRIC_RETENTION_S))
     cutoff = time.time() - window_s
     conn = _connect()
@@ -1106,6 +1130,8 @@ def get_metric_samples(window_s=3600):
             "swap": r["swap"], "net_rx": r["net_rx"], "net_tx": r["net_tx"],
             "io_r": r["io_r"], "io_w": r["io_w"], "procs": r["procs"],
         })
+    for h in by_host.values():
+        h["samples"] = _downsample(h["samples"])
     return list(by_host.values())
 
 

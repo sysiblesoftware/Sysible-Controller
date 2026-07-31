@@ -72,6 +72,33 @@ def test_health_from_stored_builds_reading():
     assert r["disk"] == 50 and r["mount"] == "/var" and r["failed"] == 2
 
 
+def test_health_from_stored_partial_when_no_sysd():
+    """A pre-upgrade agent reports disk/mem/load but not sysd/failed/oom. The
+    reading must still be served from heartbeat (graded on disk), marked
+    'heartbeat-partial' so it can be told apart from a full-fidelity reading."""
+    import webgui.server as s
+    hr = {"ts": 1.0, "disk": 92, "mem": 40, "load1": 1.0, "cores": 4}
+    r = s._health_from_stored({"id": "h3", "host": "h3", "environment": "prod"}, hr)
+    assert r["from"] == "heartbeat-partial"
+    assert r["verdict"] == "CRITICAL"      # disk>=90 alone drives the verdict
+    assert r["online"] is True and r["ok"] is True
+    assert r["failed"] == 0 and r["units"] == []   # unknown until agent upgrade
+
+
+def test_metric_samples_downsampled_to_budget():
+    """Wide windows must not return unbounded points: get_metric_samples caps
+    per-host output at _METRIC_MAX_POINTS regardless of raw sample volume."""
+    import backend.db as d
+    raw = [{"t": float(i)} for i in range(5000)]
+    out = d._downsample(raw)
+    assert len(out) <= d._METRIC_MAX_POINTS + 1
+    assert out[-1]["t"] == 4999.0          # newest point preserved
+    assert out[0]["t"] == 0.0              # oldest anchor preserved
+    # A list already within budget is returned unchanged (identity).
+    small = [{"t": float(i)} for i in range(50)]
+    assert d._downsample(small) is small
+
+
 def test_agent_metrics_payload_carries_health_signals():
     import host_agent.agent as a
     hs = a._collect_health_signals([{"mount": "/", "pct": 42}, {"mount": "/var", "pct": 88}])

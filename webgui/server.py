@@ -800,8 +800,12 @@ def _health_from_stored(base, hr):
     failed = hr.get("failed") or 0
     sysd = hr.get("sysd") or ""
     oom = hr.get("oom") or 0
+    # "partial": a reading from an agent that reports disk/mem/load but not yet the
+    # sysd/failed/oom health signals (pre-upgrade). It's graded on disk alone — the
+    # failed-units/systemd/OOM dimensions are unknown until the agent is updated.
     return {
-        **base, "online": True, "ok": True, "error": None, "from": "heartbeat",
+        **base, "online": True, "ok": True, "error": None,
+        "from": "heartbeat" if sysd else "heartbeat-partial",
         "verdict": _health_verdict(disk, failed, sysd, oom),
         "disk": disk, "mount": hr.get("mount") or "/", "mem": hr.get("mem"),
         "load1": hr.get("load1"), "cores": hr.get("cores") or 1, "failed": failed,
@@ -905,7 +909,16 @@ def _fleet_health_sweep(force_live=False):
         # round-trip. `sysd` present marks an agent new enough to report the full
         # health signal; a null/too-old reading falls through to the live probe.
         hr = health_readings.get(aid) if aid else None
-        if hr and hr.get("sysd") and (now - (hr.get("ts") or 0)) <= _HEALTH_STORE_MAX_AGE:
+        # Grade from the last heartbeat-reported reading instead of a live probe.
+        # Gate on a fresh reading that carries `disk` (the primary CRITICAL/WARNING
+        # driver) rather than on `sysd`: older agents attach disk/mem/load every
+        # metrics tick but NOT the newer sysd/failed/oom signals, so gating on
+        # `sysd` sent the ENTIRE pre-upgrade fleet through a live probe on every
+        # ~10s dashboard poll — the exact stampede this fast path exists to avoid.
+        # A reading without sysd grades on disk alone (failed-units count unknown
+        # until the agent is upgraded); _health_from_stored marks it "partial" so
+        # the UI can distinguish it from a full-fidelity reading.
+        if hr and hr.get("disk") is not None and (now - (hr.get("ts") or 0)) <= _HEALTH_STORE_MAX_AGE:
             return _health_from_stored(base, hr)
         # The metrics command is read-only and runs as the agent (root) / SSH
         # user with no sudo, so it must NOT be gated on a stored become-password.

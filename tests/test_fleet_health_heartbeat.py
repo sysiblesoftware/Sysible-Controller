@@ -16,10 +16,14 @@ import pytest
 
 @pytest.fixture()
 def db():
-    os.environ["SYSIBLE_DB_PATH"] = tempfile.mktemp(suffix=".db")
     import importlib
+    from pathlib import Path
     import backend.db as _db
     importlib.reload(_db)
+    # DB_PATH is a module constant (not read from env), so point it at a fresh
+    # temp file AFTER reload — otherwise every test shares the dev DB and leftover
+    # host_health rows make set-equality assertions flaky.
+    _db.DB_PATH = Path(tempfile.mktemp(suffix=".db"))
     _db.init_db()
     return _db
 
@@ -41,6 +45,27 @@ def test_upsert_overwrites_one_row_per_host(db):
     db.upsert_host_health("h1", 2.0, 95, 10, 0.1, 1, 0, 0, 1, "running", "/", [])
     allh = db.get_all_host_health()
     assert len(allh) == 1 and allh["h1"]["disk"] == 95 and allh["h1"]["ts"] == 2.0
+
+
+def test_host_health_stores_hypervisor_fields(db):
+    """The heartbeat carries a hypervisor role + running-guest count so the
+    console can warn before rebooting a VM host; they round-trip through the DB,
+    and default to None for plain servers / older agents that omit them."""
+    db.upsert_host_health("vmhost", 1.0, 20, 20, 0.2, 8, 0, 0, 3600, "running", "/",
+                          [], hyp="kvm", vms=4)
+    db.upsert_host_health("plain", 1.0, 20, 20, 0.2, 2, 0, 0, 3600, "running", "/", [])
+    allh = db.get_all_host_health()
+    assert allh["vmhost"]["hyp"] == "kvm" and allh["vmhost"]["vms"] == 4
+    assert allh["plain"]["hyp"] is None and allh["plain"]["vms"] is None
+
+
+def test_agent_detect_hypervisor_shape():
+    """_detect_hypervisor must always return (role|None, int) and never raise,
+    whatever /proc looks like on the host running the test."""
+    import host_agent.agent as a
+    role, vms = a._detect_hypervisor()
+    assert role is None or isinstance(role, str)
+    assert isinstance(vms, int) and vms >= 0
 
 
 @pytest.mark.parametrize("disk,failed,sysd,oom,expected", [

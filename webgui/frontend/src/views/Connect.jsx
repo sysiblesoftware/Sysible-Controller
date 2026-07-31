@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import HostResults from "../components/HostResults.jsx";
 import FileTransfer from "../components/FileTransfer.jsx";
+import { hypervisorFleetWarning } from "../hypervisor.js";
 
 // Sysible Connect — mirrors the desktop window: managed-hosts tree on the
 // left; selected-host panel, terminals, fleet actions, file transfer, and
@@ -350,14 +351,20 @@ function FleetActions({ hosts, checked, onErr }) {
     // action here — a plain OK is too easy to hit by accident. Require typing
     // the word, matching the strong guard used for system-critical paths.
     const critical = action === "reboot" || action === "poweroff";
+    // Any hypervisor hosts in the target set? Warn that their guest VMs go down.
+    const verb = action === "poweroff" ? "Powering off" : "Rebooting";
+    const targetHosts = checked.length ? hosts.filter((h) => checked.includes(h.id)) : hosts;
+    const vmWarn = critical ? hypervisorFleetWarning(targetHosts, verb) : "";
+    const vmPre = vmWarn ? `${vmWarn}\n\n` : "";
     if (critical && checked.length === 0) {
       const word = action === "poweroff" ? "POWER OFF" : "REBOOT";
       const typed = window.prompt(
+        vmPre +
         `You are about to ${word} ALL ${hosts.length} hosts in the fleet. ` +
         `Powered-off hosts will NOT come back until powered on out-of-band.\n\n` +
         `Type "${word}" to confirm:`);
       if ((typed || "").trim().toUpperCase() !== word) return;
-    } else if (confirmMsg && !window.confirm(`${confirmMsg} (${scopeLabel} host${scopeN === 1 ? "" : "s"})`)) {
+    } else if (confirmMsg && !window.confirm(`${vmPre}${confirmMsg} (${scopeLabel} host${scopeN === 1 ? "" : "s"})`)) {
       return;
     }
     setRunning(action); setResults(null); onErr("");

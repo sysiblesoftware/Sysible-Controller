@@ -687,6 +687,13 @@ def hosts(user: str = Depends(require_login)):
     # force a sweep here, so a cold posture cache simply leaves `critical` null
     # (no highlighting) until the dashboard or a posture_scan job warms it.
     posture_by_id = {h.get("id"): h for h in (_POSTURE_CACHE["hosts"] or [])}
+    # Latest heartbeat health per agent host_id, for the hypervisor role + running
+    # VM count (drives the "this is a VM host" badge and the reboot/power-off
+    # warning). Best-effort: a controller blip just leaves those fields absent.
+    try:
+        health_by_id = (api.get_fleet_health_readings() or {}).get("hosts") or {}
+    except Exception:
+        health_by_id = {}
     try:
         from webgui import suppressions
         supps = suppressions.list_all()
@@ -708,6 +715,7 @@ def hosts(user: str = Depends(require_login)):
         reasons = (_host_critical_reasons(pc.get("flags") or {}, e["label"],
                                           e.get("environment") or "", supps)
                    if pc else [])
+        hr = health_by_id.get(agent_id) if agent_id else None
         out.append({
             "id": e["id"],
             "label": e["label"],
@@ -721,6 +729,10 @@ def hosts(user: str = Depends(require_login)):
             # null when posture hasn't been gathered for this host yet.
             "critical": (len(reasons) > 0) if pc else None,
             "critical_reasons": reasons,
+            # Hypervisor role + running-guest count (null when not a VM host or the
+            # agent hasn't reported yet), so reboot/power-off flows can warn.
+            "hypervisor": (hr or {}).get("hyp"),
+            "vms": (hr or {}).get("vms"),
         })
     return {"hosts": out}
 
@@ -811,7 +823,7 @@ def _health_from_stored(base, hr):
         "disk": disk, "mount": hr.get("mount") or "/", "mem": hr.get("mem"),
         "load1": hr.get("load1"), "cores": hr.get("cores") or 1, "failed": failed,
         "uptime": hr.get("uptime") or 0, "sysd": sysd, "units": hr.get("units") or [],
-        "oom": oom,
+        "oom": oom, "hyp": hr.get("hyp"), "vms": hr.get("vms"),
     }
 
 
@@ -1279,7 +1291,20 @@ def host_posture(host_id: str, user: str = Depends(require_login)):
         last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
     except Exception:
         last_seen = {}
-    return _probe_posture(entry, _posture_command(), last_seen, _t.time())
+    result = _probe_posture(entry, _posture_command(), last_seen, _t.time())
+    # Attach the hypervisor role + running-guest count from the fast heartbeat
+    # health reading (not the posture sweep), so the drill-down's reboot button
+    # can warn about taking a VM host down even on a cold posture cache.
+    aid = entry["id"] if entry["kind"] == "agent" else \
+        (entry.get("agent_entry") or {}).get("id") if entry["kind"] == "merged" else None
+    if aid:
+        try:
+            hr = ((api.get_fleet_health_readings() or {}).get("hosts") or {}).get(aid) or {}
+            result["hypervisor"] = hr.get("hyp")
+            result["vms"] = hr.get("vms")
+        except Exception:
+            pass
+    return result
 
 
 # ----------------------------------------------------------------------

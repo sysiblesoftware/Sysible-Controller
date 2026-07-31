@@ -284,6 +284,14 @@ def init_db():
         sysd TEXT, mount TEXT, units TEXT
     )
     """)
+    # Hypervisor role (kvm/proxmox/xen-dom0/…) + running-guest count, added later
+    # so the console can warn before rebooting/powering off a VM host. Nullable so
+    # older agents (which omit them) and existing rows keep working.
+    for _col, _type in (("hyp", "TEXT"), ("vms", "INTEGER")):
+        try:
+            cur.execute(f"ALTER TABLE host_health ADD COLUMN {_col} {_type}")
+        except sqlite3.OperationalError:
+            pass
 
     # -----------------------------------------------------
     # Enrollment Tokens
@@ -1016,19 +1024,21 @@ def get_host_snapshot(host_id):
 
 
 def upsert_host_health(host_id, ts, disk, mem, load1, cores, failed, oom,
-                       uptime, sysd, mount, units):
+                       uptime, sysd, mount, units, hyp=None, vms=None):
     """Store the LATEST fleet-health reading for one host (one row, overwritten).
-    `units` is a list of failed-unit names, stored as JSON. Called from the
-    heartbeat handler when the agent attaches health signals; lets the dashboard
-    read health without a live probe. Best-effort at the call site."""
+    `units` is a list of failed-unit names, stored as JSON. `hyp`/`vms` carry the
+    hypervisor role + running-guest count (None when the host isn't a VM host, or
+    for older agents that don't report them). Called from the heartbeat handler
+    when the agent attaches health signals; lets the dashboard read health without
+    a live probe. Best-effort at the call site."""
     conn = _connect()
     cur = conn.cursor()
     cur.execute(
         "INSERT OR REPLACE INTO host_health "
-        "(host_id, ts, disk, mem, load1, cores, failed, oom, uptime, sysd, mount, units) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "(host_id, ts, disk, mem, load1, cores, failed, oom, uptime, sysd, mount, units, hyp, vms) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (host_id, float(ts), disk, mem, load1, cores, failed, oom, uptime,
-         sysd, mount, json.dumps(units or [])),
+         sysd, mount, json.dumps(units or []), hyp, vms),
     )
     conn.commit()
     conn.close()
@@ -1044,7 +1054,7 @@ def get_all_host_health():
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("SELECT host_id, ts, disk, mem, load1, cores, failed, oom, uptime, "
-                "sysd, mount, units FROM host_health")
+                "sysd, mount, units, hyp, vms FROM host_health")
     rows = cur.fetchall()
     conn.close()
     out = {}
@@ -1057,6 +1067,7 @@ def get_all_host_health():
             "ts": r["ts"], "disk": r["disk"], "mem": r["mem"], "load1": r["load1"],
             "cores": r["cores"], "failed": r["failed"], "oom": r["oom"],
             "uptime": r["uptime"], "sysd": r["sysd"], "mount": r["mount"], "units": units,
+            "hyp": r["hyp"], "vms": r["vms"],
         }
     return out
 

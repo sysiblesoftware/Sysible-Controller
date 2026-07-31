@@ -916,6 +916,62 @@ def _collect_health_signals(mounts):
     return {"failed": len(units), "units": units[:4], "sysd": sysd, "oom": oom, "mount": mount}
 
 
+def _detect_hypervisor():
+    """Best-effort: is THIS host a hypervisor running guest VMs (a VM HOST), as
+    opposed to a plain server or a guest itself? Cheap, dependency-free /proc +
+    sysfs checks — no virsh/xl/VBoxManage calls. Returns (role, vm_count):
+
+      role      short label — "proxmox" / "kvm" / "xen-dom0" / "virtualbox" /
+                "vmware" — or None if this doesn't look like a VM host.
+      vm_count  number of RUNNING guests we could count (one qemu-system /
+                VBoxHeadless / vmware-vmx process per running VM). 0 is valid for
+                a configured-but-idle hypervisor.
+
+    The point is the reboot warning: taking a VM host down interrupts every guest
+    on it, so the console flags that before an operator reboots/powers it off."""
+    role, vms = None, 0
+    try:
+        if os.path.isdir("/etc/pve"):
+            role = "proxmox"                       # Proxmox VE
+        try:
+            with open("/proc/xen/capabilities") as f:
+                if "control_d" in f.read():
+                    role = role or "xen-dom0"      # Xen control domain, not a guest
+        except OSError:
+            pass
+        kvm = os.path.exists("/dev/kvm")
+        qemu = vbox = vmware = 0
+        # One /proc scan for guest processes. `comm` is truncated to 15 chars, so
+        # qemu-system-x86_64 shows as "qemu-system-x86" — startswith covers it.
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            try:
+                with open("/proc/" + pid + "/comm") as f:
+                    comm = f.read().strip()
+            except OSError:
+                continue
+            if comm.startswith("qemu-system") or comm == "qemu-kvm":
+                qemu += 1
+            elif comm in ("VBoxHeadless", "VirtualBox"):
+                vbox += 1
+            elif comm == "vmware-vmx":
+                vmware += 1
+        if qemu:
+            role = role or ("kvm" if kvm else "qemu"); vms += qemu
+        if vbox:
+            role = role or "virtualbox"; vms += vbox
+        if vmware:
+            role = role or "vmware"; vms += vmware
+        # KVM-capable host with libvirt present but no guests currently running:
+        # still a hypervisor (rebooting it is still disruptive to its inventory).
+        if role is None and kvm and (os.path.isdir("/etc/libvirt") or os.path.exists("/run/libvirt")):
+            role = "kvm"
+    except Exception:
+        return (None, 0)
+    return (role, vms)
+
+
 def _collect_metrics():
     """Build the heartbeat's performance payload: scalar time-series metrics
     plus a rich detail snapshot. Best-effort throughout - any single failure is
@@ -1023,6 +1079,10 @@ def _collect_metrics():
     # verdict from this heartbeat instead of live-probing every host each load.
     health = _collect_health_signals(mounts)
 
+    # Hypervisor role + running-guest count, so the console can warn before a
+    # reboot/power-off takes a VM host (and all its guests) down.
+    hyp_role, hyp_vms = _detect_hypervisor()
+
     metrics = {
         "load1": load1, "load5": load5, "load15": load15, "cores": cores,
         "cpu": cpu_pct, "mem": mem, "swap": swap, "disk": disk,
@@ -1032,6 +1092,8 @@ def _collect_metrics():
         # names, overall systemd state, OOM-kills, worst-disk mount.
         "failed": health["failed"], "units": health["units"],
         "sysd": health["sysd"], "oom": health["oom"], "mount": health["mount"],
+        # Hypervisor role (None if not a VM host) + running-guest count.
+        "hyp": hyp_role, "vms": hyp_vms,
     }
     snapshot = {
         "percpu": percpu_pct,

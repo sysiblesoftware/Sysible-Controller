@@ -954,6 +954,8 @@ def heartbeat(req: HeartbeatRequest):
                 (req.metrics.get("sysd") or None),
                 (req.metrics.get("mount") or None),
                 req.metrics.get("units") or [],
+                (req.metrics.get("hyp") or None),
+                _num("vms", int),
             )
         except Exception:
             pass

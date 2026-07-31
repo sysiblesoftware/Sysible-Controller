@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import SuppressMenu from "../components/SuppressMenu.jsx";
 import { findSupp, describeSupp } from "../suppress.js";
+import { hypervisorBadge, hypervisorActionWarning, isHypervisor } from "../hypervisor.js";
 
 // Map a posture row key to the dashboard suppression signal key where one
 // exists, so suppressing a finding here stays consistent with the compliance
@@ -159,6 +160,7 @@ function fmtValue(fullKey, v) {
 // the row is actually in a warn/bad state — no action on a healthy signal.
 const ACTIONS = {
   "reboot.required": { kind: "run", label: "Reboot host", confirm: "Reboot this host now?",
+                       vmDisruptive: true,   // warn first if this host is a VM host
                        refreshAfter: true, run: (hostId) => api.fleet("reboot", [hostId]) },
   // No in-place fix for an EOL OS — send the operator to the release-upgrade tool
   // with this host pre-selected so they can assess + upgrade it.
@@ -280,7 +282,7 @@ const EXPLAIN = {
     fix: "Re-run those containers without --privileged, granting only the specific capabilities they actually need." },
 };
 
-function RowAction({ action, hostId, posture, onOpen, onRefreshSoon }) {
+function RowAction({ action, hostId, posture, hyp, onOpen, onRefreshSoon }) {
   const [state, setState] = useState("idle"); // idle | busy | ok | err
   const [msg, setMsg] = useState("");
   if (action.kind === "tool") {
@@ -296,7 +298,11 @@ function RowAction({ action, hostId, posture, onOpen, onRefreshSoon }) {
   }
   const doRun = () => {
     if (state === "busy") return;
-    if (action.confirm && !window.confirm(action.confirm)) return;
+    // A VM-disruptive action (reboot) on a hypervisor host takes every guest down
+    // with it — surface that in the confirm before anything happens.
+    const vmWarn = action.vmDisruptive ? hypervisorActionWarning(hyp) : "";
+    const confirmMsg = vmWarn ? `${vmWarn}\n\n${action.confirm || "Continue?"}` : action.confirm;
+    if (confirmMsg && !window.confirm(confirmMsg)) return;
     setState("busy"); setMsg("");
     action.run(hostId)
       .then((r) => {
@@ -317,7 +323,7 @@ function RowAction({ action, hostId, posture, onOpen, onRefreshSoon }) {
   );
 }
 
-function Row({ fullKey, label, value, hostId, posture, host, env, boot, supps, onOpen, canAct, onRefreshSoon, onSuppressed, onChanged }) {
+function Row({ fullKey, label, value, hostId, posture, hyp, host, env, boot, supps, onOpen, canAct, onRefreshSoon, onSuppressed, onChanged }) {
   const st = evalStatus(fullKey, value);
   const flagged = st === "bad" || st === "warn";
   const suppKey = SUPP_KEY[fullKey] || fullKey;
@@ -373,7 +379,7 @@ function Row({ fullKey, label, value, hostId, posture, host, env, boot, supps, o
       )}
       {flagged && canAct && !supp && (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 5 }}>
-          {action && <RowAction action={action} hostId={hostId} posture={posture} onOpen={onOpen} onRefreshSoon={onRefreshSoon} />}
+          {action && <RowAction action={action} hostId={hostId} posture={posture} hyp={hyp} onOpen={onOpen} onRefreshSoon={onRefreshSoon} />}
           <SuppressMenu ctx={{ key: suppKey, host, env, bootEpoch: boot }} onDone={onSuppressed} />
         </div>
       )}
@@ -381,7 +387,7 @@ function Row({ fullKey, label, value, hostId, posture, host, env, boot, supps, o
   );
 }
 
-function SectionCard({ section, posture, hostId, host, env, boot, supps, onOpen, canAct, onRefreshSoon, onSuppressed, onChanged }) {
+function SectionCard({ section, posture, hyp, hostId, host, env, boot, supps, onOpen, canAct, onRefreshSoon, onSuppressed, onChanged }) {
   // Collect every present key within this section's categories: known keys keep
   // their friendly label and stated order; unknown ones are appended humanized.
   const rows = [];
@@ -402,7 +408,7 @@ function SectionCard({ section, posture, hostId, host, env, boot, supps, onOpen,
     <div className="card" style={{ padding: "12px 14px" }}>
       <div className="section-title" style={{ marginBottom: 6 }}>{section.title}</div>
       {rows.map((r) => <Row key={r.fullKey} fullKey={r.fullKey} label={r.label} value={r.value}
-                            hostId={hostId} posture={posture} host={host} env={env} boot={boot} supps={supps}
+                            hostId={hostId} posture={posture} hyp={hyp} host={host} env={env} boot={boot} supps={supps}
                             onOpen={onOpen} canAct={canAct} onRefreshSoon={onRefreshSoon}
                             onSuppressed={onSuppressed} onChanged={onChanged} />)}
     </div>
@@ -565,12 +571,23 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
   }, [hostId]);
 
   const posture = data && data.posture;
+  // Hypervisor context (role + running-guest count) attached to the posture
+  // response from the heartbeat health reading; drives the badge below and the
+  // reboot confirm warning.
+  const hyp = data ? { hypervisor: data.hypervisor, vms: data.vms, label } : null;
 
   return (
     <div>
       <div className="spread" style={{ marginBottom: 14 }}>
         <button className="btn ghost sm" onClick={onBack}>← Back to dashboard</button>
         <div className="row" style={{ gap: 12, alignItems: "center" }}>
+          {isHypervisor(hyp) && (
+            <span title="This host runs virtual machines — rebooting or powering it off takes its guests down."
+                  style={{ fontSize: 11.5, fontWeight: 600, color: "#e0a83a",
+                           border: "1px solid #e0a83a", borderRadius: 10, padding: "1px 9px" }}>
+              🖥 {hypervisorBadge(hyp)}
+            </span>
+          )}
           {data && data.environment && <span className="faint" style={{ fontSize: 12 }}>{data.environment}</span>}
           <button className="btn ghost sm" onClick={load} disabled={loading}>
             {loading ? <span className="spin" /> : "Refresh posture"}
@@ -614,7 +631,7 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))",
                       gap: 12, alignItems: "start" }}>
-          {SECTIONS.map((s) => <SectionCard key={s.title} section={s} posture={posture}
+          {SECTIONS.map((s) => <SectionCard key={s.title} section={s} posture={posture} hyp={hyp}
                                             hostId={hostId} host={label} env={data && data.environment}
                                             boot={(posture.os || {}).boot_epoch} supps={supps}
                                             onOpen={onOpen} canAct={canAct} onRefreshSoon={refreshAfterReboot}

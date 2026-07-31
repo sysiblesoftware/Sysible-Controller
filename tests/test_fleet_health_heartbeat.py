@@ -99,6 +99,32 @@ def test_metric_samples_downsampled_to_budget():
     assert d._downsample(small) is small
 
 
+def test_host_bounded_passes_normal_and_kills_hang():
+    """Read-only recon dispatches are wrapped so a wedged probe can't occupy the
+    agent's serial task loop for the full 30-min agent command timeout. A normal
+    command must pass through unchanged; a hang must be killed near the cap."""
+    import subprocess
+    import time
+    import webgui.server as s
+    ok = subprocess.run(s._host_bounded("echo hi", 60), shell=True,
+                        capture_output=True, text=True)
+    assert ok.stdout.strip() == "hi"
+    t0 = time.time()
+    subprocess.run(s._host_bounded("sleep 30", 1), shell=True, capture_output=True)
+    assert (time.time() - t0) < 8, "hanging recon command was not bounded"
+
+
+def test_posture_probes_are_tmo_wrapped():
+    """The historically-unbounded posture probes (sshd -T, du /var/log, docker,
+    pkg-manager reboot checks) must run under the $TMO timeout guard."""
+    import client._api_dispatch as d
+    sh = d._POSTURE_SH
+    for probe in ("$TMO sshd -T", "$TMO du -sm /var/log", "$TMO docker ps -q",
+                  "$TMO docker inspect", "$TMO needs-restarting",
+                  "$TMO zypper needs-rebooting"):
+        assert probe in sh, f"posture probe not $TMO-guarded: {probe}"
+
+
 def test_agent_metrics_payload_carries_health_signals():
     import host_agent.agent as a
     hs = a._collect_health_signals([{"mount": "/", "pct": 42}, {"mount": "/var", "pct": 88}])

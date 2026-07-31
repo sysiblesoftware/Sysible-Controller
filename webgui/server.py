@@ -43,6 +43,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import sys
 import tempfile
 import threading
@@ -933,7 +934,8 @@ def _fleet_health_sweep(force_live=False):
         # within ~8s is reported as an unreachable/timed-out probe, so the sweep
         # can't stack up and starve the thread pool (which stalled everything).
         r = _dispatch_one(pe, cmd, "command", None, None, None,  # no token: read-only, unlogged
-                          poll_timeout=float(os.getenv("SYSIBLE_HEALTH_PROBE_TIMEOUT", "8")))
+                          poll_timeout=float(os.getenv("SYSIBLE_HEALTH_PROBE_TIMEOUT", "8")),
+                          exec_timeout=float(os.getenv("SYSIBLE_RECON_EXEC_TIMEOUT", "60")))
         m = _parse_sysmetrics((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
         return {
             **base,
@@ -1141,7 +1143,8 @@ def _probe_posture(e, cmd, last_seen, now):
     if e.get("agent_entry"):
         pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
     r = _dispatch_one(pe, cmd, "command", None, None, None,  # no token: read-only, unlogged
-                      poll_timeout=float(os.getenv("SYSIBLE_POSTURE_PROBE_TIMEOUT", "30")))
+                      poll_timeout=float(os.getenv("SYSIBLE_POSTURE_PROBE_TIMEOUT", "30")),
+                      exec_timeout=float(os.getenv("SYSIBLE_RECON_EXEC_TIMEOUT", "60")))
     p = _parse_posture((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
     # "limited": the probe ran but NOT as root (e.g. an SSH host whose login user
     # isn't root) - root-only checks (shadow, sshd -T, SUID scans) read blank, so
@@ -3230,7 +3233,8 @@ def fleet_query(body: FleetQueryRequest, user: str = Depends(require_operator)):
         if e.get("integrity_quarantined"):
             return {**base, "error": "integrity-quarantined"}
         r = _dispatch_one(e, cmd, "command", None, None, None, needs_sudo=False, log=False,
-                          poll_timeout=float(os.getenv("SYSIBLE_QUERY_PROBE_TIMEOUT", "20")))
+                          poll_timeout=float(os.getenv("SYSIBLE_QUERY_PROBE_TIMEOUT", "20")),
+                          exec_timeout=float(os.getenv("SYSIBLE_RECON_EXEC_TIMEOUT", "60")))
         val = None
         for line in (r.get("stdout") or "").splitlines():
             if line.startswith("SYSQUERY "):
@@ -3377,8 +3381,22 @@ def files_compare(body: CompareRequest, request: Request, user: str = Depends(re
             "unreadable": unreadable, "errors": errors, "identical": identical}
 
 
+def _host_bounded(command, secs):
+    """Wrap a read-only recon command so it self-terminates on the host after
+    `secs`, instead of potentially occupying the agent's SERIAL task loop for the
+    full SYSIBLE_AGENT_CMD_TIMEOUT (1800s) if a probe wedges — a hung recon task
+    would otherwise block every task queued behind it on that host. Uses coreutils
+    `timeout` (SIGTERM, then SIGKILL 5s later) when present; on a minimal host
+    without it the command runs unbounded, but the per-probe $TMO guards inside the
+    posture/metrics scripts remain the primary bound there."""
+    q = shlex.quote(command)
+    n = int(secs)
+    return (f"if command -v timeout >/dev/null 2>&1; then timeout -k 5 {n} sh -c {q}; "
+            f"else sh -c {q}; fi")
+
+
 def _dispatch_one(entry, command, kind, become_password=None, token=None, description=None,
-                  needs_sudo=True, log=True, poll_timeout=None):
+                  needs_sudo=True, log=True, poll_timeout=None, exec_timeout=None):
     """Run one command on one host and return a normalized result,
     polling agent tasks to completion (bounded) so the response is
     synchronous from the browser's point of view.
@@ -3388,6 +3406,11 @@ def _dispatch_one(entry, command, kind, become_password=None, token=None, descri
     like fleet-health pass a short one so a single unresponsive agent can't
     stall the whole parallel sweep for a minute.
 
+    `exec_timeout` caps how long the command may run ON THE HOST (via
+    _host_bounded), so a wedged read-only probe can't tie up the agent's serial
+    task loop for the 30-min agent command timeout. Read-only sweeps pass this;
+    mutating actions (which may legitimately run long) leave it unset.
+
     The dispatch itself runs with the admin token set (token!=None) so the
     controller can derive the run-as user (runuser -u <admin>) and attribute
     the activity feed; `description` is the human label recorded in that feed.
@@ -3395,6 +3418,8 @@ def _dispatch_one(entry, command, kind, become_password=None, token=None, descri
     held during the (bounded) poll loop."""
     label = entry["label"]
     env = entry.get("environment") or "Unassigned"
+    if exec_timeout:
+        command = _host_bounded(command, exec_timeout)
     try:
         outcome = _with_token(token, lambda: dispatch.run_on_entry(
             entry, command, kind=kind, become_password=become_password, description=description,

@@ -742,9 +742,14 @@ fi
 #                  it clears once you've actually rebooted.
 rr=0
 [ -f /var/run/reboot-required ] && rr=1
-if command -v needs-restarting >/dev/null 2>&1; then needs-restarting -r >/dev/null 2>&1 || rr=1; fi
+# needs-restarting / zypper can stall querying package metadata, so cap them with
+# $TMO. Exclude the timeout exit code (124) from the "reboot needed" decision so a
+# slow host isn't falsely flagged — it just leaves rr unchanged for that check.
+if command -v needs-restarting >/dev/null 2>&1; then
+  $TMO needs-restarting -r >/dev/null 2>&1; rc=$?; [ "$rc" != 0 ] && [ "$rc" != 124 ] && rr=1
+fi
 if command -v zypper >/dev/null 2>&1; then
-  zypper needs-rebooting >/dev/null 2>&1; [ "$?" = 102 ] && rr=1
+  $TMO zypper needs-rebooting >/dev/null 2>&1; [ "$?" = 102 ] && rr=1
 fi
 p reboot.required "$rr"
 
@@ -787,7 +792,9 @@ p users.svc_login_shells "$(awk -F: '($3>0 && $3<1000 && $7 !~ /(nologin|false|s
 if grep -rqsE 'pam_pwquality|pam_cracklib' /etc/pam.d 2>/dev/null; then p users.pw_complexity configured; else p users.pw_complexity none; fi
 
 # --- SSH (effective config via sshd -T, falls back to file) -----------------
-ST=$(sshd -T 2>/dev/null); [ -z "$ST" ] && ST=$(grep -vE '^\s*#|^\s*$' /etc/ssh/sshd_config 2>/dev/null)
+# `sshd -T` can block (DNS/PAM lookups, a wedged config include), so cap it with
+# $TMO; on a timeout ST is empty and we fall back to reading sshd_config.
+ST=$($TMO sshd -T 2>/dev/null); [ -z "$ST" ] && ST=$(grep -vE '^\s*#|^\s*$' /etc/ssh/sshd_config 2>/dev/null)
 sg(){ printf '%s\n' "$ST" | awk -v k="$1" 'BEGIN{IGNORECASE=1} tolower($1)==k{$1="";sub(/^[ \t]+/,"");print;exit}'; }
 if [ -n "$ST" ]; then
   p ssh.permit_root_login "$(sg permitrootlogin)"
@@ -851,7 +858,10 @@ if systemctl is-active rsyslog >/dev/null 2>&1; then p log.rsyslog active; else 
 if systemctl is-active systemd-journald >/dev/null 2>&1; then p log.journald active; else p log.journald inactive; fi
 if grep -rqsE '^[^#]*@@?[A-Za-z0-9.]' /etc/rsyslog.conf /etc/rsyslog.d 2>/dev/null; then p log.remote_forward 1; else p log.remote_forward 0; fi
 if command -v logrotate >/dev/null 2>&1; then p log.logrotate present; else p log.logrotate absent; fi
-p log.var_log_mb "$(du -sm /var/log 2>/dev/null | awk '{print $1}')"
+# `du -sm /var/log` walks the whole log tree — on a host with a huge/backed-up
+# journal or app logs this can take a long time, so bound it with $TMO (empty
+# result on timeout, which just leaves var_log_mb blank).
+p log.var_log_mb "$($TMO du -sm /var/log 2>/dev/null | awk '{print $1}')"
 
 # --- Networking -------------------------------------------------------------
 if command -v ss >/dev/null 2>&1; then
@@ -913,14 +923,17 @@ if systemctl is-active qemu-guest-agent >/dev/null 2>&1; then p virt.guest_agent
 elif systemctl is-active vmtoolsd >/dev/null 2>&1; then p virt.guest_agent open-vm-tools; fi
 
 # --- Containers -------------------------------------------------------------
+# Every docker/podman call below talks to the container daemon, which can hang
+# hard when it's wedged (unresponsive dockerd, stuck socket). Cap each daemon
+# call with $TMO so an unhealthy daemon can't stall the whole posture scan.
 if command -v docker >/dev/null 2>&1; then
   p cont.docker "$(docker --version 2>/dev/null | awk '{print $3}' | tr -d ,)"
-  p cont.docker_running "$(docker ps -q 2>/dev/null | wc -l | tr -d ' ')"
-  p cont.docker_privileged "$(docker ps -q 2>/dev/null | xargs -r docker inspect -f '{{.HostConfig.Privileged}}' 2>/dev/null | grep -c true)"
+  p cont.docker_running "$($TMO docker ps -q 2>/dev/null | wc -l | tr -d ' ')"
+  p cont.docker_privileged "$($TMO docker ps -q 2>/dev/null | xargs -r $TMO docker inspect -f '{{.HostConfig.Privileged}}' 2>/dev/null | grep -c true)"
 fi
 if command -v podman >/dev/null 2>&1; then
   p cont.podman "$(podman --version 2>/dev/null | awk '{print $3}')"
-  p cont.podman_running "$(podman ps -q 2>/dev/null | wc -l | tr -d ' ')"
+  p cont.podman_running "$($TMO podman ps -q 2>/dev/null | wc -l | tr -d ' ')"
 fi
 
 # --- AD / Identity ----------------------------------------------------------

@@ -16,10 +16,16 @@ const ROLE_LABEL = {
   vmware: "VMware host",
 };
 
-// A host record with { hypervisor, vms } (any of the console's host-shaped
-// objects). Returns true when it looks like a VM host.
+// The hypervisor role off any of the console's host-shaped objects. The inventory
+// (/api/hosts) exposes it as `hypervisor`; the fleet-health reading and posture
+// expose the raw `hyp` — accept either so one badge works everywhere.
+export function hypervisorRole(h) {
+  return h ? (h.hypervisor || h.hyp || null) : null;
+}
+
+// Returns true when a host record looks like a VM host.
 export function isHypervisor(h) {
-  return !!(h && h.hypervisor);
+  return !!hypervisorRole(h);
 }
 
 export function hypervisorLabel(role) {
@@ -32,7 +38,7 @@ export function hypervisorBadge(h) {
   if (!isHypervisor(h)) return "";
   const n = Number(h.vms);
   const count = Number.isFinite(n) && n > 0 ? `${n} VM${n === 1 ? "" : "s"}` : "VM host";
-  return `${hypervisorLabel(h.hypervisor)} · ${count}`;
+  return `${hypervisorLabel(hypervisorRole(h))} · ${count}`;
 }
 
 // Warning line for a disruptive action on ONE host (reboot / power off). Empty
@@ -44,7 +50,7 @@ export function hypervisorActionWarning(h, verb = "Rebooting") {
   const guests = Number.isFinite(n) && n > 0
     ? `${n} running VM${n === 1 ? "" : "s"}`
     : "its VMs";
-  return `⚠ ${h.label || "This host"} is a ${hypervisorLabel(h.hypervisor)}. ` +
+  return `⚠ ${h.label || h.host || "This host"} is a ${hypervisorLabel(hypervisorRole(h))}. ` +
     `${verb} it will take down ${guests}.`;
 }
 

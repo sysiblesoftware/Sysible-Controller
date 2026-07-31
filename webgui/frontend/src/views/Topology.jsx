@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
+import { hypervisorBadge } from "../hypervisor.js";
 
 // Fleet topology — a controller-centric map. The controller is the hub; managed
 // hosts cluster around it, grouped either by ENVIRONMENT or by NETWORK segment
@@ -117,7 +118,7 @@ export default function Topology({ onOpen }) {
         online: hh.online, verdict: hh.verdict, disk: hh.disk, mem: hh.mem,
         agentVersion: ag.agent_version, ip, gateway: gw,
         subnet: subnetOf(ip), revoked: !!ag.revoked, quarantined: !!ag.integrity_quarantined,
-        hasCrit,
+        hasCrit, hypervisor: hh.hyp, vms: hh.vms,
       };
     });
   }, [hosts, health, agents, posture]);
@@ -377,7 +378,7 @@ export default function Topology({ onOpen }) {
                                      strokeDasharray={n.revoked || n.quarantined ? "3 3" : undefined} />}
                     <circle r={hovered ? 11 : 9} fill={nodeColor(n)} stroke="var(--bg,#0d1117)" strokeWidth={2} />
                     {n.kind === "Agent + SSH" && <circle r={hovered ? 4.5 : 3.5} fill="var(--bg,#0d1117)" />}
-                    <text y={24} textAnchor="middle" style={{ fontSize: 11.5, fill: "var(--text,#e6e6e6)", fontWeight: hovered ? 700 : 400 }}>{trunc(n.label)}</text>
+                    <text y={24} textAnchor="middle" style={{ fontSize: 11.5, fill: "var(--text,#e6e6e6)", fontWeight: hovered ? 700 : 400 }}>{n.hypervisor ? "🖥 " : ""}{trunc(n.label)}</text>
                   </g>
                 );
               })}
@@ -417,6 +418,7 @@ function NodeTooltip({ n, W, H }) {
     n.ip ? `${n.ip}${n.gateway ? `  · gw ${n.gateway}` : ""}` : (n.address || ""),
     `status: ${statusOf(n).toLowerCase()}`,
     (n.disk != null || n.mem != null) ? `disk ${n.disk ?? "—"}%  ·  mem ${n.mem ?? "—"}%` : "",
+    n.hypervisor ? `🖥 ${hypervisorBadge(n)}` : "",
     n.hasCrit ? "⚠ active critical finding" : "",
     n.revoked ? "⦸ agent revoked" : n.quarantined ? "⚠ integrity quarantined" : "",
     n.agentVersion ? `agent ${n.agentVersion}` : "",

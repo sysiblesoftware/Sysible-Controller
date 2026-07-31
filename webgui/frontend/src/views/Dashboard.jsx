@@ -4,6 +4,7 @@ import { searchTasks } from "../featureSearch.js";
 import SuppressMenu from "../components/SuppressMenu.jsx";
 import { findSupp, describeSupp } from "../suppress.js";
 import { isAutomationActor } from "./LiveActivity.jsx";
+import HypervisorBadge from "../components/HypervisorBadge.jsx";
 
 const VERDICT_COLOR = { OK: "#4ec07a", WARNING: "#e0a83a", CRITICAL: "#e06c6c", OFFLINE: "#7a7a7a", SUPPRESSED: "#6c7fa8" };
 // Severity for the "Needs attention" list: 0 (offline) / 1 (critical) both red,
@@ -120,6 +121,7 @@ function FleetHostCard({ h, onOpenHost }) {
         <span><span className="dot" style={{ background: VERDICT_COLOR[v] || VERDICT_COLOR.OFFLINE }} />{" "}
           <strong>{h.host}</strong>
           {h.is_controller && <span style={CTRL_BADGE} title="This host is the Sysible controller">controller</span>}
+          <HypervisorBadge host={h} compact style={{ marginLeft: 6 }} />
           <span className="faint" style={{ marginLeft: 6, fontSize: 11 }}>{h.environment}</span></span>
         <span className="faint" style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
           {h.issues > 0 && <span style={{ color: VERDICT_COLOR.WARNING, fontWeight: 700 }}>⚠ {h.issues}</span>}

@@ -3,6 +3,7 @@ import { api } from "../api.js";
 import { searchTasks } from "../featureSearch.js";
 import SuppressMenu from "../components/SuppressMenu.jsx";
 import { findSupp, describeSupp } from "../suppress.js";
+import { isAutomationActor } from "./LiveActivity.jsx";
 
 const VERDICT_COLOR = { OK: "#4ec07a", WARNING: "#e0a83a", CRITICAL: "#e06c6c", OFFLINE: "#7a7a7a", SUPPRESSED: "#6c7fa8" };
 // Severity for the "Needs attention" list: 0 (offline) / 1 (critical) both red,
@@ -416,7 +417,10 @@ export default function Dashboard({ role, edition, onOpen }) {
   const isAuditor = role === "auditor";
 
   useEffect(() => {
-    if (isSuper) api.activity(12).then((d) => setActivity(d.activity || [])).catch(() => {});
+    // Pull a wider window than we show: automation (API-key/service) rows are
+    // filtered out of this glance preview, so fetch enough that real human
+    // actions still surface even when a scheduled integration dominates.
+    if (isSuper) api.activity(80).then((d) => setActivity(d.activity || [])).catch(() => {});
   }, [isSuper]);
 
   const results = useMemo(() => searchTasks(q), [q]);
@@ -426,8 +430,16 @@ export default function Dashboard({ role, edition, onOpen }) {
   // reachability the fleet donut uses (and refresh with it) instead of a stale,
   // never-refreshed last_seen window that left "Online" frozen at page-load.
 
+  // Preview hides automation (API-key / service) rows so a scheduled integration
+  // polling the fleet can't drown out what people are doing. The full Activity
+  // Feed has a toggle to show them; nothing is deleted, just filtered from view.
   const recent = useMemo(
-    () => [...activity].sort((a, b) => (b.id || 0) - (a.id || 0)).slice(0, 10),
+    () => [...activity].filter((e) => !isAutomationActor(e.username))
+                       .sort((a, b) => (b.id || 0) - (a.id || 0)).slice(0, 10),
+    [activity]
+  );
+  const hiddenAuto = useMemo(
+    () => activity.reduce((n, e) => n + (isAutomationActor(e.username) ? 1 : 0), 0),
     [activity]
   );
 
@@ -1093,10 +1105,19 @@ export default function Dashboard({ role, edition, onOpen }) {
       <div className="overview-grid">
         {isSuper && (
           <div>
-            <div className="section-title">Recent activity</div>
+            <div className="section-title" style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+              <span>Recent activity</span>
+              {hiddenAuto > 0 && (
+                <button className="btn ghost sm" style={{ fontWeight: 400 }}
+                        title="These are API-key / service-account rows, filtered from this glance. Open the full Activity Feed to see them."
+                        onClick={() => onOpen && onOpen("live")}>
+                  {hiddenAuto} automation hidden →
+                </button>
+              )}
+            </div>
             <div className="overview-feed">
               {recent.length === 0 ? (
-                <div className="empty" style={{ padding: 20 }}>No recent activity.</div>
+                <div className="empty" style={{ padding: 20 }}>No recent activity{hiddenAuto > 0 ? " from people" : ""}.</div>
               ) : recent.map((e) => (
                 <div className="feed-row" key={e.id}>
                   <span style={{ flex: 1 }}>

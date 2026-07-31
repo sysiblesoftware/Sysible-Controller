@@ -28,11 +28,16 @@ function worst(hosts) {
   return Object.keys(RANK).find((k) => RANK[k] === r) || "OK";
 }
 
+// Last successful fetch, kept at module scope so leaving Topology and coming
+// back paints the previous map INSTANTLY (then refreshes in the background)
+// instead of flashing an empty canvas while every endpoint round-trips again.
+const _snap = { hosts: [], health: [], agents: [], posture: [] };
+
 export default function Topology({ onOpen }) {
-  const [hosts, setHosts] = useState([]);
-  const [health, setHealth] = useState([]);
-  const [agents, setAgents] = useState([]);
-  const [posture, setPosture] = useState([]);
+  const [hosts, setHosts] = useState(_snap.hosts);
+  const [health, setHealth] = useState(_snap.health);
+  const [agents, setAgents] = useState(_snap.agents);
+  const [posture, setPosture] = useState(_snap.posture);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   const [auto, setAuto] = useState(true);
@@ -42,6 +47,7 @@ export default function Topology({ onOpen }) {
   const [view, setView] = useState({ s: 1, tx: 0, ty: 0 });
   const [positions, setPositions] = useState({});   // id / "__hub__"+key / "__ctrl__" -> {x,y} manual overrides
   const inFlight = useRef(false);
+  const postureInFlight = useRef(false);   // guards the heavy posture overlay separately
   const drag = useRef(null);        // background pan
   const nodeDrag = useRef(null);    // dragging a single node / hub / controller
   const svgRef = useRef(null);
@@ -52,14 +58,29 @@ export default function Topology({ onOpen }) {
     if (inFlight.current) return;
     inFlight.current = true;
     setLoading(true); setErr("");
-    Promise.allSettled([api.hosts(), api.fleetHealth(), api.agents(), api.fleetPosture(false)])
-      .then(([h, fh, ag, po]) => {
-        if (h.status === "fulfilled") setHosts(h.value.hosts || []); else setErr(h.reason?.message || "Couldn't load hosts");
-        if (fh.status === "fulfilled") setHealth(fh.value.hosts || []);
-        if (ag.status === "fulfilled") setAgents(ag.value.agents || []);
-        if (po.status === "fulfilled") setPosture(po.value.hosts || []);
-      })
-      .finally(() => { inFlight.current = false; setLoading(false); });
+    // The map's structure and status colors come from hosts + health + agents,
+    // which are cheap (health is heartbeat-served). Render as soon as those land
+    // rather than waiting on the whole batch. Each applies independently.
+    const fast = [
+      api.hosts().then((v) => { _snap.hosts = v.hosts || []; setHosts(_snap.hosts); },
+                       (e) => setErr(e?.message || "Couldn't load hosts")),
+      api.fleetHealth().then((v) => { _snap.health = v.hosts || []; setHealth(_snap.health); }, () => {}),
+      api.agents().then((v) => { _snap.agents = v.agents || []; setAgents(_snap.agents); }, () => {}),
+    ];
+    // Posture is only an OVERLAY here — the critical red ring and the network
+    // lens's gateway grouping. It's also the heavy call (a full fleet posture
+    // sweep on a cold cache), so it must NOT gate the map: fire it separately and
+    // let the rings/grouping fill in when it resolves. Without it the map still
+    // renders fully, just with disk-only criticality and subnet-based grouping.
+    // Its own in-flight guard stops the 10s poll from stacking overlapping
+    // sweeps when a cold-cache sweep runs longer than the poll interval.
+    if (!postureInFlight.current) {
+      postureInFlight.current = true;
+      api.fleetPosture(false)
+        .then((v) => { _snap.posture = v.hosts || []; setPosture(_snap.posture); }, () => {})
+        .finally(() => { postureInFlight.current = false; });
+    }
+    Promise.allSettled(fast).finally(() => { inFlight.current = false; setLoading(false); });
   }, []);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {

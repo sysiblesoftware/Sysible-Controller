@@ -14,6 +14,13 @@ _RT = (
 _VIRSH = (
     'if ! command -v virsh >/dev/null 2>&1; then '
     'echo "virsh (libvirt) is not installed on this host." >&2; exit 1; fi; '
+    # Dispatched commands run non-interactively — no login shell, so a host's
+    # LIBVIRT_DEFAULT_URI (commonly exported from /etc/profile.d) is never in
+    # scope here. Bare virsh then defaults to the per-user qemu:///session
+    # (empty) instead of qemu:///system where host VMs actually run, so
+    # "List VMs" silently returns nothing. Pin the system instance unless an
+    # operator has explicitly set a URI in the agent's own environment.
+    ': "${LIBVIRT_DEFAULT_URI:=qemu:///system}"; export LIBVIRT_DEFAULT_URI; '
 )
 
 _CONTAINER_ACTIONS = {"start", "stop", "restart", "rm", "pause", "unpause"}

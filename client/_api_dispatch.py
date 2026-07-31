@@ -674,6 +674,22 @@ def cmd_metrics_snapshot() -> str:
         # OOM kills / oom-killer events in the kernel ring buffer (agent is root).
         "oom=$(dmesg -t 2>/dev/null | grep -ciE 'out of memory|killed process|oom-killer'); [ -z \"$oom\" ] && oom=0; "
         "up=$(awk '{print int($1)}' /proc/uptime 2>/dev/null); "
+        # Hypervisor role + running-guest count, so a LIVE-probed host (agent not
+        # heartbeat-serving, or an SSH host) still reports whether it's a VM host —
+        # the console warns before rebooting it. Cheap: process-name grep + a few
+        # path checks. `comm` truncates to 15 chars so qemu-system-x86_64 shows as
+        # 'qemu-system-x86' — match the prefix, not an anchored full name.
+        "hyp=none; "
+        "[ -d /etc/pve ] && hyp=proxmox; "
+        "grep -q control_d /proc/xen/capabilities 2>/dev/null && [ \"$hyp\" = none ] && hyp=xen-dom0; "
+        "qk=$(ps -e -o comm= 2>/dev/null | grep -cE 'qemu-system|qemu-kvm'); "
+        "vb=$(ps -e -o comm= 2>/dev/null | grep -c VBoxHeadless); "
+        "vw=$(ps -e -o comm= 2>/dev/null | grep -c vmware-vmx); "
+        "vms=$((qk + vb + vw)); "
+        "[ \"$hyp\" = none ] && [ \"${qk:-0}\" -gt 0 ] 2>/dev/null && { if [ -e /dev/kvm ]; then hyp=kvm; else hyp=qemu; fi; }; "
+        "[ \"$hyp\" = none ] && [ \"${vb:-0}\" -gt 0 ] 2>/dev/null && hyp=virtualbox; "
+        "[ \"$hyp\" = none ] && [ \"${vw:-0}\" -gt 0 ] 2>/dev/null && hyp=vmware; "
+        "[ \"$hyp\" = none ] && [ -e /dev/kvm ] && { [ -d /etc/libvirt ] || [ -e /run/libvirt ]; } && hyp=kvm; "
         # Verdict: any warning signal -> WARNING; the worst ones -> CRITICAL.
         "v=OK; "
         "[ \"${diskpct:-0}\" -ge 80 ] 2>/dev/null && v=WARNING; "
@@ -682,8 +698,8 @@ def cmd_metrics_snapshot() -> str:
         "[ \"${oom:-0}\" -ge 1 ] 2>/dev/null && v=WARNING; "
         "[ \"${diskpct:-0}\" -ge 90 ] 2>/dev/null && v=CRITICAL; "
         "[ \"${failed:-0}\" -ge 3 ] 2>/dev/null && v=CRITICAL; "
-        "printf 'SYSMETRICS|verdict=%s|disk=%s|mount=%s|mem=%s|load1=%s|cores=%s|failed=%s|uptime=%s|sysd=%s|units=%s|oom=%s\\n' "
-        "\"$v\" \"${diskpct:-0}\" \"${diskmnt:-/}\" \"${mem:-0}\" \"${load1:-0}\" \"${cores:-1}\" \"${failed:-0}\" \"${up:-0}\" \"${sysd:-unknown}\" \"${units:--}\" \"${oom:-0}\""
+        "printf 'SYSMETRICS|verdict=%s|disk=%s|mount=%s|mem=%s|load1=%s|cores=%s|failed=%s|uptime=%s|sysd=%s|units=%s|oom=%s|hyp=%s|vms=%s\\n' "
+        "\"$v\" \"${diskpct:-0}\" \"${diskmnt:-/}\" \"${mem:-0}\" \"${load1:-0}\" \"${cores:-1}\" \"${failed:-0}\" \"${up:-0}\" \"${sysd:-unknown}\" \"${units:--}\" \"${oom:-0}\" \"${hyp:-none}\" \"${vms:-0}\""
     )
 
 
@@ -921,6 +937,20 @@ fi
 if command -v systemd-detect-virt >/dev/null 2>&1; then p virt.type "$(systemd-detect-virt 2>/dev/null)"; else p virt.type "n/a"; fi
 if systemctl is-active qemu-guest-agent >/dev/null 2>&1; then p virt.guest_agent qemu-guest-agent
 elif systemctl is-active vmtoolsd >/dev/null 2>&1; then p virt.guest_agent open-vm-tools; fi
+# Is THIS host a hypervisor running guests (a VM host), vs a guest itself? Emit a
+# role + running-guest count so the console badges it and warns before a reboot.
+vhyp=none
+[ -d /etc/pve ] && vhyp=proxmox
+grep -q control_d /proc/xen/capabilities 2>/dev/null && [ "$vhyp" = none ] && vhyp=xen-dom0
+vqk=$(ps -e -o comm= 2>/dev/null | grep -cE 'qemu-system|qemu-kvm')
+vvb=$(ps -e -o comm= 2>/dev/null | grep -c VBoxHeadless)
+vvw=$(ps -e -o comm= 2>/dev/null | grep -c vmware-vmx)
+[ "$vhyp" = none ] && [ "${vqk:-0}" -gt 0 ] 2>/dev/null && { if [ -e /dev/kvm ]; then vhyp=kvm; else vhyp=qemu; fi; }
+[ "$vhyp" = none ] && [ "${vvb:-0}" -gt 0 ] 2>/dev/null && vhyp=virtualbox
+[ "$vhyp" = none ] && [ "${vvw:-0}" -gt 0 ] 2>/dev/null && vhyp=vmware
+[ "$vhyp" = none ] && [ -e /dev/kvm ] && { [ -d /etc/libvirt ] || [ -e /run/libvirt ]; } && vhyp=kvm
+p virt.hypervisor "$vhyp"
+p virt.vms_running "$((vqk + vvb + vvw))"
 
 # --- Containers -------------------------------------------------------------
 # Every docker/podman call below talks to the container daemon, which can hang

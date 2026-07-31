@@ -716,6 +716,14 @@ def hosts(user: str = Depends(require_login)):
                                           e.get("environment") or "", supps)
                    if pc else [])
         hr = health_by_id.get(agent_id) if agent_id else None
+        # Hypervisor role + guest count: prefer the fast heartbeat reading; fall
+        # back to the cached posture sweep (which covers SSH hosts and agents whose
+        # heartbeat predates hypervisor reporting). null when neither knows yet.
+        hyp = (hr or {}).get("hyp")
+        vms = (hr or {}).get("vms")
+        if hyp is None and pc:
+            hyp = pc.get("hypervisor")
+            vms = pc.get("vms")
         out.append({
             "id": e["id"],
             "label": e["label"],
@@ -729,10 +737,10 @@ def hosts(user: str = Depends(require_login)):
             # null when posture hasn't been gathered for this host yet.
             "critical": (len(reasons) > 0) if pc else None,
             "critical_reasons": reasons,
-            # Hypervisor role + running-guest count (null when not a VM host or the
-            # agent hasn't reported yet), so reboot/power-off flows can warn.
-            "hypervisor": (hr or {}).get("hyp"),
-            "vms": (hr or {}).get("vms"),
+            # Hypervisor role + running-guest count (null when not a VM host or
+            # nothing has reported yet), so reboot/power-off flows can warn.
+            "hypervisor": hyp,
+            "vms": vms,
         })
     return {"hosts": out}
 
@@ -754,6 +762,8 @@ def _parse_sysmetrics(text):
                 except (KeyError, TypeError, ValueError):
                     return None
             units = d.get("units", "-")
+            hyp = d.get("hyp")
+            hyp = None if hyp in ("none", "", "-", None) else hyp
             return {
                 "verdict": d.get("verdict", "OK"),
                 "disk": num("disk", int), "mount": d.get("mount", "/"),
@@ -763,6 +773,9 @@ def _parse_sysmetrics(text):
                 "sysd": d.get("sysd", ""),
                 "units": [] if units in ("-", "", None) else units.split(","),
                 "oom": num("oom", int) or 0,
+                # Hypervisor role + running-guest count (a live-probed host still
+                # reports whether it's a VM host, for the reboot warning/badge).
+                "hyp": hyp, "vms": num("vms", int),
             }
     return None
 
@@ -1171,6 +1184,16 @@ def _probe_posture(e, cmd, last_seen, now):
             p["os"]["eol"] = "yes" if _eol_status(p["os"].get("distro"), p["os"].get("version")) else "no"
         except Exception:
             pass
+    # Hypervisor role + running-guest count parsed from the posture stream, hoisted
+    # to the top level so the inventory / drill-down can badge SSH hosts (and any
+    # host) as VM hosts without a separate probe.
+    vh = (p.get("virt") or {}) if p else {}
+    hyp = vh.get("hypervisor")
+    hyp = None if hyp in (None, "", "none", "-") else hyp
+    try:
+        vms = int(vh.get("vms_running")) if vh.get("vms_running") not in (None, "") else None
+    except (TypeError, ValueError):
+        vms = None
     return {
         **base,
         "online": True if p else online,
@@ -1179,6 +1202,7 @@ def _probe_posture(e, cmd, last_seen, now):
         "posture": p,
         "flags": _posture_flags(p),
         "limited": limited,
+        "hypervisor": hyp, "vms": vms,
     }
 
 
@@ -1292,16 +1316,18 @@ def host_posture(host_id: str, user: str = Depends(require_login)):
     except Exception:
         last_seen = {}
     result = _probe_posture(entry, _posture_command(), last_seen, _t.time())
-    # Attach the hypervisor role + running-guest count from the fast heartbeat
-    # health reading (not the posture sweep), so the drill-down's reboot button
-    # can warn about taking a VM host down even on a cold posture cache.
+    # _probe_posture already derives hypervisor/vms from the live posture stream
+    # (covers SSH hosts). Prefer the fast heartbeat health reading when it has a
+    # value (fresher, no probe needed), but keep the posture-derived value when the
+    # heartbeat doesn't carry it (older agent, or an SSH host with no agent row).
     aid = entry["id"] if entry["kind"] == "agent" else \
         (entry.get("agent_entry") or {}).get("id") if entry["kind"] == "merged" else None
     if aid:
         try:
             hr = ((api.get_fleet_health_readings() or {}).get("hosts") or {}).get(aid) or {}
-            result["hypervisor"] = hr.get("hyp")
-            result["vms"] = hr.get("vms")
+            if hr.get("hyp") is not None:
+                result["hypervisor"] = hr.get("hyp")
+                result["vms"] = hr.get("vms")
         except Exception:
             pass
     return result

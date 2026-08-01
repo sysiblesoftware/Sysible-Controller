@@ -632,10 +632,10 @@ _register(Action(name="cont_list", tool="Containers & VMs", label="List containe
     params=[], build=lambda p: api.cmd_list_containers()))
 _register(Action(name="cont_images", tool="Containers & VMs", label="List images",
     params=[], build=lambda p: api.cmd_list_images()))
-_register(Action(name="cont_action", tool="Containers & VMs", label="Container action",
+_register(Action(name="cont_action", tool="Containers & VMs", label="Run action",
     params=[Param("action", "Action", type="select",
                   options=["start", "stop", "restart", "rm", "pause", "unpause"], default="start"),
-            Param("name", "Container")],
+            Param("name", "Container(s) — one or more, or 'all'")],
     build=lambda p: api.cmd_container_action(_s(p, "action", "start"), _s(p, "name"))))
 _register(Action(name="cont_logs", tool="Containers & VMs", label="Container logs",
     params=[Param("name", "Container"),
@@ -1403,10 +1403,10 @@ _register(Action(name="cert_verify_chain", tool="Certificate Management", label=
     build=lambda p: api.cmd_verify_chain(_s(p, "cert_path"), _s(p, "chain_path"))))
 
 # ---- Containers & VMs (advanced) -------------------------------------
-_register(Action(name="vm_action", tool="Containers & VMs", label="VM action",
+_register(Action(name="vm_action", tool="Containers & VMs", label="Run action",
     params=[Param("action", "Action", type="select",
                   options=["start", "shutdown", "destroy", "reboot", "suspend", "resume"], default="start"),
-            Param("name", "VM name")],
+            Param("name", "VM name(s) — one or more, or 'all'")],
     build=lambda p: api.cmd_vm_action(_s(p, "action", "start"), _s(p, "name"))))
 _register(Action(name="vm_info", tool="Containers & VMs", label="VM info",
     params=[Param("name", "VM name")], build=lambda p: api.cmd_vm_info(_s(p, "name"))))
@@ -1581,8 +1581,8 @@ _LAYOUT: dict[str, list] = {
         ("SUSE (SCC)", "SUSE", ["sub_suse_status", "sub_suse_register", "sub_suse_extensions", "sub_suse_deregister"]),
     ],
     "Containers & VMs": [
-        ("Containers", "Containers", ["cont_runtime", "cont_list", "cont_images", "cont_action", "cont_logs", "cont_prune"]),
-        ("Virtual Machines", "Virtual Machines", ["vm_list", "vm_action", "vm_info"]),
+        ("Containers", "Containers", ["cont_runtime", "cont_list", "cont_images", "cont_logs", "cont_action", "cont_prune"]),
+        ("Virtual Machines", "Virtual Machines", ["vm_list", "vm_info", "vm_action"]),
     ],
     "Directory Services (Active Directory / LDAP)": [
         ("Active Directory", "Active Directory", ["dir_prepare_ad", "dir_install_ad", "dir_realm_status", "dir_join_ad", "dir_leave_ad", "dir_realm_permit", "dir_mkhomedir"]),

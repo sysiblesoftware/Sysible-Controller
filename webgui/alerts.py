@@ -189,37 +189,51 @@ def evaluate_rules(cfg, hosts):
         firing.append({"key": f"{host.get('id')}|{rule}", "host_id": host.get("id"),
                        "host": host.get("host"), "rule": rule, "message": msg})
 
+    def thr(rule, default, cast=int):
+        # A rule may carry a null/blank/garbage threshold (e.g. the field was
+        # cleared in the UI, stored as JSON null). `.get("threshold", default)`
+        # returns None when the key EXISTS with value null, and int(None) raised
+        # — crashing the whole evaluation cycle and silently halting every alert.
+        # Coerce None/blank/uncastable back to the safe default.
+        v = (rules.get(rule) or {}).get("threshold", default)
+        if v is None or v == "":
+            v = default
+        try:
+            return cast(v)
+        except (TypeError, ValueError):
+            return cast(default)
+
     for h in hosts:
         name = h.get("host")
         if rules.get("host_offline", {}).get("enabled") and h.get("online") is False:
             add(h, "host_offline", f"{name} is offline")
         if rules.get("disk_critical", {}).get("enabled") and h.get("disk") is not None:
-            thr = int(rules["disk_critical"].get("threshold", 90))
-            if h["disk"] >= thr:
-                add(h, "disk_critical", f"{name} disk at {h['disk']}% (≥ {thr}%)")
+            t = thr("disk_critical", 90)
+            if h["disk"] >= t:
+                add(h, "disk_critical", f"{name} disk at {h['disk']}% (≥ {t}%)")
         if rules.get("mem_high", {}).get("enabled") and h.get("mem") is not None:
-            thr = int(rules["mem_high"].get("threshold", 90))
-            if h["mem"] >= thr:
-                add(h, "mem_high", f"{name} memory at {h['mem']}% (≥ {thr}%)")
+            t = thr("mem_high", 90)
+            if h["mem"] >= t:
+                add(h, "mem_high", f"{name} memory at {h['mem']}% (≥ {t}%)")
         if rules.get("load_high", {}).get("enabled") and h.get("load1") is not None:
-            thr = float(rules["load_high"].get("threshold", 8))
-            if h["load1"] >= thr:
-                add(h, "load_high", f"{name} load {h['load1']} (≥ {thr})")
+            t = float(thr("load_high", 8, float))
+            if h["load1"] >= t:
+                add(h, "load_high", f"{name} load {h['load1']} (≥ {t})")
         if rules.get("failed_units", {}).get("enabled") and (h.get("failed") or 0) > 0:
             add(h, "failed_units", f"{name} has {h['failed']} failed unit(s)")
         if rules.get("oom_events", {}).get("enabled") and (h.get("oom") or 0) > 0:
             add(h, "oom_events", f"{name} had {h['oom']} OOM kill(s)")
         if rules.get("updates_pending", {}).get("enabled") and h.get("total") is not None:
-            thr = int(rules["updates_pending"].get("threshold", 1))
-            if (h["total"] or 0) >= thr:
+            t = thr("updates_pending", 1)
+            if (h["total"] or 0) >= t:
                 add(h, "updates_pending", f"{name} has {h['total']} pending update(s)")
         if rules.get("security_updates", {}).get("enabled") and (h.get("security") or 0) > 0:
             add(h, "security_updates", f"{name} has {h['security']} pending security update(s)")
         if rules.get("reboot_required", {}).get("enabled") and h.get("reboot"):
             add(h, "reboot_required", f"{name} requires a reboot")
         if rules.get("cert_expiring", {}).get("enabled") and h.get("cert_days") is not None:
-            thr = int(rules["cert_expiring"].get("threshold", 30))
-            if h["cert_days"] < thr:
+            t = thr("cert_expiring", 30)
+            if h["cert_days"] < t:
                 add(h, "cert_expiring", f"{name} TLS cert expires in {h['cert_days']} day(s)")
         for flag, label in (("firewall_disabled", "firewall disabled"),
                             ("mac_not_enforcing", "SELinux/AppArmor not enforcing"),

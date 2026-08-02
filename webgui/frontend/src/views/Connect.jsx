@@ -260,8 +260,12 @@ function Collapsible({ title, children, defaultOpen = false }) {
 
 function SelectedHost({ host, onTerminal, onChanged, onErr }) {
   const [env, setEnv] = useState(host.environment || "");
+  // The environment currently shown in the header. Tracked separately from the
+  // editable input so a successful Set Environment updates the header immediately —
+  // the parent reloads the host LIST but the selected-host object keeps its old env.
+  const [shownEnv, setShownEnv] = useState(host.environment || "");
   const [busy, setBusy] = useState("");
-  useEffect(() => { setEnv(host.environment || ""); }, [host]);
+  useEffect(() => { setEnv(host.environment || ""); setShownEnv(host.environment || ""); }, [host]);
 
   async function disenroll() {
     // A pure-SSH host has no Sysible agent to tear down — the agent-oriented
@@ -289,7 +293,7 @@ function SelectedHost({ host, onTerminal, onChanged, onErr }) {
   }
   async function saveEnv() {
     setBusy("env"); onErr("");
-    try { await api.setHostEnvironment(host.id, env.trim()); onChanged(false); }
+    try { await api.setHostEnvironment(host.id, env.trim()); setShownEnv(env.trim()); onChanged(false); }
     catch (e) { onErr(e.message); }
     finally { setBusy(""); }
   }
@@ -300,7 +304,7 @@ function SelectedHost({ host, onTerminal, onChanged, onErr }) {
         <div>
           <strong>{host.label}</strong>{" "}
           <span className="badge">{host.has_agent ? "Agent + SSH" : "SSH"}</span>{" "}
-          <span className="faint">{host.address} · {host.environment || "Unassigned"}</span>
+          <span className="faint">{host.address} · {shownEnv || "Unassigned"}</span>
         </div>
         <div className="row">
           <button className="btn sm" onClick={onTerminal}>Open Terminal</button>
@@ -394,12 +398,18 @@ function FleetActions({ hosts, checked, onErr }) {
                 onClick={() => act("script", "Run this script as root on", script)}>
           {running === "script" ? <span className="spin" /> : `Run Script on ${scopeLabel} host${scopeN === 1 ? "" : "s"}`}
         </button>
+        {/* These actions target the SAME scope as Run Script (checked hosts, else all)
+            — act() appends "(N checked/all hosts)" to the confirm text, so the button
+            label + confirm reflect the real scope instead of always claiming "All". */}
         <button className="btn sm" disabled={running}
-                onClick={() => act("restart_agent", "Restart the agent on all hosts?")}>Restart Agent on All</button>
+                onClick={() => act("restart_agent", "Restart the agent")}>
+          Restart Agent on {scopeLabel} host{scopeN === 1 ? "" : "s"}</button>
         <button className="btn sm danger" disabled={running}
-                onClick={() => act("reboot", "REBOOT all hosts?")}>Reboot All</button>
+                onClick={() => act("reboot", "REBOOT")}>
+          Reboot {scopeLabel} host{scopeN === 1 ? "" : "s"}</button>
         <button className="btn sm danger" disabled={running}
-                onClick={() => act("poweroff", "POWER OFF all hosts?")}>Power Off All</button>
+                onClick={() => act("poweroff", "POWER OFF")}>
+          Power Off {scopeLabel} host{scopeN === 1 ? "" : "s"}</button>
       </div>
       {results && (
         <div className="result" style={{ marginTop: 10 }}>

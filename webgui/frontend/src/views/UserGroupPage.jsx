@@ -11,14 +11,32 @@ import HostResults from "../components/HostResults.jsx";
 // shown as a coverage count with a per-environment drill-down instead of an
 // unusable inline list of host names.
 
+// Cryptographically-secure uniform integer in [0, n) via rejection sampling over
+// crypto.getRandomValues — Math.random() is NOT a CSPRNG (V8 uses xorshift128+),
+// which is inappropriate for a value applied to real OS-account passwords.
+function _randInt(n) {
+  const g = (typeof window !== "undefined" && window.crypto) || globalThis.crypto;
+  const limit = Math.floor(0x100000000 / n) * n; // largest multiple of n ≤ 2^32
+  const buf = new Uint32Array(1);
+  let x;
+  do { g.getRandomValues(buf); x = buf[0]; } while (x >= limit);
+  return x % n;
+}
+
 function genPassword(len = 16) {
   const lower = "abcdefghijkmnpqrstuvwxyz", upper = "ABCDEFGHJKLMNPQRSTUVWXYZ",
     dig = "23456789", sym = "!@#$%^&*()-_=+";
   const all = lower + upper + dig + sym;
-  const pick = (s) => s[Math.floor(Math.random() * s.length)];
-  let out = [pick(lower), pick(upper), pick(dig), pick(sym)];
+  const pick = (s) => s[_randInt(s.length)];
+  const out = [pick(lower), pick(upper), pick(dig), pick(sym)];
   for (let i = out.length; i < len; i++) out.push(pick(all));
-  return out.sort(() => Math.random() - 0.5).join("");
+  // Unbiased Fisher-Yates shuffle (the Array.sort random comparator is both biased
+  // and, like the picks above, must not depend on Math.random for a secret).
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = _randInt(i + 1);
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out.join("");
 }
 
 // A password entry field masked by default (so a set/reset password is not left

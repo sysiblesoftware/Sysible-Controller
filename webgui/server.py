@@ -1453,18 +1453,38 @@ def _run_scheduled_job(job):
     if not entries:
         return "error", "no matching target hosts"
 
-    # Scans just refresh the shared caches; no per-host action result.
+    # Scans just refresh the shared caches; no per-host action result. MERGE the probed
+    # hosts into the existing cache by id under the cache lock — a targeted (or
+    # SSH-inclusive) scan must update only the hosts it scanned and PRESERVE the rest.
+    # Wholesale-replacing with only the scanned subset made every non-targeted host
+    # vanish from the fleet dashboard AND the alerts evaluator (both read these caches)
+    # until the next full sweep. Only stamp whole-cache freshness (ts) when the job
+    # actually covered ALL hosts, so a partial top-up doesn't suppress the periodic
+    # full refresh that keeps non-scanned hosts current.
+    is_full = not tgt
     if action == "patch_scan":
         last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
         now = _t.time(); cmd = api.cmd_update_status(refresh=True)
-        _UPDATES_CACHE["hosts"] = [_probe_updates(e, cmd, last_seen, now) for e in entries]
-        _UPDATES_CACHE["ts"] = now
+        probed = [_probe_updates(e, cmd, last_seen, now) for e in entries]
+        with _UPDATES_LOCK:
+            merged = {h.get("id"): h for h in (_UPDATES_CACHE.get("hosts") or [])}
+            for h in probed:
+                merged[h.get("id")] = h
+            _UPDATES_CACHE["hosts"] = list(merged.values())
+            if is_full:
+                _UPDATES_CACHE["ts"] = now
         return "ok", f"rescanned {len(entries)} host(s)"
     if action == "posture_scan":
         last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
         now = _t.time(); cmd = _posture_command()
-        _POSTURE_CACHE["hosts"] = [_probe_posture(e, cmd, last_seen, now) for e in entries]
-        _POSTURE_CACHE["ts"] = now
+        probed = [_probe_posture(e, cmd, last_seen, now) for e in entries]
+        with _POSTURE_LOCK:
+            merged = {h.get("id"): h for h in (_POSTURE_CACHE.get("hosts") or [])}
+            for h in probed:
+                merged[h.get("id")] = h
+            _POSTURE_CACHE["hosts"] = list(merged.values())
+            if is_full:
+                _POSTURE_CACHE["ts"] = now
         return "ok", f"rescanned {len(entries)} host(s)"
 
     arg = (job.get("arg") or "").strip()

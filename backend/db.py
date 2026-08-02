@@ -2627,12 +2627,27 @@ def get_activity_log(limit=200, since_id=0):
     conn = _connect()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute(
-        "SELECT id, timestamp, username, host, description, command FROM activity_log "
-        "WHERE id > ? ORDER BY id DESC LIMIT ?",
-        (since_id, limit),
-    )
-    rows = [dict(r) for r in cur.fetchall()]
+    cols = "id, timestamp, username, host, description, command"
+    if since_id and since_id > 0:
+        # Incremental poll: select the CONTIGUOUS oldest-unseen window above since_id
+        # (ORDER BY id ASC), not the newest `limit`. A plain `id > since_id ORDER BY id
+        # DESC LIMIT n` returns only the newest n rows and silently drops the rows in
+        # (since_id, max-n] — a poller advancing its cursor to the max it saw never
+        # gets them again (audit-feed data loss during a fleet-wide burst). We keep the
+        # newest-first RESPONSE shape by reversing, so callers are unaffected.
+        cur.execute(
+            f"SELECT {cols} FROM activity_log WHERE id > ? ORDER BY id ASC LIMIT ?",
+            (since_id, limit),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        rows.reverse()
+    else:
+        # Initial / latest-N view: newest-first.
+        cur.execute(
+            f"SELECT {cols} FROM activity_log ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
 

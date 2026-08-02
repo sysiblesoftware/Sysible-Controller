@@ -628,7 +628,11 @@ def cmd_create_swap_file(path: str, size_mb, persist: bool = True) -> str:
         q_line = shlex.quote(f"{path}\tnone\tswap\tsw\t0\t0")
         q_path_match = shlex.quote(path)
         cmd += (
-            f" && (grep -qF {q_path_match} /etc/fstab 2>/dev/null "
+            # Exact first-field match (via awk ENVIRON, no regex/escape pitfalls) so a
+            # prefix-colliding path (/swap vs /swapfile) isn't mistaken for an existing
+            # entry — the old `grep -qF` substring match would skip the append and still
+            # claim success, so the new swap never survived a reboot.
+            f" && (p={q_path_match} awk '$1==ENVIRON[\"p\"]{{f=1}} END{{exit !f}}' /etc/fstab 2>/dev/null "
             f"|| (cp /etc/fstab /etc/fstab.bak.$(date +%s) && echo {q_line} >> /etc/fstab)) "
             "&& echo 'Added to /etc/fstab.'"
         )
@@ -650,6 +654,10 @@ def cmd_resize_swap_file(path: str, size_mb, persist: bool = True) -> str:
     cmd = (
         f"if [ ! -f {q_path} ]; then printf '%s does not exist - use Create Swap File for a new swap file.\\n' {q_path} >&2; exit 1; fi; "
         f"swapoff {q_path} 2>/dev/null; "
+        # Remove the old file BEFORE recreating: fallocate only grows/allocates and
+        # never truncates, so on a SHRINK it would return 0 while leaving the file at
+        # its old (larger) size — the resize would silently no-op yet report success.
+        f"rm -f {q_path} 2>/dev/null; "
         f"(fallocate -l {size_mb}M {q_path} 2>/dev/null || dd if=/dev/zero of={q_path} bs=1M count={size_mb} 2>&1) "
         f"&& chmod 600 {q_path} "
         f"&& mkswap {q_path} 2>&1 "
@@ -660,7 +668,9 @@ def cmd_resize_swap_file(path: str, size_mb, persist: bool = True) -> str:
         q_line = shlex.quote(f"{path}\tnone\tswap\tsw\t0\t0")
         q_path_match = shlex.quote(path)
         cmd += (
-            f" && (grep -qF {q_path_match} /etc/fstab 2>/dev/null "
+            # Exact first-field fstab match (see cmd_create_swap_file) so a prefix-
+            # colliding path isn't wrongly treated as already-present.
+            f" && (p={q_path_match} awk '$1==ENVIRON[\"p\"]{{f=1}} END{{exit !f}}' /etc/fstab 2>/dev/null "
             f"|| (cp /etc/fstab /etc/fstab.bak.$(date +%s) && echo {q_line} >> /etc/fstab)) "
             "&& echo 'Confirmed entry in /etc/fstab.'"
         )
@@ -681,7 +691,9 @@ def cmd_create_swap_partition(device: str, persist: bool = True) -> str:
         q_line = shlex.quote(f"{device}\tnone\tswap\tsw\t0\t0")
         q_dev_match = shlex.quote(device)
         cmd += (
-            f" && (grep -qF {q_dev_match} /etc/fstab 2>/dev/null "
+            # Exact first-field fstab match (see cmd_create_swap_file) so a prefix-
+            # colliding device (/dev/sdb vs /dev/sdb1) isn't treated as already-present.
+            f" && (p={q_dev_match} awk '$1==ENVIRON[\"p\"]{{f=1}} END{{exit !f}}' /etc/fstab 2>/dev/null "
             f"|| (cp /etc/fstab /etc/fstab.bak.$(date +%s) && echo {q_line} >> /etc/fstab)) "
             "&& echo 'Added to /etc/fstab.'"
         )

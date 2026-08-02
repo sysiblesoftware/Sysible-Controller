@@ -45,3 +45,18 @@ def test_agent_source_still_normalizes_before_hashing():
     # agents silently look outdated again. Keep the normalization in place.
     src = AGENT_SOURCE_FILE.read_text(encoding="utf-8")
     assert "_source_version" in src and "SYSIBLE_CONTROLLER" in src
+
+
+def test_agent_update_restart_is_robust():
+    """The pushed self-update must NOT use a fixed transient-unit name (it
+    collides after the first run and silently stops restarting the agent), and
+    must clear any systemd start-limit lockout before restarting. Regression for
+    'Update agents pushes but no host ever converges'."""
+    import backend.agent_bundle as ab
+    if not hasattr(ab, "build_agent_update_command"):
+        import pytest
+        pytest.skip("this edition builds the update command inline in app.py")
+    _ver, cmd = ab.build_agent_update_command(ab.AGENT_SOURCE_FILE.read_text(encoding="utf-8"))
+    assert "--unit=sysible-agent-selfupdate" not in cmd, "fixed unit name collides"
+    assert "reset-failed" in cmd, "must clear start-limit lockout before restart"
+    assert "systemctl restart sysible-agent" in cmd

@@ -1159,6 +1159,7 @@ def _build_agent_update_command():
     / detached shell) so the task can report success before the agent bounces -
     a plain `systemctl restart` would kill the agent process running this task."""
     import base64
+    import shlex
     from backend.agent_bundle import (AGENT_SOURCE_FILE, _AGENT_INSTALL_DIR,
                                       _SERVICE_NAME, agent_version_of)
 
@@ -1170,21 +1171,28 @@ def _build_agent_update_command():
     ver = agent_version_of(src)
     install = f"{_AGENT_INSTALL_DIR}/agent.py"
     svc = _SERVICE_NAME
+    # The out-of-band restart must be BULLETPROOF — it's the only thing that makes
+    # the on-disk update take effect. Earlier it used a FIXED transient-unit name
+    # (--unit=sysible-agent-selfupdate); once that name lingered from a prior run
+    # (or the unit tripped systemd's start-limit after repeated restarts),
+    # systemd-run failed AND the in-cgroup `setsid` fallback got killed when the
+    # service stopped — so the file was replaced but the process never reloaded,
+    # on every host. Now: no fixed name (auto-named, never collides), clear any
+    # start-limit lockout first, and use a detached transient unit that survives
+    # the restart. The agent also self-heals by re-execing when its on-disk source
+    # changes, so even if this restart is lost the new build loads within ~10s.
+    restart = f"systemctl reset-failed {svc} 2>/dev/null; systemctl restart {svc}"
     cmd = (
         "set -e\n"
         f"nf={install}.new\n"
         f"printf '%s' '{b64}' | base64 -d > \"$nf\"\n"
         "python3 -m py_compile \"$nf\"\n"
         f"mv -f \"$nf\" {install}\n"
-        # Restart after this task returns: a 3s-delayed transient unit (own
-        # cgroup) if systemd-run exists, else a detached shell. Either way the
-        # restart can't kill the agent before it reports this task's result.
         "if command -v systemd-run >/dev/null 2>&1; then\n"
-        f"  systemd-run --collect --on-active=3 --unit=sysible-agent-selfupdate "
-        f"systemctl restart {svc} >/dev/null 2>&1 "
-        f"|| setsid sh -c 'sleep 3; systemctl restart {svc}' >/dev/null 2>&1 &\n"
+        f"  systemd-run --collect --on-active=3 /bin/sh -c {shlex.quote(restart)} </dev/null >/dev/null 2>&1 "
+        f"|| setsid /bin/sh -c 'sleep 3; {restart}' </dev/null >/dev/null 2>&1 &\n"
         "else\n"
-        f"  setsid sh -c 'sleep 3; systemctl restart {svc}' >/dev/null 2>&1 &\n"
+        f"  setsid /bin/sh -c 'sleep 3; {restart}' </dev/null >/dev/null 2>&1 &\n"
         "fi\n"
         f"echo \"sysible-agent updated to {ver}; restarting\"\n"
     )

@@ -54,7 +54,19 @@ except Exception:
 # bytes). Best-effort - never let it break startup.
 try:
     import hashlib as _hashlib
-    AGENT_VERSION = _hashlib.sha256(open(__file__, "rb").read()).hexdigest()[:12]
+    import re as _re
+    # The enrollment bundle bakes the resolved controller URL into the
+    # os.getenv("SYSIBLE_CONTROLLER", "...") default further down, so hashing the
+    # raw file made EVERY enrolled agent's version differ from the controller's
+    # (which hashes the unpatched source) — the fleet looked permanently
+    # "outdated". Reset that one default to its canonical placeholder before
+    # hashing so a patched-but-current agent matches; the controller normalizes
+    # identically (backend/app.py:_current_agent_version).
+    _av_src = _re.sub(
+        r'os\.getenv\("SYSIBLE_CONTROLLER",\s*"[^"]*"\)',
+        lambda _m: 'os.getenv("SYSIBLE_CONTROLLER", "https://127.0.0.1:9000")',
+        open(__file__, "r", encoding="utf-8").read())
+    AGENT_VERSION = _hashlib.sha256(_av_src.encode("utf-8")).hexdigest()[:12]
 except Exception:
     AGENT_VERSION = ""
 

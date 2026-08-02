@@ -1159,12 +1159,15 @@ def _build_agent_update_command():
     / detached shell) so the task can report success before the agent bounces -
     a plain `systemctl restart` would kill the agent process running this task."""
     import base64
-    import hashlib
-    from backend.agent_bundle import AGENT_SOURCE_FILE, _AGENT_INSTALL_DIR, _SERVICE_NAME
+    from backend.agent_bundle import (AGENT_SOURCE_FILE, _AGENT_INSTALL_DIR,
+                                      _SERVICE_NAME, agent_version_of)
 
     src = AGENT_SOURCE_FILE.read_text(encoding="utf-8")
     b64 = base64.b64encode(src.encode("utf-8")).decode("ascii")
-    ver = hashlib.sha256(src.encode("utf-8")).hexdigest()[:12]
+    # Match what the agent reports post-update (AGENT_VERSION normalizes the
+    # baked controller-URL default out before hashing) so rollout tracking and
+    # the "updated to X" message agree with the fleet's heartbeat version.
+    ver = agent_version_of(src)
     install = f"{_AGENT_INSTALL_DIR}/agent.py"
     svc = _SERVICE_NAME
     cmd = (
@@ -1240,11 +1243,13 @@ def update_agents_route(request: Request):
 def _current_agent_version():
     """Short hash of the controller's CURRENT host_agent/agent.py — the build an
     'update agents' push would deliver. Agents report theirs on heartbeat, so a
-    mismatch means the agent is out of date."""
-    import hashlib
-    from backend.agent_bundle import AGENT_SOURCE_FILE
+    mismatch means the agent is out of date. The per-host baked controller-URL
+    default is normalized out the same way the agent computes AGENT_VERSION —
+    otherwise every enrolled agent (whose bundle patched that line) would look
+    permanently outdated."""
+    from backend.agent_bundle import AGENT_SOURCE_FILE, agent_version_of
     try:
-        return hashlib.sha256(AGENT_SOURCE_FILE.read_text(encoding="utf-8").encode()).hexdigest()[:12]
+        return agent_version_of(AGENT_SOURCE_FILE.read_text(encoding="utf-8"))
     except Exception:
         return None
 

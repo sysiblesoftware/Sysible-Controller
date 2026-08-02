@@ -187,6 +187,23 @@ echo "Python dependencies OK (requests present)." """
 _CONTROLLER_DEFAULT_LINE = 'os.getenv("SYSIBLE_CONTROLLER", "https://127.0.0.1:9000")'
 
 
+def agent_version_of(src_text: str) -> str:
+    """The 12-char version hash the fleet reports for a given agent source.
+
+    The enrollment bundle bakes the resolved controller URL into agent.py's
+    os.getenv("SYSIBLE_CONTROLLER", "...") default, so the installed file differs
+    per host. Normalize that line back to its canonical placeholder before
+    hashing (the agent does the same in AGENT_VERSION) so a patched-but-current
+    agent isn't reported as permanently outdated. Used by both the version-check
+    (_current_agent_version) and the update push (_build_agent_update_command)."""
+    import hashlib
+    import re
+    canon = re.sub(
+        r'os\.getenv\("SYSIBLE_CONTROLLER",\s*"[^"]*"\)',
+        lambda _m: _CONTROLLER_DEFAULT_LINE, src_text)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:12]
+
+
 def _env_file(controller_url: str, token: str, include_cert: bool) -> str:
     lines = [
         f"SYSIBLE_CONTROLLER={controller_url}",

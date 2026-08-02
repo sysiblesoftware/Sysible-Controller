@@ -44,4 +44,4 @@ def test_agent_source_still_normalizes_before_hashing():
     # Guard: if someone reverts host_agent/agent.py to hashing raw bytes, enrolled
     # agents silently look outdated again. Keep the normalization in place.
     src = AGENT_SOURCE_FILE.read_text(encoding="utf-8")
-    assert "_av_src" in src and "SYSIBLE_CONTROLLER" in src
+    assert "_source_version" in src and "SYSIBLE_CONTROLLER" in src

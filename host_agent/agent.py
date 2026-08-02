@@ -24,9 +24,11 @@ The token may also be passed as the first CLI argument, e.g.:
   python3 agent.py <token>
 """
 
+import hashlib
 import json
 import os
 import platform
+import re
 import shlex
 import socket
 import subprocess
@@ -52,23 +54,72 @@ except Exception:
 # progress bar) can tell which hosts are already running the current agent.
 # Matches the controller's hash of host_agent/agent.py (sha256 of the same
 # bytes). Best-effort - never let it break startup.
+# The enrollment bundle bakes the resolved controller URL into the
+# os.getenv("SYSIBLE_CONTROLLER", "...") default further down, so hashing the raw
+# file made EVERY enrolled agent's version differ from the controller's (which
+# hashes the unpatched source) — the fleet looked permanently "outdated". Reset
+# that one default to its canonical placeholder before hashing so a patched-but-
+# current agent matches; the controller normalizes identically
+# (backend/app.py:_current_agent_version).
+_CONTROLLER_DEFAULT_RE = re.compile(r'os\.getenv\("SYSIBLE_CONTROLLER",\s*"[^"]*"\)')
+_CONTROLLER_DEFAULT_CANON = 'os.getenv("SYSIBLE_CONTROLLER", "https://127.0.0.1:9000")'
+
+
+def _source_version(path):
+    """12-char build hash of an agent source file, with the baked controller-URL
+    default normalized out. Matches backend/app.py:_current_agent_version, so an
+    enrolled (URL-patched) agent reads as current against the controller."""
+    src = open(path, "r", encoding="utf-8").read()
+    src = _CONTROLLER_DEFAULT_RE.sub(lambda _m: _CONTROLLER_DEFAULT_CANON, src)
+    return hashlib.sha256(src.encode("utf-8")).hexdigest()[:12]
+
+
 try:
-    import hashlib as _hashlib
-    import re as _re
-    # The enrollment bundle bakes the resolved controller URL into the
-    # os.getenv("SYSIBLE_CONTROLLER", "...") default further down, so hashing the
-    # raw file made EVERY enrolled agent's version differ from the controller's
-    # (which hashes the unpatched source) — the fleet looked permanently
-    # "outdated". Reset that one default to its canonical placeholder before
-    # hashing so a patched-but-current agent matches; the controller normalizes
-    # identically (backend/app.py:_current_agent_version).
-    _av_src = _re.sub(
-        r'os\.getenv\("SYSIBLE_CONTROLLER",\s*"[^"]*"\)',
-        lambda _m: 'os.getenv("SYSIBLE_CONTROLLER", "https://127.0.0.1:9000")',
-        open(__file__, "r", encoding="utf-8").read())
-    AGENT_VERSION = _hashlib.sha256(_av_src.encode("utf-8")).hexdigest()[:12]
+    AGENT_VERSION = _source_version(os.path.abspath(__file__))
 except Exception:
     AGENT_VERSION = ""
+
+
+# A self-update task rewrites this file on disk and asks systemd to restart us.
+# When that external restart doesn't take (a wedged transient unit, systemd-run
+# missing, a restart that races the task), the process keeps running the OLD
+# bytes and reporting the OLD build forever — so the console shows the host stuck
+# "updating" even though agent.py on disk is already current. Re-exec into the
+# new build ourselves instead of depending on the restart. Throttled; only acts
+# when the on-disk source both DIFFERS from what we're running and compiles (so a
+# truncated/corrupt write can't spin us in a crash-reexec loop — systemd stays
+# the backstop for that).
+_last_reexec_check = 0.0
+
+
+def _reexec_if_source_changed():
+    global _last_reexec_check
+    now = time.time()
+    if now - _last_reexec_check < 10:
+        return
+    _last_reexec_check = now
+    if not AGENT_VERSION:
+        return
+    path = os.path.abspath(__file__)
+    try:
+        if _source_version(path) == AGENT_VERSION:
+            return
+    except Exception:
+        return
+    try:
+        import py_compile
+        py_compile.compile(path, doraise=True)
+    except Exception as e:
+        print(f"[agent] agent.py changed on disk but won't compile ({e}); "
+              "staying on the running build.")
+        return
+    print(f"[agent] agent.py updated on disk (was {AGENT_VERSION}); re-executing to load the new build.")
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os.execv(sys.executable, [sys.executable, path] + sys.argv[1:])
 
 # Cap on stdout/stderr bytes kept from a single command - a runaway
 # command (e.g. `cat` on a huge file, a noisy build log) shouldn't be
@@ -1491,6 +1542,12 @@ def loop(state):
                          name="sysible-metrics").start()
 
     while True:
+        # Self-heal: if a self-update replaced agent.py on disk but the external
+        # service restart didn't take, re-exec into the new build so we stop
+        # reporting the stale one (else the console shows this host stuck
+        # "updating" forever). No-op until the on-disk source actually changes.
+        _reexec_if_source_changed()
+
         ran_task = False
 
         try:

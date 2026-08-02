@@ -517,7 +517,37 @@ cmd_update() {
   #    path inline (no global git config change) so the update actually applies.
   if [[ -d "$SRC/.git" ]] && command -v git >/dev/null 2>&1; then
     echo "Pulling latest code (git) ..."
-    _git() { git -C "$SRC" -c safe.directory="$SRC" "$@"; }
+    # GIT_TERMINAL_PROMPT=0 + BatchMode ssh: the updater runs headless (systemd-run,
+    # no TTY), so a private-repo fetch with no stored credentials otherwise tries to
+    # read a username from a terminal that isn't there and dies with the cryptic
+    # "could not read Username for 'https://github.com': No such device or address".
+    # Forcing non-interactive makes it fail FAST with a clean, classifiable auth error
+    # (handled below) instead of hanging or emitting that confusing message.
+    _git() { GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new" git -C "$SRC" -c safe.directory="$SRC" "$@"; }
+
+    # SELF-HEAL a detached / gone-upstream checkout BEFORE pulling, so a state like
+    # "## dev...origin/dev [gone]" repairs itself instead of blocking the operator with
+    # manual 'set-upstream' steps (a prior interrupted update, or a ref-store prune that
+    # couldn't refetch, can leave it this way). Best-effort and NON-destructive: it never
+    # discards commits or working-tree changes, and if the remote can't be reached (e.g.
+    # missing credentials) the fetch is a clean no-op and the auth check below takes over.
+    _cur="$(_git symbolic-ref --quiet --short HEAD 2>/dev/null || echo '')"
+    if [[ -z "$_cur" ]]; then
+      # Detached HEAD — try to land on a real branch that has a remote counterpart.
+      _def="$(_git remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p' | head -1)"
+      for _cand in "$_def" main master dev; do
+        if [[ -n "$_cand" ]] && _git rev-parse --verify --quiet "refs/remotes/origin/$_cand" >/dev/null 2>&1; then
+          _git checkout "$_cand" >/dev/null 2>&1 && { _cur="$_cand"; echo "Re-attached $SRC to branch $_cand (was detached HEAD)."; break; }
+        fi
+      done
+    fi
+    if [[ -n "$_cur" ]] && ! _git rev-parse --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+      _git fetch --quiet origin "$_cur" 2>/dev/null || true
+      if _git rev-parse --verify --quiet "refs/remotes/origin/$_cur" >/dev/null 2>&1 \
+         && _git branch --set-upstream-to="origin/$_cur" "$_cur" >/dev/null 2>&1; then
+        echo "Re-attached $SRC to origin/$_cur (upstream tracking was missing)."
+      fi
+    fi
     # --quiet keeps the update log clean: it drops git's noisy per-branch fetch
     # summary ("From github.com … * [new branch] dependabot/…") and progress
     # chatter — the bulk of what the operator was seeing — while any real error
@@ -526,6 +556,33 @@ cmd_update() {
     _pull_out="$(_git pull --quiet --ff-only 2>&1)"; _pull_rc=$?
     [[ -n "$_pull_out" ]] && printf '%s\n' "$_pull_out"
     if [[ $_pull_rc -ne 0 ]]; then
+      # (0) AUTHENTICATION / unreachable remote — the checkout can't reach its (private)
+      # remote to pull: no stored credentials, an expired token, or no deploy key. This is
+      # NOT a ref/tracking problem, and it MUST be caught before the ref-store repair below
+      # — that repair DELETES the origin/* cache and then refetches, so on an auth failure
+      # it would wipe origin/<branch> and be unable to restore it, manufacturing the very
+      # "origin/<branch> [gone]" state whose 'set-upstream' advice then can't work either.
+      # Detect it, tell the operator exactly what to fix (credentials), and STOP.
+      if printf '%s' "$_pull_out" | grep -qiE 'could not read (Username|Password)|Authentication failed|terminal prompts disabled|Permission denied \(publickey\)|Invalid username or password|Support for password authentication was removed|fatal: unable to access|The requested URL returned error: 40[0-9]|could not read from remote repository'; then
+        _remote_url="$(_git remote get-url origin 2>/dev/null || echo '(no "origin" remote configured)')"
+        echo "ERROR: update blocked — $SRC could not AUTHENTICATE to its git remote to pull the update."
+        echo "       Remote: $_remote_url"
+        echo "       git has no usable credentials for it (private repo, expired token, or no deploy key), so a"
+        echo "       headless pull can't read a username. This is a CREDENTIALS problem, NOT a branch/tracking one"
+        echo "       — the 'set-upstream' advice does not apply. Fix ONE of these on the host, then retry the update:"
+        echo "         • Store a token (HTTPS) — prompts once, then caches it:"
+        echo "             sudo git config --system credential.helper store"
+        echo "             sudo git -C $SRC -c safe.directory=\"$SRC\" fetch origin   # enter your user + a PAT"
+        echo "           …or bake a read-only token straight into the remote URL:"
+        echo "             sudo git -C $SRC -c safe.directory=\"$SRC\" remote set-url origin https://<user>:<TOKEN>@github.com/<org>/<repo>.git"
+        echo "         • …or switch to an SSH deploy key:"
+        echo "             sudo git -C $SRC -c safe.directory=\"$SRC\" remote set-url origin git@github.com:<org>/<repo>.git"
+        echo "             # then add that host's public key as a read-only Deploy Key on the repository"
+        echo "       No-git alternative — deploy the code you already have without pulling:"
+        echo "             cd <your-up-to-date-checkout> && sudo ./install_sysible.sh"
+        _write_update_status failed "Update blocked: $SRC cannot authenticate to its git remote ($_remote_url) to pull. Configure credentials on the host (a stored PAT via 'git config --system credential.helper store' then fetch, a token in the remote URL, or an SSH deploy key), then retry. This is NOT a tracking-branch problem. No-git path: run ./install_sysible.sh from an up-to-date checkout."
+        exit 1
+      fi
       # An untracked-file collision ("untracked working tree files would be overwritten
       # by merge") is NOT a ref-store problem — the checkout has untracked files shadowing
       # files the update adds, and a ref repair won't help. Give the exact, safe remedy

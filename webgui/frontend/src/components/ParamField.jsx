@@ -84,21 +84,33 @@ function RemoteSelect({ p, value, onChange, targets }) {
   const useManual = manual || !listUsable || !valueInList;
 
   if (useManual) {
+    // Explain WHY this is a text box (not a menu) so the picker is discoverable
+    // rather than looking like a plain field. The menu needs exactly one host.
+    let hint = "";
+    if (targets.length === 0) hint = "Check one host on the left to pick from its VMs.";
+    else if (targets.length > 1) hint = `Pick a VM per host isn't possible for ${targets.length} hosts — type a name, or 'all'.`;
+    else if (loading) hint = "Loading VMs on the selected host…";
+    else if (error) hint = `Couldn't list VMs (${error}). Type a name instead.`;
+    else if (single && options.length === 0) hint = "No VMs found on the selected host — type a name if you know it.";
     return (
-      <div className="row" style={{ gap: 6, alignItems: "center" }}>
-        <input
-          type="text" value={cur} style={{ flex: 1 }}
-          placeholder={p.placeholder || p.help || ""}
-          onChange={(e) => onChange(p.name, e.target.value)}
-        />
-        {listUsable && (
-          <button type="button" className="btn ghost sm"
-                  title="Choose from the VMs on the selected host"
-                  onClick={() => { setManual(false); if (!valueInList) onChange(p.name, ""); }}>
-            ▾ list
-          </button>
-        )}
-      </div>
+      <>
+        <div className="row" style={{ gap: 6, alignItems: "center" }}>
+          <input
+            type="text" value={cur} style={{ flex: 1 }}
+            placeholder={p.placeholder || p.help || ""}
+            onChange={(e) => onChange(p.name, e.target.value)}
+          />
+          {loading && <span className="spin" />}
+          {listUsable && (
+            <button type="button" className="btn ghost sm"
+                    title="Choose from the VMs on the selected host"
+                    onClick={() => { setManual(false); if (!valueInList) onChange(p.name, ""); }}>
+              ▾ list
+            </button>
+          )}
+        </div>
+        {hint && <div className="faint" style={{ fontSize: 11, marginTop: 3 }}>{hint}</div>}
+      </>
     );
   }
 

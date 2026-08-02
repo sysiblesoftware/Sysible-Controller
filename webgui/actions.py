@@ -33,10 +33,13 @@ from client import _api_users  # for the one cmd_* name that collides on `api`
 class Param:
     name: str
     label: str
-    type: str = "text"          # text | password | number | select | checkbox
+    type: str = "text"          # text | password | number | select | checkbox | select-remote
     default: object = ""
     required: bool = True
     options: list = field(default_factory=list)   # for type == "select"
+    # For type == "select-remote": the (hidden) action whose per-host stdout —
+    # one value per line — populates the dropdown for the single selected host.
+    source: str = ""
     help: str = ""
     # Greyed-out example shown in an empty field (HTML placeholder). Always an
     # EXAMPLE of what to type, e.g. "e.g. nginx" — never a value that gets
@@ -56,6 +59,9 @@ class Action:
     danger: bool = False        # UI confirms before running (delete, etc.)
     tab: str = ""               # desktop tab this action lives under
     group: str = ""             # titled section (QGroupBox) within the tab
+    hidden: bool = False        # dispatchable, but not rendered as a button
+                                # (used by remote-select fields that fetch their
+                                # own option list, e.g. vm_names for the VM picker)
 
 
 # ----------------------------------------------------------------------
@@ -1403,13 +1409,20 @@ _register(Action(name="cert_verify_chain", tool="Certificate Management", label=
     build=lambda p: api.cmd_verify_chain(_s(p, "cert_path"), _s(p, "chain_path"))))
 
 # ---- Containers & VMs (advanced) -------------------------------------
+# Hidden helper: the VM-name picker fetches this action's stdout (one domain per
+# line) to populate its dropdown for the single selected host. Not shown as a button.
+_register(Action(name="vm_names", tool="Containers & VMs", label="List VM names",
+    hidden=True, params=[], build=lambda p: api.cmd_list_vm_names()))
 _register(Action(name="vm_action", tool="Containers & VMs", label="Run action",
     params=[Param("action", "Action", type="select",
                   options=["start", "shutdown", "destroy", "reboot", "suspend", "resume"], default="start"),
-            Param("name", "VM name(s) — one or more, or 'all'")],
+            Param("name", "VM name", type="select-remote", source="vm_names",
+                  help="pick a VM on the selected host, or type one or more names / 'all'")],
     build=lambda p: api.cmd_vm_action(_s(p, "action", "start"), _s(p, "name"))))
 _register(Action(name="vm_info", tool="Containers & VMs", label="VM info",
-    params=[Param("name", "VM name")], build=lambda p: api.cmd_vm_info(_s(p, "name"))))
+    params=[Param("name", "VM name", type="select-remote", source="vm_names",
+                  help="pick a VM on the selected host, or type a name")],
+    build=lambda p: api.cmd_vm_info(_s(p, "name"))))
 
 # ---- Directory Services (advanced) -----------------------------------
 _register(Action(name="dir_install_ldap", tool="Directory Services (Active Directory / LDAP)",
@@ -1847,6 +1860,8 @@ def catalog():
     dicts. The build= callable is intentionally not serialized."""
     by_tool: dict[str, list] = {}
     for a in _ACTIONS.values():
+        if a.hidden:            # dispatchable, but never rendered as a button
+            continue
         by_tool.setdefault(a.tool, []).append({
             "name": a.name,
             "label": (a.label[:1].upper() + a.label[1:]) if a.label else a.label,
@@ -1858,7 +1873,7 @@ def catalog():
                 {
                     "name": pr.name, "label": pr.label, "type": pr.type,
                     "default": pr.default, "required": pr.required,
-                    "options": pr.options, "help": pr.help,
+                    "options": pr.options, "source": pr.source, "help": pr.help,
                     "placeholder": _placeholder_for(pr),
                 }
                 for pr in a.params

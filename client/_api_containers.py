@@ -100,6 +100,13 @@ def cmd_list_vms() -> str:
     return _VIRSH + 'virsh list --all 2>&1'
 
 
+def cmd_list_vm_names() -> str:
+    """Bare domain names, one per line (no header/state columns). Used to
+    populate the VM-name dropdown in the console — kept separate from
+    cmd_list_vms so the picker gets a clean, parseable list."""
+    return _VIRSH + 'virsh list --all --name 2>/dev/null'
+
+
 def cmd_vm_action(action: str, name: str) -> str:
     action = (action or "").strip()
     name = (name or "").strip()

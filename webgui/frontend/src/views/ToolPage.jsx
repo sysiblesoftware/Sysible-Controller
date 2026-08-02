@@ -233,7 +233,7 @@ export default function ToolPage({ tool, hosts, onRefreshHosts, prefill }) {
           {[...groups.entries()].map(([groupTitle, acts]) => (
             <GroupSection key={groupTitle || "_"}
                           title={tabs.autoTabbed && groupTitle === currentTab ? "" : groupTitle}
-                          desc={GROUP_HELP[groupTitle]} acts={acts}
+                          desc={GROUP_HELP[groupTitle]} acts={acts} targets={targets}
                           gkey={gkey(currentTab, groupTitle)} gval={gval} setGParam={setGParam}
                           runningAction={runningAction} onRun={run} />
           ))}
@@ -250,7 +250,7 @@ export default function ToolPage({ tool, hosts, onRefreshHosts, prefill }) {
 // A titled group: shared parameter fields (the ordered union across the
 // group's actions, rendered once) followed by a wrapping row of action
 // buttons. Param-less groups are just a button row.
-function GroupSection({ title, desc, acts, gkey, gval, setGParam, runningAction, onRun }) {
+function GroupSection({ title, desc, acts, targets, gkey, gval, setGParam, runningAction, onRun }) {
   const sharedParams = useMemo(() => {
     const seen = new Map();
     for (const a of acts) for (const p of a.params) if (!seen.has(p.name)) seen.set(p.name, p);
@@ -265,7 +265,7 @@ function GroupSection({ title, desc, acts, gkey, gval, setGParam, runningAction,
         <div className="group-fields">
           {sharedParams.map((p) => (
             <div key={p.name} className="group-field">
-              <ParamField p={p} value={gval(gkey, p)} onChange={(n, v) => setGParam(gkey, n, v)} />
+              <ParamField p={p} value={gval(gkey, p)} targets={targets} onChange={(n, v) => setGParam(gkey, n, v)} />
             </div>
           ))}
         </div>

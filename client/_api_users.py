@@ -1,5 +1,6 @@
 """Users/groups/remote-hosts/file-transfer/fleet-user-mgmt/password helpers - split out of client/api.py to keep individual file sizes manageable. Imported via `from client._api_users import *` at the bottom of client/api.py."""
 import base64
+import hashlib
 import json
 import random
 import secrets
@@ -349,12 +350,96 @@ def generate_strong_password(length: int = 16, policy: dict = None) -> str:
     return "".join(chars)
 
 
+# SHA-512 crypt ($6$) alphabet and 24-bit -> base64 packer used by the
+# pure-Python fallback below. This is the crypt-specific base64 (NOT the
+# standard one) with its own character order and little-endian grouping.
+_CRYPT_ITOA64 = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+
+def _crypt_b64_from_24bit(b2: int, b1: int, b0: int, n: int) -> str:
+    w = (b2 << 16) | (b1 << 8) | b0
+    out = []
+    for _ in range(n):
+        out.append(_CRYPT_ITOA64[w & 0x3F])
+        w >>= 6
+    return "".join(out)
+
+
+def _sha512_crypt(password: str, salt: str) -> str:
+    """Pure-Python implementation of the glibc SHA-512 crypt ($6$) scheme
+    (Ulrich Drepper's spec, https://www.akkadia.org/drepper/SHA-crypt.txt),
+    used when the stdlib `crypt` module is unavailable.
+
+    `crypt` was removed from the standard library in Python 3.13 and never
+    existed on non-POSIX platforms, so a controller running a modern Python
+    could no longer build `usermod -p '$6$...'` commands. hashlib.sha512 is
+    always present, so this fallback keeps password hashing local to the
+    controller - the produced hash is byte-for-byte identical to what glibc
+    crypt() emits, so the plaintext still never leaves this machine. Uses the
+    default 5000 rounds and a 16-char salt, matching crypt.mksalt()."""
+    pw = password.encode("utf-8")
+    salt_bytes = salt.encode("ascii")[:16]
+    plen = len(pw)
+
+    # Digest B = SHA512(password + salt + password)
+    alt = hashlib.sha512(pw + salt_bytes + pw).digest()
+
+    # Digest A
+    a = hashlib.sha512()
+    a.update(pw + salt_bytes)
+    i = plen
+    while i > 0:
+        a.update(alt[: min(i, 64)])
+        i -= 64
+    i = plen
+    while i > 0:
+        a.update(alt if (i & 1) else pw)
+        i >>= 1
+    a_digest = a.digest()
+
+    # DP -> sequence P (password repeated), DS -> sequence S (salt repeated)
+    dp = hashlib.sha512(pw * plen).digest()
+    p_seq = (dp * (plen // 64 + 1))[:plen]
+    ds = hashlib.sha512(salt_bytes * (16 + a_digest[0])).digest()
+    s_seq = (ds * (len(salt_bytes) // 64 + 1))[: len(salt_bytes)]
+
+    # 5000 rounds of mixing
+    c = a_digest
+    for r in range(5000):
+        ctx = hashlib.sha512()
+        ctx.update(p_seq if (r & 1) else c)
+        if r % 3:
+            ctx.update(s_seq)
+        if r % 7:
+            ctx.update(p_seq)
+        ctx.update(c if (r & 1) else p_seq)
+        c = ctx.digest()
+
+    # crypt-specific base64 with glibc's byte permutation
+    order = [
+        (0, 21, 42), (22, 43, 1), (44, 2, 23), (3, 24, 45), (25, 46, 4),
+        (47, 5, 26), (6, 27, 48), (28, 49, 7), (50, 8, 29), (9, 30, 51),
+        (31, 52, 10), (53, 11, 32), (12, 33, 54), (34, 55, 13), (56, 14, 35),
+        (15, 36, 57), (37, 58, 16), (59, 17, 38), (18, 39, 60), (40, 61, 19),
+        (62, 20, 41),
+    ]
+    enc = [_crypt_b64_from_24bit(c[x], c[y], c[z], 4) for (x, y, z) in order]
+    enc.append(_crypt_b64_from_24bit(0, 0, c[63], 2))
+    return "$6$%s$%s" % (salt_bytes.decode("ascii"), "".join(enc))
+
+
 def _hash_password(password: str):
+    # Prefer the stdlib crypt when present (POSIX, Python < 3.13); otherwise
+    # fall back to the pure-Python SHA-512 crypt so a controller on Python 3.13+
+    # or a non-POSIX host can still hash locally instead of refusing the change.
     try:
         import crypt
         return crypt.crypt(password, crypt.mksalt(crypt.METHOD_SHA512))
-    except ImportError:
-        return None
+    except (ImportError, OSError):
+        pass
+    alphabet = "./" + string.ascii_letters + string.digits
+    salt = "".join(secrets.choice(alphabet) for _ in range(16))
+    return _sha512_crypt(password, salt)
 
 
 def _reject_leading_dash(username: str):

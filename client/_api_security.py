@@ -352,6 +352,10 @@ def _build_sshd_set_option_script(key: str, value: str, reload: bool = False) ->
     # authoritative regardless of where an old one sat.
     qk = shlex.quote(key)
     qv = shlex.quote(value)
+    q_dropdir = shlex.quote(_SSHD_CONFIG + ".d")   # /etc/ssh/sshd_config.d
+    # sshd keywords are case-insensitive, so the strip must be too (the GNU sed
+    # `I` flag) - a drop-in may write `passwordauthentication` in any case.
+    strip = f"sed -i -E '/^[[:space:]]*{key}[[:space:]]/Id'"
     binf = _sshd_bin_fragment()
     if reload:
         # Apply-and-reload: after the new config validates, reload sshd so the
@@ -365,14 +369,31 @@ def _build_sshd_set_option_script(key: str, value: str, reload: bool = False) ->
         )
     else:
         on_ok = f"printf 'sshd_config: %s set to %s. Reload sshd to apply.\\n' {qk} \"$v\""
+    # Modern Debian/Ubuntu (and all cloud images) put `Include
+    # /etc/ssh/sshd_config.d/*.conf` at the TOP of sshd_config, and sshd honours
+    # the FIRST occurrence of a keyword. A cloud image ships
+    # 50-cloud-init.conf with `PasswordAuthentication yes`, so a line we append
+    # to the bottom of the main file is silently overridden - the operator
+    # disables password/root login, `sshd -t` passes, the reload succeeds, and
+    # the control never actually takes effect. So strip the key from every
+    # drop-in as well, making our appended line the sole authoritative
+    # occurrence. Back up the drop-in dir too and roll it back if validation
+    # fails, exactly like the main file.
     return (
         f"{binf}; "
         f"cp {q_cfg} {q_bak} 2>&1; "
+        f"dropd={q_dropdir}; bakd=$(mktemp -d 2>/dev/null || echo \"/tmp/sysible-sshd-bak.$$\"); "
+        f"mkdir -p \"$bakd\"; "
+        f"if [ -d \"$dropd\" ]; then cp -a \"$dropd\"/. \"$bakd\"/ 2>/dev/null; fi; "
         f"v={qv}; "
-        f"sed -i -E '/^[[:space:]]*{key}[[:space:]]/d' {q_cfg}; "
+        f"{strip} {q_cfg}; "
+        f"if [ -d \"$dropd\" ]; then for f in \"$dropd\"/*.conf; do [ -e \"$f\" ] && {strip} \"$f\"; done; fi; "
         f"printf '%s %s\\n' {qk} \"$v\" >> {q_cfg}; "
-        f"if \"$SSHDBIN\" -t 2>&1; then {on_ok}; "
-        f"else echo 'New config failed validation - restoring previous sshd_config.' >&2; cp {q_bak} {q_cfg}; exit 1; fi"
+        f"if \"$SSHDBIN\" -t 2>&1; then rm -rf \"$bakd\" 2>/dev/null; {on_ok}; "
+        f"else echo 'New config failed validation - restoring previous sshd_config.' >&2; "
+        f"cp {q_bak} {q_cfg}; "
+        f"if [ -d \"$dropd\" ]; then rm -f \"$dropd\"/*.conf 2>/dev/null; cp -a \"$bakd\"/. \"$dropd\"/ 2>/dev/null; fi; "
+        f"rm -rf \"$bakd\" 2>/dev/null; exit 1; fi"
     )
 
 
@@ -532,9 +553,12 @@ def cmd_search_audit_log(query: str, lines: int = 200) -> str:
 # ===========================================================
 def cmd_list_failed_logins(lines: int = 50) -> str:
     lines = _validate_int_range(lines, 1, 5000, "Line count")
+    # The SSH unit is `sshd.service` on RHEL/SUSE but `ssh.service` on
+    # Debian/Ubuntu; hardcoding `sshd` returned nothing from the journal there.
+    svc = _sshd_service_fragment()
     return (
-        f"if command -v lastb >/dev/null 2>&1; then lastb -n {lines} 2>&1; "
-        f"else journalctl -u sshd --no-pager 2>&1 | grep -i 'failed password' | tail -n {lines}; fi"
+        f"{svc}; if command -v lastb >/dev/null 2>&1; then lastb -n {lines} 2>&1; "
+        f"else journalctl -u \"$SSHSVC\" --no-pager 2>&1 | grep -i 'failed password' | tail -n {lines}; fi"
     )
 
 
@@ -542,11 +566,12 @@ def cmd_failed_login_summary(top_n: int = 20) -> str:
     """Counts failed-password attempts by source IP, highest first -
     quick view of who/what is hammering SSH."""
     top_n = _validate_int_range(top_n, 1, 500, "Result count")
+    svc = _sshd_service_fragment()   # ssh.service (Debian) vs sshd.service (RHEL/SUSE)
     return (
-        "src=/var/log/secure; [ -r \"$src\" ] || src=/var/log/auth.log; "
+        f"{svc}; src=/var/log/secure; [ -r \"$src\" ] || src=/var/log/auth.log; "
         'if [ -r "$src" ]; then '
         'grep -i "failed password" "$src" 2>&1; '
-        "else journalctl -u sshd --no-pager 2>&1 | grep -i 'failed password'; fi "
+        "else journalctl -u \"$SSHSVC\" --no-pager 2>&1 | grep -i 'failed password'; fi "
         "| grep -oE 'from [0-9a-fA-F:.]+' | awk '{print $2}' | sort | uniq -c | sort -rn "
         f"| head -n {top_n}"
     )

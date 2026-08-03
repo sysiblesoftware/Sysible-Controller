@@ -463,7 +463,19 @@ def cmd_create_user(username: str, password: str = "", shell: str = "/bin/bash")
         f'fi; '
         f'echo "home directory ready: $h"'
     )
-    cmd = f"useradd -m -s {sh} {u} && {{ {ensure_home}; }}"
+    # useradd defaults to creating a private group named after the user
+    # (USERGROUPS_ENAB). If a group of that name already exists but the user
+    # does not - e.g. Ubuntu ships a legacy `admin` group - useradd refuses with
+    # "group <name> exists" (exit 9). Detect that and fall back to -N so the
+    # account is created with the distro's default group instead of colliding.
+    # -N does NOT add the user to the pre-existing group, so no unexpected
+    # group membership or privilege is granted.
+    create = (
+        f"if getent group {u} >/dev/null 2>&1; then "
+        f"useradd -m -N -s {sh} {u}; "
+        f"else useradd -m -s {sh} {u}; fi"
+    )
+    cmd = f"{create} && {{ {ensure_home}; }}"
     if password:
         cmd += " && " + cmd_set_password(username, password)
     return cmd

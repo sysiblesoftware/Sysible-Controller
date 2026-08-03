@@ -595,7 +595,8 @@ def cmd_update_status(refresh: bool = False) -> str:
             "if command -v dnf >/dev/null 2>&1; then dnf -q makecache --refresh >/dev/null 2>&1; "
             "elif command -v yum >/dev/null 2>&1; then yum -q makecache >/dev/null 2>&1; "
             "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive -q refresh >/dev/null 2>&1; "
-            "elif command -v apt-get >/dev/null 2>&1; then apt-get -qq update >/dev/null 2>&1; fi\n"
+            "elif command -v apt-get >/dev/null 2>&1; then apt-get -qq update >/dev/null 2>&1; "
+            "elif command -v pacman >/dev/null 2>&1; then pacman -Sy >/dev/null 2>&1; fi\n"
         )
     return (
         prep +
@@ -616,6 +617,11 @@ def cmd_update_status(refresh: bool = False) -> str:
         "up=$(apt-get -s -o Debug::NoLocking=true upgrade 2>/dev/null | grep '^Inst '); "
         "total=$(printf '%s\\n' \"$up\" | grep -c '^Inst '); "
         "sec=$(printf '%s\\n' \"$up\" | grep -ci security); "
+        # Arch: pacman -Qu lists installed packages with a newer version available
+        # (against the last synced db). Arch ships no per-update security metadata,
+        # so security stays 0.
+        "elif command -v pacman >/dev/null 2>&1; then mgr=pacman; "
+        "total=$(pacman -Qu 2>/dev/null | grep -c .); sec=0; "
         "fi\n"
         "[ -f /var/run/reboot-required ] && rr=1\n"
         "if command -v needs-restarting >/dev/null 2>&1; then needs-restarting -r >/dev/null 2>&1 || rr=1; fi\n"
@@ -639,6 +645,7 @@ def cmd_clean_package_cache() -> str:
         "elif command -v yum >/dev/null 2>&1; then yum clean all; "
         "elif command -v zypper >/dev/null 2>&1; then zypper clean; "
         "elif command -v apt-get >/dev/null 2>&1; then apt-get clean; "
+        "elif command -v pacman >/dev/null 2>&1; then pacman -Sc --noconfirm; "
         "else echo 'No supported package manager found' >&2; exit 1; fi; "
         "echo 'Package cache cleaned.'"
     )
@@ -1343,7 +1350,8 @@ def cmd_install_sos() -> str:
         "elif command -v dnf >/dev/null 2>&1; then dnf install -y sos; "
         "elif command -v yum >/dev/null 2>&1; then yum install -y sos; "
         "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install sos; "
-        "else echo 'No supported package manager found (apt/dnf/yum/zypper).' >&2; exit 1; fi; "
+        "elif command -v pacman >/dev/null 2>&1; then echo 'sos/sosreport is a Red Hat diagnostic tool and is not packaged for Arch Linux.' >&2; exit 1; "
+        "else echo 'No supported package manager found (apt/dnf/yum/zypper/pacman).' >&2; exit 1; fi; "
         "echo; echo 'sos installed - you can now run Generate sos Report.'"
     )
 

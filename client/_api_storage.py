@@ -198,6 +198,8 @@ def cmd_install_smartmontools() -> str:
         rpm_cmd='"$PKGMGR" install -y smartmontools',
         zypper_cmd="zypper --non-interactive install smartmontools",
         apt_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y smartmontools",
+        # Same package name on Arch (extra repo).
+        pacman_cmd="pacman -Sy --needed --noconfirm smartmontools",
     ) + " && echo 'smartmontools installed.'"
 
 
@@ -209,6 +211,8 @@ def cmd_install_lvm_tools() -> str:
         rpm_cmd='"$PKGMGR" install -y lvm2',
         zypper_cmd="zypper --non-interactive install lvm2",
         apt_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y lvm2",
+        # Same package name on Arch (core repo).
+        pacman_cmd="pacman -Sy --needed --noconfirm lvm2",
     ) + " && echo 'LVM tools (lvm2) installed.'"
 
 
@@ -220,6 +224,8 @@ def cmd_install_mdadm() -> str:
         rpm_cmd='"$PKGMGR" install -y mdadm',
         zypper_cmd="zypper --non-interactive install mdadm",
         apt_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y mdadm",
+        # Same package name on Arch (core repo).
+        pacman_cmd="pacman -Sy --needed --noconfirm mdadm",
     ) + " && echo 'mdadm installed.'"
 
 

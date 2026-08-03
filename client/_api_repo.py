@@ -13,6 +13,19 @@ import shlex
 from client._api_automation import _pkgmgr_dispatch, _validate_repo_alias
 
 
+# On Arch, repositories are defined as [name] sections inside the single
+# /etc/pacman.conf file - not drop-in files like the RPM (.repo), zypper, or apt
+# (.list) families this module otherwise targets. Adding/enabling/disabling/
+# removing/creating a repo therefore means editing that one file in place, which
+# can't be done safely and generically here. For those write actions we emit a
+# clear pointer instead of blindly rewriting pacman.conf; only the read-only
+# listing has a real pacman equivalent.
+_PACMAN_REPO_MANUAL = (
+    "echo 'On Arch, edit /etc/pacman.conf to add or toggle a repository "
+    "(this action does not manage pacman.conf).' >&2; exit 1"
+)
+
+
 def cmd_list_repositories() -> str:
     return _pkgmgr_dispatch(
         rpm_cmd='"$PKGMGR" repolist all',
@@ -22,6 +35,11 @@ def cmd_list_repositories() -> str:
             '[ -f "$f" ] || continue; '
             'echo "--- $f ---"; cat "$f"; echo; '
             'done'
+        ),
+        # Read-only: pacman-conf lists configured repos; fall back to grepping the
+        # [section] headers straight out of pacman.conf if pacman-conf is absent.
+        pacman_cmd=(
+            "pacman-conf --repo-list 2>/dev/null || grep -E '^\\[' /etc/pacman.conf"
         ),
     )
 
@@ -66,7 +84,8 @@ def cmd_add_repository(url: str, alias: str = "") -> str:
         zypper_cmd = 'echo "zypper requires the Alias / Repository ID field - fill it in and retry."'
         apt_cmd = 'echo "Debian/Ubuntu requires the Alias / Repository ID field (used as the filename) - fill it in and retry."'
 
-    return _pkgmgr_dispatch(rpm_cmd=rpm_cmd, zypper_cmd=zypper_cmd, apt_cmd=apt_cmd)
+    return _pkgmgr_dispatch(rpm_cmd=rpm_cmd, zypper_cmd=zypper_cmd, apt_cmd=apt_cmd,
+                            pacman_cmd=_PACMAN_REPO_MANUAL)
 
 
 def cmd_enable_repository(alias: str) -> str:
@@ -95,6 +114,7 @@ def cmd_enable_repository(alias: str) -> str:
             f'elif [ -f {list_path} ]; then echo "Already enabled."; '
             f'else echo "No such repository file: {base}.list (or .list.disabled)"; fi'
         ),
+        pacman_cmd=_PACMAN_REPO_MANUAL,
     )
 
 
@@ -124,6 +144,7 @@ def cmd_disable_repository(alias: str) -> str:
             f'elif [ -f {disabled_path} ]; then echo "Already disabled."; '
             f'else echo "No such repository file: {base}.list (or .list.disabled)"; fi'
         ),
+        pacman_cmd=_PACMAN_REPO_MANUAL,
     )
 
 
@@ -144,6 +165,7 @@ def cmd_remove_repository(alias: str) -> str:
         rpm_cmd=rpm_cmd,
         zypper_cmd=f'zypper --non-interactive removerepo {q_alias}',
         apt_cmd=f'rm -f {list_path} {disabled_path} && apt-get update && echo "Removed."',
+        pacman_cmd=_PACMAN_REPO_MANUAL,
     )
 
 
@@ -254,4 +276,5 @@ def cmd_create_repository(
         f'echo "Created repository {alias_safe} ({list_path})."'
     )
 
-    return _pkgmgr_dispatch(rpm_cmd=rpm_cmd, zypper_cmd=zypper_cmd, apt_cmd=apt_cmd)
+    return _pkgmgr_dispatch(rpm_cmd=rpm_cmd, zypper_cmd=zypper_cmd, apt_cmd=apt_cmd,
+                            pacman_cmd=_PACMAN_REPO_MANUAL)

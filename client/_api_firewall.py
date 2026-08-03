@@ -484,7 +484,11 @@ _PKG_DETECT = (
     "elif command -v zypper >/dev/null 2>&1; then PM='zypper --non-interactive install'; "
     "elif command -v apt-get >/dev/null 2>&1; then apt-get update >/dev/null 2>&1; "
     "PM='apt-get install -y'; "
-    "else echo 'No supported package manager found (dnf/yum/zypper/apt).' >&2; exit 1; fi; "
+    # Arch: -Sy refreshes the sync db, --needed is idempotent, --noconfirm keeps it
+    # non-interactive. firewalld and ufw are both installable (Arch ships no firewall
+    # by default). The harmless DEBIAN_FRONTEND prefix callers add is ignored here.
+    "elif command -v pacman >/dev/null 2>&1; then PM='pacman -Sy --needed --noconfirm'; "
+    "else echo 'No supported package manager found (dnf/yum/zypper/apt/pacman).' >&2; exit 1; fi; "
 )
 
 # After a start attempt, `systemctl enable --now` only reports "status=1/FAILURE"

@@ -415,6 +415,7 @@ def cmd_install_packages(names: str) -> str:
         rpm_cmd=f'"$PKGMGR" install -y -- {pkgs}',
         zypper_cmd=f'zypper --non-interactive install -- {pkgs}',
         apt_cmd=f'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y -- {pkgs}',
+        pacman_cmd=f'pacman -Sy --needed --noconfirm {pkgs}',
     )
 
 
@@ -433,6 +434,8 @@ def cmd_install_local_package(remote_path: str) -> str:
         rpm_cmd=f'"$PKGMGR" install -y {q}',
         zypper_cmd=f'zypper --non-interactive install --allow-unsigned-rpm {q}',
         apt_cmd=f'DEBIAN_FRONTEND=noninteractive apt-get install -y {q}',
+        # Arch installs a local package FILE (.pkg.tar.zst) with -U.
+        pacman_cmd=f'pacman -U --noconfirm {q}',
     )
 
 
@@ -444,6 +447,7 @@ def cmd_remove_packages(names: str) -> str:
         rpm_cmd=f'"$PKGMGR" remove -y -- {pkgs}',
         zypper_cmd=f'zypper --non-interactive remove -- {pkgs}',
         apt_cmd=f'DEBIAN_FRONTEND=noninteractive apt-get remove -y -- {pkgs}',
+        pacman_cmd=f'pacman -R --noconfirm {pkgs}',
     )
 
 
@@ -484,11 +488,13 @@ def cmd_update_packages(names: str = "", flags: str = "") -> str:
             rpm_cmd=f'"$PKGMGR" update -y{rf} -- {pkgs}',
             zypper_cmd=f'zypper --non-interactive update -- {pkgs}',
             apt_cmd=f'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --only-upgrade -y -- {pkgs}',
+            pacman_cmd=f'pacman -Sy --noconfirm {pkgs}',
         )
     return _pkgmgr_dispatch(
         rpm_cmd=f'"$PKGMGR" upgrade -y{rf}',
         zypper_cmd='zypper --non-interactive update',
         apt_cmd='apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y',
+        pacman_cmd='pacman -Syu --noconfirm',
     )
 
 
@@ -518,7 +524,13 @@ def cmd_package_status(names: str) -> str:
         "if v=$(rpm -q --qf '%{VERSION}-%{RELEASE}' \"$p\" 2>/dev/null); "
         "then echo \"SYSIBLE_PKG $p installed $v\"; else echo \"SYSIBLE_PKG $p absent\"; fi; done"
     )
-    return _pkgmgr_dispatch(rpm_cmd=rpm, zypper_cmd=rpm, apt_cmd=apt)
+    pacman = (
+        "for p in " + pkgs + "; do "
+        "v=$(pacman -Q \"$p\" 2>/dev/null | awk '{print $2}'); "
+        "if [ -n \"$v\" ]; then echo \"SYSIBLE_PKG $p installed $v\"; "
+        "else echo \"SYSIBLE_PKG $p absent\"; fi; done"
+    )
+    return _pkgmgr_dispatch(rpm_cmd=rpm, zypper_cmd=rpm, apt_cmd=apt, pacman_cmd=pacman)
 
 
 def cmd_query_package(name: str) -> str:
@@ -530,6 +542,8 @@ def cmd_query_package(name: str) -> str:
         rpm_cmd=f'"$PKGMGR" info {pkg} 2>/dev/null || rpm -qi {pkg}',
         zypper_cmd=f'zypper info {pkg}',
         apt_cmd=f'apt-cache show {pkg} 2>/dev/null || dpkg -s {pkg} 2>/dev/null || echo "Package not found:" {pkg}',
+        # -Qi: installed package info; -Si: repo info for a not-yet-installed one.
+        pacman_cmd=f'pacman -Qi {pkg} 2>/dev/null || pacman -Si {pkg} 2>/dev/null || echo "Package not found:" {pkg}',
     )
 
 
@@ -548,6 +562,11 @@ def cmd_verify_package(name: str) -> str:
         f'else echo "$out"; fi'
     )
 
+    pacman_verify = (
+        f'out=$(pacman -Qkk {pkg} 2>&1 | grep -vE "0 altered files|, 0 missing files"); '
+        f'if [ -z "$out" ]; then echo "OK -" {pkg} "- no discrepancies found."; '
+        f'else echo "$out"; fi'
+    )
     return _pkgmgr_dispatch(
         rpm_cmd=rpm_verify,
         zypper_cmd=rpm_verify,
@@ -559,6 +578,7 @@ def cmd_verify_package(name: str) -> str:
             f'if [ -z "$out" ]; then echo "OK -" {pkg} "- no discrepancies found."; '
             'else echo "$out"; fi; fi'
         ),
+        pacman_cmd=pacman_verify,
     )
 
 
@@ -567,6 +587,7 @@ def cmd_clean_package_cache() -> str:
         rpm_cmd='"$PKGMGR" clean all',
         zypper_cmd='zypper clean --all',
         apt_cmd='apt-get clean',
+        pacman_cmd='pacman -Sc --noconfirm',
     )
 
 
@@ -587,6 +608,8 @@ def cmd_search_packages(term: str) -> str:
     "$PKGMGR" -q search """ + t + r""" 2>/dev/null | grep ' : ' | sed -e 's/\.[^. :]* : / /' -e 's/ : / /'
   elif [ "$PKGMGR" = "zypper" ]; then
     zypper -q search """ + t + r""" 2>/dev/null | awk -F'|' 'NF>=3 {n=$2; sub(/^ +/,"",n); sub(/ +$/,"",n); if(n!="" && n!="Name" && n !~ /^-+$/){s=$3; sub(/^ +/,"",s); sub(/ +$/,"",s); print n" "s}}'
+  elif [ "$PKGMGR" = "pacman" ]; then
+    pacman -Ss """ + t + r""" 2>/dev/null | awk '/^[^[:space:]]/{split($1,a,"/"); n=a[2]; getline d; sub(/^[[:space:]]+/,"",d); print n" "d}'
   else
     apt-cache search """ + t + r""" 2>/dev/null | sed 's/ - / /'
   fi
@@ -603,7 +626,9 @@ def cmd_list_installed_packages() -> str:
         "dpkg-query -W -f='${Package}\\n' 2>/dev/null; "
         'elif command -v rpm >/dev/null 2>&1; then '
         "rpm -qa --qf '%{NAME}\\n' 2>/dev/null; "
-        'else echo "Neither dpkg nor rpm found on this host."; fi'
+        'elif command -v pacman >/dev/null 2>&1; then '
+        "pacman -Qq 2>/dev/null; "
+        'else echo "Neither dpkg, rpm nor pacman found on this host."; fi'
     )
 
 

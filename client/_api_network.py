@@ -315,7 +315,12 @@ def cmd_configure_static_ip(connection: str, ip_cidr: str, gateway: str = "", dn
         f"printf '      addresses: [%s]\\n' {q_ip} >> \"$f\"; "
     )
     if gw:
-        np += f"printf '      routes:\\n        - to: default\\n          via: %s\\n' {shlex.quote(gw)} >> \"$f\"; "
+        # Use the explicit default-route CIDR (0.0.0.0/0), not the `to: default`
+        # alias: that alias only landed in netplan ~0.103, so on Ubuntu 18.04 and
+        # un-SRU'd 20.04 (netplan.io 0.99) `netplan generate` rejects `to: default`
+        # and static-IP config hard-fails. 0.0.0.0/0 is accepted by every netplan
+        # version that supports the routes: key.
+        np += f"printf '      routes:\\n        - to: 0.0.0.0/0\\n          via: %s\\n' {shlex.quote(gw)} >> \"$f\"; "
     if dns_parts:
         np += f"printf '      nameservers:\\n        addresses: [%s]\\n' {shlex.quote(', '.join(dns_parts))} >> \"$f\"; "
     np += _netplan_apply_fragment()

@@ -621,7 +621,14 @@ def cmd_check_security_updates() -> str:
     installing anything."""
     return _pkgmgr_dispatch(
         rpm_cmd=(
-            'if [ "$PKGMGR" = "dnf" ]; then dnf updateinfo list security 2>&1; '
+            # dnf5 (Fedora 41+, RHEL 10) renamed the `updateinfo` command to
+            # `advisory` and DROPPED the `list security` positional aliases, so
+            # `dnf updateinfo list security` errors there. dnf5 has an `advisory`
+            # subcommand (dnf4 does not), so probe for it and use `advisory list
+            # --security`; fall back to the dnf4 form otherwise.
+            'if [ "$PKGMGR" = "dnf" ]; then '
+            'if dnf advisory --help >/dev/null 2>&1; then dnf advisory list --security 2>&1; '
+            'else dnf updateinfo list security 2>&1; fi; '
             "else (yum --security check-update 2>&1 || true); fi"
         ),
         zypper_cmd="zypper list-patches --category security 2>&1",

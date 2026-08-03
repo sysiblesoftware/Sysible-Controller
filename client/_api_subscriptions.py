@@ -84,9 +84,10 @@ def cmd_subscription_register_all(org: str = "", activationkey: str = "",
         rhsm = ("echo 'Red Hat-family host detected, but no RHSM credentials were provided "
                 "(org + activation key, or username + password). Skipping.' >&2; exit 1")
 
-    # Ubuntu branch
+    # Ubuntu branch (resolve pro OR the legacy `ua` CLI - see _PRO_MISSING)
     if pro_token:
-        pro = f"echo '== Ubuntu Pro =='; pro attach {shlex.quote(pro_token)} 2>&1"
+        pro = ("echo '== Ubuntu Pro =='; PRO=$(command -v pro 2>/dev/null || command -v ua 2>/dev/null); "
+               f'"$PRO" attach {shlex.quote(pro_token)} 2>&1')
     else:
         pro = ("echo 'Ubuntu host detected, but no Ubuntu Pro token was provided. "
                "Skipping.' >&2; exit 1")
@@ -101,9 +102,9 @@ def cmd_subscription_register_all(org: str = "", activationkey: str = "",
 
     return (
         "if command -v subscription-manager >/dev/null 2>&1; then " + rhsm + "; "
-        "elif command -v pro >/dev/null 2>&1; then " + pro + "; "
+        "elif command -v pro >/dev/null 2>&1 || command -v ua >/dev/null 2>&1; then " + pro + "; "
         "elif command -v SUSEConnect >/dev/null 2>&1; then " + suse + "; "
-        "else echo 'No supported subscription tool (subscription-manager / pro / "
+        "else echo 'No supported subscription tool (subscription-manager / pro / ua / "
         "SUSEConnect) found on this host.' >&2; exit 1; fi"
     )
 
@@ -178,9 +179,15 @@ def cmd_rhsm_unregister() -> str:
 # ===========================================================
 # Canonical / Ubuntu - the Ubuntu Pro client (`pro`)
 # ===========================================================
+# ubuntu-advantage-tools renamed its CLI from `ua` to `pro` in v27 (2022). Older
+# Ubuntu LTS (16.04/18.04, and un-SRU'd 20.04) ship only `ua` with no `pro`
+# symlink, so guarding on `pro` alone wrongly reports the client missing there.
+# Resolve either name into $PRO; the subcommands (attach/detach/enable/disable/
+# status/refresh, --assume-yes) are identical between the two.
 _PRO_MISSING = (
-    "if ! command -v pro >/dev/null 2>&1; then "
-    "echo 'The Ubuntu Pro client (pro / ubuntu-advantage-tools) is not installed - this is an "
+    "PRO=$(command -v pro 2>/dev/null || command -v ua 2>/dev/null); "
+    'if [ -z "$PRO" ]; then '
+    "echo 'The Ubuntu Pro client (pro / ua / ubuntu-advantage-tools) is not installed - this is an "
     "Ubuntu-only tool.' >&2; exit 1; fi; "
 )
 
@@ -192,36 +199,36 @@ PRO_SERVICES = [
 
 
 def cmd_pro_status() -> str:
-    return _PRO_MISSING + "pro status --all 2>&1"
+    return _PRO_MISSING + '"$PRO" status --all 2>&1'
 
 
 def cmd_pro_attach(token: str) -> str:
     token = (token or "").strip()
     if not token:
         raise ValueError("An Ubuntu Pro token is required (from ubuntu.com/pro/dashboard).")
-    return _PRO_MISSING + f"pro attach {shlex.quote(token)} 2>&1"
+    return _PRO_MISSING + f'"$PRO" attach {shlex.quote(token)} 2>&1'
 
 
 def cmd_pro_detach() -> str:
-    return _PRO_MISSING + "pro detach --assume-yes 2>&1"
+    return _PRO_MISSING + '"$PRO" detach --assume-yes 2>&1'
 
 
 def cmd_pro_enable(service: str) -> str:
     service = (service or "").strip()
     if not service:
         raise ValueError("Choose a Pro service to enable.")
-    return _PRO_MISSING + f"pro enable {shlex.quote(service)} --assume-yes 2>&1"
+    return _PRO_MISSING + f'"$PRO" enable {shlex.quote(service)} --assume-yes 2>&1'
 
 
 def cmd_pro_disable(service: str) -> str:
     service = (service or "").strip()
     if not service:
         raise ValueError("Choose a Pro service to disable.")
-    return _PRO_MISSING + f"pro disable {shlex.quote(service)} --assume-yes 2>&1"
+    return _PRO_MISSING + f'"$PRO" disable {shlex.quote(service)} --assume-yes 2>&1'
 
 
 def cmd_pro_refresh() -> str:
-    return _PRO_MISSING + "pro refresh 2>&1 && echo 'Refreshed.'"
+    return _PRO_MISSING + '"$PRO" refresh 2>&1 && echo \'Refreshed.\''
 
 
 # ===========================================================

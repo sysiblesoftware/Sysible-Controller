@@ -28,6 +28,9 @@ import client._api_repo as R
 import client._api_network as N
 import client._api_firewall as FW
 import client._api_users as U
+import client._api_boot as B
+import client._api_backup as Bk
+import client._api_subscriptions as Sub
 
 _PREFIX = 'export PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH"; '
 
@@ -167,10 +170,14 @@ def test_netplan_yaml_renders_and_parses(tmp_path):
     assert "addresses: [192.168.1.50/24]" in content
     assert "via: 192.168.1.1" in content
     assert "addresses: [1.1.1.1, 9.9.9.9]" in content
+    # Explicit default-route CIDR, NOT the `to: default` alias (rejected by the
+    # netplan 0.99 shipped on Ubuntu 18.04 / un-SRU'd 20.04).
+    assert "to: 0.0.0.0/0" in content
+    assert "to: default" not in content
     yaml = pytest.importorskip("yaml")
     eth = yaml.safe_load(content)["network"]["ethernets"]["ens3"]
     assert eth["dhcp4"] is False
-    assert eth["routes"] == [{"to": "default", "via": "192.168.1.1"}]
+    assert eth["routes"] == [{"to": "0.0.0.0/0", "via": "192.168.1.1"}]
 
 
 @pytest.mark.parametrize("bad", [
@@ -232,4 +239,145 @@ def test_create_user_same_name_group_guard():
     assert "getent group admin" in cmd
     assert "useradd -m -N -s" in cmd   # collision path: default group, no join
     assert "useradd -m -s" in cmd      # normal path: private group
+    _bash_n(cmd)
+
+
+# === 2nd cross-distro audit: fixes for silent-wrong / hard-error bugs ==========
+
+# --- fsck is a no-op stub on XFS/btrfs: dispatch to the real repair tool -------
+
+@pytest.mark.parametrize("auto", [True, False])
+def test_repair_dispatches_by_fstype_not_bare_fsck(auto):
+    cmd = M.cmd_repair_filesystem("/dev/sdb1", auto)
+    # A bare `fsck` execs fsck.xfs / fsck.btrfs which exit 0 without repairing.
+    assert "xfs_repair" in cmd            # XFS (RHEL/Rocky/Alma default root)
+    assert "btrfs check" in cmd           # btrfs (Fedora/openSUSE default root)
+    assert "e2fsck" in cmd                # ext*
+    assert "blkid -o value -s TYPE" in cmd or "lsblk -dno FSTYPE" in cmd
+    _bash_n(cmd)
+
+
+def test_repair_xfs_runs_xfs_repair(tmp_path):
+    """Simulate an XFS device: the real repair tool must run, not a fsck no-op."""
+    cmd = M.cmd_repair_filesystem("/dev/sdb1")
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "xfs_repair").write_text("#!/bin/sh\necho XFS_REPAIR_RAN\n")
+    (bindir / "xfs_repair").chmod(0o755)
+    sim = (
+        "findmnt(){ return 1; }; blkid(){ echo xfs; }; lsblk(){ echo xfs; }; "
+        f'export PATH="{bindir}:$PATH"; ' + cmd
+    )
+    r = subprocess.run(["bash", "-c", sim], capture_output=True, text=True)
+    assert "XFS_REPAIR_RAN" in r.stdout
+
+
+# --- swap files on btrfs must be NOCOW (chattr +C) or swapon rejects them ------
+
+@pytest.mark.parametrize("cmd", [
+    St.cmd_create_swap_file("/swapfile", 1024, True),
+    St.cmd_resize_swap_file("/swapfile", 2048, True),
+])
+def test_swap_btrfs_nocow(cmd):
+    assert 'findmnt -no FSTYPE -T' in cmd     # detect the target dir's fs
+    assert "chattr +C" in cmd                 # NOCOW, required for btrfs swapfiles
+    assert "dd if=/dev/zero" in cmd           # still dd (not fallocate) for XFS
+    _bash_n(cmd)
+
+
+# --- kernel cmdline on RHEL8+/Fedora BLS needs grubby, not just grub.cfg -------
+
+def test_kernel_cmdline_uses_grubby_on_bls():
+    cmd = B.cmd_set_kernel_cmdline("quiet nosmt")
+    # BLS entries take options from /boot/loader/entries, not a regenerated
+    # grub.cfg — grubby applies to existing kernels; grub2-mkconfig alone is a no-op.
+    assert "command -v grubby" in cmd
+    assert "grubby --update-kernel=ALL --args=" in cmd
+    assert "grub2-mkconfig" in cmd or "update-grub" in cmd   # fallback still present
+    _bash_n(cmd)
+
+
+# --- sudo grant: openSUSE ships %wheel commented out, membership is inert ------
+
+def test_set_sudo_installs_validated_group_rule():
+    cmd = U.cmd_set_sudo("deploy", True)
+    assert "visudo -cf" in cmd                 # validated before install
+    assert "/etc/sudoers.d/sysible-sudo-group" in cmd
+    assert "0440" in cmd
+    assert "NOPASSWD" not in cmd               # no extra privilege
+    _bash_n(cmd)
+
+
+def test_set_sudo_rule_is_group_scoped():
+    """The installed sudoers line grants the detected group, not a literal group."""
+    cmd = U.cmd_set_sudo("deploy", True)
+    # printf builds `%<grp> ALL=(ALL:ALL) ALL` from the runtime-detected $grp.
+    assert "ALL=(ALL:ALL) ALL" in cmd
+    assert '"$grp"' in cmd
+
+
+# --- account lockout: faillock.conf is inert unless wired into PAM ------------
+
+def test_account_lockout_policy_wires_or_warns():
+    cmd = U.cmd_set_account_lockout_policy(5, 900)
+    assert "faillock.conf" in cmd
+    assert "authselect enable-feature with-faillock" in cmd   # RHEL8+ wiring
+    assert "pam_faillock" in cmd                               # warning for the rest
+    _bash_n(cmd)
+
+
+# --- security updates: dnf5 renamed `updateinfo` -> `advisory` ----------------
+
+def test_check_security_updates_dnf5_advisory_branch():
+    cmd = S.cmd_check_security_updates()
+    assert "dnf advisory --help" in cmd                 # probe for dnf5
+    assert "dnf advisory list --security" in cmd        # dnf5 form
+    assert "dnf updateinfo list security" in cmd        # dnf4 fallback
+    _bash_n(cmd)
+
+
+# --- scheduled backup: /etc/cron.d is inert without a cron daemon -------------
+
+def test_backup_schedule_ensures_cron_daemon():
+    cmd = Bk.cmd_configure_backup_schedule("/etc", "/backups", "0 2 * * *")
+    assert "/etc/cron.d/sysible-backup" in cmd
+    # Must ensure a cron daemon exists+runs (crond on RHEL/SUSE, cron on Debian).
+    assert "command -v crond" in cmd and "command -v cron" in cmd
+    assert "systemctl enable --now crond" in cmd or "systemctl enable --now cron" in cmd
+    assert "cronie" in cmd                    # installs where absent
+    _bash_n(cmd)
+
+
+# --- Ubuntu Pro: older LTS ships the legacy `ua` CLI, not `pro` ---------------
+
+@pytest.mark.parametrize("cmd", [
+    Sub.cmd_pro_status(),
+    Sub.cmd_pro_attach("TOKEN"),
+    Sub.cmd_pro_refresh(),
+])
+def test_pro_resolves_ua_or_pro(cmd):
+    assert "command -v pro" in cmd and "command -v ua" in cmd   # resolve either
+    assert '"$PRO"' in cmd                                      # invoke the resolved CLI
+    _bash_n(cmd)
+
+
+def test_pro_only_ua_present_runs(tmp_path):
+    """With only the legacy `ua` on PATH, the pro builder must still run it."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "ua").write_text("#!/bin/sh\necho UA_RAN: \"$@\"\n")
+    (bindir / "ua").chmod(0o755)
+    cmd = Sub.cmd_pro_status()
+    sim = f'export PATH="{bindir}:$PATH"; ' + cmd
+    r = subprocess.run(["bash", "-c", sim], capture_output=True, text=True)
+    assert "UA_RAN: status --all" in r.stdout
+
+
+# --- XFS quotas use mount options, not quotacheck/quotaon ---------------------
+
+def test_enable_quotas_has_xfs_branch():
+    cmd = M.cmd_enable_quotas("/data")
+    assert 'findmnt -no FSTYPE' in cmd
+    assert "uquota" in cmd and "gquota" in cmd     # XFS guidance
+    assert "quotacheck" in cmd                     # ext path still present
     _bash_n(cmd)

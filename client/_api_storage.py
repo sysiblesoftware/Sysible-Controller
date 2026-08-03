@@ -635,6 +635,14 @@ def cmd_create_swap_file(path: str, size_mb, persist: bool = True) -> str:
         # creates a file with unwritten/preallocated extents and RETURNS 0, so
         # the old `fallocate || dd` fallback never fired - then `swapon` fails
         # with "swapfile has holes" (Invalid argument). dd fills real blocks.
+        #
+        # btrfs needs one more step: a swap file must be NOCOW (chattr +C, which
+        # only takes effect while the file is empty) and uncompressed, or swapon
+        # rejects it ("Invalid argument"). When the target dir is btrfs, create the
+        # file empty and mark it +C before dd fills it.
+        f"_d=$(dirname {q_path}); "
+        f'if [ "$(findmnt -no FSTYPE -T "$_d" 2>/dev/null)" = btrfs ]; then '
+        f"rm -f {q_path} 2>/dev/null; : > {q_path} && chattr +C {q_path} 2>/dev/null; fi; "
         f"dd if=/dev/zero of={q_path} bs=1M count={size_mb} 2>&1 "
         f"&& chmod 600 {q_path} "
         f"&& mkswap {q_path} 2>&1 "
@@ -679,6 +687,11 @@ def cmd_resize_swap_file(path: str, size_mb, persist: bool = True) -> str:
         # creates a file with unwritten/preallocated extents and RETURNS 0, so
         # the old `fallocate || dd` fallback never fired - then `swapon` fails
         # with "swapfile has holes" (Invalid argument). dd fills real blocks.
+        # On btrfs the file must additionally be NOCOW (chattr +C on the empty
+        # file) and uncompressed, or swapon rejects it ("Invalid argument").
+        f"_d=$(dirname {q_path}); "
+        f'if [ "$(findmnt -no FSTYPE -T "$_d" 2>/dev/null)" = btrfs ]; then '
+        f": > {q_path} && chattr +C {q_path} 2>/dev/null; fi; "
         f"dd if=/dev/zero of={q_path} bs=1M count={size_mb} 2>&1 "
         f"&& chmod 600 {q_path} "
         f"&& mkswap {q_path} 2>&1 "

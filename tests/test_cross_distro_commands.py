@@ -208,6 +208,23 @@ def test_firewalld_enable_refusal_is_not_masked():
     assert "authentication required" in (r.stdout + r.stderr).lower()
 
 
+# --- openSUSE targetpw fix: user's own sudo password, no NOPASSWD --------------
+
+def test_fix_targetpw_minimal_and_no_nopasswd():
+    cmd = S.cmd_allow_user_sudo_password("deploy")
+    assert "!targetpw" in cmd
+    assert "NOPASSWD" not in cmd            # must NOT weaken the host policy
+    assert "visudo -cf" in cmd              # validated before install
+    assert "0440" in cmd
+    _bash_n(cmd)
+
+
+@pytest.mark.parametrize("bad", ["root ALL=(ALL)", "a b", "x;y", "-rf", ""])
+def test_fix_targetpw_rejects_bad_username(bad):
+    with pytest.raises(ValueError):
+        S.cmd_allow_user_sudo_password(bad)
+
+
 # --- create-user same-name group collision (Ubuntu legacy `admin` group) ------
 
 def test_create_user_same_name_group_guard():

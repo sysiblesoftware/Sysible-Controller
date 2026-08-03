@@ -1260,6 +1260,18 @@ _register(Action(name="sec_run_lynis", tool="Security Administration", label="Ru
     params=[], build=lambda p: api.cmd_run_lynis_scan()))
 _register(Action(name="sec_run_rkhunter", tool="Security Administration", label="Run rkhunter scan",
     params=[], build=lambda p: api.cmd_run_rkhunter_scan()))
+_register(Action(name="sec_fix_targetpw", tool="Security Administration",
+    label="Fix openSUSE sudo (use your password)", danger=True,
+    description=("openSUSE/SLES default sudo to targetpw, so it asks for the ROOT "
+                 "password, not yours - rejecting a correct user password with "
+                 "'Sorry, try again.'. This adds only 'Defaults:<user> !targetpw' for "
+                 "the named user (no NOPASSWD, no new privilege) so sudo checks that "
+                 "user's own password, like other distros. Needs root once (store the "
+                 "host's root password, run this, then switch back to your password)."),
+    params=[Param("username", "Run-as user", placeholder="e.g. deploy",
+                  help=("The local user Sysible runs commands as on this host "
+                        "(your console/run-as user).") )],
+    build=lambda p: api.cmd_allow_user_sudo_password(_s(p, "username"))))
 
 # ---- File System Management (advanced) -------------------------------
 _register(Action(name="fs_rename", tool="File System Management", label="Rename",
@@ -1566,6 +1578,7 @@ _LAYOUT: dict[str, list] = {
         ("Updates & Policy", "Password Policy", ["sec_pw_policy", "sec_set_pwquality", "sec_set_aging", "sec_set_lockout"]),
         ("Hardening & Scans", "Hardening", ["sec_hardening", "sec_sysctl_harden", "sec_disable_coredumps", "sec_world_writable", "sec_suid"]),
         ("Hardening & Scans", "Scanners", ["sec_install_rkhunter", "sec_install_lynis", "sec_lynis_status", "sec_run_lynis", "sec_run_rkhunter"]),
+        ("Host Setup", "sudo", ["sec_fix_targetpw"]),
     ],
     "System Health, Logs & Recovery": [
         ("Overview & Disk", "Overview", ["health_check", "health_uptime", "health_mem_cpu", "health_disk_usage", "health_large_files"]),

@@ -1159,12 +1159,19 @@ def _build_agent_update_command():
     / detached shell) so the task can report success before the agent bounces -
     a plain `systemctl restart` would kill the agent process running this task."""
     import base64
+    import gzip
     import shlex
     from backend.agent_bundle import (AGENT_SOURCE_FILE, _AGENT_INSTALL_DIR,
                                       _SERVICE_NAME, agent_version_of)
 
     src = AGENT_SOURCE_FILE.read_text(encoding="utf-8")
-    b64 = base64.b64encode(src.encode("utf-8")).decode("ascii")
+    # GZIP before base64: agent.py is now ~117 KB, whose raw base64 (~156 KB)
+    # exceeds Linux's MAX_ARG_STRLEN (128 KB) single-argument limit. The agent
+    # runs this command inline via `sh -c '<command>'`, so a 156 KB command fails
+    # with "Argument list too long" BEFORE it writes anything — the self-update
+    # silently no-op'd on every host once the file grew past ~96 KB. gzip -9 drops
+    # the payload to ~40 KB, well under the limit, and `gzip -d` is universal.
+    b64 = base64.b64encode(gzip.compress(src.encode("utf-8"), 9)).decode("ascii")
     # Match what the agent reports post-update (AGENT_VERSION normalizes the
     # baked controller-URL default out before hashing) so rollout tracking and
     # the "updated to X" message agree with the fleet's heartbeat version.
@@ -1185,7 +1192,7 @@ def _build_agent_update_command():
     cmd = (
         "set -e\n"
         f"nf={install}.new\n"
-        f"printf '%s' '{b64}' | base64 -d > \"$nf\"\n"
+        f"printf '%s' '{b64}' | base64 -d | gzip -d > \"$nf\"\n"
         "python3 -m py_compile \"$nf\"\n"
         f"mv -f \"$nf\" {install}\n"
         "if command -v systemd-run >/dev/null 2>&1; then\n"

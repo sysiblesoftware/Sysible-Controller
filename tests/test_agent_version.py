@@ -60,3 +60,18 @@ def test_agent_update_restart_is_robust():
     assert "--unit=sysible-agent-selfupdate" not in cmd, "fixed unit name collides"
     assert "reset-failed" in cmd, "must clear start-limit lockout before restart"
     assert "systemctl restart sysible-agent" in cmd
+
+
+def test_agent_update_command_fits_arg_limit():
+    """The pushed self-update runs inline via `sh -c '<command>'`, so the whole
+    command must stay under Linux's MAX_ARG_STRLEN (128 KiB) per-argument limit —
+    else it dies with 'Argument list too long' before writing anything. agent.py
+    grew past ~96 KB and its raw base64 blew the limit on every host; the source
+    is now gzip'd before base64. Regression for 'no agent ever updates'."""
+    import backend.agent_bundle as ab
+    if not hasattr(ab, "build_agent_update_command"):
+        import pytest
+        pytest.skip("this edition builds the update command inline in app.py")
+    _v, cmd = ab.build_agent_update_command(ab.AGENT_SOURCE_FILE.read_text(encoding="utf-8"))
+    assert len(cmd.encode()) < 131072, f"update command {len(cmd)} bytes exceeds MAX_ARG_STRLEN"
+    assert "gzip -d" in cmd, "source must be gzip-compressed to fit the arg limit"

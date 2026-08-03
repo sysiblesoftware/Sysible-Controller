@@ -104,6 +104,14 @@ def cmd_install_selinux_tools() -> str:
             "done"
         ),
         apt_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y policycoreutils selinux-utils setools",
+        # Arch does NOT ship the SELinux userspace in its official repos - the
+        # whole SELinux stack lives in the AUR 'selinux' group, so there's nothing
+        # pacman can install here. Fail with a clear pointer instead of a wrong
+        # command (Arch uses AppArmor/none by default anyway).
+        pacman_cmd=(
+            "echo 'SELinux is not available in the Arch official repositories "
+            "(see the AUR selinux group); this action cannot install it via pacman.' >&2; exit 1"
+        ),
     ) + " && echo 'SELinux userspace tools installed.'"
 
 
@@ -602,6 +610,18 @@ def cmd_check_security_updates() -> str:
             "else echo 'apt-get upgradable packages (install unattended-upgrades for a security-only view):'; "
             "apt list --upgradable 2>/dev/null; fi"
         ),
+        # Arch is a rolling release with no security-only update channel, so the
+        # closest read-only equivalent is "what would a full upgrade pull in". Use
+        # checkupdates (pacman-contrib) when present - it queries a temporary db and
+        # so needs no root and never touches the live sync db; otherwise fall back
+        # to refreshing the db and listing upgradable packages with pacman -Qu
+        # (which exits 1 when nothing is upgradable, hence the explicit message).
+        pacman_cmd=(
+            "echo 'Arch Linux is a rolling release and does not classify updates as "
+            "security-only; showing all available updates.'; "
+            "if command -v checkupdates >/dev/null 2>&1; then checkupdates 2>&1 || echo 'No updates available.'; "
+            "else pacman -Sy >/dev/null 2>&1; pacman -Qu 2>&1 || echo 'No updates available.'; fi"
+        ),
     )
 
 
@@ -623,6 +643,15 @@ def cmd_install_security_updates() -> str:
             "DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null 2>&1 && "
             "DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades 2>&1 && "
             "unattended-upgrade -d 2>&1"
+        ),
+        # Arch has no security-only update mechanism, and partial upgrades
+        # (pacman -Sy <pkg>) are explicitly unsupported and can break the system.
+        # The only correct way to pick up security fixes is a FULL system upgrade,
+        # so that's what we emit (with a note explaining why it isn't security-only).
+        pacman_cmd=(
+            "echo 'Arch has no security-only update channel; applying a full system "
+            "upgrade instead (partial upgrades are unsupported on Arch).'; "
+            "pacman -Syu --noconfirm 2>&1"
         ),
     ) + " && echo 'Security updates installed (see output above for details).'"
 
@@ -803,6 +832,8 @@ def cmd_install_lynis() -> str:
         rpm_cmd='"$PKGMGR" install -y lynis',
         zypper_cmd="zypper --non-interactive install lynis",
         apt_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y lynis",
+        # lynis is in Arch's 'extra' repo under the same package name.
+        pacman_cmd="pacman -Sy --needed --noconfirm lynis",
     ) + " && echo 'Lynis installed.'"
 
 
@@ -811,6 +842,8 @@ def cmd_install_rkhunter() -> str:
         rpm_cmd='"$PKGMGR" install -y rkhunter',
         zypper_cmd="zypper --non-interactive install rkhunter",
         apt_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y rkhunter",
+        # rkhunter is in Arch's 'extra' repo under the same package name.
+        pacman_cmd="pacman -Sy --needed --noconfirm rkhunter",
     ) + " && echo 'rkhunter installed.'"
 
 

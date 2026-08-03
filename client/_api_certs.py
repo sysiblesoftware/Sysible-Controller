@@ -97,6 +97,8 @@ def cmd_install_certbot() -> str:
         "elif command -v yum >/dev/null 2>&1; then yum install -y certbot; "
         "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install certbot; "
         "elif command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y certbot; "
+        # Arch ships a native 'certbot' package, so use pacman before the snap fallback.
+        "elif command -v pacman >/dev/null 2>&1; then pacman -Sy --needed --noconfirm certbot; "
         "elif command -v snap >/dev/null 2>&1; then snap install --classic certbot && ln -sf /snap/bin/certbot /usr/bin/certbot; "
         "else echo 'No supported package manager (dnf/yum/zypper/apt/snap) found to install certbot.' >&2; exit 1; fi; "
         "if command -v certbot >/dev/null 2>&1; then echo \"Installed: $(certbot --version 2>&1)\"; "

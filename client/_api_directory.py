@@ -25,6 +25,9 @@ _INSTALL_REALM = (
     "samba-common samba-common-tools krb5-workstation; "
     "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install realmd sssd sssd-ad adcli "
     "samba-client krb5-client; "
+    # Arch: realmd/sssd/adcli match upstream names; krb5 provides kinit/klist and
+    # samba provides the net/AD tooling realmd shells out to during a join.
+    "elif command -v pacman >/dev/null 2>&1; then pacman -Sy --needed --noconfirm realmd sssd adcli krb5 samba; "
     "else echo 'No supported package manager found.' >&2; exit 1; fi"
 )
 
@@ -88,6 +91,10 @@ def cmd_prepare_ad_join(domain: str = "") -> str:
         "elif command -v pam-config >/dev/null 2>&1; then "
         "pam-config --add --mkhomedir 2>&1 && echo 'mkhomedir enabled (pam-config).' "
         "|| echo 'Enable pam_mkhomedir via pam-config on this host.'; "
+        # Arch has no pam-config/authselect/pam-auth-update - enabling pam_mkhomedir
+        # means hand-editing /etc/pam.d, which is too risky to automate here.
+        "elif command -v pacman >/dev/null 2>&1; then "
+        "echo 'Arch: enable pam_mkhomedir manually - add \"session optional pam_mkhomedir.so umask=0077\" to /etc/pam.d/system-login (no pam-config/authselect on Arch).'; "
         "else echo 'oddjobd started; enable pam_mkhomedir in your PAM stack if home dirs are needed.'; fi; "
         "echo; echo '== 5/5 Readiness check =='; "
         "for t in realm adcli klist; do if command -v \"$t\" >/dev/null 2>&1; then echo \"  $t: present\"; "
@@ -108,6 +115,8 @@ def cmd_install_ldap_dependencies() -> str:
         "elif command -v dnf >/dev/null 2>&1; then dnf install -y sssd sssd-ldap openldap-clients oddjob oddjob-mkhomedir; "
         "elif command -v yum >/dev/null 2>&1; then yum install -y sssd sssd-ldap openldap-clients oddjob oddjob-mkhomedir; "
         "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install sssd sssd-ldap openldap2-client; "
+        # Arch: sssd bundles the LDAP provider; 'openldap' ships the ldapsearch client.
+        "elif command -v pacman >/dev/null 2>&1; then pacman -Sy --needed --noconfirm sssd openldap; "
         "else echo 'No supported package manager found.' >&2; exit 1; fi; "
         "echo 'LDAP client dependencies installed (SSSD, LDAP utils, PAM/NSS modules).'"
     )
@@ -285,6 +294,10 @@ def cmd_enable_mkhomedir() -> str:
         "elif command -v pam-config >/dev/null 2>&1; then "
         "pam-config --add --mkhomedir 2>&1 && echo 'Enabled home-dir creation (pam-config --mkhomedir).' "
         "|| echo 'Run pam-config --add --mkhomedir on this host.'; "
+        # Arch has no pam-config/authselect/pam-auth-update - enabling pam_mkhomedir
+        # means hand-editing /etc/pam.d, which is too risky to automate here.
+        "elif command -v pacman >/dev/null 2>&1; then "
+        "echo 'Arch: enable pam_mkhomedir manually - add \"session optional pam_mkhomedir.so umask=0077\" to /etc/pam.d/system-login (no pam-config/authselect on Arch).'; "
         "else echo 'Could not auto-configure mkhomedir; oddjobd was started - enable pam_mkhomedir for your PAM stack.'; fi"
     )
 

@@ -26,6 +26,8 @@ def _install_chrony_fragment() -> str:
         "elif command -v dnf >/dev/null 2>&1; then dnf install -y chrony; "
         "elif command -v yum >/dev/null 2>&1; then yum install -y chrony; "
         "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install chrony; "
+        # Arch: package is 'chrony' (service chronyd); config lands at /etc/chrony.conf.
+        "elif command -v pacman >/dev/null 2>&1; then pacman -Sy --needed --noconfirm chrony; "
         "else echo 'No supported package manager found.' >&2; exit 1; fi"
     )
 
@@ -72,6 +74,8 @@ def _install_ntp_fragment() -> str:
         "elif command -v dnf >/dev/null 2>&1; then dnf install -y ntp || dnf install -y ntpsec; "
         "elif command -v yum >/dev/null 2>&1; then yum install -y ntp; "
         "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install ntp; "
+        # Arch: classic NTP is packaged as 'ntp' (service ntpd).
+        "elif command -v pacman >/dev/null 2>&1; then pacman -Sy --needed --noconfirm ntp; "
         "else echo 'No supported package manager found.' >&2; exit 1; fi"
     )
 

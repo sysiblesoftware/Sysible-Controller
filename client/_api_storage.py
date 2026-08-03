@@ -349,7 +349,18 @@ def cmd_format_filesystem(device: str, fs_type: str, label: str = "", force: boo
         flags += f"{_MKFS_FORCE_FLAG[fs_type]} "
     if label:
         flags += f"{_MKFS_LABEL_FLAG[fs_type]} {shlex.quote(label)} "
-    return f"mkfs.{fs_type} {flags}{q_dev} 2>&1"
+    # Not every mkfs.<type> ships everywhere: mkfs.btrfs is absent on RHEL 8+
+    # (btrfs unsupported), mkfs.ntfs (ntfs-3g) is EPEL-only on RHEL, mkfs.xfs
+    # needs xfsprogs, etc. Give the "package not installed" message the rest of
+    # this module gives instead of a bare "mkfs.btrfs: command not found".
+    pkg = {"btrfs": "btrfs-progs", "xfs": "xfsprogs", "ntfs": "ntfs-3g",
+           "vfat": "dosfstools", "fat": "dosfstools", "exfat": "exfatprogs",
+           "f2fs": "f2fs-tools", "reiserfs": "reiserfsprogs"}.get(fs_type, "the relevant filesystem tools")
+    return (
+        f"if ! command -v mkfs.{fs_type} >/dev/null 2>&1; then "
+        f"echo 'mkfs.{fs_type} is not installed on this host (package: {pkg}).' >&2; exit 1; fi; "
+        f"mkfs.{fs_type} {flags}{q_dev} 2>&1"
+    )
 
 
 # ---------------------------------------------------------

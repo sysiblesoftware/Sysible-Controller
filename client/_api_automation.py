@@ -751,7 +751,16 @@ case "$family" in
       echo "Ready. Run the upgrade action to download Fedora $TARGET, then reboot to apply."
     else
       dnf -y --refresh upgrade
-      dnf -y install dnf-plugin-system-upgrade || dnf -y install dnf5-plugin-system-upgrade || true
+      # Install the plugin matching the ACTIVE dnf: on Fedora 41+ /usr/bin/dnf is
+      # dnf5, which does not load the dnf4 Python plugin - installing the dnf4
+      # `dnf-plugin-system-upgrade` there succeeds but never registers the
+      # `system-upgrade` command, so download fails with "unknown command". Key off
+      # the backend rather than relying on install-failure fallthrough.
+      if dnf --version 2>/dev/null | grep -q '^dnf5'; then
+        dnf -y install dnf5-plugin-system-upgrade || true
+      else
+        dnf -y install dnf-plugin-system-upgrade || true
+      fi
       dnf -y system-upgrade download --releasever="$TARGET"
       echo
       echo "Downloaded Fedora $TARGET. Apply it with a reboot into the offline upgrade:"

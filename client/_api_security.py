@@ -629,7 +629,15 @@ def cmd_check_security_updates() -> str:
             'if [ "$PKGMGR" = "dnf" ]; then '
             'if dnf advisory --help >/dev/null 2>&1; then dnf advisory list --security 2>&1; '
             'else dnf updateinfo list security 2>&1; fi; '
-            "else (yum --security check-update 2>&1 || true); fi"
+            # yum --security relies on the repos publishing updateinfo (security-
+            # advisory) metadata. RHEL and Amazon Linux 2 publish it; classic CentOS 7
+            # repos do NOT, so --security matches nothing and this can read as "no
+            # security updates" even when updates exist. Flag that possibility.
+            'else out=$(yum --security check-update 2>&1); rc=$?; echo "$out"; '
+            'if ! echo "$out" | grep -q updateinfo && [ "$rc" -ne 100 ]; then '
+            "echo 'Note: if this host uses repos without updateinfo metadata "
+            "(e.g. classic CentOS 7), yum cannot classify security-only updates "
+            "- run a full update check to be sure.' >&2; fi; true; fi"
         ),
         zypper_cmd="zypper list-patches --category security 2>&1",
         apt_cmd=(
@@ -714,7 +722,17 @@ def cmd_set_pwquality_option(key: str, value) -> str:
         f"touch {q_file}; v={qv}; "
         f"sed -i -E '/^[[:space:]]*{key}[[:space:]]*=/d' {q_file}; "
         f"printf '%s = %s\\n' {qk} \"$v\" >> {q_file}; "
-        f"printf 'pwquality.conf: %s set to %s.\\n' {qk} \"$v\""
+        f"printf 'pwquality.conf: %s set to %s.\\n' {qk} \"$v\"; "
+        # pwquality.conf is read by pam_pwquality, which RHEL/Fedora/SUSE wire into
+        # the password stack by default. Debian/Ubuntu do NOT install
+        # libpam-pwquality or reference it in common-password by default, so the
+        # directive is inert there until that package is installed and wired - warn
+        # rather than imply the policy is in force.
+        'if command -v apt-get >/dev/null 2>&1 && '
+        '! grep -rq pam_pwquality /etc/pam.d/ 2>/dev/null; then '
+        "echo 'Note: pam_pwquality is not referenced in this host'\"'\"'s PAM stack "
+        "(Debian/Ubuntu default). Install libpam-pwquality and enable it in "
+        "/etc/pam.d/common-password for this to take effect.' >&2; fi"
     )
 
 

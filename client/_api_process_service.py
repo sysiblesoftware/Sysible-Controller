@@ -236,6 +236,25 @@ def cmd_service_status(name: str) -> str:
     return f"systemctl status {shlex.quote(_service_unit(name))} --no-pager -l 2>&1; true"
 
 
+# Resolve common cross-distro unit-name differences at runtime. The three
+# canonical daemons are named differently per distro - Debian/Ubuntu use ssh,
+# cron, chrony; RHEL/Fedora/SUSE use sshd, crond, chronyd - so a name typed (or
+# copied from a placeholder) for the wrong family would hard-fail on
+# "Unit sshd.service not found". If the requested unit has NO unit file, fall
+# back to its known alias when that one DOES exist.
+_SVC_ALIAS_RESOLVE = (
+    'if ! systemctl list-unit-files --no-legend "$u" 2>/dev/null | grep -q .; then '
+    'case "$u" in '
+    'ssh.service) systemctl list-unit-files --no-legend sshd.service 2>/dev/null | grep -q . && u=sshd.service;; '
+    'sshd.service) systemctl list-unit-files --no-legend ssh.service 2>/dev/null | grep -q . && u=ssh.service;; '
+    'cron.service) systemctl list-unit-files --no-legend crond.service 2>/dev/null | grep -q . && u=crond.service;; '
+    'crond.service) systemctl list-unit-files --no-legend cron.service 2>/dev/null | grep -q . && u=cron.service;; '
+    'chrony.service) systemctl list-unit-files --no-legend chronyd.service 2>/dev/null | grep -q . && u=chronyd.service;; '
+    'chronyd.service) systemctl list-unit-files --no-legend chrony.service 2>/dev/null | grep -q . && u=chrony.service;; '
+    'esac; fi; '
+)
+
+
 def _service_action_cmd(verb: str, name: str, past: str) -> str:
     """`systemctl <verb> <unit>` is silent on success, which makes the GUI
     look like nothing happened. Wrap it so it always reports the outcome
@@ -244,7 +263,7 @@ def _service_action_cmd(verb: str, name: str, past: str) -> str:
     `past` are fixed English words chosen here, never user input."""
     q = shlex.quote(_service_unit(name))
     return (
-        f"u={q}; "
+        f"u={q}; " + _SVC_ALIAS_RESOLVE +
         f'systemctl {verb} "$u"; rc=$?; '
         f'if [ "$rc" -eq 0 ]; then echo "{past} $u."; '
         f'else echo "Failed to {verb} $u (exit $rc)." >&2; fi; '

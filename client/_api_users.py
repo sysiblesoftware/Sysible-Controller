@@ -656,7 +656,16 @@ def cmd_set_password_quality_policy(minlen=None, retry=None, dcredit=None, ucred
     settings = {k: int(v) for k, v in raw.items() if v is not None}
     if not settings:
         raise ValueError("Specify at least one password-quality setting")
-    return _set_security_conf_keys("/etc/security/pwquality.conf", settings)
+    # pwquality.conf is inert unless pam_pwquality is wired into the password stack.
+    # RHEL/Fedora/SUSE do this by default; Debian/Ubuntu do not install/reference
+    # libpam-pwquality by default, so warn rather than imply the policy is enforced.
+    return (
+        _set_security_conf_keys("/etc/security/pwquality.conf", settings)
+        + "; if command -v apt-get >/dev/null 2>&1 && ! grep -rq pam_pwquality /etc/pam.d/ 2>/dev/null; then "
+        "echo 'Note: pam_pwquality is not referenced in this host'\"'\"'s PAM stack "
+        "(Debian/Ubuntu default). Install libpam-pwquality and enable it in "
+        "/etc/pam.d/common-password for this to take effect.' >&2; fi"
+    )
 
 
 def cmd_set_account_lockout_policy(deny=None, unlock_time=None) -> str:

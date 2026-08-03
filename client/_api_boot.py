@@ -158,8 +158,14 @@ def cmd_remove_old_kernels(keep: str = "2") -> str:
         f"dnf -y remove --oldinstallonly --setopt installonly_limit={keep} 2>&1 || "
         "echo 'Nothing to remove (or dnf-plugins-core missing).'; "
         "elif command -v apt-get >/dev/null 2>&1; then "
+        # NOTE: the `keep` count is honored ONLY on dnf. apt's autoremove drops every
+        # kernel marked autoremovable, and zypper's purge-kernels obeys the host's
+        # /etc/zypp/zypp.conf `multiversion.kernels` policy - neither takes `keep`.
+        # Surface that so the operator isn't surprised by how many kernels remain.
+        f"echo 'Note: on apt the exact keep-count ({keep}) is governed by APT autoremove, not this field.' >&2; "
         "DEBIAN_FRONTEND=noninteractive apt-get -y --purge autoremove 2>&1; "
         "elif command -v zypper >/dev/null 2>&1; then "
+        f"echo 'Note: on zypper the keep-count ({keep}) is governed by multiversion.kernels in /etc/zypp/zypp.conf, not this field.' >&2; "
         "zypper --non-interactive purge-kernels 2>&1 || echo 'purge-kernels needs the zypper purge-kernels plugin.'; "
         "else echo 'No supported package manager found.' >&2; exit 1; fi; "
         "echo; echo 'Done. Current running kernel is always kept.'"

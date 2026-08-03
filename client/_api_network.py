@@ -142,6 +142,16 @@ _NETPLAN_IFACE_GUARD = (
     "case \"$IFACE\" in ''|*[!A-Za-z0-9_.-]*) "
     "echo 'On a netplan host (e.g. Ubuntu Server), enter the INTERFACE name "
     "(e.g. ens3 - see List Devices), not an nmcli profile name.' >&2; exit 1;; esac; "
+    # Charset-valid is not enough: on the netplan path IFACE is a real device name
+    # (ethernets: <IFACE>:), whereas the same field is an nmcli PROFILE name on the
+    # NM path. netplan generate/apply do NOT error on a config that matches no NIC,
+    # so a wrong-but-valid name (an nmcli profile label, or a device that only
+    # exists on another host) would silently configure nothing. Require the device
+    # to exist before writing.
+    'if [ ! -e "/sys/class/net/$IFACE" ] && ! ip link show "$IFACE" >/dev/null 2>&1; then '
+    "echo \"Network interface '$IFACE' does not exist on this host - enter the "
+    "interface name shown by List Devices (e.g. ens3), not an nmcli profile.\" >&2; "
+    "exit 1; fi; "
 )
 
 
@@ -346,6 +356,23 @@ def cmd_configure_dhcp(connection: str) -> str:
         "f=\"/etc/netplan/90-sysible-$IFACE.yaml\"; "
         "[ -e \"$f\" ] && cp \"$f\" \"$f.bak.$(date +%s)\" 2>/dev/null; umask 077; "
         "printf 'network:\\n  version: 2\\n  ethernets:\\n    %s:\\n      dhcp4: true\\n' \"$IFACE\" > \"$f\"; "
+        # netplan MERGES all /etc/netplan/*.yaml per interface, and for the
+        # `addresses`/`routes` LISTS it CONCATENATES rather than overrides - so a
+        # static IP defined for this interface in another file (e.g. the installer's
+        # 00-installer-config.yaml) survives even though our file sets dhcp4: true,
+        # leaving the NIC with the old static address AND DHCP. There is no way to
+        # clear a list from a higher-priority file (an empty list appends nothing),
+        # so detect any other netplan file that still carries a static config for
+        # this interface and tell the operator to remove it - silently "succeeding"
+        # here would leave the switch to DHCP half-done.
+        'for _nf in /etc/netplan/*.yaml; do [ "$_nf" = "$f" ] && continue; '
+        '[ -e "$_nf" ] || continue; '
+        'if grep -qE "^[[:space:]]*${IFACE}:" "$_nf" 2>/dev/null && '
+        'grep -qE "addresses:|gateway4:|routes:" "$_nf" 2>/dev/null; then '
+        'echo "WARNING: $_nf also configures $IFACE with a static address/route. '
+        'netplan appends address lists across files, so that static IP will persist '
+        'alongside DHCP - remove the addresses/routes/gateway4 lines for $IFACE from '
+        '$_nf (or delete that file) for DHCP-only." >&2; fi; done; '
         + _netplan_apply_fragment()
     )
     return (

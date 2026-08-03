@@ -31,6 +31,10 @@ import client._api_users as U
 import client._api_boot as B
 import client._api_backup as Bk
 import client._api_subscriptions as Sub
+import client._api_process_service as P
+import client._api_timesync as T
+import client._api_directory as Dir
+import client._api_automation as A
 
 _PREFIX = 'export PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH"; '
 
@@ -380,4 +384,130 @@ def test_enable_quotas_has_xfs_branch():
     assert 'findmnt -no FSTYPE' in cmd
     assert "uquota" in cmd and "gquota" in cmd     # XFS guidance
     assert "quotacheck" in cmd                     # ext path still present
+    _bash_n(cmd)
+
+
+# === 2nd audit, deferred batch: more cross-distro correctness =================
+
+# --- generic service builders resolve ssh/sshd, cron/crond, chrony/chronyd ----
+
+@pytest.mark.parametrize("verb_cmd", [
+    P.cmd_service_start("sshd"), P.cmd_service_restart("cron"),
+    P.cmd_service_enable("chronyd"),
+])
+def test_service_builders_resolve_unit_aliases(verb_cmd):
+    assert "list-unit-files --no-legend" in verb_cmd
+    assert "sshd.service" in verb_cmd and "ssh.service" in verb_cmd
+    assert "crond.service" in verb_cmd and "cron.service" in verb_cmd
+    assert "chronyd.service" in verb_cmd and "chrony.service" in verb_cmd
+    _bash_n(verb_cmd)
+
+
+def test_service_alias_resolves_sshd_to_ssh_on_debian():
+    """On a Debian-like host where only ssh.service exists, a 'sshd' request runs ssh."""
+    cmd = P.cmd_service_restart("sshd")
+    stub = (
+        'systemctl(){ case "$1 $2 $3" in '
+        '"list-unit-files --no-legend sshd.service") return 0;; '
+        '"list-unit-files --no-legend ssh.service") echo "ssh.service enabled"; return 0;; '
+        'is-active*) echo active;; is-enabled*) echo enabled;; *) return 0;; '
+        'esac; }; export -f systemctl; '
+    )
+    r = subprocess.run(["bash", "-c", stub + cmd], capture_output=True, text=True)
+    # The builder's own confirmation names the RESOLVED unit ($u), proving sshd->ssh.
+    assert "Restarted ssh.service." in r.stdout
+
+
+# --- chrony: disable DHCP-supplied NTP so the chosen servers are exclusive -----
+
+def test_set_ntp_servers_disables_dhcp_sourcedir():
+    cmd = T.cmd_set_ntp_servers("1.1.1.1 8.8.8.8")
+    assert "sourcedir" in cmd                       # Debian DHCP NTP source
+    assert "server 1.1.1.1 iburst" in cmd
+    _bash_n(cmd)
+
+
+# --- netplan DHCP switch must warn about a static IP left in another file ------
+
+def test_dhcp_warns_about_conflicting_static_netplan():
+    cmd = N.cmd_configure_dhcp("ens3")
+    # netplan concatenates address lists across files, so a static IP elsewhere
+    # survives; the builder must detect and warn rather than silently half-switch.
+    assert "/etc/netplan/*.yaml" in cmd
+    assert "appends address lists" in cmd
+    _bash_n(cmd)
+
+
+# --- netplan config validates the interface actually exists -------------------
+
+@pytest.mark.parametrize("cmd", [
+    N.cmd_configure_static_ip("ens3", "1.2.3.4/24", "1.2.3.1"),
+    N.cmd_configure_dhcp("ens3"),
+])
+def test_netplan_path_checks_iface_exists(cmd):
+    assert "/sys/class/net/$IFACE" in cmd or 'ip link show "$IFACE"' in cmd
+    _bash_n(cmd)
+
+
+# --- dnf5 addrepo: bare baseurl needs --set=baseurl, .repo needs --from-repofile
+
+def test_repo_add_dnf5_baseurl_vs_repofile():
+    cmd = R.cmd_add_repository("https://repo.example.com/x/", "myrepo")
+    assert "--add-repo" in cmd                      # dnf4 form
+    assert "--set=baseurl=" in cmd                  # dnf5 bare-baseurl form
+    assert "--from-repofile=" in cmd                # dnf5 .repo-file form
+    assert "--id=myrepo" in cmd
+    _bash_n(cmd)
+
+
+# --- Fedora system-upgrade: install the plugin matching the active dnf --------
+
+@pytest.mark.parametrize("build", [
+    lambda: A.cmd_release_upgrade("41"),
+    lambda: A.cmd_release_upgrade_check("41"),
+])
+def test_fedora_upgrade_plugin_keyed_on_dnf_major(build):
+    cmd = build()
+    assert "dnf5-plugin-system-upgrade" in cmd
+    assert "dnf-plugin-system-upgrade" in cmd
+    assert "grep -q '^dnf5'" in cmd
+    _bash_n(cmd)
+
+
+# --- LDAP client wires NSS + PAM (SSSD alone doesn't) -------------------------
+
+def test_ldap_client_wires_nss_and_pam():
+    cmd = Dir.cmd_configure_ldap_client("ldap.example.com", "dc=example,dc=com")
+    assert "nsswitch.conf" in cmd                    # NSS sss wiring
+    assert "grep -qw sss" in cmd
+    assert "authselect select sssd" in cmd           # RHEL PAM
+    assert "pam-auth-update --enable sss" in cmd     # Debian PAM
+    assert "pam-config --add --sss" in cmd           # SUSE PAM
+    _bash_n(cmd)
+
+
+# --- mkfs gives a friendly 'not installed' message per distro -----------------
+
+def test_format_filesystem_guards_missing_mkfs():
+    cmd = St.cmd_format_filesystem("/dev/sdb1", "btrfs")
+    assert "command -v mkfs.btrfs" in cmd
+    assert "btrfs-progs" in cmd                       # package hint
+    _bash_n(cmd)
+
+
+# --- pwquality.conf is inert on default Debian/Ubuntu: warn -------------------
+
+def test_pwquality_warns_on_debian():
+    cmd = S.cmd_set_pwquality_option("minlen", "12")
+    assert "pam_pwquality" in cmd
+    assert "libpam-pwquality" in cmd
+    _bash_n(cmd)
+
+
+# --- keep-N kernels: note the count is dnf-only -------------------------------
+
+def test_remove_old_kernels_notes_keep_is_dnf_only():
+    cmd = B.cmd_remove_old_kernels("5")
+    assert "APT autoremove" in cmd
+    assert "multiversion.kernels" in cmd
     _bash_n(cmd)

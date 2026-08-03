@@ -866,3 +866,31 @@ def cmd_run_rkhunter_scan() -> str:
         "echo 'rkhunter is not installed on this host (package: rkhunter).' >&2; exit 1; fi; "
         "rkhunter --check --sk --no-colors 2>&1"
     )
+
+
+def cmd_allow_user_sudo_password(username: str) -> str:
+    """openSUSE/SLES ship `Defaults targetpw`, so sudo demands the ROOT password
+    instead of the invoking user's - which is why a correct user sudo password is
+    rejected there with 'Sorry, try again.'. This installs a MINIMAL, validated
+    /etc/sudoers.d override for JUST this user: `Defaults:<user> !targetpw`.
+
+    It grants NO new privilege and adds NO NOPASSWD - the host's sudo policy is
+    otherwise unchanged; sudo simply checks THIS user's own password, exactly like
+    every other distro. On non-SUSE hosts (which don't set targetpw) it's a
+    harmless no-op. The rule is written to a temp file, validated with `visudo
+    -cf`, and only then installed at 0440, so a malformed rule can never break
+    sudo. First run needs root once: store the host's root password, run this,
+    then switch back to your user password."""
+    user = _validate_username(username, "Sudo user")
+    u = shlex.quote(user)
+    dst = shlex.quote(f"/etc/sudoers.d/sysible-{user}-targetpw")
+    return (
+        f"u={u}; tmp=$(mktemp) || exit 1; "
+        "printf 'Defaults:%s !targetpw\\n' \"$u\" > \"$tmp\"; "
+        f"if visudo -cf \"$tmp\" >/dev/null 2>&1; then "
+        f"install -m 0440 -o root -g root \"$tmp\" {dst} && rm -f \"$tmp\" && "
+        "printf 'Done - sudo now checks the user %s'\\''s own password on this host "
+        "(targetpw disabled for this user only; no other policy change).\\n' \"$u\"; "
+        "else rm -f \"$tmp\"; echo 'The generated sudoers rule failed visudo validation; "
+        "nothing was changed.' >&2; exit 1; fi"
+    )

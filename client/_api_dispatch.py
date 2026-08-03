@@ -21,6 +21,37 @@ from client._api_users import (
 )
 
 
+# Every command we dispatch runs on the target under a shell whose PATH may lack
+# the sbin dirs. Most visibly on the RBAC path: `runuser -u <user>` resets PATH
+# to the target user's ENV_PATH from /etc/login.defs, which omits /usr/sbin on
+# openSUSE/SLES; systemd's minimal service PATH can do the same. Admin binaries
+# (useradd, usermod, iptables, nft, ufw, mkfs.*, the LVM/mdadm tools, parted,
+# grub2-mkconfig, dracut, realm, subscription-manager, sysctl, visudo, fstrim,
+# hwclock, ...) live in /sbin or /usr/sbin, so a bare invocation fails with
+# "command not found" (exit 127) - or, worse, a `command -v` guard returns false
+# and the builder reports a false "X is not installed" and refuses to run.
+#
+# Prepend the sbin dirs to PATH ONCE here, at the single choke point every agent
+# and SSH command flows through, so every cmd_* builder resolves its tool on
+# every distro (usr-merged or not) without each having to remember the prefix.
+# It only *prepends* to the inherited $PATH, so nothing is lost. A leading
+# `export` (not a per-command env prefix) means it also covers chained
+# sub-commands. It's applied to the command CONTENT only - approval/command
+# policy matches on the substrings that follow, which are unchanged.
+_SBIN_PATH_EXPORT = 'export PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH"; '
+
+
+def _with_sbin_path(command: str) -> str:
+    """Prepend the sbin-inclusive PATH export to a command bound for a host.
+    Idempotent: a builder that already prepends the same export (e.g. the
+    account builders in _api_users) won't get a second copy."""
+    if not command:
+        return command
+    if command.lstrip().startswith('export PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH"'):
+        return command
+    return _SBIN_PATH_EXPORT + command
+
+
 def merge_duplicate_host_entries(entries):
     """Collapse an agent entry and an SSH entry that share the exact
     same hostname into a single display row.
@@ -261,6 +292,9 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
     falls back to a summary of the command itself.
     """
     entry = _underlying_entry(entry)
+
+    # Ensure sbin is on PATH for every dispatched command (see _with_sbin_path).
+    command = _with_sbin_path(command)
 
     # The sudo (become) password is resolved by the caller and passed in: the
     # web console reads it from the controller-side store (webgui/sudo_store.py)
@@ -559,6 +593,7 @@ def cmd_update_status(refresh: bool = False) -> str:
     if refresh:
         prep = (
             "if command -v dnf >/dev/null 2>&1; then dnf -q makecache --refresh >/dev/null 2>&1; "
+            "elif command -v yum >/dev/null 2>&1; then yum -q makecache >/dev/null 2>&1; "
             "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive -q refresh >/dev/null 2>&1; "
             "elif command -v apt-get >/dev/null 2>&1; then apt-get -qq update >/dev/null 2>&1; fi\n"
         )
@@ -568,6 +603,12 @@ def cmd_update_status(refresh: bool = False) -> str:
         "if command -v dnf >/dev/null 2>&1; then mgr=dnf; "
         "total=$(dnf -q check-update 2>/dev/null | awk 'NF>=3 && $1!~/^(Obsoleting|Last|Security|Loaded|Dependencies)/{c++} END{print c+0}'); "
         "sec=$(dnf -q --security check-update 2>/dev/null | awk 'NF>=3 && $1!~/^(Obsoleting|Last|Security|Loaded|Dependencies)/{c++} END{print c+0}'); "
+        # yum-only hosts (RHEL7 / CentOS7 / Amazon Linux 2 / Oracle Linux 7) have
+        # no dnf; without this branch they fell through to mgr=unknown/total=0 and
+        # reported "up to date" while sitting on pending (security) updates.
+        "elif command -v yum >/dev/null 2>&1; then mgr=yum; "
+        "total=$(yum -q check-update 2>/dev/null | awk 'NF>=3 && $1!~/^(Obsoleting|Last|Security|Loaded|Dependencies)/{c++} END{print c+0}'); "
+        "sec=$(yum -q --security check-update 2>/dev/null | awk 'NF>=3 && $1!~/^(Obsoleting|Last|Security|Loaded|Dependencies)/{c++} END{print c+0}'); "
         "elif command -v zypper >/dev/null 2>&1; then mgr=zypper; "
         "total=$(zypper --non-interactive -q list-updates 2>/dev/null | grep -cE '^v \\|'); "
         "sec=$(zypper --non-interactive -q list-patches --category security 2>/dev/null | grep -cE '\\| *needed'); "

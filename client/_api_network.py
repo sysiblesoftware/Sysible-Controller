@@ -38,6 +38,13 @@ def _require_nmcli_fragment() -> str:
         "To use these configuration actions, install and enable NetworkManager "
         "(zypper in NetworkManager && systemctl enable --now NetworkManager) - note that "
         "switching the active stack can disrupt connectivity, so do it at the console.' >&2; exit 1; "
+        "elif command -v netplan >/dev/null 2>&1; then "
+        "echo 'This host uses netplan (the Ubuntu Server default). Configure Static IP "
+        "and Configure DHCP support netplan directly - use those actions. The granular "
+        "actions (Set DNS / Gateway / MTU / Route on their own) still need NetworkManager "
+        "here; install it (apt-get install -y network-manager && systemctl enable --now "
+        "NetworkManager) if you need them, noting that switching the active renderer can "
+        "disrupt connectivity.' >&2; exit 1; "
         "else "
         "echo 'NetworkManager (nmcli) is not installed on this host - network "
         "configuration here is standardized on NetworkManager, so install/enable "
@@ -94,6 +101,62 @@ def _validate_connection_name(name: str) -> str:
         # RCE; this keeps the identifier validators consistent).
         raise ValueError("Invalid connection name: cannot begin with '-'.")
     return name
+
+
+# IPv4/IPv6 charset-limited validators. These embed into a netplan YAML file and
+# nmcli args, so restricting to [0-9A-Fa-f:.] (plus /prefix for CIDR) both
+# catches typos and prevents YAML/shell breakout - netplan generate then
+# validates the actual semantics.
+_CIDR_RE = re.compile(r"^[0-9A-Fa-f:.]+/\d{1,3}$")
+_IP_RE = re.compile(r"^[0-9A-Fa-f:.]+$")
+
+
+def _validate_cidr(value: str, label: str = "IP address") -> str:
+    value = (value or "").strip()
+    if not _CIDR_RE.match(value):
+        raise ValueError(f"{label} must be in CIDR form, e.g. 192.168.1.50/24.")
+    return value
+
+
+def _validate_ip(value: str, label: str = "Address") -> str:
+    value = (value or "").strip()
+    if not _IP_RE.match(value):
+        raise ValueError(f"{label} must be an IPv4 or IPv6 address.")
+    return value
+
+
+def _validate_dns_list(value: str) -> list:
+    parts = [p for p in (value or "").replace(",", " ").split() if p]
+    if not parts:
+        raise ValueError("At least one DNS server is required (space-separated for more than one).")
+    for p in parts:
+        if not _IP_RE.match(p):
+            raise ValueError(f"'{p}' is not a valid DNS server IP address.")
+    return parts
+
+
+# On a netplan host the config field names an INTERFACE (ens3), not an nmcli
+# profile. This runtime guard keeps the value safe to use as a filename and a
+# YAML key, and tells the operator what to enter if they typed a profile name.
+_NETPLAN_IFACE_GUARD = (
+    "case \"$IFACE\" in ''|*[!A-Za-z0-9_.-]*) "
+    "echo 'On a netplan host (e.g. Ubuntu Server), enter the INTERFACE name "
+    "(e.g. ens3 - see List Devices), not an nmcli profile name.' >&2; exit 1;; esac; "
+)
+
+
+def _netplan_apply_fragment(iface_var: str = "IFACE") -> str:
+    """Validate the freshly-written /etc/netplan file and apply it, rolling back
+    to the timestamped backup (or removing the file) if netplan rejects it, so a
+    bad config can't be left in place to break the next boot."""
+    return (
+        "if netplan generate 2>&1; then netplan apply 2>&1 "
+        f"&& printf 'Applied via netplan on %s.\\n' \"${iface_var}\"; "
+        "else echo 'netplan rejected the configuration (see message above); rolling back.' >&2; "
+        "b=$(ls -1t \"$f\".bak.* 2>/dev/null | head -n1); "
+        "if [ -n \"$b\" ]; then mv \"$b\" \"$f\"; else rm -f \"$f\"; fi; "
+        "netplan generate 2>/dev/null; exit 1; fi"
+    )
 
 
 _SAFE_HOSTNAME_RE = re.compile(
@@ -218,36 +281,74 @@ def cmd_show_ip_config(iface: str = "") -> str:
 
 def cmd_configure_static_ip(connection: str, ip_cidr: str, gateway: str = "", dns: str = "") -> str:
     """Covers both "Configure IP addresses" and "Configure static
-    networking" - on nmcli they're the same operation."""
+    networking". Uses nmcli where NetworkManager is running; on a netplan host
+    (Ubuntu Server default) it instead writes a Sysible-owned per-interface
+    /etc/netplan file and applies it - a static IP address+gateway+DNS is a
+    self-contained interface config, so writing the whole file is deterministic
+    and safe (netplan generate validates it; a rejected config is rolled back)."""
     conn = _validate_connection_name(connection)
-    ip_cidr = (ip_cidr or "").strip()
-    if not ip_cidr:
-        raise ValueError("IP address (CIDR form, e.g. 192.168.1.50/24) is required.")
+    ip_cidr = _validate_cidr(ip_cidr, "IP address")
+    gateway = (gateway or "").strip()
+    gw = _validate_ip(gateway, "Gateway") if gateway else ""
+    dns = (dns or "").strip()
+    dns_parts = _validate_dns_list(dns) if dns else []
     q_conn = shlex.quote(conn)
     q_ip = shlex.quote(ip_cidr)
 
+    # --- nmcli path ---
     extra = ""
-    gateway = (gateway or "").strip()
-    if gateway:
-        extra += f" ipv4.gateway {shlex.quote(gateway)}"
-    dns = (dns or "").strip()
-    if dns:
-        extra += f" ipv4.dns {shlex.quote(dns)}"
-
-    return (
-        f"{_require_nmcli_fragment()}"
+    if gw:
+        extra += f" ipv4.gateway {shlex.quote(gw)}"
+    if dns_parts:
+        extra += f" ipv4.dns {shlex.quote(','.join(dns_parts))}"
+    nmcli = (
         f"nmcli connection modify {q_conn} ipv4.method manual ipv4.addresses {q_ip}{extra} "
         f"&& nmcli connection up {q_conn} 2>&1"
+    )
+
+    # --- netplan path (values are IP-charset validated, so YAML-safe) ---
+    np = (
+        f"IFACE={q_conn}; {_NETPLAN_IFACE_GUARD}"
+        "f=\"/etc/netplan/90-sysible-$IFACE.yaml\"; "
+        "[ -e \"$f\" ] && cp \"$f\" \"$f.bak.$(date +%s)\" 2>/dev/null; umask 077; "
+        "printf 'network:\\n  version: 2\\n  ethernets:\\n    %s:\\n      dhcp4: false\\n' \"$IFACE\" > \"$f\"; "
+        f"printf '      addresses: [%s]\\n' {q_ip} >> \"$f\"; "
+    )
+    if gw:
+        np += f"printf '      routes:\\n        - to: default\\n          via: %s\\n' {shlex.quote(gw)} >> \"$f\"; "
+    if dns_parts:
+        np += f"printf '      nameservers:\\n        addresses: [%s]\\n' {shlex.quote(', '.join(dns_parts))} >> \"$f\"; "
+    np += _netplan_apply_fragment()
+
+    return (
+        "if command -v nmcli >/dev/null 2>&1 && "
+        "nmcli -t -f RUNNING general status 2>/dev/null | grep -q '^running$'; then "
+        f"{nmcli}; "
+        f"elif command -v netplan >/dev/null 2>&1; then {np}; "
+        f"else {_require_nmcli_fragment()}fi"
     )
 
 
 def cmd_configure_dhcp(connection: str) -> str:
     conn = _validate_connection_name(connection)
     q_conn = shlex.quote(conn)
-    return (
-        f"{_require_nmcli_fragment()}"
+    nmcli = (
         f'nmcli connection modify {q_conn} ipv4.method auto ipv4.addresses "" ipv4.gateway "" '
         f"&& nmcli connection up {q_conn} 2>&1"
+    )
+    np = (
+        f"IFACE={q_conn}; {_NETPLAN_IFACE_GUARD}"
+        "f=\"/etc/netplan/90-sysible-$IFACE.yaml\"; "
+        "[ -e \"$f\" ] && cp \"$f\" \"$f.bak.$(date +%s)\" 2>/dev/null; umask 077; "
+        "printf 'network:\\n  version: 2\\n  ethernets:\\n    %s:\\n      dhcp4: true\\n' \"$IFACE\" > \"$f\"; "
+        + _netplan_apply_fragment()
+    )
+    return (
+        "if command -v nmcli >/dev/null 2>&1 && "
+        "nmcli -t -f RUNNING general status 2>/dev/null | grep -q '^running$'; then "
+        f"{nmcli}; "
+        f"elif command -v netplan >/dev/null 2>&1; then {np}; "
+        f"else {_require_nmcli_fragment()}fi"
     )
 
 

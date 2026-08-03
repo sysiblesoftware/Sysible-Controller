@@ -280,7 +280,11 @@ def cmd_add_fstab_entry(
     q_mnt = shlex.quote(mount_point)
 
     return (
-        f"if grep -qF {q_mnt} /etc/fstab 2>/dev/null; then "
+        # Match the mount point against the SECOND field exactly (like
+        # cmd_remove_fstab_entry), not a substring anywhere on the line - a plain
+        # `grep -F /data` also matched a device column, a comment, or a longer
+        # mount point (/data2), wrongly refusing a legitimate new entry.
+        f"if awk -v m={q_mnt} '$2==m{{f=1}} END{{exit !f}}' /etc/fstab 2>/dev/null; then "
         "echo 'An /etc/fstab entry for that mount point already exists - remove it first if you want to replace it.' >&2; exit 1; fi; "
         f"cp /etc/fstab /etc/fstab.bak.$(date +%s) "
         f"&& echo {q_line} >> /etc/fstab "

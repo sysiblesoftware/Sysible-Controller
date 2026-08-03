@@ -561,7 +561,13 @@ def cmd_create_raid_array(raid_device: str, level: str, devices: str) -> str:
     return (
         "if ! command -v mdadm >/dev/null 2>&1; then "
         "echo 'mdadm is not installed on this host (package: mdadm).' >&2; exit 1; fi; "
-        f"mdadm --create {q_raid} --level={level} --raid-devices={len(dev_list)} {q_devs} --run 2>&1 "
+        # Feed 'y' on stdin: when a member device already carries a filesystem or
+        # partition signature (the common "repurpose these disks" case), mdadm
+        # --create asks "appears to contain ... Continue creating array? (y/n)"
+        # and reads the answer from stdin. --run only suppresses the DEGRADED
+        # prompt, not this one, so non-interactively it gets EOF -> "no" -> the
+        # array is never created. `yes |` answers every such prompt.
+        f"yes 2>/dev/null | mdadm --create {q_raid} --level={level} --raid-devices={len(dev_list)} {q_devs} --run 2>&1 "
         f"&& printf 'Created %s (RAID{level}, {len(dev_list)} member(s)) - check RAID Status for sync progress.\\n' {q_raid}"
     )
 
@@ -618,7 +624,12 @@ def cmd_create_swap_file(path: str, size_mb, persist: bool = True) -> str:
     size_mb = _validate_int_range(size_mb, 1, 1_048_576, "Size (MB)")
     q_path = shlex.quote(path)
     cmd = (
-        f"(fallocate -l {size_mb}M {q_path} 2>/dev/null || dd if=/dev/zero of={q_path} bs=1M count={size_mb} 2>&1) "
+        # Swap files MUST be written with dd, never fallocate: on XFS and btrfs
+        # (the default root fs on RHEL/Rocky/Alma and Fedora/openSUSE) fallocate
+        # creates a file with unwritten/preallocated extents and RETURNS 0, so
+        # the old `fallocate || dd` fallback never fired - then `swapon` fails
+        # with "swapfile has holes" (Invalid argument). dd fills real blocks.
+        f"dd if=/dev/zero of={q_path} bs=1M count={size_mb} 2>&1 "
         f"&& chmod 600 {q_path} "
         f"&& mkswap {q_path} 2>&1 "
         f"&& swapon {q_path} 2>&1 "
@@ -654,11 +665,15 @@ def cmd_resize_swap_file(path: str, size_mb, persist: bool = True) -> str:
     cmd = (
         f"if [ ! -f {q_path} ]; then printf '%s does not exist - use Create Swap File for a new swap file.\\n' {q_path} >&2; exit 1; fi; "
         f"swapoff {q_path} 2>/dev/null; "
-        # Remove the old file BEFORE recreating: fallocate only grows/allocates and
-        # never truncates, so on a SHRINK it would return 0 while leaving the file at
-        # its old (larger) size — the resize would silently no-op yet report success.
+        # Remove the old file BEFORE recreating so the new swap file is exactly
+        # the requested size on a shrink (no stale trailing blocks).
         f"rm -f {q_path} 2>/dev/null; "
-        f"(fallocate -l {size_mb}M {q_path} 2>/dev/null || dd if=/dev/zero of={q_path} bs=1M count={size_mb} 2>&1) "
+        # Swap files MUST be written with dd, never fallocate: on XFS and btrfs
+        # (the default root fs on RHEL/Rocky/Alma and Fedora/openSUSE) fallocate
+        # creates a file with unwritten/preallocated extents and RETURNS 0, so
+        # the old `fallocate || dd` fallback never fired - then `swapon` fails
+        # with "swapfile has holes" (Invalid argument). dd fills real blocks.
+        f"dd if=/dev/zero of={q_path} bs=1M count={size_mb} 2>&1 "
         f"&& chmod 600 {q_path} "
         f"&& mkswap {q_path} 2>&1 "
         f"&& swapon {q_path} 2>&1 "

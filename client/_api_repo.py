@@ -39,10 +39,17 @@ def cmd_add_repository(url: str, alias: str = "") -> str:
     q_url = shlex.quote(url)
     alias = (alias or "").strip()
 
+    # dnf5 (Fedora 41+, RHEL 10) rewrote config-manager: `--add-repo <url>` became
+    # `addrepo --from-repofile=<url>`. Probe the help text (present only on dnf4)
+    # so the right form is emitted regardless of the installed dnf major version.
     rpm_cmd = (
         'if [ "$PKGMGR" = "dnf" ]; then '
-        f'dnf config-manager --add-repo {q_url} 2>&1 || '
-        'echo "Failed - is dnf-plugins-core installed? (Install Packages: dnf-plugins-core)"; '
+        '  if dnf config-manager --help 2>&1 | grep -q -- "--add-repo"; then '
+        f'    dnf config-manager --add-repo {q_url} 2>&1; '
+        '  else '
+        f'    dnf config-manager addrepo --from-repofile={q_url} 2>&1; '
+        '  fi || '
+        '  echo "Failed - install the config-manager plugin (dnf4: dnf-plugins-core, dnf5: dnf5-plugins)."; '
         'else '
         f'yum-config-manager --add-repo {q_url} 2>&1 || '
         'echo "Failed - is yum-utils installed? (Install Packages: yum-utils)"; '
@@ -71,8 +78,12 @@ def cmd_enable_repository(alias: str) -> str:
     list_path = shlex.quote(base + ".list")
     disabled_path = shlex.quote(base + ".list.disabled")
 
+    # dnf5 replaced `--set-enabled <repo>` with `setopt <repo>.enabled=1`.
     rpm_cmd = (
-        f'if [ "$PKGMGR" = "dnf" ]; then dnf config-manager --set-enabled {q_alias}; '
+        'if [ "$PKGMGR" = "dnf" ]; then '
+        '  if dnf config-manager --help 2>&1 | grep -q -- "--set-enabled"; then '
+        f'    dnf config-manager --set-enabled {q_alias}; '
+        f'  else dnf config-manager setopt {q_alias}.enabled=1; fi; '
         f'else yum-config-manager --enable {q_alias}; fi'
     )
 
@@ -96,8 +107,12 @@ def cmd_disable_repository(alias: str) -> str:
     list_path = shlex.quote(base + ".list")
     disabled_path = shlex.quote(base + ".list.disabled")
 
+    # dnf5 replaced `--set-disabled <repo>` with `setopt <repo>.enabled=0`.
     rpm_cmd = (
-        f'if [ "$PKGMGR" = "dnf" ]; then dnf config-manager --set-disabled {q_alias}; '
+        'if [ "$PKGMGR" = "dnf" ]; then '
+        '  if dnf config-manager --help 2>&1 | grep -q -- "--set-disabled"; then '
+        f'    dnf config-manager --set-disabled {q_alias}; '
+        f'  else dnf config-manager setopt {q_alias}.enabled=0; fi; '
         f'else yum-config-manager --disable {q_alias}; fi'
     )
 

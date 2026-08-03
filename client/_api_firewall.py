@@ -124,7 +124,24 @@ def cmd_set_firewalld_enabled(enabled: bool) -> str:
     """Starts/enables or stops/disables the firewalld service (both
     the running state and whether it comes up at boot)."""
     if enabled:
-        return "systemctl enable --now firewalld 2>&1; " + _FW_START_DIAG
+        # Gate on systemctl's REAL exit code before the is-active diagnostic.
+        # Previously this was `systemctl enable ...; <is-active diag>`, so when the
+        # enable was refused by polkit (non-root RBAC path: "Interactive
+        # authentication required" / "Access denied") but firewalld happened to be
+        # running already, the is-active check passed and the whole command exited
+        # 0 - masking the failure, reporting false success, AND stopping the agent
+        # from escalating to sudo (it only escalates on a NON-zero exit that also
+        # looks like a privilege error). Propagating rc lets the agent retry the
+        # command under sudo, so the enable actually succeeds.
+        return (
+            "systemctl enable --now firewalld 2>&1; rc=$?; "
+            "if [ \"$rc\" -ne 0 ]; then "
+            "echo 'firewalld could not be enabled. An \"authentication required\" or "
+            "\"access denied\" message above means this action needs root - mark this "
+            "host \"password sudo\" or grant the console user NOPASSWD sudo.' >&2; "
+            "exit \"$rc\"; fi; "
+            + _FW_START_DIAG
+        )
     return (
         "systemctl disable --now firewalld 2>&1 "
         "&& echo 'firewalld stopped and disabled.'"
@@ -614,14 +631,23 @@ def cmd_set_ufw_enabled(enabled: bool) -> str:
     also enables the service so it survives a reboot; disabling stops it and
     keeps the configured rules (re-enabling re-applies them)."""
     if enabled:
+        # Gate on ufw's exit code before the trailing `ufw status` (which always
+        # exits 0 and would otherwise mask a failed enable and block the agent's
+        # sudo escalation - see cmd_set_firewalld_enabled).
         return (
             _UFW_MISSING +
-            "ufw --force enable 2>&1 && systemctl enable ufw >/dev/null 2>&1; "
+            "ufw --force enable 2>&1; rc=$?; "
+            "if [ \"$rc\" -ne 0 ]; then "
+            "echo 'ufw could not be enabled. If this needs root, mark this host "
+            "\"password sudo\" or grant the console user NOPASSWD sudo.' >&2; exit \"$rc\"; fi; "
+            "systemctl enable ufw >/dev/null 2>&1; "
             "echo; ufw status verbose 2>&1"
         )
     return (
         _UFW_MISSING +
-        "ufw disable 2>&1 && systemctl disable ufw >/dev/null 2>&1; "
+        "ufw disable 2>&1; rc=$?; "
+        "if [ \"$rc\" -ne 0 ]; then echo 'ufw could not be disabled (needs root).' >&2; exit \"$rc\"; fi; "
+        "systemctl disable ufw >/dev/null 2>&1; "
         "echo 'ufw disabled (rules kept; re-enable to re-apply them).'"
     )
 

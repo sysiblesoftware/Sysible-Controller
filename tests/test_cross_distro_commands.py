@@ -26,6 +26,7 @@ import client._api_storage as St
 import client._api_filesystem_mount as M
 import client._api_repo as R
 import client._api_network as N
+import client._api_firewall as FW
 import client._api_users as U
 
 _PREFIX = 'export PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH"; '
@@ -180,6 +181,31 @@ def test_netplan_yaml_renders_and_parses(tmp_path):
 def test_network_validators_reject_injection(bad):
     with pytest.raises(ValueError):
         bad()
+
+
+# --- firewalld/ufw enable must propagate the real exit code (sudo escalation) --
+
+@pytest.mark.parametrize("cmd,tool", [
+    (FW.cmd_set_firewalld_enabled(True), "systemctl enable --now firewalld"),
+    (FW.cmd_set_ufw_enabled(True), "ufw --force enable"),
+    (FW.cmd_set_ufw_enabled(False), "ufw disable"),
+])
+def test_service_enable_propagates_exit_code(cmd, tool):
+    # The mutating command's exit code must gate the rest, so a polkit refusal
+    # (non-root) surfaces as non-zero + a privilege phrase -> the agent escalates
+    # to sudo, instead of a trailing status command masking it as exit 0.
+    assert "rc=$?" in cmd and 'exit "$rc"' in cmd
+    _bash_n(cmd)
+
+
+def test_firewalld_enable_refusal_is_not_masked():
+    """Simulate the enable being refused: the whole command must exit non-zero."""
+    cmd = FW.cmd_set_firewalld_enabled(True)
+    stub = "sh -c 'echo \"Failed to enable unit: Interactive authentication required.\" >&2; exit 1'"
+    sim = cmd.replace("systemctl enable --now firewalld", stub, 1)
+    r = subprocess.run(["bash", "-c", sim], capture_output=True, text=True)
+    assert r.returncode != 0, "refused enable was masked as success"
+    assert "authentication required" in (r.stdout + r.stderr).lower()
 
 
 # --- create-user same-name group collision (Ubuntu legacy `admin` group) ------

@@ -528,8 +528,26 @@ def _run_as_user(user, cmd, become_password=None):
         low = (res["stderr"] or "").lower()
         if become_password and ("try again" in low or "incorrect password" in low
                                 or "sorry" in low):
-            res["stderr"] = (res["stderr"].rstrip()
-                             + f"\n[sysible] sudo rejected the password for '{user}' on this host.")
+            hint = f"\n[sysible] sudo rejected the password for '{user}' on this host."
+            # openSUSE/SLES ship `Defaults targetpw` in /etc/sudoers, so sudo asks
+            # for the TARGET user's (root's) password, NOT the invoking user's -
+            # the #1 reason a correct user password is still rejected here. Detect
+            # SUSE and spell out the fix, since the raw "Sorry, try again." is
+            # otherwise baffling.
+            try:
+                with open("/etc/os-release") as _f:
+                    _osr = _f.read().lower()
+                if "suse" in _osr:
+                    hint += (
+                        " NOTE: openSUSE/SLES default sudo to 'targetpw', so it "
+                        "expects this host's ROOT password here, not your user "
+                        "password. Fix: store the host's ROOT password as its sudo "
+                        "password, or add a sudoers rule for the user "
+                        f"('Defaults:{user} !targetpw' plus NOPASSWD)."
+                    )
+            except OSError:
+                pass
+            res["stderr"] = res["stderr"].rstrip() + hint
         elif not become_password and (
                 "password is required" in low or "a terminal is required" in low
                 or "no tty present" in low or "not allowed to execute" in low

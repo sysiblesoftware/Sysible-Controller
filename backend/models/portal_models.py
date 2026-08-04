@@ -22,7 +22,7 @@ def _validate_admin_name(v: str) -> str:
 class SetControllerConfigRequest(BaseModel):
     hostname: str = ""
     ip: str = ""
-    address_mode: str = "hostname"  # "hostname", "ip", or "all" (every detected local IP, with failover) - which agent bundles use
+    address_mode: str = "ip"  # "ip" or "all" (every detected local IP, with failover) - agent bundles are IP-only; a legacy "hostname" value is coerced to "ip"
     port: int = 9000
 
 

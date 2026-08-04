@@ -2,6 +2,269 @@
 
 All notable changes to the Sysible Controller are recorded here.
 
+## Unreleased
+
+### Security — post-assessment hardening (batch 1)
+
+- **Admin API-key rotation on demand** (`sysible_controller rotate-api-key`). Generates
+  a fresh key, replaces `api_key.txt` atomically at 0600, and restarts the backend +
+  console so both reload it. Gives an operator a one-command response to a suspected
+  key exposure instead of hand-editing the file. Key is printed once, never logged.
+- **Revoke unclaimed enrollment tokens** (`sysible_controller revoke-enroll-tokens` →
+  `db.purge_unconsumed_enroll_tokens()`). Invalidates every minted-but-unclaimed enroll
+  token in one action if one may have leaked (pasted curl one-liner, CI log), while
+  leaving already-claimed tokens intact so a legitimate re-enroll window still works.
+- **Tightened Content-Security-Policy** on the console: explicit `script-src 'self'`
+  and `object-src 'none'` (scripts previously fell back to `default-src`; plugins were
+  already blocked implicitly — now explicit). `webgui/server.py`.
+
+### Fixed
+
+- **`self-enroll` re-adds the controller after a DB reset instead of falsely reporting
+  "already enrolled".** The gate decided the controller was enrolled purely from the
+  on-disk agent (`/opt/sysible-agent/agent.py`), which survives a datastore reset or a
+  `disenroll --self` even though the controller's host row is gone — so it short-circuited
+  and the controller never reappeared in the console, while the leftover agent crash-looped
+  on a spent single-use token. `self-enroll` now asks the controller's own `/agents` API
+  whether this host is a live fleet member and re-enrolls (fresh bundle + token) when it
+  isn't, clearing the stale agent first. `sysible_controller`.
+- **Login page shows the real Sysible logo, and autofilled fields respect the theme.**
+  The sign-in card rendered a generic "S" monogram instead of the product logo; it now
+  shows the full logo lockup (with a graceful fallback to the monogram if the image is
+  missing), styled to read correctly on both the light and dark card. Separately,
+  browser-autofilled username/password fields no longer render as an olive box in light
+  mode — autofilled inputs are now pinned to the app's own field colors in both themes.
+  `webgui/frontend/src/views/Login.jsx`, `webgui/frontend/src/styles.css`.
+- **`sysible_controller` CLI is no longer installed root-only.** The installer set the
+  command executable with `chmod +x`, which under a hardened root `umask` (e.g. `077`)
+  only adds *owner* execute — leaving `/usr/local/bin/sysible_controller` as `rwx------`,
+  so a non-root user got "command not found"/"Permission denied" instead of the usage
+  banner. It is now installed `755` (privileged subcommands still self-gate with
+  `_require_root`). Existing installs can fix in place:
+  `sudo chmod 755 /usr/local/bin/sysible_controller`. `install_sysible.sh`.
+
+### Fixed — UX audit (view authorization, not just hiding)
+
+- **Console view access is now enforced, not merely hidden.** The left-nav already
+  omitted screens a role may not use, but a hand-typed or bookmarked `?view=` URL
+  (e.g. an auditor opening `?view=settings`) still rendered the privileged screen —
+  authorization-by-obscurity. A single `canSeeView(key, role)` predicate now drives
+  the nav filter, every top-level render gate, and a redirect effect that bounces a
+  forbidden view back to the dashboard, so the three can no longer drift apart.
+- **User & Group Administration password fields are masked.** The Create-User and
+  Set-Password inputs rendered the typed password as plain on-screen text
+  (`type="text"`), leaving it shoulder-surfable. They now mask by default with an
+  explicit **Show/Hide** toggle alongside the existing **Generate** button.
+  `webgui/frontend/src/views/UserGroupPage.jsx`.
+
+### Security — hardening from the Fortune-100 audit
+
+Remediation of the adversarially-verified findings from the pre-release security audit:
+
+- **Agent secret hashed at rest (was cleartext).** The per-host `agent_secret` — the only
+  bearer credential the DB stored verbatim — is now stored as its SHA-256 like every other
+  token/key, so a DB-snapshot leak yields no directly-replayable agent credential. A legacy
+  plaintext row is accepted once and transparently upgraded to the hash on the agent's next
+  authenticated call, so no already-enrolled host is locked out. *(CWE-312)*
+- **Session invalidation on self-service credential change.** `/admin/credentials` and
+  `/admin/force-password-change` now revoke the account's other live admin tokens, matching
+  the admin-reset path — a stolen session no longer survives a password change. *(CWE-613)*
+- **Forced-password-change gate on superuser BFF surfaces.** `require_superuser_session` now
+  enforces `must_change_password` (like `require_operator`), so a superuser on a temporary
+  credential can't drive superuser-only screens until they rotate it. *(CWE-620)*
+- **Request-body size limit on the console BFF.** The internet-facing console now bounds
+  request bodies (above the legitimate upload ceiling), closing an unauthenticated
+  memory-exhaustion vector on `POST /api/login`. *(CWE-770)*
+- **Controller-side superuser gate on portal file-mutation routes** (delete upload, stage
+  download, delete download) — defense-in-depth matching their sibling portal routes. *(CWE-862)*
+- **Login error no longer leaks the internal controller address/TLS details** on the
+  unauthenticated `/api/login` path — logged server-side, generic message returned. *(CWE-209)*
+- **`Cache-Control: no-store` on authenticated console responses** so sensitive fleet JSON
+  isn't retained by a shared/proxy cache or browser history. *(CWE-525)*
+
+Follow-up sweep of the remaining low-severity findings:
+
+- **Constant-time `/cli/bundle` auth** — always runs one PBKDF2 verify (real or decoy) so a
+  wrong username costs the same as a wrong password, closing a username-enumeration timing
+  oracle (matches the `/login` handler). *(CWE-208)*
+- **Legacy password hashes upgraded on login** — a successful admin login whose stored hash
+  is below the current PBKDF2 cost is transparently re-hashed, so no under-cost hash (and
+  the timing asymmetry it creates vs the fixed-cost decoy) lingers. *(CWE-208)*
+- **Bounded reads on two file paths** — the portal download-staging upload and the SSH/SFTP
+  file download now enforce a size ceiling (and the SFTP path requires a regular file), so a
+  superuser can't drive unbounded controller memory with a huge or pseudo-file. *(CWE-770)*
+- **Supply-chain gate delivered** — `.github/workflows/security-scan.yml` (weekly + on
+  dependency change) runs `pip-audit` and publishes a CycloneDX SBOM, and
+  `scripts/security_scan.sh` runs the same locally — the gate the `requirements.txt` header
+  had promised. *(CWE-1104)*
+
+### Changed — agent bundles and the controller address are now IP-only
+
+Agent bundles no longer bake in a hostname for the controller — they use its **IP** so
+agents never depend on DNS being configured on each managed host (the failure mode that
+strands agents after a rename or DNS change). Settings → Controller now offers only
+**Single IP** or **All detected IPs**; the hostname field and "hostname" address mode are
+gone. A legacy install whose config was in "hostname" mode is transparently migrated to
+IP on read (prefers the stored IP, else every detected NIC address), so existing installs
+keep producing working bundles without emitting a hostname. Controller self-enroll already
+used the loopback address and is unaffected. `POST /controller-config` coerces any
+"hostname" mode to "ip" and ignores a supplied hostname.
+
+### Added — enrollment source-IP allowlist (Settings → Enrollment Access)
+
+A console-managed allowlist that restricts which source networks may enroll a NEW host on
+`POST /agents/enroll`. The one-time enrollment token is still required on top — the
+allowlist narrows *where* a valid token may be presented from, so a leaked-but-unused
+bundle can't enroll a rogue host from an off-subnet source. Managed from a new
+**Settings → Enrollment Access** tab (add/remove CIDRs with notes; audited).
+
+- **Empty == allow all** (backward compatible); a non-empty list restricts enrollment to
+  the listed CIDRs. **Loopback is always allowed** (controller self-enroll / the BFF).
+- Accepts IPv4/IPv6 CIDRs or a bare IP (stored as /32 or /128). An unparseable source with
+  a non-empty allowlist **fails closed** (denied).
+- Enforced at the socket-peer IP (`request.client.host` — not a spoofable
+  `X-Forwarded-For`). For behind-a-bastion hosts this is the relay/tunnel peer, which is
+  what you allow. **Only the open, token-gated enroll path is gated** — steady-state agent
+  traffic (heartbeat/tasks/results, authenticated by the agent secret) is unaffected, so a
+  wrong CIDR can't lock out the existing fleet.
+- New `GET/POST/DELETE /admin/enroll-allowlist` (superuser); a denied enroll returns 403
+  "Enrollment from this network is not permitted."
+
+### Added — `sysible_controller disenroll` (force-remove a host from the controller side)
+
+A new CLI subcommand that force-removes an enrolled host from the controller itself —
+the operator escape hatch for when the normal (agent-initiated or console) disenroll
+can't complete: a **stale pinned TLS cert** (the agent can't verify the controller after
+a cert regen / reinstall / new-IP reissue), an offline or zombie agent, or a graceful
+disenroll that keeps re-enrolling.
+
+- Talks to the controller's own API over loopback using the **live serving cert**, so it
+  works even when every agent's pinned cert has drifted (the exact failure that leaves a
+  host stuck in the roster).
+- Resolves the target by `--self` (the controller's own managed-host record, via the
+  `is_controller` flag), `--name`, `--ip`, or an exact `host_id`; refuses ambiguous
+  matches and asks for `--host-id`.
+- Defaults to a **FORCE** removal (purges the enrollment token so a still-running agent
+  can't re-enroll — the reason a graceful disenroll appears to "not work"); `--keep-token`
+  opts out. `--dry-run` previews; `-y` skips the prompt.
+- Falls back to a direct database removal (`tools/unenroll_agent.py`) if the controller
+  API is unreachable. For `--self` it also stops the local `sysible-agent` afterward.
+
+Also: the bundle's `disenroll_agent.sh` now detects when the controller notification
+didn't get through and prints a follow-up telling the operator to finish the cleanup with
+`sysible_controller disenroll` on the controller — so a remote host whose notify failed
+(drifted cert / moved controller) no longer silently leaves an orphaned row.
+
+### Added — console health-warning banner ("agents can't check in")
+
+A superuser-only warning banner across every console view that catches the outage class
+where the fleet silently stops checking in, backed by a cheap read-only
+`GET /admin/health-warnings` endpoint (defensive — each detector is independently wrapped
+and degrades to "no warning" rather than a false alarm):
+
+- **Stale / mismatched pinned TLS certificate** — the classic "agents stopped checking in
+  after a controller cert regen / reinstall / new-IP reissue." The controller compares the
+  cert it now hands out for pinning (`trust.crt`, falling back to the serving leaf) against
+  the cert its own loopback agent has pinned locally (`SYSIBLE_CA_CERT`, default
+  `/etc/sysible/controller.crt`); if the SHA-256 fingerprints diverge, every agent pinning
+  the old cert will fail TLS verification until re-deployed — so the banner says so, with
+  the fix (refresh the pinned cert / re-enroll).
+- **Mass host silence** — a high fraction of enrolled hosts going stale at once (the
+  fleet-wide symptom of cert drift, a moved controller address, or the controller being
+  down), distinct from a single host powered off.
+
+Banners are dismissible for the session; the console polls on load and every 60 s.
+
+### Security
+- **Package management: option-injection → root RCE closed.** A package field like
+  `nginx -o DPkg::Pre-Invoke::=<cmd>` was parsed by apt/dnf as an OPTION rather than a
+  package name (arbitrary command as root). Package tokens beginning with `-` are now
+  rejected, and install/remove/update place a `--` end-of-options separator before the
+  operands.
+- **Repository URL CRLF injection closed.** Adding a repository now rejects CR/LF in the
+  URL/source line, so it can no longer write a second `[trusted=yes]` apt source into
+  `sources.list.d`.
+- **Onboarding-portal bind address is configurable.** The self-service portal (default
+  :8090) that serves agent bundles was hardcoded to bind `0.0.0.0`; it now honours
+  `SYSIBLE_PORTAL_HOST` (default `0.0.0.0`, unchanged) so a multi-homed / segmented
+  controller can pin it to a management interface or to `127.0.0.1` behind a reverse
+  proxy. The portal stays TLS + login-gated with single-use, host-capped bundle tokens —
+  this narrows the network attack surface (it doesn't close an auth hole; every
+  bundle/file route is already authenticated).
+
+### Fixed
+- **Agent: exponential reconnect backoff.** When the controller is unreachable (it was
+  renumbered onto a new IP, a firewall/network change cut the host off, or the controller
+  service is down), the agent's poll and heartbeat loops now back off from
+  `SYSIBLE_POLL_INTERVAL` up to `SYSIBLE_CONN_BACKOFF_MAX` (60s) instead of retrying every
+  ~1.5s forever — much less log spam and CPU/network churn during an outage — and snap
+  back to the normal cadence the instant a request succeeds.
+- **Request-body size cap** on the controller API (default 16 MiB,
+  `SYSIBLE_MAX_REQUEST_BYTES`), so an unbounded agent heartbeat/result body can't be
+  buffered into memory to exhaust the controller.
+- **Enroll flood guard**: a per-source-IP rate limit on `/agents/enroll` (default
+  240/60s, `SYSIBLE_ENROLL_RATE_MAX`) sheds an enrollment storm before it takes the enroll
+  lock. Generous by default so legitimate mass rollout (even behind one NAT) is
+  unaffected; set to 0 to disable.
+- **Identifier validators reject a leading `-`** (usernames, nmcli connection names) — the
+  option-injection shape — matching the package-name validator. Benign (these tools have
+  no command-executing option, so it was never RCE), kept for consistency.
+
+### Added
+- **Headless-install curl one-liner: address the controller by IP.** When the console is
+  configured with a hostname but a target host has no DNS for it, the curl command failed
+  to resolve. The "Enroll a Host" tab now offers a checkbox to build the command against
+  the controller's IP instead of its hostname (curl already uses `-k`, so the self-signed
+  cert not covering the IP is fine). Shown whenever both a hostname and an IP are known.
+
+### Fixed
+- **"Check for updates" now shows the real git error.** When the update check couldn't
+  reach the remote it reported a generic "git ls-remote failed (network or auth)". It now
+  includes git's actual stderr (auth prompt, unknown host, TLS/proxy, permission denied),
+  so you can see and fix why the check failed.
+- **`destroy` now removes this machine's own self-enrolled agent.** The controller enrolls
+  itself as a managed host (`/opt/sysible-agent`); `destroy` tore down the backend/console
+  but left that local agent, which then crash-looped under systemd Restart=always trying to
+  reach the deleted controller (repeated "409 A live agent is already enrolled…"). Destroy
+  now stops, disables, and removes the local `sysible-agent` service and directory. Other
+  hosts' agents are still untouched.
+- **Install: default admin seeding is fail-soft and honest.** The installer's default
+  superuser seed now runs as one Python call that catches DB errors (printing an
+  explicit warning instead of being silently misreported as "administrators already
+  exist"), retries while the datastore comes up, and generates the first-login password
+  with a DB-free fallback. On SQLite this is belt-and-suspenders; it matters most on
+  Enterprise/Postgres, where a not-yet-ready or unreachable database could otherwise
+  leave a fresh install with no console login and no password shown.
+
+### Security — agent re-enrollment hardening
+
+Closes an offline-host identity-takeover gap found by an independent audit of the
+`POST /agents/enroll` path. Live-host and revoked-host protections were already sound;
+these changes extend the same rigor to the offline case and to token single-use.
+
+- **Re-binding an existing host now requires authorization.** A bearer enrollment token
+  alone can no longer overwrite an already-enrolled host's agent secret — closing the
+  path where a leaked/replayed token plus a host's (machine-derivable, non-secret)
+  `host_id` or spoofed hostname+IP could seize an *offline* host and lock out the real
+  agent. Re-enrolling an existing record now requires one of: the current `agent_secret`
+  (the agent presents it automatically when it still holds saved state), or an
+  admin-issued **reissue token** bound to that one host. Gated by
+  `SYSIBLE_ENROLL_REQUIRE_REBIND_AUTH` (default on). A clean disenroll deletes the record,
+  so the normal disenroll → re-enroll lifecycle is unchanged; only an *unclean* wipe
+  (record still present) now needs a reissue.
+- **Reissue enrollment (console + API).** New per-host **Reissue** action mints a
+  single-use, host-bound token to reclaim exactly that record after a reinstall.
+  `POST /admin/enroll-token/reissue` (superuser + localhost, audited).
+- **Enrollment tokens are single-use at the database.** `consume_enroll_token` now
+  claims the token with a conditional `UPDATE … WHERE token=? AND (used=0 OR bound_host_id=?)`
+  and checks the row count, so two requests racing the same token can't both enroll a
+  host — it no longer relies solely on a process-local lock (mirrors the relay-token path).
+- **Community enrollment tokens are hashed at rest** (SHA-256), matching Enterprise and
+  the console/admin token storage — a leaked Community DB/backup no longer yields
+  directly replayable enroll tokens. Existing unused tokens must be re-minted after upgrade.
+- **Shorter, tunable token reuse window** — default 7 days → 24h, via
+  `SYSIBLE_ENROLL_TOKEN_REUSE_HOURS`.
+
 ## 3.0.2 — 2026-07-16
 
 A fleet-management and reliability release on top of 3.0.1: a much sturdier host

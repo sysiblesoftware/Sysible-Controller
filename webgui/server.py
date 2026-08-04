@@ -43,6 +43,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import sys
 import tempfile
 import threading
@@ -126,6 +127,56 @@ _HTTPS_ONLY = (not _ALLOW_INSECURE_COOKIE) or os.getenv("SYSIBLE_WEBGUI_HTTPS_ON
 if _ALLOW_INSECURE_COOKIE and not (os.getenv("SYSIBLE_WEBGUI_HTTPS_ONLY", "0") == "1" or _TRUST_PROXY):
     _log.warning("SYSIBLE_WEBGUI_ALLOW_INSECURE_COOKIE=1: session cookie 'Secure' flag is OFF. "
                  "Use only for plain-HTTP dev/lab — never in production.")
+class _BodyLimitMiddleware:
+    """Reject an over-large request body BEFORE Starlette buffers it — the same guard
+    the controller API carries. The BFF is the internet-facing service and has an
+    unauthenticated POST /api/login, so without this an oversized body is a trivial
+    unauthenticated memory-exhaustion DoS. Checks a declared Content-Length up front
+    (returns 413), and byte-counts a chunked/mis-declared body to stay bounded."""
+    def __init__(self, app, max_bytes):
+        self.app = app
+        self.max_bytes = int(max_bytes)
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or self.max_bytes <= 0:
+            return await self.app(scope, receive, send)
+        for k, v in scope.get("headers") or []:
+            if k == b"content-length":
+                try:
+                    if int(v) > self.max_bytes:
+                        return await self._too_large(send)
+                except ValueError:
+                    pass
+                break
+        seen = {"n": 0}
+        cap = self.max_bytes
+
+        async def _guarded_receive():
+            message = await receive()
+            if message.get("type") == "http.request":
+                seen["n"] += len(message.get("body", b"") or b"")
+                if seen["n"] > cap:
+                    return {"type": "http.disconnect"}
+            return message
+        return await self.app(scope, _guarded_receive, send)
+
+    async def _too_large(self, send):
+        await send({"type": "http.response.start", "status": 413,
+                    "headers": [(b"content-type", b"application/json"),
+                                (b"cache-control", b"no-store")]})
+        await send({"type": "http.response.body", "body": b'{"detail":"Request body too large."}'})
+
+
+# Global ceiling must sit ABOVE the largest legitimate upload (the file-transfer /
+# package routes cap themselves at _MAX_SSH_UPLOAD_BYTES), so it bounds memory without
+# rejecting a valid upload. Everything else (e.g. the unauthenticated /api/login body)
+# is then bounded too, closing the unbounded-body DoS. Override with the env var.
+try:
+    _MAX_BFF_BODY_BYTES = int(os.getenv("SYSIBLE_WEBGUI_MAX_REQUEST_BYTES",
+                                        str(_MAX_SSH_UPLOAD_BYTES + 4096)))
+except ValueError:
+    _MAX_BFF_BODY_BYTES = _MAX_SSH_UPLOAD_BYTES + 4096
+
 app.add_middleware(
     SessionMiddleware,
     secret_key=_SECRET,
@@ -134,6 +185,9 @@ app.add_middleware(
     same_site="strict",
     max_age=_SESSION_MAX_AGE,
 )
+# Registered LAST so it wraps OUTERMOST (Starlette applies add_middleware in reverse),
+# rejecting oversized bodies before SessionMiddleware or any handler buffers them.
+app.add_middleware(_BodyLimitMiddleware, max_bytes=_MAX_BFF_BODY_BYTES)
 
 
 # State-changing HTTP methods carry a same-origin backstop: SameSite=Strict already keeps
@@ -175,12 +229,19 @@ async def security_headers(request: Request, call_next):
     resp.headers.setdefault(
         "Content-Security-Policy",
         "default-src 'self'; img-src 'self' data:; "
+        "script-src 'self'; object-src 'none'; "
         "style-src 'self' 'unsafe-inline'; connect-src 'self'; "
         "frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
     )
     if _HTTPS_ONLY:
         resp.headers.setdefault(
             "Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    # Authenticated console responses carry sensitive fleet data (host inventory,
+    # posture, sudo scopes, /api/me). Mark them uncacheable so a shared/proxy cache
+    # or browser history can't retain them after logout. Static assets under /assets
+    # keep their own long-cache headers (set by the file handler, not overridden here).
+    if not request.url.path.startswith("/assets"):
+        resp.headers.setdefault("Cache-Control", "no-store")
     return resp
 
 
@@ -247,6 +308,13 @@ def require_superuser_session(request: Request):
     _revalidate_session(request)
     if request.session.get("role") != "superuser":
         raise HTTPException(status_code=403, detail="This action requires a superuser account.")
+    # Same forced-password-change gate as require_operator: a superuser still on a
+    # temporary/reset credential must not be able to drive superuser-only surfaces
+    # (portal, TLS install, enrollment ACLs) until they rotate it. The
+    # change-credentials route is require_login, so it stays reachable to clear the flag.
+    if request.session.get("must_change_password"):
+        raise HTTPException(status_code=403,
+                            detail="You must change your temporary password before performing this action.")
     return user
 
 
@@ -438,13 +506,15 @@ def login(body: LoginRequest, request: Request):
     except Exception as e:
         # Could NOT reach the controller (down, wrong base URL, unreadable API
         # key, or TLS verification failed) — this is NOT a wrong password, so
-        # don't throttle and don't claim "invalid credentials". Surface the
-        # real cause so it's diagnosable.
+        # don't throttle and don't claim "invalid credentials". Log the real cause
+        # server-side, but do NOT leak it to this UNAUTHENTICATED endpoint: the raw
+        # exception discloses the internal controller address/port and TLS details.
+        _log.warning("login: controller round-trip failed: %s", e)
         raise HTTPException(
             status_code=502,
-            detail=f"Could not reach the controller to verify the login: {e}. "
-                   f"Check the controller is running and the web console can read "
-                   f"its API key and TLS cert (see 'sysible_controller webgui logs').",
+            detail="Could not reach the controller to verify the login. "
+                   "Check the controller is running and the web console can read "
+                   "its API key and TLS cert (see 'sysible_controller webgui logs').",
         )
 
     with _login_attempts_lock:
@@ -617,6 +687,13 @@ def hosts(user: str = Depends(require_login)):
     # force a sweep here, so a cold posture cache simply leaves `critical` null
     # (no highlighting) until the dashboard or a posture_scan job warms it.
     posture_by_id = {h.get("id"): h for h in (_POSTURE_CACHE["hosts"] or [])}
+    # Latest heartbeat health per agent host_id, for the hypervisor role + running
+    # VM count (drives the "this is a VM host" badge and the reboot/power-off
+    # warning). Best-effort: a controller blip just leaves those fields absent.
+    try:
+        health_by_id = (api.get_fleet_health_readings() or {}).get("hosts") or {}
+    except Exception:
+        health_by_id = {}
     try:
         from webgui import suppressions
         supps = suppressions.list_all()
@@ -638,6 +715,15 @@ def hosts(user: str = Depends(require_login)):
         reasons = (_host_critical_reasons(pc.get("flags") or {}, e["label"],
                                           e.get("environment") or "", supps)
                    if pc else [])
+        hr = health_by_id.get(agent_id) if agent_id else None
+        # Hypervisor role + guest count: prefer the fast heartbeat reading; fall
+        # back to the cached posture sweep (which covers SSH hosts and agents whose
+        # heartbeat predates hypervisor reporting). null when neither knows yet.
+        hyp = (hr or {}).get("hyp")
+        vms = (hr or {}).get("vms")
+        if hyp is None and pc:
+            hyp = pc.get("hypervisor")
+            vms = pc.get("vms")
         out.append({
             "id": e["id"],
             "label": e["label"],
@@ -651,6 +737,10 @@ def hosts(user: str = Depends(require_login)):
             # null when posture hasn't been gathered for this host yet.
             "critical": (len(reasons) > 0) if pc else None,
             "critical_reasons": reasons,
+            # Hypervisor role + running-guest count (null when not a VM host or
+            # nothing has reported yet), so reboot/power-off flows can warn.
+            "hypervisor": hyp,
+            "vms": vms,
         })
     return {"hosts": out}
 
@@ -672,6 +762,8 @@ def _parse_sysmetrics(text):
                 except (KeyError, TypeError, ValueError):
                     return None
             units = d.get("units", "-")
+            hyp = d.get("hyp")
+            hyp = None if hyp in ("none", "", "-", None) else hyp
             return {
                 "verdict": d.get("verdict", "OK"),
                 "disk": num("disk", int), "mount": d.get("mount", "/"),
@@ -681,6 +773,9 @@ def _parse_sysmetrics(text):
                 "sysd": d.get("sysd", ""),
                 "units": [] if units in ("-", "", None) else units.split(","),
                 "oom": num("oom", int) or 0,
+                # Hypervisor role + running-guest count (a live-probed host still
+                # reports whether it's a VM host, for the reboot warning/badge).
+                "hyp": hyp, "vms": num("vms", int),
             }
     return None
 
@@ -690,12 +785,59 @@ def _parse_sysmetrics(text):
 # dashboard at once each launched an independent fleet-wide sweep — at scale the
 # GET blocked on batches × per-host-timeout and starved the thread pool. A short
 # TTL coalesces a burst of loads into one sweep; ?refresh=1 forces a fresh one.
-_HEALTH_CACHE = {"ts": 0.0, "hosts": None}
+_HEALTH_CACHE = {"ts": 0.0, "hosts": None, "access": 0.0}
 try:
     _HEALTH_TTL = float(os.getenv("SYSIBLE_FLEET_HEALTH_TTL", "15"))
 except ValueError:
     _HEALTH_TTL = 15.0
+# How stale a heartbeat-reported health reading may be before we fall back to a
+# live probe for that host. Agents report metrics every METRICS_INTERVAL (60s
+# default), so ~2 intervals keeps the donut fresh while still serving almost
+# everything from the heartbeat instead of probing the fleet on every load.
+try:
+    _HEALTH_STORE_MAX_AGE = float(os.getenv("SYSIBLE_HEALTH_STORE_MAX_AGE", "120"))
+except ValueError:
+    _HEALTH_STORE_MAX_AGE = 120.0
 _HEALTH_LOCK = threading.Lock()
+
+
+def _health_verdict(disk, failed, sysd, oom):
+    """OK/WARNING/CRITICAL from the raw signals — the SAME thresholds the on-host
+    cmd_metrics_snapshot() shell applies, so a heartbeat-derived reading grades
+    identically to a live probe."""
+    try:
+        d = int(disk)
+    except (TypeError, ValueError):
+        d = 0
+    f = int(failed or 0)
+    o = int(oom or 0)
+    v = "OK"
+    if d >= 80 or f >= 1 or sysd == "degraded" or o >= 1:
+        v = "WARNING"
+    if d >= 90 or f >= 3:
+        v = "CRITICAL"
+    return v
+
+
+def _health_from_stored(base, hr):
+    """Build a fleet-health reading from a stored heartbeat reading `hr` (same
+    shape a live probe returns), computing the verdict server-side."""
+    disk = hr.get("disk")
+    failed = hr.get("failed") or 0
+    sysd = hr.get("sysd") or ""
+    oom = hr.get("oom") or 0
+    # "partial": a reading from an agent that reports disk/mem/load but not yet the
+    # sysd/failed/oom health signals (pre-upgrade). It's graded on disk alone — the
+    # failed-units/systemd/OOM dimensions are unknown until the agent is updated.
+    return {
+        **base, "online": True, "ok": True, "error": None,
+        "from": "heartbeat" if sysd else "heartbeat-partial",
+        "verdict": _health_verdict(disk, failed, sysd, oom),
+        "disk": disk, "mount": hr.get("mount") or "/", "mem": hr.get("mem"),
+        "load1": hr.get("load1"), "cores": hr.get("cores") or 1, "failed": failed,
+        "uptime": hr.get("uptime") or 0, "sysd": sysd, "units": hr.get("units") or [],
+        "oom": oom, "hyp": hr.get("hyp"), "vms": hr.get("vms"),
+    }
 
 
 @app.get("/api/fleet-health")
@@ -709,6 +851,8 @@ def fleet_health(refresh: int = 0, user: str = Depends(require_login)):
     import concurrent.futures
     import time as _t
 
+    _HEALTH_CACHE["access"] = _t.time()   # mark active use (drives background priming)
+
     def _fresh():
         return (not refresh) and _HEALTH_CACHE["hosts"] is not None \
             and (_t.time() - _HEALTH_CACHE["ts"]) < _HEALTH_TTL
@@ -721,7 +865,7 @@ def fleet_health(refresh: int = 0, user: str = Depends(require_login)):
         # lock — serve its result instead of re-sweeping.
         if _fresh():
             return {"hosts": _HEALTH_CACHE["hosts"], "cached": True, "ts": _HEALTH_CACHE["ts"]}
-        return _fleet_health_sweep()
+        return _fleet_health_sweep(force_live=bool(refresh))
 
 
 def _sweep_workers(n):
@@ -736,7 +880,7 @@ def _sweep_workers(n):
     return min(max(1, cap), max(1, n))
 
 
-def _fleet_health_sweep():
+def _fleet_health_sweep(force_live=False):
     import concurrent.futures
     import time as _t
     try:
@@ -750,6 +894,18 @@ def _fleet_health_sweep():
         last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
     except Exception:
         last_seen = {}
+    # Latest per-host health the agents reported on heartbeat. This is what lets
+    # the sweep serve most hosts WITHOUT a live probe: a host whose agent reported
+    # health recently (sysd present, ts fresh) is graded from that reading; only
+    # stale/missing hosts (or ?refresh=1) fall back to the live command dispatch.
+    # Best-effort — if the controller call fails, health_readings is empty and
+    # every host is live-probed (the pre-existing behaviour).
+    health_readings = {}
+    if not force_live:
+        try:
+            health_readings = (api.get_fleet_health_readings() or {}).get("hosts") or {}
+        except Exception:
+            health_readings = {}
     now = _t.time()
     cmd = api.cmd_metrics_snapshot()
 
@@ -774,6 +930,22 @@ def _fleet_health_sweep():
         # out the task timeout on a host that won't answer.
         if aid is not None and not online:
             return {**base, "online": False, "ok": False, "verdict": "OFFLINE", "error": "offline"}
+        # FAST PATH: an online host whose agent reported health on a recent
+        # heartbeat is graded from that reading — no live probe, no agent
+        # round-trip. `sysd` present marks an agent new enough to report the full
+        # health signal; a null/too-old reading falls through to the live probe.
+        hr = health_readings.get(aid) if aid else None
+        # Grade from the last heartbeat-reported reading instead of a live probe.
+        # Gate on a fresh reading that carries `disk` (the primary CRITICAL/WARNING
+        # driver) rather than on `sysd`: older agents attach disk/mem/load every
+        # metrics tick but NOT the newer sysd/failed/oom signals, so gating on
+        # `sysd` sent the ENTIRE pre-upgrade fleet through a live probe on every
+        # ~10s dashboard poll — the exact stampede this fast path exists to avoid.
+        # A reading without sysd grades on disk alone (failed-units count unknown
+        # until the agent is upgraded); _health_from_stored marks it "partial" so
+        # the UI can distinguish it from a full-fidelity reading.
+        if hr and hr.get("disk") is not None and (now - (hr.get("ts") or 0)) <= _HEALTH_STORE_MAX_AGE:
+            return _health_from_stored(base, hr)
         # The metrics command is read-only and runs as the agent (root) / SSH
         # user with no sudo, so it must NOT be gated on a stored become-password.
         # Clear the password-sudo flag on a copy of the entry so run_on_entry
@@ -787,7 +959,8 @@ def _fleet_health_sweep():
         # within ~8s is reported as an unreachable/timed-out probe, so the sweep
         # can't stack up and starve the thread pool (which stalled everything).
         r = _dispatch_one(pe, cmd, "command", None, None, None,  # no token: read-only, unlogged
-                          poll_timeout=float(os.getenv("SYSIBLE_HEALTH_PROBE_TIMEOUT", "8")))
+                          poll_timeout=float(os.getenv("SYSIBLE_HEALTH_PROBE_TIMEOUT", "8")),
+                          exec_timeout=float(os.getenv("SYSIBLE_RECON_EXEC_TIMEOUT", "60")))
         m = _parse_sysmetrics((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
         return {
             **base,
@@ -995,12 +1168,32 @@ def _probe_posture(e, cmd, last_seen, now):
     if e.get("agent_entry"):
         pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
     r = _dispatch_one(pe, cmd, "command", None, None, None,  # no token: read-only, unlogged
-                      poll_timeout=float(os.getenv("SYSIBLE_POSTURE_PROBE_TIMEOUT", "30")))
+                      poll_timeout=float(os.getenv("SYSIBLE_POSTURE_PROBE_TIMEOUT", "30")),
+                      exec_timeout=float(os.getenv("SYSIBLE_RECON_EXEC_TIMEOUT", "60")))
     p = _parse_posture((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
     # "limited": the probe ran but NOT as root (e.g. an SSH host whose login user
     # isn't root) - root-only checks (shadow, sshd -T, SUID scans) read blank, so
     # the result can't be trusted as "clean". Agent hosts run as root (privileged).
     limited = bool(p) and (p.get("meta") or {}).get("privileged") == "0"
+    # Surface the EOL / unsupported-OS determination as a first-class posture row
+    # (os.eol = yes/no) so the per-host view both SHOWS it and can offer a
+    # remediation (Fix → OS Release Upgrade). The dashboard already computes this
+    # flag from the same _eol_status table; this just exposes it on the row too.
+    if p and isinstance(p.get("os"), dict):
+        try:
+            p["os"]["eol"] = "yes" if _eol_status(p["os"].get("distro"), p["os"].get("version")) else "no"
+        except Exception:
+            pass
+    # Hypervisor role + running-guest count parsed from the posture stream, hoisted
+    # to the top level so the inventory / drill-down can badge SSH hosts (and any
+    # host) as VM hosts without a separate probe.
+    vh = (p.get("virt") or {}) if p else {}
+    hyp = vh.get("hypervisor")
+    hyp = None if hyp in (None, "", "none", "-") else hyp
+    try:
+        vms = int(vh.get("vms_running")) if vh.get("vms_running") not in (None, "") else None
+    except (TypeError, ValueError):
+        vms = None
     return {
         **base,
         "online": True if p else online,
@@ -1009,6 +1202,7 @@ def _probe_posture(e, cmd, last_seen, now):
         "posture": p,
         "flags": _posture_flags(p),
         "limited": limited,
+        "hypervisor": hyp, "vms": vms,
     }
 
 
@@ -1064,6 +1258,47 @@ def fleet_posture(refresh: int = 0, user: str = Depends(require_login)):
         return {"hosts": hosts, "cached": False, "ts": now}
 
 
+def _prime_caches_loop():
+    """Keep the fleet-health (and posture) caches warm WHILE the dashboard is in
+    active use, so an interactive load is a cache hit instead of waiting on a
+    sweep. Gated on recent access (the health cache's `access` stamp, set by
+    fleet_health) so it goes silent — no background probing at all — once nobody
+    is watching. Health refresh is nearly free now (heartbeat-served); posture
+    still dispatches, so it refreshes on its own slower cadence. Best-effort:
+    every error is swallowed and retried next tick. Disable with
+    SYSIBLE_BACKGROUND_PRIME=0."""
+    import time as _pt
+    try:
+        active_window = float(os.getenv("SYSIBLE_PRIME_ACTIVE_WINDOW", "300"))
+    except ValueError:
+        active_window = 300.0
+    health_every = max(5.0, _HEALTH_TTL)
+    posture_every = max(60.0, _POSTURE_TTL * 0.8)
+    last_posture = 0.0
+    while True:
+        try:
+            _pt.sleep(health_every)
+            if (_pt.time() - _HEALTH_CACHE.get("access", 0.0)) > active_window:
+                continue   # dashboard idle → don't probe the fleet in the background
+            try:
+                with _HEALTH_LOCK:
+                    _fleet_health_sweep()
+            except Exception:
+                pass
+            if (_pt.time() - last_posture) >= posture_every:
+                last_posture = _pt.time()
+                try:
+                    fleet_posture(refresh=0, user="__prime__")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+
+if os.getenv("SYSIBLE_BACKGROUND_PRIME", "1").lower() not in ("0", "false", "no", "off"):
+    threading.Thread(target=_prime_caches_loop, name="sysible-cache-prime", daemon=True).start()
+
+
 @app.get("/api/host-posture/{host_id}")
 def host_posture(host_id: str, user: str = Depends(require_login)):
     """Full read-only posture for a single host (the drill-down's Refresh).
@@ -1080,7 +1315,22 @@ def host_posture(host_id: str, user: str = Depends(require_login)):
         last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
     except Exception:
         last_seen = {}
-    return _probe_posture(entry, _posture_command(), last_seen, _t.time())
+    result = _probe_posture(entry, _posture_command(), last_seen, _t.time())
+    # _probe_posture already derives hypervisor/vms from the live posture stream
+    # (covers SSH hosts). Prefer the fast heartbeat health reading when it has a
+    # value (fresher, no probe needed), but keep the posture-derived value when the
+    # heartbeat doesn't carry it (older agent, or an SSH host with no agent row).
+    aid = entry["id"] if entry["kind"] == "agent" else \
+        (entry.get("agent_entry") or {}).get("id") if entry["kind"] == "merged" else None
+    if aid:
+        try:
+            hr = ((api.get_fleet_health_readings() or {}).get("hosts") or {}).get(aid) or {}
+            if hr.get("hyp") is not None:
+                result["hypervisor"] = hr.get("hyp")
+                result["vms"] = hr.get("vms")
+        except Exception:
+            pass
+    return result
 
 
 # ----------------------------------------------------------------------
@@ -1203,18 +1453,38 @@ def _run_scheduled_job(job):
     if not entries:
         return "error", "no matching target hosts"
 
-    # Scans just refresh the shared caches; no per-host action result.
+    # Scans just refresh the shared caches; no per-host action result. MERGE the probed
+    # hosts into the existing cache by id under the cache lock — a targeted (or
+    # SSH-inclusive) scan must update only the hosts it scanned and PRESERVE the rest.
+    # Wholesale-replacing with only the scanned subset made every non-targeted host
+    # vanish from the fleet dashboard AND the alerts evaluator (both read these caches)
+    # until the next full sweep. Only stamp whole-cache freshness (ts) when the job
+    # actually covered ALL hosts, so a partial top-up doesn't suppress the periodic
+    # full refresh that keeps non-scanned hosts current.
+    is_full = not tgt
     if action == "patch_scan":
         last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
         now = _t.time(); cmd = api.cmd_update_status(refresh=True)
-        _UPDATES_CACHE["hosts"] = [_probe_updates(e, cmd, last_seen, now) for e in entries]
-        _UPDATES_CACHE["ts"] = now
+        probed = [_probe_updates(e, cmd, last_seen, now) for e in entries]
+        with _UPDATES_LOCK:
+            merged = {h.get("id"): h for h in (_UPDATES_CACHE.get("hosts") or [])}
+            for h in probed:
+                merged[h.get("id")] = h
+            _UPDATES_CACHE["hosts"] = list(merged.values())
+            if is_full:
+                _UPDATES_CACHE["ts"] = now
         return "ok", f"rescanned {len(entries)} host(s)"
     if action == "posture_scan":
         last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
         now = _t.time(); cmd = _posture_command()
-        _POSTURE_CACHE["hosts"] = [_probe_posture(e, cmd, last_seen, now) for e in entries]
-        _POSTURE_CACHE["ts"] = now
+        probed = [_probe_posture(e, cmd, last_seen, now) for e in entries]
+        with _POSTURE_LOCK:
+            merged = {h.get("id"): h for h in (_POSTURE_CACHE.get("hosts") or [])}
+            for h in probed:
+                merged[h.get("id")] = h
+            _POSTURE_CACHE["hosts"] = list(merged.values())
+            if is_full:
+                _POSTURE_CACHE["ts"] = now
         return "ok", f"rescanned {len(entries)} host(s)"
 
     arg = (job.get("arg") or "").strip()
@@ -2142,6 +2412,11 @@ def controller_log(lines: int = 400, request: Request = None, user: str = Depend
     return _wrap(lambda: _as_admin(request, lambda: api.get_controller_log(lines=lines)))
 
 
+@app.get("/api/health-warnings")
+def health_warnings_route(request: Request, user: str = Depends(require_superuser_session)):
+    return _wrap(lambda: _as_admin(request, lambda: api.health_warnings()))
+
+
 # ----------------------------------------------------------------------
 # Settings — administrators, password policy, controller config, license, audit
 # ----------------------------------------------------------------------
@@ -2740,6 +3015,16 @@ def enroll_token(request: Request, user: str = Depends(require_login)):
     return _wrap(lambda: _as_admin(request, lambda: api.generate_enroll_token()))
 
 
+@app.post("/api/enroll-token/reissue")
+def reissue_enroll_token(body: dict, request: Request,
+                         user: str = Depends(require_superuser_session)):
+    """Mint a host-bound reissue token to re-enroll ONE existing host after a reinstall
+    that wiped its agent secret. Superuser-only: re-binding a host's identity is a
+    privileged action, so this is gated the same as generating a bundle."""
+    host_id = (body.get("host_id") or "").strip() if isinstance(body, dict) else ""
+    return _wrap(lambda: _as_admin(request, lambda: api.reissue_enroll_token(host_id)))
+
+
 @app.get("/api/enrollment-pause")
 def get_enrollment_pause(request: Request, user: str = Depends(require_login)):
     """Whether new agent enrollment is paused (the runaway kill-switch)."""
@@ -2753,6 +3038,28 @@ def set_enrollment_pause(body: dict, request: Request,
     runaway that re-enrolls faster than it can be deleted."""
     paused = bool(body.get("paused")) if isinstance(body, dict) else False
     return _wrap(lambda: _as_admin(request, lambda: api.set_enrollment_pause(paused, actor=user)))
+
+
+@app.get("/api/enroll-allowlist")
+def get_enroll_allowlist(request: Request, user: str = Depends(require_login)):
+    """The enrollment source-IP allowlist (empty == all sources allowed)."""
+    return _wrap(lambda: _as_admin(request, lambda: api.get_enroll_allowlist()))
+
+
+@app.post("/api/enroll-allowlist")
+def add_enroll_allowlist(body: dict, request: Request,
+                         user: str = Depends(require_superuser_session)):
+    """Add an allowed source CIDR/IP to the enrollment allowlist (superuser)."""
+    cidr = (body.get("cidr") or "") if isinstance(body, dict) else ""
+    note = (body.get("note") or "") if isinstance(body, dict) else ""
+    return _wrap(lambda: _as_admin(request, lambda: api.add_enroll_allowlist(cidr, note)))
+
+
+@app.delete("/api/enroll-allowlist/{entry_id}")
+def remove_enroll_allowlist(entry_id: int, request: Request,
+                            user: str = Depends(require_superuser_session)):
+    """Remove an enrollment-allowlist entry by id (superuser)."""
+    return _wrap(lambda: _as_admin(request, lambda: api.remove_enroll_allowlist(entry_id)))
 
 
 @app.get("/api/agent-bundle")
@@ -2997,7 +3304,8 @@ def fleet_query(body: FleetQueryRequest, user: str = Depends(require_operator)):
         if e.get("integrity_quarantined"):
             return {**base, "error": "integrity-quarantined"}
         r = _dispatch_one(e, cmd, "command", None, None, None, needs_sudo=False, log=False,
-                          poll_timeout=float(os.getenv("SYSIBLE_QUERY_PROBE_TIMEOUT", "20")))
+                          poll_timeout=float(os.getenv("SYSIBLE_QUERY_PROBE_TIMEOUT", "20")),
+                          exec_timeout=float(os.getenv("SYSIBLE_RECON_EXEC_TIMEOUT", "60")))
         val = None
         for line in (r.get("stdout") or "").splitlines():
             if line.startswith("SYSQUERY "):
@@ -3144,8 +3452,22 @@ def files_compare(body: CompareRequest, request: Request, user: str = Depends(re
             "unreadable": unreadable, "errors": errors, "identical": identical}
 
 
+def _host_bounded(command, secs):
+    """Wrap a read-only recon command so it self-terminates on the host after
+    `secs`, instead of potentially occupying the agent's SERIAL task loop for the
+    full SYSIBLE_AGENT_CMD_TIMEOUT (1800s) if a probe wedges — a hung recon task
+    would otherwise block every task queued behind it on that host. Uses coreutils
+    `timeout` (SIGTERM, then SIGKILL 5s later) when present; on a minimal host
+    without it the command runs unbounded, but the per-probe $TMO guards inside the
+    posture/metrics scripts remain the primary bound there."""
+    q = shlex.quote(command)
+    n = int(secs)
+    return (f"if command -v timeout >/dev/null 2>&1; then timeout -k 5 {n} sh -c {q}; "
+            f"else sh -c {q}; fi")
+
+
 def _dispatch_one(entry, command, kind, become_password=None, token=None, description=None,
-                  needs_sudo=True, log=True, poll_timeout=None):
+                  needs_sudo=True, log=True, poll_timeout=None, exec_timeout=None):
     """Run one command on one host and return a normalized result,
     polling agent tasks to completion (bounded) so the response is
     synchronous from the browser's point of view.
@@ -3155,6 +3477,11 @@ def _dispatch_one(entry, command, kind, become_password=None, token=None, descri
     like fleet-health pass a short one so a single unresponsive agent can't
     stall the whole parallel sweep for a minute.
 
+    `exec_timeout` caps how long the command may run ON THE HOST (via
+    _host_bounded), so a wedged read-only probe can't tie up the agent's serial
+    task loop for the 30-min agent command timeout. Read-only sweeps pass this;
+    mutating actions (which may legitimately run long) leave it unset.
+
     The dispatch itself runs with the admin token set (token!=None) so the
     controller can derive the run-as user (runuser -u <admin>) and attribute
     the activity feed; `description` is the human label recorded in that feed.
@@ -3162,6 +3489,8 @@ def _dispatch_one(entry, command, kind, become_password=None, token=None, descri
     held during the (bounded) poll loop."""
     label = entry["label"]
     env = entry.get("environment") or "Unassigned"
+    if exec_timeout:
+        command = _host_bounded(command, exec_timeout)
     try:
         outcome = _with_token(token, lambda: dispatch.run_on_entry(
             entry, command, kind=kind, become_password=become_password, description=description,

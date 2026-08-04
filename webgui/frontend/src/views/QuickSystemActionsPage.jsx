@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
 import HostTree from "../components/HostTree.jsx";
 import ResultsPane from "../components/ResultsPane.jsx";
+import { hypervisorFleetWarning } from "../hypervisor.js";
 
 // Quick System Actions — bespoke page. Beyond the one-click fixes, it has a
 // service browser: list the running (or installed) services on a selected host,
@@ -59,6 +60,15 @@ export default function QuickSystemActionsPage({ hosts = [], onRefreshHosts, pre
   }
   const svc = (action, label) => run(action, { name }, label);
   const confirmRun = (action, label, prompt) => { if (window.confirm(prompt)) run(action, {}, label); };
+  // Reboot / power-off: if any checked host is a hypervisor, warn that its guest
+  // VMs go down with it before confirming.
+  const confirmPower = (action, label, prompt, verb) => {
+    // `targets` are host IDs (HostTree keys its checkboxes by id); match on id,
+    // with label as a fallback in case a caller seeded labels.
+    const targetHosts = hosts.filter((h) => targets.includes(h.id) || targets.includes(h.label));
+    const warn = hypervisorFleetWarning(targetHosts, verb);
+    confirmRun(action, label, warn ? `${warn}\n\n${prompt}` : prompt);
+  };
 
   async function runScript() {
     if (targets.length === 0) { setErr("Check one or more target hosts first."); return; }
@@ -206,11 +216,11 @@ export default function QuickSystemActionsPage({ hosts = [], onRefreshHosts, pre
         <fieldset className="tool-group-box"><legend>Power (careful)</legend>
           <div className="group-buttons">
             <button className="btn sm danger" disabled={busy}
-                    onClick={() => confirmRun("qsa_reboot", "Reboot host", "Reboot every checked host now?")}>
+                    onClick={() => confirmPower("qsa_reboot", "Reboot host", "Reboot every checked host now?", "Rebooting")}>
               Reboot host</button>
             <button className="btn sm danger" disabled={busy}
-                    onClick={() => confirmRun("qsa_poweroff", "Power off host",
-                      "Power off every checked host now? They will NOT come back until powered on out-of-band.")}>
+                    onClick={() => confirmPower("qsa_poweroff", "Power off host",
+                      "Power off every checked host now? They will NOT come back until powered on out-of-band.", "Powering off")}>
               Power off host</button>
           </div>
         </fieldset>

@@ -28,6 +28,13 @@ import client._api_repo as R
 import client._api_network as N
 import client._api_firewall as FW
 import client._api_users as U
+import client._api_boot as B
+import client._api_backup as Bk
+import client._api_subscriptions as Sub
+import client._api_process_service as P
+import client._api_timesync as T
+import client._api_directory as Dir
+import client._api_automation as A
 
 _PREFIX = 'export PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH"; '
 
@@ -167,10 +174,14 @@ def test_netplan_yaml_renders_and_parses(tmp_path):
     assert "addresses: [192.168.1.50/24]" in content
     assert "via: 192.168.1.1" in content
     assert "addresses: [1.1.1.1, 9.9.9.9]" in content
+    # Explicit default-route CIDR, NOT the `to: default` alias (rejected by the
+    # netplan 0.99 shipped on Ubuntu 18.04 / un-SRU'd 20.04).
+    assert "to: 0.0.0.0/0" in content
+    assert "to: default" not in content
     yaml = pytest.importorskip("yaml")
     eth = yaml.safe_load(content)["network"]["ethernets"]["ens3"]
     assert eth["dhcp4"] is False
-    assert eth["routes"] == [{"to": "default", "via": "192.168.1.1"}]
+    assert eth["routes"] == [{"to": "0.0.0.0/0", "via": "192.168.1.1"}]
 
 
 @pytest.mark.parametrize("bad", [
@@ -232,4 +243,271 @@ def test_create_user_same_name_group_guard():
     assert "getent group admin" in cmd
     assert "useradd -m -N -s" in cmd   # collision path: default group, no join
     assert "useradd -m -s" in cmd      # normal path: private group
+    _bash_n(cmd)
+
+
+# === 2nd cross-distro audit: fixes for silent-wrong / hard-error bugs ==========
+
+# --- fsck is a no-op stub on XFS/btrfs: dispatch to the real repair tool -------
+
+@pytest.mark.parametrize("auto", [True, False])
+def test_repair_dispatches_by_fstype_not_bare_fsck(auto):
+    cmd = M.cmd_repair_filesystem("/dev/sdb1", auto)
+    # A bare `fsck` execs fsck.xfs / fsck.btrfs which exit 0 without repairing.
+    assert "xfs_repair" in cmd            # XFS (RHEL/Rocky/Alma default root)
+    assert "btrfs check" in cmd           # btrfs (Fedora/openSUSE default root)
+    assert "e2fsck" in cmd                # ext*
+    assert "blkid -o value -s TYPE" in cmd or "lsblk -dno FSTYPE" in cmd
+    _bash_n(cmd)
+
+
+def test_repair_xfs_runs_xfs_repair(tmp_path):
+    """Simulate an XFS device: the real repair tool must run, not a fsck no-op."""
+    cmd = M.cmd_repair_filesystem("/dev/sdb1")
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "xfs_repair").write_text("#!/bin/sh\necho XFS_REPAIR_RAN\n")
+    (bindir / "xfs_repair").chmod(0o755)
+    sim = (
+        "findmnt(){ return 1; }; blkid(){ echo xfs; }; lsblk(){ echo xfs; }; "
+        f'export PATH="{bindir}:$PATH"; ' + cmd
+    )
+    r = subprocess.run(["bash", "-c", sim], capture_output=True, text=True)
+    assert "XFS_REPAIR_RAN" in r.stdout
+
+
+# --- swap files on btrfs must be NOCOW (chattr +C) or swapon rejects them ------
+
+@pytest.mark.parametrize("cmd", [
+    St.cmd_create_swap_file("/swapfile", 1024, True),
+    St.cmd_resize_swap_file("/swapfile", 2048, True),
+])
+def test_swap_btrfs_nocow(cmd):
+    assert 'findmnt -no FSTYPE -T' in cmd     # detect the target dir's fs
+    assert "chattr +C" in cmd                 # NOCOW, required for btrfs swapfiles
+    assert "dd if=/dev/zero" in cmd           # still dd (not fallocate) for XFS
+    _bash_n(cmd)
+
+
+# --- kernel cmdline on RHEL8+/Fedora BLS needs grubby, not just grub.cfg -------
+
+def test_kernel_cmdline_uses_grubby_on_bls():
+    cmd = B.cmd_set_kernel_cmdline("quiet nosmt")
+    # BLS entries take options from /boot/loader/entries, not a regenerated
+    # grub.cfg — grubby applies to existing kernels; grub2-mkconfig alone is a no-op.
+    assert "command -v grubby" in cmd
+    assert "grubby --update-kernel=ALL --args=" in cmd
+    assert "grub2-mkconfig" in cmd or "update-grub" in cmd   # fallback still present
+    _bash_n(cmd)
+
+
+# --- sudo grant: openSUSE ships %wheel commented out, membership is inert ------
+
+def test_set_sudo_installs_validated_group_rule():
+    cmd = U.cmd_set_sudo("deploy", True)
+    assert "visudo -cf" in cmd                 # validated before install
+    assert "/etc/sudoers.d/sysible-sudo-group" in cmd
+    assert "0440" in cmd
+    assert "NOPASSWD" not in cmd               # no extra privilege
+    _bash_n(cmd)
+
+
+def test_set_sudo_rule_is_group_scoped():
+    """The installed sudoers line grants the detected group, not a literal group."""
+    cmd = U.cmd_set_sudo("deploy", True)
+    # printf builds `%<grp> ALL=(ALL:ALL) ALL` from the runtime-detected $grp.
+    assert "ALL=(ALL:ALL) ALL" in cmd
+    assert '"$grp"' in cmd
+
+
+# --- account lockout: faillock.conf is inert unless wired into PAM ------------
+
+def test_account_lockout_policy_wires_or_warns():
+    cmd = U.cmd_set_account_lockout_policy(5, 900)
+    assert "faillock.conf" in cmd
+    assert "authselect enable-feature with-faillock" in cmd   # RHEL8+ wiring
+    assert "pam_faillock" in cmd                               # warning for the rest
+    _bash_n(cmd)
+
+
+# --- security updates: dnf5 renamed `updateinfo` -> `advisory` ----------------
+
+def test_check_security_updates_dnf5_advisory_branch():
+    cmd = S.cmd_check_security_updates()
+    assert "dnf advisory --help" in cmd                 # probe for dnf5
+    assert "dnf advisory list --security" in cmd        # dnf5 form
+    assert "dnf updateinfo list security" in cmd        # dnf4 fallback
+    _bash_n(cmd)
+
+
+# --- scheduled backup: /etc/cron.d is inert without a cron daemon -------------
+
+def test_backup_schedule_ensures_cron_daemon():
+    cmd = Bk.cmd_configure_backup_schedule("/etc", "/backups", "0 2 * * *")
+    assert "/etc/cron.d/sysible-backup" in cmd
+    # Must ensure a cron daemon exists+runs (crond on RHEL/SUSE, cron on Debian).
+    assert "command -v crond" in cmd and "command -v cron" in cmd
+    assert "systemctl enable --now crond" in cmd or "systemctl enable --now cron" in cmd
+    assert "cronie" in cmd                    # installs where absent
+    _bash_n(cmd)
+
+
+# --- Ubuntu Pro: older LTS ships the legacy `ua` CLI, not `pro` ---------------
+
+@pytest.mark.parametrize("cmd", [
+    Sub.cmd_pro_status(),
+    Sub.cmd_pro_attach("TOKEN"),
+    Sub.cmd_pro_refresh(),
+])
+def test_pro_resolves_ua_or_pro(cmd):
+    assert "command -v pro" in cmd and "command -v ua" in cmd   # resolve either
+    assert '"$PRO"' in cmd                                      # invoke the resolved CLI
+    _bash_n(cmd)
+
+
+def test_pro_only_ua_present_runs(tmp_path):
+    """With only the legacy `ua` on PATH, the pro builder must still run it."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "ua").write_text("#!/bin/sh\necho UA_RAN: \"$@\"\n")
+    (bindir / "ua").chmod(0o755)
+    cmd = Sub.cmd_pro_status()
+    sim = f'export PATH="{bindir}:$PATH"; ' + cmd
+    r = subprocess.run(["bash", "-c", sim], capture_output=True, text=True)
+    assert "UA_RAN: status --all" in r.stdout
+
+
+# --- XFS quotas use mount options, not quotacheck/quotaon ---------------------
+
+def test_enable_quotas_has_xfs_branch():
+    cmd = M.cmd_enable_quotas("/data")
+    assert 'findmnt -no FSTYPE' in cmd
+    assert "uquota" in cmd and "gquota" in cmd     # XFS guidance
+    assert "quotacheck" in cmd                     # ext path still present
+    _bash_n(cmd)
+
+
+# === 2nd audit, deferred batch: more cross-distro correctness =================
+
+# --- generic service builders resolve ssh/sshd, cron/crond, chrony/chronyd ----
+
+@pytest.mark.parametrize("verb_cmd", [
+    P.cmd_service_start("sshd"), P.cmd_service_restart("cron"),
+    P.cmd_service_enable("chronyd"),
+])
+def test_service_builders_resolve_unit_aliases(verb_cmd):
+    assert "list-unit-files --no-legend" in verb_cmd
+    assert "sshd.service" in verb_cmd and "ssh.service" in verb_cmd
+    assert "crond.service" in verb_cmd and "cron.service" in verb_cmd
+    assert "chronyd.service" in verb_cmd and "chrony.service" in verb_cmd
+    _bash_n(verb_cmd)
+
+
+def test_service_alias_resolves_sshd_to_ssh_on_debian():
+    """On a Debian-like host where only ssh.service exists, a 'sshd' request runs ssh."""
+    cmd = P.cmd_service_restart("sshd")
+    stub = (
+        'systemctl(){ case "$1 $2 $3" in '
+        '"list-unit-files --no-legend sshd.service") return 0;; '
+        '"list-unit-files --no-legend ssh.service") echo "ssh.service enabled"; return 0;; '
+        'is-active*) echo active;; is-enabled*) echo enabled;; *) return 0;; '
+        'esac; }; export -f systemctl; '
+    )
+    r = subprocess.run(["bash", "-c", stub + cmd], capture_output=True, text=True)
+    # The builder's own confirmation names the RESOLVED unit ($u), proving sshd->ssh.
+    assert "Restarted ssh.service." in r.stdout
+
+
+# --- chrony: disable DHCP-supplied NTP so the chosen servers are exclusive -----
+
+def test_set_ntp_servers_disables_dhcp_sourcedir():
+    cmd = T.cmd_set_ntp_servers("1.1.1.1 8.8.8.8")
+    assert "sourcedir" in cmd                       # Debian DHCP NTP source
+    assert "server 1.1.1.1 iburst" in cmd
+    _bash_n(cmd)
+
+
+# --- netplan DHCP switch must warn about a static IP left in another file ------
+
+def test_dhcp_warns_about_conflicting_static_netplan():
+    cmd = N.cmd_configure_dhcp("ens3")
+    # netplan concatenates address lists across files, so a static IP elsewhere
+    # survives; the builder must detect and warn rather than silently half-switch.
+    assert "/etc/netplan/*.yaml" in cmd
+    assert "appends address lists" in cmd
+    _bash_n(cmd)
+
+
+# --- netplan config validates the interface actually exists -------------------
+
+@pytest.mark.parametrize("cmd", [
+    N.cmd_configure_static_ip("ens3", "1.2.3.4/24", "1.2.3.1"),
+    N.cmd_configure_dhcp("ens3"),
+])
+def test_netplan_path_checks_iface_exists(cmd):
+    assert "/sys/class/net/$IFACE" in cmd or 'ip link show "$IFACE"' in cmd
+    _bash_n(cmd)
+
+
+# --- dnf5 addrepo: bare baseurl needs --set=baseurl, .repo needs --from-repofile
+
+def test_repo_add_dnf5_baseurl_vs_repofile():
+    cmd = R.cmd_add_repository("https://repo.example.com/x/", "myrepo")
+    assert "--add-repo" in cmd                      # dnf4 form
+    assert "--set=baseurl=" in cmd                  # dnf5 bare-baseurl form
+    assert "--from-repofile=" in cmd                # dnf5 .repo-file form
+    assert "--id=myrepo" in cmd
+    _bash_n(cmd)
+
+
+# --- Fedora system-upgrade: install the plugin matching the active dnf --------
+
+@pytest.mark.parametrize("build", [
+    lambda: A.cmd_release_upgrade("41"),
+    lambda: A.cmd_release_upgrade_check("41"),
+])
+def test_fedora_upgrade_plugin_keyed_on_dnf_major(build):
+    cmd = build()
+    assert "dnf5-plugin-system-upgrade" in cmd
+    assert "dnf-plugin-system-upgrade" in cmd
+    assert "grep -q '^dnf5'" in cmd
+    _bash_n(cmd)
+
+
+# --- LDAP client wires NSS + PAM (SSSD alone doesn't) -------------------------
+
+def test_ldap_client_wires_nss_and_pam():
+    cmd = Dir.cmd_configure_ldap_client("ldap.example.com", "dc=example,dc=com")
+    assert "nsswitch.conf" in cmd                    # NSS sss wiring
+    assert "grep -qw sss" in cmd
+    assert "authselect select sssd" in cmd           # RHEL PAM
+    assert "pam-auth-update --enable sss" in cmd     # Debian PAM
+    assert "pam-config --add --sss" in cmd           # SUSE PAM
+    _bash_n(cmd)
+
+
+# --- mkfs gives a friendly 'not installed' message per distro -----------------
+
+def test_format_filesystem_guards_missing_mkfs():
+    cmd = St.cmd_format_filesystem("/dev/sdb1", "btrfs")
+    assert "command -v mkfs.btrfs" in cmd
+    assert "btrfs-progs" in cmd                       # package hint
+    _bash_n(cmd)
+
+
+# --- pwquality.conf is inert on default Debian/Ubuntu: warn -------------------
+
+def test_pwquality_warns_on_debian():
+    cmd = S.cmd_set_pwquality_option("minlen", "12")
+    assert "pam_pwquality" in cmd
+    assert "libpam-pwquality" in cmd
+    _bash_n(cmd)
+
+
+# --- keep-N kernels: note the count is dnf-only -------------------------------
+
+def test_remove_old_kernels_notes_keep_is_dnf_only():
+    cmd = B.cmd_remove_old_kernels("5")
+    assert "APT autoremove" in cmd
+    assert "multiversion.kernels" in cmd
     _bash_n(cmd)

@@ -319,11 +319,31 @@ def _sshd_bin_fragment(var: str = "SSHDBIN") -> str:
     )
 
 
+def _sshd_privsep_dir_fragment() -> str:
+    """Ensure the sshd privilege-separation directory exists before `sshd -t`.
+
+    On Debian/Ubuntu (and others) `sshd -t` FAILS with 'Missing privilege
+    separation directory: /run/sshd' when that directory is absent — a runtime
+    dir the systemd unit's RuntimeDirectory normally creates, but which can be
+    missing at config-test time (a cleared /run, sshd started outside systemd,
+    a fresh boot state). That made a perfectly VALID hardening config get
+    rejected and rolled back.
+
+    Creating it — root-owned, 0755, exactly what sshd itself uses — lets a good
+    config validate. It does NOT bypass validation: `sshd -t` still runs and a
+    genuinely bad config still fails and is restored. Best-effort: any error is
+    ignored and `sshd -t` then reports the real problem. Harmless on distros that
+    don't use /run/sshd (an empty tmpfs dir cleared at reboot)."""
+    return ("[ -d /run/sshd ] || mkdir -p /run/sshd 2>/dev/null || true; "
+            "chmod 0755 /run/sshd 2>/dev/null || true; ")
+
+
 def cmd_sshd_status() -> str:
     svc = _sshd_service_fragment()
     binf = _sshd_bin_fragment()
+    psd = _sshd_privsep_dir_fragment()
     return (
-        f"{svc}; {binf}; echo \"-- systemctl status $SSHSVC --\" && systemctl status \"$SSHSVC\" --no-pager 2>&1; "
+        f"{svc}; {binf}; {psd}echo \"-- systemctl status $SSHSVC --\" && systemctl status \"$SSHSVC\" --no-pager 2>&1; "
         "echo; echo '-- sshd -t (config syntax check) --' && \"$SSHDBIN\" -t 2>&1 && echo 'sshd config OK.'"
     )
 
@@ -365,6 +385,7 @@ def _build_sshd_set_option_script(key: str, value: str, reload: bool = False) ->
     # `I` flag) - a drop-in may write `passwordauthentication` in any case.
     strip = f"sed -i -E '/^[[:space:]]*{key}[[:space:]]/Id'"
     binf = _sshd_bin_fragment()
+    psd = _sshd_privsep_dir_fragment()
     if reload:
         # Apply-and-reload: after the new config validates, reload sshd so the
         # change takes effect in one click (a reload keeps existing sessions).
@@ -388,7 +409,7 @@ def _build_sshd_set_option_script(key: str, value: str, reload: bool = False) ->
     # occurrence. Back up the drop-in dir too and roll it back if validation
     # fails, exactly like the main file.
     return (
-        f"{binf}; "
+        f"{binf}; {psd}"
         f"cp {q_cfg} {q_bak} 2>&1; "
         f"dropd={q_dropdir}; bakd=$(mktemp -d 2>/dev/null || echo \"/tmp/sysible-sshd-bak.$$\"); "
         f"mkdir -p \"$bakd\"; "
@@ -415,8 +436,9 @@ def cmd_sshd_set_option(key: str, value: str) -> str:
 def cmd_sshd_reload() -> str:
     svc = _sshd_service_fragment()
     binf = _sshd_bin_fragment()
+    psd = _sshd_privsep_dir_fragment()
     return (
-        f"{binf}; if ! \"$SSHDBIN\" -t 2>&1; then echo 'Current sshd_config does not pass validation - not reloading.' >&2; exit 1; fi; "
+        f"{binf}; {psd}if ! \"$SSHDBIN\" -t 2>&1; then echo 'Current sshd_config does not pass validation - not reloading.' >&2; exit 1; fi; "
         f"{svc}; systemctl reload \"$SSHSVC\" 2>&1 && echo 'sshd reloaded.'"
     )
 
@@ -599,8 +621,23 @@ def cmd_check_security_updates() -> str:
     installing anything."""
     return _pkgmgr_dispatch(
         rpm_cmd=(
-            'if [ "$PKGMGR" = "dnf" ]; then dnf updateinfo list security 2>&1; '
-            "else (yum --security check-update 2>&1 || true); fi"
+            # dnf5 (Fedora 41+, RHEL 10) renamed the `updateinfo` command to
+            # `advisory` and DROPPED the `list security` positional aliases, so
+            # `dnf updateinfo list security` errors there. dnf5 has an `advisory`
+            # subcommand (dnf4 does not), so probe for it and use `advisory list
+            # --security`; fall back to the dnf4 form otherwise.
+            'if [ "$PKGMGR" = "dnf" ]; then '
+            'if dnf advisory --help >/dev/null 2>&1; then dnf advisory list --security 2>&1; '
+            'else dnf updateinfo list security 2>&1; fi; '
+            # yum --security relies on the repos publishing updateinfo (security-
+            # advisory) metadata. RHEL and Amazon Linux 2 publish it; classic CentOS 7
+            # repos do NOT, so --security matches nothing and this can read as "no
+            # security updates" even when updates exist. Flag that possibility.
+            'else out=$(yum --security check-update 2>&1); rc=$?; echo "$out"; '
+            'if ! echo "$out" | grep -q updateinfo && [ "$rc" -ne 100 ]; then '
+            "echo 'Note: if this host uses repos without updateinfo metadata "
+            "(e.g. classic CentOS 7), yum cannot classify security-only updates "
+            "- run a full update check to be sure.' >&2; fi; true; fi"
         ),
         zypper_cmd="zypper list-patches --category security 2>&1",
         apt_cmd=(
@@ -685,7 +722,17 @@ def cmd_set_pwquality_option(key: str, value) -> str:
         f"touch {q_file}; v={qv}; "
         f"sed -i -E '/^[[:space:]]*{key}[[:space:]]*=/d' {q_file}; "
         f"printf '%s = %s\\n' {qk} \"$v\" >> {q_file}; "
-        f"printf 'pwquality.conf: %s set to %s.\\n' {qk} \"$v\""
+        f"printf 'pwquality.conf: %s set to %s.\\n' {qk} \"$v\"; "
+        # pwquality.conf is read by pam_pwquality, which RHEL/Fedora/SUSE wire into
+        # the password stack by default. Debian/Ubuntu do NOT install
+        # libpam-pwquality or reference it in common-password by default, so the
+        # directive is inert there until that package is installed and wired - warn
+        # rather than imply the policy is in force.
+        'if command -v apt-get >/dev/null 2>&1 && '
+        '! grep -rq pam_pwquality /etc/pam.d/ 2>/dev/null; then '
+        "echo 'Note: pam_pwquality is not referenced in this host'\"'\"'s PAM stack "
+        "(Debian/Ubuntu default). Install libpam-pwquality and enable it in "
+        "/etc/pam.d/common-password for this to take effect.' >&2; fi"
     )
 
 

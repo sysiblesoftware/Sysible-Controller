@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
+import { hypervisorBadge } from "../hypervisor.js";
+import { findSupp } from "../suppress.js";
 
 // Fleet topology — a controller-centric map. The controller is the hub; managed
 // hosts cluster around it, grouped either by ENVIRONMENT or by NETWORK segment
@@ -13,6 +15,30 @@ const ACCENT = "#3d7dd8";
 const RANK = { CRITICAL: 0, OFFLINE: 1, WARNING: 2, SUPPRESSED: 3, OK: 4, UNKNOWN: 5 };
 // Posture flags that count as CRITICAL (mirrors the dashboard's critical set).
 const CRIT_FLAGS = ["ssh_root_login", "firewall_disabled", "eol_os", "risky_accounts"];
+
+// Recompute a host's health verdict the way the dashboard's per-host analysis
+// does — from the raw fleet-health signals, honoring suppressions of its two
+// suppressible health findings (disk_critical, failed_units) — so the map's node
+// color matches the dashboard instead of the server's raw verdict (which ignores
+// suppressions). `hh` is the fleet-health reading; isSupp(key)->bool. Returns
+// OFFLINE / CRITICAL / WARNING / SUPPRESSED / OK, or null when status is unknown.
+function healthVerdict(hh, isSupp) {
+  if (hh.online === false) return "OFFLINE";
+  if (hh.online == null && !hh.verdict) return null;   // unknown (e.g. SSH host, no probe)
+  let sev = 9, active = 0, suppressed = 0;
+  const add = (s, key) => {
+    if (key && isSupp(key)) { suppressed++; return; }
+    active++; sev = Math.min(sev, s);
+  };
+  if (hh.ok === false) add(2, null);
+  if ((hh.disk ?? 0) >= 90) add(1, "disk_critical");
+  else if ((hh.disk ?? 0) >= 80) add(2, null);
+  if ((hh.mem ?? 0) >= 90) add(1, null);
+  if ((hh.failed ?? 0) > 0) add(hh.failed >= 3 ? 1 : 2, "failed_units");
+  if ((hh.oom ?? 0) > 0) add(1, null);
+  if (active === 0) return suppressed ? "SUPPRESSED" : "OK";
+  return sev === 1 ? "CRITICAL" : "WARNING";
+}
 
 function statusOf(n) {
   if (n.online === false) return "OFFLINE";
@@ -28,11 +54,17 @@ function worst(hosts) {
   return Object.keys(RANK).find((k) => RANK[k] === r) || "OK";
 }
 
+// Last successful fetch, kept at module scope so leaving Topology and coming
+// back paints the previous map INSTANTLY (then refreshes in the background)
+// instead of flashing an empty canvas while every endpoint round-trips again.
+const _snap = { hosts: [], health: [], agents: [], posture: [], supps: [] };
+
 export default function Topology({ onOpen }) {
-  const [hosts, setHosts] = useState([]);
-  const [health, setHealth] = useState([]);
-  const [agents, setAgents] = useState([]);
-  const [posture, setPosture] = useState([]);
+  const [hosts, setHosts] = useState(_snap.hosts);
+  const [health, setHealth] = useState(_snap.health);
+  const [agents, setAgents] = useState(_snap.agents);
+  const [posture, setPosture] = useState(_snap.posture);
+  const [supps, setSupps] = useState(_snap.supps);   // active finding suppressions
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   const [auto, setAuto] = useState(true);
@@ -42,22 +74,43 @@ export default function Topology({ onOpen }) {
   const [view, setView] = useState({ s: 1, tx: 0, ty: 0 });
   const [positions, setPositions] = useState({});   // id / "__hub__"+key / "__ctrl__" -> {x,y} manual overrides
   const inFlight = useRef(false);
+  const postureInFlight = useRef(false);   // guards the heavy posture overlay separately
   const drag = useRef(null);        // background pan
   const nodeDrag = useRef(null);    // dragging a single node / hub / controller
   const svgRef = useRef(null);
+  const userAdjusted = useRef(false);   // once the user pans/zooms, stop auto-fitting
+  const lastFitSig = useRef("");        // structural signature we last fit to
 
   const load = useCallback(() => {
     if (inFlight.current) return;
     inFlight.current = true;
     setLoading(true); setErr("");
-    Promise.allSettled([api.hosts(), api.fleetHealth(), api.agents(), api.fleetPosture(false)])
-      .then(([h, fh, ag, po]) => {
-        if (h.status === "fulfilled") setHosts(h.value.hosts || []); else setErr(h.reason?.message || "Couldn't load hosts");
-        if (fh.status === "fulfilled") setHealth(fh.value.hosts || []);
-        if (ag.status === "fulfilled") setAgents(ag.value.agents || []);
-        if (po.status === "fulfilled") setPosture(po.value.hosts || []);
-      })
-      .finally(() => { inFlight.current = false; setLoading(false); });
+    // The map's structure and status colors come from hosts + health + agents,
+    // which are cheap (health is heartbeat-served). Render as soon as those land
+    // rather than waiting on the whole batch. Each applies independently.
+    const fast = [
+      api.hosts().then((v) => { _snap.hosts = v.hosts || []; setHosts(_snap.hosts); },
+                       (e) => setErr(e?.message || "Couldn't load hosts")),
+      api.fleetHealth().then((v) => { _snap.health = v.hosts || []; setHealth(_snap.health); }, () => {}),
+      api.agents().then((v) => { _snap.agents = v.agents || []; setAgents(_snap.agents); }, () => {}),
+      // Suppressions (cheap) so a node's critical ring clears when its finding is
+      // suppressed — the map must match the dashboard, not re-flag silenced ones.
+      api.suppressions().then((v) => { _snap.supps = v.suppressions || []; setSupps(_snap.supps); }, () => {}),
+    ];
+    // Posture is only an OVERLAY here — the critical red ring and the network
+    // lens's gateway grouping. It's also the heavy call (a full fleet posture
+    // sweep on a cold cache), so it must NOT gate the map: fire it separately and
+    // let the rings/grouping fill in when it resolves. Without it the map still
+    // renders fully, just with disk-only criticality and subnet-based grouping.
+    // Its own in-flight guard stops the 10s poll from stacking overlapping
+    // sweeps when a cold-cache sweep runs longer than the poll interval.
+    if (!postureInFlight.current) {
+      postureInFlight.current = true;
+      api.fleetPosture(false)
+        .then((v) => { _snap.posture = v.hosts || []; setPosture(_snap.posture); }, () => {})
+        .finally(() => { postureInFlight.current = false; });
+    }
+    Promise.allSettled(fast).finally(() => { inFlight.current = false; setLoading(false); });
   }, []);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -83,17 +136,32 @@ export default function Topology({ onOpen }) {
       const flags = pr.flags || {};
       const ip = ag.ip || extractIp(h.address);
       const gw = (pr.posture && pr.posture.net && pr.posture.net.gateway) || null;
-      const hasCrit = (hh.disk >= 90) || CRIT_FLAGS.some((k) => flags[k] === true);
+      // Honor suppressions the way the dashboard does, so the map agrees with it.
+      // A finding counts only if firing AND not silenced by an active suppression
+      // (host/env scope; boot_epoch drives the "until next reboot" check). The
+      // node COLOR uses a suppression-aware health verdict (a suppressed disk /
+      // failed-unit finding no longer keeps it amber); the red RING uses the
+      // suppression-filtered sev-1 posture flags.
+      const env = h.environment || "Unassigned";
+      const boot = (pr.posture && pr.posture.os && pr.posture.os.boot_epoch) || null;
+      const isSupp = (key) => !!findSupp(supps, { host: h.label, env, key, bootEpoch: boot });
+      const verdict = healthVerdict(hh, isSupp);
+      const hasCrit = (hh.disk >= 90 && !isSupp("disk_critical")) ||
+        CRIT_FLAGS.some((k) => flags[k] === true && !isSupp(k));
       return {
-        id: h.id, label: h.label, env: h.environment || "Unassigned",
-        kind: h.type_text || "", address: h.address, isController: !!h.is_controller,
-        online: hh.online, verdict: hh.verdict, disk: hh.disk, mem: hh.mem,
+        id: h.id, label: h.label, env,
+        // The reliable is_controller flag is computed on the AGENT record (GET /agents,
+        // _is_controller_host by name+IP); the merged-hosts source may not carry it, which
+        // would draw the controller's own self-managed host as an ordinary host under an
+        // environment (a duplicate "controller"). Trust either source.
+        kind: h.type_text || "", address: h.address, isController: !!(ag.is_controller || h.is_controller),
+        online: hh.online, verdict, disk: hh.disk, mem: hh.mem,
         agentVersion: ag.agent_version, ip, gateway: gw,
         subnet: subnetOf(ip), revoked: !!ag.revoked, quarantined: !!ag.integrity_quarantined,
-        hasCrit,
+        hasCrit, hypervisor: hh.hyp, vms: hh.vms,
       };
     });
-  }, [hosts, health, agents, posture]);
+  }, [hosts, health, agents, posture, supps]);
 
   const center = useMemo(() => all.find((m) => m.isController) || null, [all]);
 
@@ -177,6 +245,44 @@ export default function Topology({ onOpen }) {
   }, [laid, center]);
   const hoverObj = hover ? nodeById[hover] : null;
 
+  // Fit-to-view: center + scale the whole graph (controller + hubs + hosts) into
+  // the viewport. The radial layout pins the controller at the viewBox centre, so
+  // with few groups the content sits off to one side and hosts run past an edge —
+  // this reframes it so everything is visible. Padding leaves room for the labels
+  // that sit below/around each node.
+  const fitView = useCallback(() => {
+    const pts = [[laid.ctrl.x, laid.ctrl.y]];
+    laid.hubs.forEach((h) => pts.push([h.x, h.y]));
+    laid.nodes.forEach((n) => pts.push([n.x, n.y]));
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [x, y] of pts) {
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+    if (!Number.isFinite(minX)) return;
+    const padX = 80, padTop = 46, padBottom = 66;   // labels hang below the nodes
+    minX -= padX; maxX += padX; minY -= padTop; maxY += padBottom;
+    const cw = Math.max(1, maxX - minX), ch = Math.max(1, maxY - minY);
+    const s = Math.max(0.3, Math.min(3, Math.min(W / cw, H / ch)));
+    const bcx = (minX + maxX) / 2, bcy = (minY + maxY) / 2;
+    setView({ s, tx: W / 2 - s * bcx, ty: H / 2 - s * bcy });
+  }, [laid]);
+
+  // Re-fit only when the STRUCTURE changes (group set / lens / collapse / which
+  // hosts exist) — not on every 10 s value refresh, and never after the user has
+  // panned or zoomed themselves.
+  const fitSig = useMemo(() =>
+    lens + "|" + laid.hubs.map((h) => h.key + (h.collapsed ? "c" : "")).join(",")
+         + "|" + laid.nodes.map((n) => n.id).join(","),
+    [lens, laid]);
+  useEffect(() => {
+    if (laid.hubs.length === 0) return;           // nothing to frame yet
+    if (userAdjusted.current) return;             // respect a manual pan/zoom
+    if (fitSig === lastFitSig.current) return;    // structure unchanged
+    lastFitSig.current = fitSig;
+    fitView();
+  }, [fitSig, fitView, laid.hubs.length]);
+
   const counts = useMemo(() => {
     let on = 0, off = 0, crit = 0;
     for (const n of all) { if (n.isController) continue; if (n.online === false) off++; else if (n.online) on++; if (n.hasCrit && n.online !== false) crit++; }
@@ -186,12 +292,16 @@ export default function Topology({ onOpen }) {
   const toggleGroup = (key) => setCollapsed((c) => ({ ...c, [key]: !c[key] }));
   const collapseAll = () => setCollapsed(Object.fromEntries(groups.map((g) => [g.key, true])));
   const expandAll = () => setCollapsed({});
-  const zoom = (f) => setView((v) => {
-    const s = Math.max(0.4, Math.min(3, v.s * f));
-    return { s, tx: v.tx + (v.s - s) * cx, ty: v.ty + (v.s - s) * cy };
-  });
-  // Reset view AND any manual node positions back to the computed layout.
-  const resetView = () => { setView({ s: 1, tx: 0, ty: 0 }); setPositions({}); };
+  const zoom = (f) => {
+    userAdjusted.current = true;
+    setView((v) => {
+      const s = Math.max(0.4, Math.min(3, v.s * f));
+      return { s, tx: v.tx + (v.s - s) * cx, ty: v.ty + (v.s - s) * cy };
+    });
+  };
+  // Reset any manual node positions and re-fit the whole graph to the viewport
+  // (clearing the "user adjusted" flag so the fit effect reframes it).
+  const resetView = () => { userAdjusted.current = false; lastFitSig.current = ""; setPositions({}); };
   const onWheel = (e) => { zoom(e.deltaY < 0 ? 1.12 : 0.89); };
   const onDown = (e) => { drag.current = { x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty }; };
 
@@ -216,6 +326,7 @@ export default function Topology({ onOpen }) {
       return;
     }
     if (!drag.current || !svgRef.current) return;
+    userAdjusted.current = true;   // a manual pan; stop auto-fitting
     const k = svgUnitsPerPx();
     setView((v) => ({ ...v, tx: drag.current.tx + (e.clientX - drag.current.x) * k, ty: drag.current.ty + (e.clientY - drag.current.y) * k }));
   };
@@ -252,7 +363,7 @@ export default function Topology({ onOpen }) {
           <div className="row" style={{ gap: 2 }}>
             <button className="btn ghost sm" onClick={() => zoom(1.2)} title="Zoom in">＋</button>
             <button className="btn ghost sm" onClick={() => zoom(0.83)} title="Zoom out">－</button>
-            <button className="btn ghost sm" onClick={resetView} title="Reset view & node positions">⤢</button>
+            <button className="btn ghost sm" onClick={resetView} title="Fit everything to view & reset node positions">⤢</button>
           </div>
           <label className="checkrow" style={{ margin: 0 }}>
             <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
@@ -307,7 +418,7 @@ export default function Topology({ onOpen }) {
                                      strokeDasharray={n.revoked || n.quarantined ? "3 3" : undefined} />}
                     <circle r={hovered ? 11 : 9} fill={nodeColor(n)} stroke="var(--bg,#0d1117)" strokeWidth={2} />
                     {n.kind === "Agent + SSH" && <circle r={hovered ? 4.5 : 3.5} fill="var(--bg,#0d1117)" />}
-                    <text y={24} textAnchor="middle" style={{ fontSize: 11.5, fill: "var(--text,#e6e6e6)", fontWeight: hovered ? 700 : 400 }}>{trunc(n.label)}</text>
+                    <text y={24} textAnchor="middle" style={{ fontSize: 11.5, fill: "var(--text,#e6e6e6)", fontWeight: hovered ? 700 : 400 }}>{n.hypervisor ? "🖥 " : ""}{trunc(n.label)}</text>
                   </g>
                 );
               })}
@@ -332,7 +443,7 @@ export default function Topology({ onOpen }) {
               <span key={k} className="faint"><span className="dot" style={{ background: COLOR[k] }} /> {l}</span>
             ))}
             <span className="faint"><span style={{ display: "inline-block", width: 10, height: 10, borderRadius: "50%", border: `2px solid ${COLOR.CRITICAL}`, verticalAlign: "middle", marginRight: 4 }} /> critical finding / revoked</span>
-            <span className="faint" style={{ marginLeft: "auto" }}>solid = agent · dashed = SSH · drag a node to move it · drag the background to pan · scroll to zoom · click a cluster to collapse · ⤢ resets</span>
+            <span className="faint" style={{ marginLeft: "auto" }}>solid = agent · dashed = SSH · drag a node to move it · drag the background to pan · scroll to zoom · click a cluster to collapse · ⤢ fits everything to view</span>
           </div>
         </div>
       )}
@@ -347,6 +458,7 @@ function NodeTooltip({ n, W, H }) {
     n.ip ? `${n.ip}${n.gateway ? `  · gw ${n.gateway}` : ""}` : (n.address || ""),
     `status: ${statusOf(n).toLowerCase()}`,
     (n.disk != null || n.mem != null) ? `disk ${n.disk ?? "—"}%  ·  mem ${n.mem ?? "—"}%` : "",
+    n.hypervisor ? `🖥 ${hypervisorBadge(n)}` : "",
     n.hasCrit ? "⚠ active critical finding" : "",
     n.revoked ? "⦸ agent revoked" : n.quarantined ? "⚠ integrity quarantined" : "",
     n.agentVersion ? `agent ${n.agentVersion}` : "",

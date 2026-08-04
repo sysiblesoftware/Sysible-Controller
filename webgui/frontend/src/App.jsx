@@ -17,6 +17,7 @@ import Alerts from "./views/Alerts.jsx";
 import FleetQuery from "./views/FleetQuery.jsx";
 import Topology from "./views/Topology.jsx";
 import UpdatesBadge from "./components/UpdatesBadge.jsx";
+import HealthBanner from "./components/HealthBanner.jsx";
 import SudoModal from "./components/SudoModal.jsx";
 import StandaloneTerminal from "./components/StandaloneTerminal.jsx";
 
@@ -106,6 +107,30 @@ function applyTheme(t) { document.documentElement.setAttribute("data-theme", t);
 const VIEW_KEYS = new Set(
   NAV.filter((n) => n.key && n.key !== "connect" && !n.download).map((n) => n.key),
 );
+const NAV_BY_KEY = Object.fromEntries(NAV.filter((n) => n.key).map((n) => [n.key, n]));
+// In-app DRILL-IN views: reached by clicking into something (e.g. a host from a
+// dashboard finding, a topology node, or a fleet card), NOT from the sidebar — so
+// they're absent from NAV/NAV_BY_KEY. They must be allowed here, or the role
+// redirect below treats them as "unknown view" and bounces every drill-in back to
+// the dashboard (which read as a page "refresh"). Per-host data access is still
+// gated server-side (auth + EE env-scope); HostDetail itself is read-only for
+// auditors via canAct.
+const DRILL_VIEWS = new Set(["host"]);
+
+// Single source of truth for "may this role open this view", used by BOTH the rail
+// filter and the render/redirect below so they can't drift. Superuser-gated views
+// (su:true) require superuser; an auditor gets a strict allow-list (aud:true). A
+// null key is the always-available dashboard; an unknown key is denied. Without a
+// shared gate the rail hid su views but the render only checked !isAuditor, so a
+// sysadmin could open Settings/Host Enrollment by URL (?view=settings).
+function canSeeView(key, role) {
+  if (key == null) return true;                 // dashboard
+  if (DRILL_VIEWS.has(key)) return true;        // in-app drill-in (e.g. host detail)
+  const n = NAV_BY_KEY[key];
+  if (!n) return false;                         // unknown view
+  if (role === "auditor") return !!n.aud;
+  return !n.su || role === "superuser";
+}
 function hrefForView(key) { return "?view=" + (key || "dashboard"); }
 function viewFromSearch() {
   try {
@@ -246,6 +271,14 @@ export default function App() {
     localStorage.setItem("sysible_theme", next);
   };
 
+  // Redirect away from a view the current role can't access — a URL-seeded ?view=
+  // (bookmark, shared link) or a mid-session role change. Bouncing to the dashboard
+  // avoids both disclosing a superuser surface to a lesser role AND dead-ending on a
+  // blank pane under a section title. Runs only once role is known.
+  useEffect(() => {
+    if (role && !canSeeView(view, role)) go(null);
+  }, [role, view, go]);
+
   if (checking) return <div className="login-wrap"><span className="spin" /></div>;
   if (!user) return <Login onLoggedIn={onLoggedIn} />;
   // A temporary password must be rotated before anything else is reachable.
@@ -287,8 +320,8 @@ export default function App() {
   const isSuper = role === "superuser";
   const isAuditor = role === "auditor";
   // Auditors get a strict allow-list (read-only surfaces only); everyone else
-  // sees everything except superuser-gated items.
-  const nav = NAV.filter((n) => (isAuditor ? n.aud : (!n.su || isSuper)));
+  // sees everything except superuser-gated items. Same gate as the render/redirect.
+  const nav = NAV.filter((n) => canSeeView(n.key, role));
 
   // A plain edition badge — no usage-vs-limit counts (the edition is uncapped).
   const editionLabel = (() => {
@@ -369,6 +402,7 @@ export default function App() {
           </div>
         </div>
         <div className="main-scroll">
+          {isSuper && <HealthBanner />}
           {view === null && <Dashboard role={role} edition={edition}
             onOpen={(section, opts) => go(section, opts || null)} />}
           {view === "topology" && <Topology onOpen={(section, opts) => go(section, opts || null)} />}
@@ -379,13 +413,13 @@ export default function App() {
           {view === "host" && <HostDetail hostId={target?.id} label={target?.label} canAct={!isAuditor}
             onBack={() => (history.length > 0 ? goBack() : go(null))}
             onOpen={(section, opts) => go(section, opts || null)} />}
-          {!isAuditor && view === "hosts" && <HostEnrollment />}
-          {!isAuditor && view === "settings" && <Settings initialTab={target?.tab} />}
+          {isSuper && view === "hosts" && <HostEnrollment />}
+          {isSuper && view === "settings" && <Settings initialTab={target?.tab} />}
           {!isAuditor && view === "quickactions" && <ToolRunner solo="Quick System Actions" />}
           {!isAuditor && view === "fleetquery" && <FleetQuery />}
           {!isAuditor && view === "sysadmin" && <ToolRunner openTool={target?.tool} openTab={target?.tab}
             openPrefill={target?.prefill} onConsumed={() => setTarget(null)} resetKey={navTick} />}
-          {view === "live" && <LiveActivity role={role} />}
+          {(isSuper || isAuditor) && view === "live" && <LiveActivity role={role} />}
         </div>
       </main>
 

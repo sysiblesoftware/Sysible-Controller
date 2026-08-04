@@ -13,6 +13,60 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # =========================================================
+# COMMAND-LINE FLAGS
+# By default the installer opens the controller's ports to everyone once it
+# detects an active firewall (see the firewall section near the end). That is
+# the safe-to-reach default, but on an internet-exposed box you usually want
+# the agent API (:9000) and the console (:8800) reachable ONLY from your
+# management network. --restrict-firewall switches to scoped rules for that.
+#
+#   --restrict-firewall          Scope the opened ports to the CIDRs below
+#                                instead of opening them to the whole world.
+#   --agent-cidr=<cidr[,cidr]>   Source(s) allowed to reach the agent API :9000
+#   --admin-cidr=<cidr[,cidr]>   Source(s) allowed to reach the console :8800
+#
+# Opt-in only: without --restrict-firewall the behaviour is unchanged. A port
+# whose CIDR list is empty in restrict mode is left OPEN (with a warning) rather
+# than silently locked down, so you can never fence yourself out of the console.
+# =========================================================
+RESTRICT_FIREWALL=0
+AGENT_CIDR=""
+ADMIN_CIDR=""
+# Optional mutual-TLS (client-certificate auth) on the controller API :9000.
+# OFF by default; enabled with --mtls (or SYSIBLE_MTLS_ENABLED=1). Requires a CA
+# that signed the client certs the BFF/CLI will present.
+MTLS_ENABLED="${SYSIBLE_MTLS_ENABLED:-0}"
+MTLS_CA="${SYSIBLE_MTLS_CA:-}"
+MTLS_MODE="${SYSIBLE_MTLS_MODE:-required}"   # required|optional
+for arg in "$@"; do
+  case "$arg" in
+    --restrict-firewall) RESTRICT_FIREWALL=1 ;;
+    --agent-cidr=*)      AGENT_CIDR="${arg#*=}" ;;
+    --admin-cidr=*)      ADMIN_CIDR="${arg#*=}" ;;
+    --mtls)              MTLS_ENABLED=1 ;;
+    --mtls-ca=*)         MTLS_CA="${arg#*=}"; MTLS_ENABLED=1 ;;
+    --mtls-mode=*)       MTLS_MODE="${arg#*=}" ;;
+    -h|--help)
+      echo "Usage: $0 [--restrict-firewall --agent-cidr=CIDR[,CIDR] --admin-cidr=CIDR[,CIDR]]"
+      echo "          [--mtls --mtls-ca=/path/to/client-ca.crt [--mtls-mode=required|optional]]"
+      echo "  --restrict-firewall  scope opened ports to the given CIDRs (default: open to all)"
+      echo "  --agent-cidr=CIDR    source(s) allowed to reach the agent API on :9000"
+      echo "  --admin-cidr=CIDR    source(s) allowed to reach the web console on :8800"
+      echo "  --mtls               require client certificates on the controller API :9000"
+      echo "  --mtls-ca=PATH       CA that signed the client certs (required with --mtls)"
+      echo "  --mtls-mode=MODE     required (default) rejects certless clients; optional logs only"
+      exit 0 ;;
+    *) echo "WARNING: ignoring unknown argument '$arg'" ;;
+  esac
+done
+case "$MTLS_ENABLED" in 1|true|yes|on|TRUE|Yes|On) MTLS_ENABLED=1 ;; *) MTLS_ENABLED=0 ;; esac
+if [[ "$RESTRICT_FIREWALL" == "1" && -z "$AGENT_CIDR" && -z "$ADMIN_CIDR" ]]; then
+  echo "WARNING: --restrict-firewall given without --agent-cidr/--admin-cidr;"
+  echo "         nothing to scope, so ports will be opened to all as usual."
+  RESTRICT_FIREWALL=0
+fi
+
+# =========================================================
 # DETECT PACKAGE MANAGER / OS FAMILY
 # Sysible Controller itself (this installer's own dependencies)
 # now supports RHEL/CentOS/Fedora (dnf, falling back to yum on
@@ -263,6 +317,57 @@ if [[ -f "$CERT_FILE" && ! -f "$TRUST_FILE" ]]; then
 fi
 
 # =========================================================
+# OPTIONAL MUTUAL TLS (client-certificate auth) on the API :9000
+# The systemd unit sources $BASE/mtls.env at runtime and passes
+# $SYSIBLE_MTLS_ARGS to uvicorn. We only WRITE that file when --mtls is
+# requested (never delete it on a plain redeploy, so an operator's manual
+# mTLS config survives), and we validate the CA first so a fresh install can't
+# be left unable to start. Turn mTLS OFF by emptying/removing mtls.env and
+# restarting. The clients that call the API (BFF/CLI) must present a cert signed
+# by this CA — set SYSIBLE_CLIENT_CERT / SYSIBLE_CLIENT_KEY for them (see
+# client/api.py and SECURITY.md).
+# =========================================================
+MTLS_ENV_FILE="$BASE/mtls.env"
+if [[ "$MTLS_ENABLED" == "1" ]]; then
+  if [[ -z "$MTLS_CA" || ! -f "$MTLS_CA" ]]; then
+    if [[ "$MTLS_MODE" == "optional" ]]; then
+      echo "WARNING: --mtls (optional) requested but --mtls-ca is missing or unreadable"
+      echo "         ('$MTLS_CA'). Skipping mTLS setup; re-run with a valid"
+      echo "         --mtls-ca=/path/to/client-ca.crt to enable it."
+    else
+      # FAIL CLOSED: the operator explicitly asked for REQUIRED client-cert auth.
+      # Silently continuing without it would leave them believing mTLS is on when
+      # it is not, so refuse rather than start server-auth-only.
+      echo "ERROR: --mtls (required) needs a readable --mtls-ca, but '$MTLS_CA' is" >&2
+      echo "       missing or unreadable. Refusing to continue WITHOUT the client-cert" >&2
+      echo "       auth you asked for. Provide the CA and re-run, or use" >&2
+      echo "       --mtls-mode=optional for a staged rollout that logs but still admits" >&2
+      echo "       certless clients." >&2
+      exit 1
+    fi
+  else
+    case "$MTLS_MODE" in
+      optional) _REQS=1 ;;
+      required|*) _REQS=2 ;;
+    esac
+    # Copy the CA into the cert dir (0644) so it lives with the other TLS material
+    # and survives the source checkout going away.
+    MTLS_CA_DEST="$CERT_DIR/mtls_ca.crt"
+    cp -f "$MTLS_CA" "$MTLS_CA_DEST"
+    chmod 644 "$MTLS_CA_DEST"
+    printf '%s\n' \
+      "# Sysible controller mutual-TLS args for uvicorn (managed by install_sysible.sh --mtls)." \
+      "# Empty this file (or remove it) and restart to turn mTLS OFF." \
+      "SYSIBLE_MTLS_ARGS=--ssl-cert-reqs $_REQS --ssl-ca-certs $MTLS_CA_DEST" \
+      > "$MTLS_ENV_FILE"
+    chmod 600 "$MTLS_ENV_FILE"
+    echo "Mutual TLS ENABLED (mode=$MTLS_MODE): clients must present a cert signed by"
+    echo "  $MTLS_CA_DEST. Configure SYSIBLE_CLIENT_CERT/SYSIBLE_CLIENT_KEY on the console"
+    echo "  and any CLI/agent that calls the API, then restart the backend."
+  fi
+fi
+
+# =========================================================
 # PROVISION THE ADMIN API KEY
 # Every admin/API endpoint requires this key (X-API-Key header).
 # Generate it now (mode 600) so it exists with the right
@@ -298,12 +403,17 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=$BASE
 Environment=PYTHONPATH=$BASE
+# Optional mutual-TLS args, sourced at RUNTIME from mtls.env if present (the '-'
+# makes a missing file a no-op). Empty/absent => mTLS OFF (server-auth TLS only).
+# Managed by 'install_sysible.sh --mtls'; see SECURITY.md. Single-\$ so systemd
+# splits it into separate uvicorn args on whitespace.
+EnvironmentFile=-$BASE/mtls.env
 # Bind address for the controller API. Defaults to 0.0.0.0 because remote agents
 # connect here — but this port also carries the admin/console surface (behind the
 # root-only API key). HARDENING: set SYSIBLE_CONTROLLER_BIND to a specific NIC IP
 # before install to bind only that interface, and firewall :9000 to your management
 # + agent networks. (Resolved at install time; edit this ExecStart to change later.)
-ExecStart=$VENV/bin/uvicorn backend.app:app --host ${SYSIBLE_CONTROLLER_BIND:-0.0.0.0} --port 9000 --ssl-keyfile $KEY_FILE --ssl-certfile $CERT_FILE --log-level info
+ExecStart=$VENV/bin/uvicorn backend.app:app --host ${SYSIBLE_CONTROLLER_BIND:-0.0.0.0} --port 9000 --ssl-keyfile $KEY_FILE --ssl-certfile $CERT_FILE \$SYSIBLE_MTLS_ARGS --log-level info
 Restart=always
 RestartSec=5
 User=root
@@ -342,23 +452,49 @@ fi
 # random password, flagged must-change. Printed once at the end of install.
 # =========================================================
 DEFAULT_ADMIN_USER="admin"
-DEFAULT_ADMIN_PASS="$($VENV/bin/python -c 'from backend.policy import generate_compliant_password; from backend.db import get_admin_password_policy; print(generate_compliant_password(get_admin_password_policy()))')"
-# Pass the generated password via the ENV (/proc/<pid>/environ is owner-only),
-# not argv (/proc/<pid>/cmdline is world-readable), so it isn't exposed in `ps`.
-SEEDED_ADMIN="$(SYSIBLE_SEED_PASS="$DEFAULT_ADMIN_PASS" $VENV/bin/python - "$DEFAULT_ADMIN_USER" <<'PY'
-import os
-import sys
-from backend.db import count_administrators, add_administrator
-from backend import portal_auth
-if count_administrators() == 0:
-    salt, h = portal_auth.hash_password(os.environ["SYSIBLE_SEED_PASS"])
+DEFAULT_ADMIN_PASS=""
+# Seed the default superuser. Everything DB-touching (count, password-policy read,
+# insert) lives in ONE Python call that catches errors and prints an explicit
+# "dberror" instead of dying silently — a silent miss used to be misreported below as
+# "admins already exist", which would hide a fresh install left with no console login.
+# The password is generated inside that call (with a DB-free fallback) and returned on
+# stdout line 2, so it never touches argv (/proc/<pid>/cmdline is world-readable).
+SEEDED_ADMIN="dberror"
+for _try in $(seq 1 15); do
+  _seed_out="$($VENV/bin/python - "$DEFAULT_ADMIN_USER" <<'PY'
+import sys, secrets, string
+try:
+    from backend.db import count_administrators, add_administrator
+    from backend import portal_auth
+    if count_administrators() != 0:
+        print("exists"); sys.exit(0)
+    try:
+        from backend.policy import generate_compliant_password
+        from backend.db import get_admin_password_policy
+        pw = generate_compliant_password(get_admin_password_policy())
+    except Exception:
+        pw = "".join(secrets.choice(string.ascii_letters + string.digits)
+                     for _ in range(20)) + "!aA1"
+    salt, h = portal_auth.hash_password(pw)
     add_administrator(sys.argv[1], h, salt, must_change_password=1,
                       created_by="installer", role="superuser")
-    print("created")
-else:
-    print("exists")
+    print("created"); print(pw)
+except Exception as e:
+    sys.stderr.write("admin seed: %s\n" % e)
+    print("dberror")
 PY
 )"
+  _seed_status="$(printf '%s\n' "$_seed_out" | sed -n 1p)"
+  if [[ "$_seed_status" == "created" ]]; then
+    SEEDED_ADMIN="created"
+    DEFAULT_ADMIN_PASS="$(printf '%s\n' "$_seed_out" | sed -n 2p)"
+    break
+  elif [[ "$_seed_status" == "exists" ]]; then
+    SEEDED_ADMIN="exists"
+    break
+  fi
+  sleep 2   # datastore not reachable yet — wait and retry
+done
 
 # =========================================================
 # INSTALL THE WEB CONSOLE AS ITS OWN SYSTEMD SERVICE
@@ -404,7 +540,13 @@ chmod +x "$BASE/start_webgui.sh" 2>/dev/null || true
 # =========================================================
 echo "Installing sysible_controller CLI to /usr/local/bin/sysible_controller..."
 cp -f "$BASE/sysible_controller" /usr/local/bin/sysible_controller
-chmod +x /usr/local/bin/sysible_controller
+# Explicit 755, not `chmod +x`: under a hardened root umask (e.g. 077) the freshly
+# copied file is 600 and a bare `+x` only adds OWNER execute (the other bits are
+# masked out), leaving the command root-only (rwx------). That makes it undiscoverable
+# to non-root users, who then see "Permission denied"/"command not found" instead of
+# the usage banner. The CLI itself gates every privileged subcommand with _require_root,
+# and its source ships in the repo, so world-readable/executable is correct here.
+chmod 755 /usr/local/bin/sysible_controller
 
 # =========================================================
 # RUNTIME DIR (portal.pid, last_update.{json,log}, web-console secret)
@@ -433,18 +575,70 @@ chmod 700 "$BASE"
 # =========================================================
 BACKEND_PORT=9000
 CONSOLE_PORT=8800
+
+# firewalld: scope a port to a comma-separated CIDR list via rich rules, or -
+# when the list is empty - open it to all with --add-port. A rich rule with a
+# source+port accept only admits that source; the port is NOT globally open
+# unless we also --add-port, so restrict mode deliberately skips --add-port.
+_fwd_port() {  # $1=port  $2=comma-separated CIDRs (may be empty)
+  local port="$1" cidrs="$2"
+  if [[ -z "$cidrs" ]]; then
+    echo "  firewalld: opening ${port}/tcp to all"
+    firewall-cmd --permanent --add-port=${port}/tcp >/dev/null 2>&1 || true
+    return
+  fi
+  local IFS=','; local c fam
+  for c in $cidrs; do
+    [[ -z "$c" ]] && continue
+    fam=ipv4; [[ "$c" == *:* ]] && fam=ipv6
+    echo "  firewalld: allowing ${c} -> ${port}/tcp"
+    firewall-cmd --permanent --add-rich-rule="rule family=${fam} source address=${c} port port=${port} protocol=tcp accept" >/dev/null 2>&1 || true
+  done
+}
+_ufw_port() {  # $1=port  $2=comma-separated CIDRs (may be empty)
+  local port="$1" cidrs="$2"
+  if [[ -z "$cidrs" ]]; then
+    echo "  ufw: opening ${port}/tcp to all"
+    ufw allow ${port}/tcp >/dev/null 2>&1 || true
+    return
+  fi
+  local IFS=','; local c
+  for c in $cidrs; do
+    [[ -z "$c" ]] && continue
+    echo "  ufw: allowing ${c} -> ${port}/tcp"
+    ufw allow from "$c" to any port ${port} proto tcp >/dev/null 2>&1 || true
+  done
+}
+
 if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-  echo "Opening firewalld ports ${BACKEND_PORT}/tcp and ${CONSOLE_PORT}/tcp..."
-  firewall-cmd --permanent --add-port=${BACKEND_PORT}/tcp >/dev/null 2>&1 || true
-  firewall-cmd --permanent --add-port=${CONSOLE_PORT}/tcp >/dev/null 2>&1 || true
+  if [[ "$RESTRICT_FIREWALL" == "1" ]]; then
+    echo "Scoping firewalld ports (restrict mode)..."
+    _fwd_port "$BACKEND_PORT" "$AGENT_CIDR"
+    _fwd_port "$CONSOLE_PORT" "$ADMIN_CIDR"
+  else
+    echo "Opening firewalld ports ${BACKEND_PORT}/tcp and ${CONSOLE_PORT}/tcp..."
+    _fwd_port "$BACKEND_PORT" ""
+    _fwd_port "$CONSOLE_PORT" ""
+  fi
   firewall-cmd --reload >/dev/null 2>&1 || true
 elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi "Status: active"; then
-  echo "Opening ufw ports ${BACKEND_PORT}/tcp and ${CONSOLE_PORT}/tcp..."
-  ufw allow ${BACKEND_PORT}/tcp >/dev/null 2>&1 || true
-  ufw allow ${CONSOLE_PORT}/tcp >/dev/null 2>&1 || true
+  if [[ "$RESTRICT_FIREWALL" == "1" ]]; then
+    echo "Scoping ufw ports (restrict mode)..."
+    _ufw_port "$BACKEND_PORT" "$AGENT_CIDR"
+    _ufw_port "$CONSOLE_PORT" "$ADMIN_CIDR"
+  else
+    echo "Opening ufw ports ${BACKEND_PORT}/tcp and ${CONSOLE_PORT}/tcp..."
+    _ufw_port "$BACKEND_PORT" ""
+    _ufw_port "$CONSOLE_PORT" ""
+  fi
 else
   echo "NOTE: no active firewalld/ufw detected. If a firewall is in front of this host,"
-  echo "      open TCP ${BACKEND_PORT} (agent API) and ${CONSOLE_PORT} (web console) manually."
+  if [[ "$RESTRICT_FIREWALL" == "1" ]]; then
+    echo "      scope TCP ${BACKEND_PORT} (agent API) to ${AGENT_CIDR:-<your agents>} and"
+    echo "      TCP ${CONSOLE_PORT} (web console) to ${ADMIN_CIDR:-<your admins>} manually."
+  else
+    echo "      open TCP ${BACKEND_PORT} (agent API) and ${CONSOLE_PORT} (web console) manually."
+  fi
 fi
 
 echo ""
@@ -472,10 +666,20 @@ if [[ "$SEEDED_ADMIN" == "created" ]]; then
   echo -e "${R} Change it after first login (Settings -> My Account). This is shown${Z}"
   echo -e "${R} only once - copy it now.${Z}"
   echo ""
-else
+elif [[ "$SEEDED_ADMIN" == "exists" ]]; then
   echo ""
   echo " Administrators already exist, so no default was created. To set a web"
   echo " console login password, run:  sudo sysible_controller reset-admin"
+  echo ""
+else
+  # DB was unreachable while seeding — do NOT claim admins already exist (that would
+  # hide a fresh install left with no console login). Tell the operator plainly.
+  R='\033[1;91m'; Z='\033[0m'
+  echo ""
+  echo -e "${R} WARNING: could not create the default web-console admin — the database${Z}"
+  echo -e "${R} was not reachable during install. No console login exists yet. Check that${Z}"
+  echo -e "${R} the datastore is up and the controller can reach it, then run:${Z}"
+  echo -e "${R}     sudo sysible_controller reset-admin${Z}"
   echo ""
 fi
 echo "Run: sudo sysible_controller start  &&  sudo sysible_controller webgui start"

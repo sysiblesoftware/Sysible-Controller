@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
 import SuppressMenu from "../components/SuppressMenu.jsx";
 import { findSupp, describeSupp } from "../suppress.js";
+import { hypervisorBadge, hypervisorActionWarning, isHypervisor } from "../hypervisor.js";
 
 // Map a posture row key to the dashboard suppression signal key where one
 // exists, so suppressing a finding here stays consistent with the compliance
@@ -32,6 +33,7 @@ const SECTIONS = [
     "os.distro": "Distribution ID", "os.name": "Release", "os.version": "Version",
     "os.kernel": "Kernel", "os.arch": "Architecture", "os.uptime_s": "Uptime",
     "os.boot_epoch": "Booted", "sub.rhsm": "RHEL subscription", "sub.ubuntu_pro": "Ubuntu Pro",
+    "os.eol": "End-of-life / unsupported OS",
     "reboot.required": "Reboot required" } },
   { title: "Security & Hardening", cats: ["mac", "sec", "fw"], labels: {
     "mac.selinux": "SELinux", "mac.apparmor": "AppArmor", "sec.fips": "FIPS mode",
@@ -108,6 +110,7 @@ function evalStatus(fullKey, v) {
   const s = (v == null ? "" : String(v)).trim().toLowerCase();
   switch (fullKey) {
     case "reboot.required": return s === "1" ? "bad" : "good";
+    case "os.eol": return s === "yes" ? "bad" : s === "no" ? "good" : "none";
     case "fw.active": return s === "1" ? "good" : "bad";
     case "mac.selinux": return s === "enforcing" ? "good" : s === "permissive" ? "warn" : s === "disabled" ? "warn" : "none";
     case "mac.apparmor": return s === "enabled" ? "good" : s === "disabled" ? "warn" : "none";
@@ -137,6 +140,7 @@ function evalStatus(fullKey, v) {
 
 function fmtValue(fullKey, v) {
   if (v === "" || v == null) return "—";
+  if (fullKey === "os.eol") return v === "yes" ? "EOL / unsupported" : v === "no" ? "Supported" : v;
   if (fullKey === "os.uptime_s") return fmtUptime(v);
   if (fullKey === "os.boot_epoch") { const d = new Date(parseInt(v, 10) * 1000); return isNaN(d) ? v : d.toLocaleString(); }
   if (fullKey === "fw.active" || fullKey === "reboot.required" || fullKey === "net.ip_forward" ||
@@ -156,7 +160,12 @@ function fmtValue(fullKey, v) {
 // the row is actually in a warn/bad state — no action on a healthy signal.
 const ACTIONS = {
   "reboot.required": { kind: "run", label: "Reboot host", confirm: "Reboot this host now?",
+                       vmDisruptive: true,   // warn first if this host is a VM host
                        refreshAfter: true, run: (hostId) => api.fleet("reboot", [hostId]) },
+  // No in-place fix for an EOL OS — send the operator to the release-upgrade tool
+  // with this host pre-selected so they can assess + upgrade it.
+  "os.eol": { kind: "tool", tool: "OS Release Upgrade",
+    prefill: (posture, hostId) => ({ host: hostId }) },
   "cert.expiring_30d": { kind: "tool", tool: "Certificate Management" },
   "cert.nearest_days": { kind: "tool", tool: "Certificate Management" },
   "fw.active": { kind: "tool", tool: "Firewall Administration" },
@@ -187,7 +196,93 @@ const ACTIONS = {
     prefill: (posture, hostId) => ({ host: hostId }) },
 };
 
-function RowAction({ action, hostId, posture, onOpen, onRefreshSoon }) {
+// Plain-language "why it matters + how to fix" for each finding that can flag,
+// so the alert is self-explanatory ON THE ROW — the operator shouldn't have to
+// already know what "Password auth: yes" implies or open another screen to learn
+// the remediation. Keep each to one or two short sentences and name the concrete
+// directive/command, so it's actionable even without opening the linked tool.
+const EXPLAIN = {
+  "reboot.required": {
+    why: "A kernel or core library was updated but the system is still running the old version — those security fixes aren't active until a reboot.",
+    fix: "Reboot this host during a maintenance window (the “Reboot host” button here, or `systemctl reboot`)." },
+  "os.eol": {
+    why: "This OS release no longer gets security updates, so newly found vulnerabilities will never be patched on it.",
+    fix: "Plan an in-place release upgrade or migrate to a supported release — “Fix” opens the OS Release Upgrade tool with this host selected." },
+  "fw.active": {
+    why: "No host firewall is active, so every listening service is reachable from anywhere the network permits.",
+    fix: "Enable ufw/firewalld and allow only the ports this host needs — open Firewall Administration." },
+  "mac.selinux": {
+    why: "SELinux isn't enforcing, so its mandatory-access-control confinement of a compromised service is switched off.",
+    fix: "Once you've confirmed no policy denials break the workload, set enforcing: `setenforce 1` and SELINUX=enforcing in /etc/selinux/config." },
+  "mac.apparmor": {
+    why: "AppArmor is disabled, so its per-program confinement isn't limiting what a compromised service can reach.",
+    fix: "Enable it and load the distro profiles: `systemctl enable --now apparmor`." },
+  "sec.fail2ban": {
+    why: "fail2ban isn't running, so repeated failed logins (e.g. SSH brute-force) aren't being blocked.",
+    fix: "Install fail2ban with an sshd jail and start it: `systemctl enable --now fail2ban`." },
+  "ssh.permit_root_login": {
+    why: "SSH allows direct root login: one guessed or leaked root password is a full takeover, and root logins can't be tied to a person.",
+    fix: "Set `PermitRootLogin no` in /etc/ssh/sshd_config and reload sshd; log in as a normal user and use sudo." },
+  "ssh.password_auth": {
+    why: "SSH accepts password logins, which can be brute-forced or phished — key-based logins can't.",
+    fix: "Confirm your admins can log in with SSH keys, then set `PasswordAuthentication no` in /etc/ssh/sshd_config and reload sshd." },
+  "ssh.weak_ciphers": {
+    why: "sshd offers encryption ciphers now considered weak, lowering the bar for a capable network attacker.",
+    fix: "Pin strong ciphers in /etc/ssh/sshd_config, e.g. `Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com`, then reload sshd." },
+  "ssh.weak_macs": {
+    why: "sshd offers MAC (integrity) algorithms now considered weak, e.g. hmac-sha1, weakening tamper protection of the session.",
+    fix: "Pin strong MACs in /etc/ssh/sshd_config, e.g. `MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com`, then reload sshd." },
+  "ssh.weak_kex": {
+    why: "sshd offers key-exchange algorithms now considered weak.",
+    fix: "Pin strong KEX in /etc/ssh/sshd_config, e.g. `KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org`, then reload sshd." },
+  "users.uid0_count": {
+    why: "More than one account has UID 0 — each is effectively root, a common backdoor that also destroys accountability.",
+    fix: "Give each admin their own non-zero UID account with sudo, and remove the extra UID-0 entries from /etc/passwd." },
+  "users.empty_pw_count": {
+    why: "One or more accounts have an empty password, so anyone can log in as them with no credential at all.",
+    fix: "Set a password or lock each account (`passwd -l <user>`) — open User & Group Administration." },
+  "users.dup_uid": {
+    why: "Two usernames share a UID, so the system can't tell them apart — file ownership and audit trails become ambiguous.",
+    fix: "Assign each account a unique UID and re-chown its files." },
+  "users.dup_gid": {
+    why: "Two groups share a GID, so group-based permissions can't be distinguished.",
+    fix: "Assign each group a unique GID." },
+  "users.pw_complexity": {
+    why: "No password-quality policy is configured, so users can set trivially weak passwords.",
+    fix: "Configure pam_pwquality (min length/complexity) — “Fix” opens Environmental Policies to push a policy to this host." },
+  "fs.disk_pct": {
+    why: "A filesystem is nearly full; at 100% anything writing to it will fail or crash.",
+    fix: "Free space or grow the volume — open Storage Administration to see the worst mount." },
+  "fs.inode_pct": {
+    why: "A filesystem is nearly out of inodes; it will refuse new files even with free space remaining.",
+    fix: "Delete large numbers of small/stale files, or recreate the FS with more inodes — open Storage Administration." },
+  "time.synced": {
+    why: "The clock isn't synchronized; skew breaks TLS validation, Kerberos, token expiry and log correlation.",
+    fix: "Enable an NTP client (`systemctl enable --now chronyd`, or systemd-timesyncd) — open Time Synchronization." },
+  "cert.expiring_30d": {
+    why: "A TLS certificate expires within 30 days; once it lapses, clients reject the service.",
+    fix: "Renew or re-issue the certificate before the date — open Certificate Management." },
+  "cert.nearest_days": {
+    why: "The soonest-expiring TLS certificate is close to lapsing.",
+    fix: "Renew it ahead of the expiry date — open Certificate Management." },
+  "svc.failed_count": {
+    why: "One or more systemd units are in the failed state, so something that should be running isn't.",
+    fix: "Inspect with `systemctl --failed` and `journalctl -u <unit>`, then restart/repair — “Fix” opens Quick System Actions with the unit filled in." },
+  "svc.zombies": {
+    why: "Zombie processes mean a parent isn't reaping its children — usually a buggy service.",
+    fix: "Find the parent (`ps -el | grep Z`) and restart it." },
+  "hw.smart": {
+    why: "A disk reports SMART health as failing — it may fail soon and take data with it.",
+    fix: "Back up now and replace the drive; confirm with `smartctl -a /dev/<disk>`." },
+  "perf.oom": {
+    why: "The kernel OOM-killer has fired, meaning the host ran out of memory and killed processes.",
+    fix: "Add RAM/swap or cut the top consumers' memory use; review with `journalctl -k | grep -i oom`." },
+  "cont.docker_privileged": {
+    why: "One or more containers run with --privileged, which effectively grants them root on the host.",
+    fix: "Re-run those containers without --privileged, granting only the specific capabilities they actually need." },
+};
+
+function RowAction({ action, hostId, posture, hyp, onOpen, onRefreshSoon }) {
   const [state, setState] = useState("idle"); // idle | busy | ok | err
   const [msg, setMsg] = useState("");
   if (action.kind === "tool") {
@@ -203,7 +298,11 @@ function RowAction({ action, hostId, posture, onOpen, onRefreshSoon }) {
   }
   const doRun = () => {
     if (state === "busy") return;
-    if (action.confirm && !window.confirm(action.confirm)) return;
+    // A VM-disruptive action (reboot) on a hypervisor host takes every guest down
+    // with it — surface that in the confirm before anything happens.
+    const vmWarn = action.vmDisruptive ? hypervisorActionWarning(hyp) : "";
+    const confirmMsg = vmWarn ? `${vmWarn}\n\n${action.confirm || "Continue?"}` : action.confirm;
+    if (confirmMsg && !window.confirm(confirmMsg)) return;
     setState("busy"); setMsg("");
     action.run(hostId)
       .then((r) => {
@@ -224,7 +323,7 @@ function RowAction({ action, hostId, posture, onOpen, onRefreshSoon }) {
   );
 }
 
-function Row({ fullKey, label, value, hostId, posture, host, env, boot, supps, onOpen, canAct, onRefreshSoon, onSuppressed, onChanged }) {
+function Row({ fullKey, label, value, hostId, posture, hyp, host, env, boot, supps, onOpen, canAct, onRefreshSoon, onSuppressed, onChanged }) {
   const st = evalStatus(fullKey, value);
   const flagged = st === "bad" || st === "warn";
   const suppKey = SUPP_KEY[fullKey] || fullKey;
@@ -257,6 +356,18 @@ function Row({ fullKey, label, value, hostId, posture, host, env, boot, supps, o
           </span>
         </span>
       </div>
+      {flagged && !supp && EXPLAIN[fullKey] && (
+        <div style={{ marginTop: 5, fontSize: 12, lineHeight: 1.45, color: "var(--text)", opacity: 0.85 }}>
+          <div>
+            <span style={{ color: st === "bad" ? C.bad : C.warn, fontWeight: 600 }}>Why it matters: </span>
+            {EXPLAIN[fullKey].why}
+          </div>
+          <div style={{ marginTop: 2 }}>
+            <span style={{ color: C.good, fontWeight: 600 }}>How to fix: </span>
+            {EXPLAIN[fullKey].fix}
+          </div>
+        </div>
+      )}
       {flagged && supp && (
         <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8, marginTop: 5 }}>
           <span style={{ fontSize: 11, color: C.supp, border: `1px solid ${C.supp}`, borderRadius: 10, padding: "0 8px" }}
@@ -268,7 +379,7 @@ function Row({ fullKey, label, value, hostId, posture, host, env, boot, supps, o
       )}
       {flagged && canAct && !supp && (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 5 }}>
-          {action && <RowAction action={action} hostId={hostId} posture={posture} onOpen={onOpen} onRefreshSoon={onRefreshSoon} />}
+          {action && <RowAction action={action} hostId={hostId} posture={posture} hyp={hyp} onOpen={onOpen} onRefreshSoon={onRefreshSoon} />}
           <SuppressMenu ctx={{ key: suppKey, host, env, bootEpoch: boot }} onDone={onSuppressed} />
         </div>
       )}
@@ -276,7 +387,7 @@ function Row({ fullKey, label, value, hostId, posture, host, env, boot, supps, o
   );
 }
 
-function SectionCard({ section, posture, hostId, host, env, boot, supps, onOpen, canAct, onRefreshSoon, onSuppressed, onChanged }) {
+function SectionCard({ section, posture, hyp, hostId, host, env, boot, supps, onOpen, canAct, onRefreshSoon, onSuppressed, onChanged }) {
   // Collect every present key within this section's categories: known keys keep
   // their friendly label and stated order; unknown ones are appended humanized.
   const rows = [];
@@ -297,7 +408,7 @@ function SectionCard({ section, posture, hostId, host, env, boot, supps, onOpen,
     <div className="card" style={{ padding: "12px 14px" }}>
       <div className="section-title" style={{ marginBottom: 6 }}>{section.title}</div>
       {rows.map((r) => <Row key={r.fullKey} fullKey={r.fullKey} label={r.label} value={r.value}
-                            hostId={hostId} posture={posture} host={host} env={env} boot={boot} supps={supps}
+                            hostId={hostId} posture={posture} hyp={hyp} host={host} env={env} boot={boot} supps={supps}
                             onOpen={onOpen} canAct={canAct} onRefreshSoon={onRefreshSoon}
                             onSuppressed={onSuppressed} onChanged={onChanged} />)}
     </div>
@@ -460,12 +571,23 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
   }, [hostId]);
 
   const posture = data && data.posture;
+  // Hypervisor context (role + running-guest count) attached to the posture
+  // response from the heartbeat health reading; drives the badge below and the
+  // reboot confirm warning.
+  const hyp = data ? { hypervisor: data.hypervisor, vms: data.vms, label } : null;
 
   return (
     <div>
       <div className="spread" style={{ marginBottom: 14 }}>
         <button className="btn ghost sm" onClick={onBack}>← Back to dashboard</button>
         <div className="row" style={{ gap: 12, alignItems: "center" }}>
+          {isHypervisor(hyp) && (
+            <span title="This host runs virtual machines — rebooting or powering it off takes its guests down."
+                  style={{ fontSize: 11.5, fontWeight: 600, color: "#e0a83a",
+                           border: "1px solid #e0a83a", borderRadius: 10, padding: "1px 9px" }}>
+              🖥 {hypervisorBadge(hyp)}
+            </span>
+          )}
           {data && data.environment && <span className="faint" style={{ fontSize: 12 }}>{data.environment}</span>}
           <button className="btn ghost sm" onClick={load} disabled={loading}>
             {loading ? <span className="spin" /> : "Refresh posture"}
@@ -509,7 +631,7 @@ export default function HostDetail({ hostId, label, onBack, onOpen, canAct = tru
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))",
                       gap: 12, alignItems: "start" }}>
-          {SECTIONS.map((s) => <SectionCard key={s.title} section={s} posture={posture}
+          {SECTIONS.map((s) => <SectionCard key={s.title} section={s} posture={posture} hyp={hyp}
                                             hostId={hostId} host={label} env={data && data.environment}
                                             boot={(posture.os || {}).boot_epoch} supps={supps}
                                             onOpen={onOpen} canAct={canAct} onRefreshSoon={refreshAfterReboot}

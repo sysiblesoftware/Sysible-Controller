@@ -12,6 +12,8 @@ from backend.agent_bundle import mint_agent_bundle, detect_local_ips, resolve_co
 from backend.auth import require_api_key, require_superuser, require_activity_viewer, acting_admin_name
 from backend.db import (
     create_enroll_token,
+    create_reissue_token,
+    enroll_token_authorizes_rebind,
     validate_enroll_token,
     resolve_enroll_token_host,
     consume_enroll_token,
@@ -21,9 +23,11 @@ from backend.db import (
     get_metric_samples,
     upsert_host_snapshot,
     get_host_snapshot,
+    upsert_host_health,
+    get_all_host_health,
     list_agents,
     delete_agent,
-    get_agent_secret,
+    agent_secret_matches,
     revoke_agent,
     is_agent_revoked,
     agent_exists,
@@ -137,6 +141,107 @@ from backend.remote_routes import (
 app = FastAPI(title="Sysible Controller", docs_url=None, redoc_url=None, openapi_url=None)
 
 
+# ---------------------------------------------------------------------------
+# Scrub a per-host agent secret from access logs. Current agents send the secret
+# in the X-Agent-Secret header (never logged), but the poll/pty endpoints also
+# accept it as a `?agent_secret=` query param for backward compatibility with
+# older field agents — and a secret in the URL lands in the uvicorn access log
+# (and any TLS-terminating proxy log) in cleartext. Redact it there so the
+# compat fallback can't leak a bearer secret into logs.
+# ---------------------------------------------------------------------------
+import logging as _logging
+import re as _re_log
+
+
+class _RedactAgentSecretFilter(_logging.Filter):
+    _PAT = _re_log.compile(r"(agent_secret=)[^&\s\"']+", _re_log.IGNORECASE)
+
+    def filter(self, record):
+        try:
+            if record.args:
+                args = tuple(
+                    self._PAT.sub(r"\1[redacted]", a) if isinstance(a, str) and "agent_secret=" in a.lower() else a
+                    for a in record.args
+                )
+                record.args = args
+            if isinstance(record.msg, str) and "agent_secret=" in record.msg.lower():
+                record.msg = self._PAT.sub(r"\1[redacted]", record.msg)
+        except Exception:
+            pass
+        return True
+
+
+_logging.getLogger("uvicorn.access").addFilter(_RedactAgentSecretFilter())
+
+
+def _max_request_bytes() -> int:
+    """Global request-body ceiling for the controller API. The high-volume agent
+    endpoints (heartbeat snapshot, task result, metrics) otherwise accept an
+    UNBOUNDED JSON body that Starlette buffers into RAM before validation, so a
+    single authenticated/compromised agent could exhaust memory. 16 MiB is far above
+    any legitimate heartbeat/result yet bounds the blast radius. Set
+    SYSIBLE_MAX_REQUEST_BYTES=0 to disable."""
+    try:
+        v = int(os.getenv("SYSIBLE_MAX_REQUEST_BYTES", str(16 * 1024 * 1024)))
+        return v if v >= 0 else 16 * 1024 * 1024
+    except (TypeError, ValueError):
+        return 16 * 1024 * 1024
+
+
+# Ceiling for a single staged portal-download file (the multipart body bypasses the
+# global JSON body limit above). Bounds the in-memory read in stage_portal_download_route.
+try:
+    _PORTAL_STAGE_MAX_BYTES = int(os.getenv("SYSIBLE_PORTAL_FILE_MAX_BYTES", str(100 * 1024 * 1024)))
+except (TypeError, ValueError):
+    _PORTAL_STAGE_MAX_BYTES = 100 * 1024 * 1024
+
+
+class _BodyLimitMiddleware:
+    """Reject an over-large request body BEFORE it is buffered into memory. Checks a
+    declared Content-Length up front (the common case — `requests`/`httpx` always set
+    it) and returns 413; for a chunked/mis-declared body it counts bytes as they
+    stream and cuts the stream off once the cap is crossed, so memory stays bounded."""
+
+    def __init__(self, app, max_bytes: int):
+        self.app = app
+        self.max_bytes = int(max_bytes)
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or self.max_bytes <= 0:
+            return await self.app(scope, receive, send)
+        for k, v in scope.get("headers") or []:
+            if k == b"content-length":
+                try:
+                    if int(v) > self.max_bytes:
+                        return await self._too_large(send)
+                except ValueError:
+                    pass
+                break
+        seen = {"n": 0}
+        cap = self.max_bytes
+
+        async def _guarded_receive():
+            message = await receive()
+            if message.get("type") == "http.request":
+                seen["n"] += len(message.get("body", b"") or b"")
+                if seen["n"] > cap:
+                    # Stop the app buffering more; the handler sees end-of-stream.
+                    return {"type": "http.disconnect"}
+            return message
+
+        return await self.app(scope, _guarded_receive, send)
+
+    async def _too_large(self, send):
+        await send({"type": "http.response.start", "status": 413,
+                    "headers": [(b"content-type", b"application/json"),
+                                (b"cache-control", b"no-store")]})
+        await send({"type": "http.response.body",
+                    "body": b'{"detail":"Request body too large."}'})
+
+
+app.add_middleware(_BodyLimitMiddleware, max_bytes=_max_request_bytes())
+
+
 def _clamp_limit(limit, lo: int = 1, hi: int = 1000) -> int:
     """Bound an operator-supplied list `limit` so a huge value can't force an
     unbounded result set / memory spike. Non-numeric falls back to the max."""
@@ -198,9 +303,7 @@ def verify_agent(host_id: str, agent_secret: str):
             detail="Agent secret revoked — re-enroll this host to restore it.",
         )
 
-    expected = get_agent_secret(host_id)
-
-    if not expected or not secrets.compare_digest(agent_secret, expected):
+    if not agent_secret_matches(host_id, agent_secret):
         raise HTTPException(status_code=401, detail="Invalid agent secret")
 
 
@@ -240,6 +343,39 @@ async def generate_token(request: Request):
     }
 
 
+@app.post("/admin/enroll-token/reissue", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+async def reissue_token(request: Request, body: dict = Body(...),
+                        acting: str = Depends(acting_admin_name)):
+    """Mint a REISSUE token that authorizes re-binding one EXISTING host_id.
+
+    Re-enrolling an already-registered host (e.g. after a reinstall that wiped the
+    agent's saved secret) is otherwise refused: a bearer enroll token alone must not
+    be able to take over a host's identity. An administrator issues this host-bound,
+    single-use token deliberately, hands it to the reinstalled host, and enrollment
+    then re-binds exactly that host_id and no other. Superuser + localhost gated and
+    audited, like token generation."""
+    client_ip = request.client.host
+    if client_ip not in ["127.0.0.1", "::1", "localhost"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    host_id = (body.get("host_id") or "").strip() if isinstance(body, dict) else ""
+    if not host_id:
+        raise HTTPException(status_code=400, detail="host_id is required.")
+    if not _find_agent(host_id):
+        raise HTTPException(
+            status_code=404,
+            detail="No such enrolled host. Reissue is for re-binding an EXISTING host; "
+                   "use Generate token to enroll a brand-new host.")
+
+    token = secrets.token_hex(16)
+    create_reissue_token(token, host_id)
+    log_admin_audit("enroll_token_reissued", acting,
+                    f"reissue token minted to re-bind host {host_id}")
+
+    from backend.db import ENROLL_TOKEN_VALID_DAYS
+    return {"token": token, "host_id": host_id, "valid_days": ENROLL_TOKEN_VALID_DAYS}
+
+
 @app.get("/admin/enrollment-pause", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def get_enrollment_pause_route():
     """Whether new agent enrollment is currently paused (the runaway kill-switch)."""
@@ -259,6 +395,42 @@ def set_enrollment_pause_route(body: dict = Body(...),
     log_admin_audit("enrollment_paused" if paused else "enrollment_resumed",
                     acting, "new agent enrollment " + ("PAUSED" if paused else "resumed"))
     return get_enrollment_control()
+
+
+@app.get("/admin/enroll-allowlist", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def get_enroll_allowlist_route():
+    """The enrollment source-IP allowlist. Empty == all sources allowed (a valid
+    token is still required); a non-empty list restricts which networks may enroll."""
+    from backend.db import list_enroll_allowlist
+    return {"entries": list_enroll_allowlist()}
+
+
+@app.post("/admin/enroll-allowlist", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def add_enroll_allowlist_route(body: dict = Body(...), acting: str = Depends(acting_admin_name)):
+    """Add an allowed source CIDR (or bare IP) to the enrollment allowlist.
+    Superuser-gated, audited."""
+    from backend.db import add_enroll_allowlist_cidr, list_enroll_allowlist
+    cidr = (body.get("cidr") or "").strip() if isinstance(body, dict) else ""
+    note = (body.get("note") or "").strip() if isinstance(body, dict) else ""
+    try:
+        norm = add_enroll_allowlist_cidr(cidr, note, actor=acting)
+    except ValueError:
+        raise HTTPException(status_code=400,
+                            detail=f"Not a valid CIDR or IP address: {cidr!r}")
+    log_admin_audit("enroll_allowlist_add", acting,
+                    f"allow {norm}" + (f" ({note})" if note else ""))
+    return {"entries": list_enroll_allowlist()}
+
+
+@app.delete("/admin/enroll-allowlist/{entry_id}",
+            dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def remove_enroll_allowlist_route(entry_id: int, acting: str = Depends(acting_admin_name)):
+    """Remove an enrollment-allowlist entry by id. Superuser-gated, audited.
+    Removing the last entry re-opens enrollment to all sources (token still required)."""
+    from backend.db import remove_enroll_allowlist_cidr, list_enroll_allowlist
+    if remove_enroll_allowlist_cidr(entry_id, actor=acting):
+        log_admin_audit("enroll_allowlist_remove", acting, f"entry {entry_id}")
+    return {"entries": list_enroll_allowlist()}
 
 
 # =========================================================
@@ -450,8 +622,53 @@ def _consume_ssh_enable_result(host_id, result_str):
 _RESERVED_HOST_IDS = {"*"}
 
 
+# Coarse in-process per-IP flood guard for /agents/enroll (see _enroll_rate_limited).
+_ENROLL_RATE = {}          # ip -> list[float] recent request timestamps
+_ENROLL_RATE_LOCK = threading.Lock()
+
+
+def _enroll_rate_limited(ip):
+    """Return retry-after seconds if `ip` has exceeded the enroll flood limit, else 0.
+
+    Allows up to SYSIBLE_ENROLL_RATE_MAX requests per SYSIBLE_ENROLL_RATE_WINDOW
+    seconds per SOURCE IP (default 240 / 60s) — high enough for a legitimate staggered
+    mass rollout, even many hosts behind one NAT, but it caps a pathological flood that
+    would otherwise hold the enroll lock and starve the threadpool. In-process guard;
+    the DB enroll-token consume stays the authoritative anti-replay.
+    Set SYSIBLE_ENROLL_RATE_MAX=0 to disable."""
+    if not ip:
+        return 0
+    try:
+        maxn = int(os.getenv("SYSIBLE_ENROLL_RATE_MAX", "240"))
+    except (TypeError, ValueError):
+        maxn = 240
+    if maxn <= 0:
+        return 0
+    try:
+        window = int(os.getenv("SYSIBLE_ENROLL_RATE_WINDOW", "60"))
+    except (TypeError, ValueError):
+        window = 60
+    if window <= 0:
+        return 0
+    now = time.time()
+    cutoff = now - window
+    with _ENROLL_RATE_LOCK:
+        hits = [t for t in _ENROLL_RATE.get(ip, ()) if t >= cutoff]
+        if len(hits) >= maxn:
+            _ENROLL_RATE[ip] = hits
+            return max(1, int(hits[0] + window - now))
+        hits.append(now)
+        _ENROLL_RATE[ip] = hits
+        # Bound memory: drop IPs with no recent hits once the table grows large.
+        if len(_ENROLL_RATE) > 10000:
+            for k in [k for k, v in list(_ENROLL_RATE.items())
+                      if not v or v[-1] < cutoff]:
+                _ENROLL_RATE.pop(k, None)
+        return 0
+
+
 @app.post("/agents/enroll")
-def enroll(req: EnrollRequest):
+def enroll(req: EnrollRequest, request: Request):
     # Plain `def` (threadpooled) for the same reason as heartbeat below: the
     # body is all blocking DB/token work and shouldn't occupy the event loop.
 
@@ -463,6 +680,28 @@ def enroll(req: EnrollRequest):
     if hid_in and (hid_in in _RESERVED_HOST_IDS or
                    not all(c.isalnum() or c in "._-" for c in hid_in)):
         raise HTTPException(status_code=400, detail="Invalid host_id.")
+
+    # Coarse per-source-IP flood guard: shed an enrollment storm before it takes the
+    # enroll lock and expensive token validation (a compromised/looping source can't
+    # starve the threadpool). Generous by default so legitimate mass rollout is fine.
+    _client_ip = request.client.host if request.client else ""
+    _retry_after = _enroll_rate_limited(_client_ip)
+    if _retry_after:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many enrollment attempts from this source; retry shortly.",
+            headers={"Retry-After": str(_retry_after)})
+
+    # Source-IP allowlist: a non-empty allowlist restricts WHICH networks may
+    # enroll a new host (the token is still required on top). Empty == allow all
+    # (backward compatible); loopback is always allowed (self-enroll / BFF). This
+    # narrows the leaked-bundle exposure — a valid token can't be presented from an
+    # off-subnet source. Managed from Settings → Enrollment Access.
+    from backend.db import enroll_ip_allowed
+    if not enroll_ip_allowed(_client_ip):
+        raise HTTPException(
+            status_code=403,
+            detail="Enrollment from this network is not permitted.")
 
     # Emergency brake: when an admin has paused enrollment (the runaway
     # kill-switch), refuse ALL new enrollments so a crash-looping/re-provisioning
@@ -521,31 +760,49 @@ def enroll(req: EnrollRequest):
                            "if the agent is still installed; a reimaged host must be "
                            "Force-Deleted and enrolled fresh.",
                 )
-            # (b) The bound host is still actively heartbeating — refuse re-enrollment
-            #     while it is online. This is a HARD security boundary, NOT a UX nicety:
-            #     a FRESH enroll token echoes the caller's requested host_id verbatim
-            #     (resolve_enroll_token_host), and host_id is a non-secret,
-            #     machine-derivable identifier, so any holder of a fresh token who knows
-            #     a victim's host_id could otherwise overwrite a LIVE host's agent secret
-            #     and take it over (new secret => real host locked out). A genuine
-            #     restart / reinstall re-enrolls fine once the old agent is gone
-            #     (last_seen goes stale, ~5 min); to re-enroll a still-online host on
-            #     purpose, Force Delete its record first (superuser-gated — purges the
-            #     record and its enroll token), then enroll fresh.
+            # (b) Re-binding an EXISTING host's identity requires proof that the caller
+            #     is authorized to take it over — a bearer enroll token alone is NOT
+            #     enough. A fresh token echoes the caller's requested host_id verbatim
+            #     (resolve_enroll_token_host) and host_id is a non-secret,
+            #     machine-derivable identifier, so without this gate any token holder
+            #     who knows (or computes) a victim's host_id could overwrite its
+            #     agent_secret and take it over — locking out the real host, whether it
+            #     is online OR merely offline. Authorization is one of:
+            #       P1  the caller presents the CURRENT agent_secret (it genuinely IS
+            #           the incumbent host — e.g. a deliberate secret refresh), or
+            #       P3  an administrator minted a REISSUE token bound to this exact
+            #           host_id (the supported path for a reinstall that lost its
+            #           secret; mint it from the console / the reissue endpoint).
+            #     Absent proof, an online host is refused (409) and an offline one is
+            #     refused (403) directing the operator to Reissue or Force Delete —
+            #     never a silent takeover. (EE additionally accepts a signature from the
+            #     host's registered key as proof; see its enroll handler.)
             #     NOTE: do NOT "supersede when req.host_id == resolved host_id" — that
             #     comparison is a tautology for a fresh token (resolve echoes the input),
-            #     so it authenticates nothing and reintroduces the takeover. A safe
-            #     live-host supersede would require proof of possession of the existing
-            #     identity (the current agent_secret / a signature from the registered
-            #     key), which a state-less re-enroll doesn't have anyway.
-            last_seen = existing.get("last_seen") or 0
-            if time.time() - last_seen < _REENROLL_LIVE_HOST_GRACE_S:
+            #     so it authenticates nothing and reintroduces the takeover.
+            proven = False
+            if req.prev_agent_secret and agent_secret_matches(host_id, req.prev_agent_secret):
+                proven = True   # P1: holds the incumbent secret
+            if not proven and enroll_token_authorizes_rebind(req.token, host_id):
+                proven = True       # P3: admin-authorized reissue token for this host
+
+            if not proven and _ENROLL_REQUIRE_REBIND_AUTH:
+                last_seen = existing.get("last_seen") or 0
+                if time.time() - last_seen < _REENROLL_LIVE_HOST_GRACE_S:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="A live agent is already enrolled for this host and is "
+                               "still online, so re-enrollment is blocked (this stops a "
+                               "token holder from hijacking a live host). Wait until it "
+                               "goes offline, or Force Delete its record first.",
+                    )
                 raise HTTPException(
-                    status_code=409,
-                    detail="A live agent is already enrolled for this host and is still "
-                           "online, so re-enrollment is blocked (this stops a token holder "
-                           "from hijacking a live host). Wait until it goes offline, or "
-                           "Force Delete its record first, then enroll again.",
+                    status_code=403,
+                    detail="This host_id is already enrolled. Re-enrolling an existing "
+                           "host requires authorization — either the current agent "
+                           "credential, or an admin-issued reissue token for this host "
+                           "(console: host → Reissue enrollment). To replace it "
+                           "outright, Force Delete the record first, then enroll fresh.",
                 )
 
         # Community-edition host cap (no-op in an unlimited/Enterprise build).
@@ -561,8 +818,16 @@ def enroll(req: EnrollRequest):
         # host_id, so a retry with the same token resolves back to it and updates
         # the one row — rather than the reverse order, where a row could exist
         # with an unbound token and the next fresh-uuid enroll would spawn a
-        # duplicate. (Both live inside _ENROLL_LOCK.)
-        consume_enroll_token(req.token, host_id)
+        # duplicate. (Both live inside _ENROLL_LOCK.) The claim is atomic at the DB
+        # (conditional UPDATE), so even if a second replica raced past validate with
+        # the same fresh token, only one claim wins; the loser gets 409 here rather
+        # than both enrolling distinct hosts off one token.
+        if not consume_enroll_token(req.token, host_id):
+            raise HTTPException(
+                status_code=409,
+                detail="This enrollment token was just claimed by another host. "
+                       "Generate a fresh token and try again.",
+            )
 
         create_or_update_agent(
             host_id,
@@ -677,6 +942,23 @@ def heartbeat(req: HeartbeatRequest):
             )
         except Exception:
             pass
+        # Latest fleet-health reading (newer agents attach failed/sysd/oom so the
+        # dashboard can render health without a live probe). Best-effort; a miss
+        # just means that host gets live-probed next sweep.
+        try:
+            upsert_host_health(
+                req.host_id, time.time(),
+                _num("disk", int), _num("mem", int), _num("load1", float),
+                _num("cores", int), _num("failed", int), _num("oom", int),
+                _num("uptime", int),
+                (req.metrics.get("sysd") or None),
+                (req.metrics.get("mount") or None),
+                req.metrics.get("units") or [],
+                (req.metrics.get("hyp") or None),
+                _num("vms", int),
+            )
+        except Exception:
+            pass
 
     # Persist the latest rich detail snapshot if attached (newer agents only).
     # Stored as one row per host (overwritten), feeding the per-host drill-down.
@@ -742,6 +1024,13 @@ try:
     _REENROLL_LIVE_HOST_GRACE_S = int(os.getenv("SYSIBLE_REENROLL_LIVE_HOST_GRACE_S", "300"))
 except ValueError:
     _REENROLL_LIVE_HOST_GRACE_S = 300
+
+# Require proof-of-possession (current agent_secret) or an admin reissue token before
+# re-binding an ALREADY-ENROLLED host_id. Default ON — this closes the offline-host
+# takeover where a bearer enroll-token holder overwrites a host's credential. It can be
+# set to "0" as a temporary escape hatch during a fleet migration that predates the
+# reissue flow, but leaving it off re-opens the takeover, so keep it on in production.
+_ENROLL_REQUIRE_REBIND_AUTH = os.getenv("SYSIBLE_ENROLL_REQUIRE_REBIND_AUTH", "1") != "0"
 
 # Reclaim tasks stuck in 'dispatched' (the host was handed the command but its
 # result never came back — lost in transit, or the agent died on receipt) so they
@@ -870,29 +1159,47 @@ def _build_agent_update_command():
     / detached shell) so the task can report success before the agent bounces -
     a plain `systemctl restart` would kill the agent process running this task."""
     import base64
-    import hashlib
-    from backend.agent_bundle import AGENT_SOURCE_FILE, _AGENT_INSTALL_DIR, _SERVICE_NAME
+    import gzip
+    import shlex
+    from backend.agent_bundle import (AGENT_SOURCE_FILE, _AGENT_INSTALL_DIR,
+                                      _SERVICE_NAME, agent_version_of)
 
     src = AGENT_SOURCE_FILE.read_text(encoding="utf-8")
-    b64 = base64.b64encode(src.encode("utf-8")).decode("ascii")
-    ver = hashlib.sha256(src.encode("utf-8")).hexdigest()[:12]
+    # GZIP before base64: agent.py is now ~117 KB, whose raw base64 (~156 KB)
+    # exceeds Linux's MAX_ARG_STRLEN (128 KB) single-argument limit. The agent
+    # runs this command inline via `sh -c '<command>'`, so a 156 KB command fails
+    # with "Argument list too long" BEFORE it writes anything — the self-update
+    # silently no-op'd on every host once the file grew past ~96 KB. gzip -9 drops
+    # the payload to ~40 KB, well under the limit, and `gzip -d` is universal.
+    b64 = base64.b64encode(gzip.compress(src.encode("utf-8"), 9)).decode("ascii")
+    # Match what the agent reports post-update (AGENT_VERSION normalizes the
+    # baked controller-URL default out before hashing) so rollout tracking and
+    # the "updated to X" message agree with the fleet's heartbeat version.
+    ver = agent_version_of(src)
     install = f"{_AGENT_INSTALL_DIR}/agent.py"
     svc = _SERVICE_NAME
+    # The out-of-band restart must be BULLETPROOF — it's the only thing that makes
+    # the on-disk update take effect. Earlier it used a FIXED transient-unit name
+    # (--unit=sysible-agent-selfupdate); once that name lingered from a prior run
+    # (or the unit tripped systemd's start-limit after repeated restarts),
+    # systemd-run failed AND the in-cgroup `setsid` fallback got killed when the
+    # service stopped — so the file was replaced but the process never reloaded,
+    # on every host. Now: no fixed name (auto-named, never collides), clear any
+    # start-limit lockout first, and use a detached transient unit that survives
+    # the restart. The agent also self-heals by re-execing when its on-disk source
+    # changes, so even if this restart is lost the new build loads within ~10s.
+    restart = f"systemctl reset-failed {svc} 2>/dev/null; systemctl restart {svc}"
     cmd = (
         "set -e\n"
         f"nf={install}.new\n"
-        f"printf '%s' '{b64}' | base64 -d > \"$nf\"\n"
+        f"printf '%s' '{b64}' | base64 -d | gzip -d > \"$nf\"\n"
         "python3 -m py_compile \"$nf\"\n"
         f"mv -f \"$nf\" {install}\n"
-        # Restart after this task returns: a 3s-delayed transient unit (own
-        # cgroup) if systemd-run exists, else a detached shell. Either way the
-        # restart can't kill the agent before it reports this task's result.
         "if command -v systemd-run >/dev/null 2>&1; then\n"
-        f"  systemd-run --collect --on-active=3 --unit=sysible-agent-selfupdate "
-        f"systemctl restart {svc} >/dev/null 2>&1 "
-        f"|| setsid sh -c 'sleep 3; systemctl restart {svc}' >/dev/null 2>&1 &\n"
+        f"  systemd-run --collect --on-active=3 /bin/sh -c {shlex.quote(restart)} </dev/null >/dev/null 2>&1 "
+        f"|| setsid /bin/sh -c 'sleep 3; {restart}' </dev/null >/dev/null 2>&1 &\n"
         "else\n"
-        f"  setsid sh -c 'sleep 3; systemctl restart {svc}' >/dev/null 2>&1 &\n"
+        f"  setsid /bin/sh -c 'sleep 3; {restart}' </dev/null >/dev/null 2>&1 &\n"
         "fi\n"
         f"echo \"sysible-agent updated to {ver}; restarting\"\n"
     )
@@ -951,11 +1258,13 @@ def update_agents_route(request: Request):
 def _current_agent_version():
     """Short hash of the controller's CURRENT host_agent/agent.py — the build an
     'update agents' push would deliver. Agents report theirs on heartbeat, so a
-    mismatch means the agent is out of date."""
-    import hashlib
-    from backend.agent_bundle import AGENT_SOURCE_FILE
+    mismatch means the agent is out of date. The per-host baked controller-URL
+    default is normalized out the same way the agent computes AGENT_VERSION —
+    otherwise every enrolled agent (whose bundle patched that line) would look
+    permanently outdated."""
+    from backend.agent_bundle import AGENT_SOURCE_FILE, agent_version_of
     try:
-        return hashlib.sha256(AGENT_SOURCE_FILE.read_text(encoding="utf-8").encode()).hexdigest()[:12]
+        return agent_version_of(AGENT_SOURCE_FILE.read_text(encoding="utf-8"))
     except Exception:
         return None
 
@@ -1000,7 +1309,13 @@ def _controller_update_available():
         remote, rbranch = up.split("/", 1)
         ls = _git("ls-remote", remote, rbranch, timeout=tmo)
         if ls.returncode != 0:
-            return {"checked": False, "reason": "git ls-remote failed (network or auth)",
+            # Surface the ACTUAL git error (auth prompt, unknown host, TLS, proxy,
+            # permission denied…) so the operator can act on it, instead of a generic
+            # "network or auth". Trimmed and single-lined for the UI.
+            detail = " ".join((ls.stderr or ls.stdout or "").split())[:200]
+            return {"checked": False,
+                    "reason": f"git ls-remote {remote} {rbranch} failed"
+                              + (f": {detail}" if detail else " (network or auth)"),
                     "current": cur, "branch": branch}
         remote_sha = (ls.stdout.split() or [""])[0].strip()
         if not remote_sha:
@@ -1174,6 +1489,134 @@ def get_activity_log_route(limit: int = 200, since_id: int = 0):
     return {"entries": get_activity_log(limit=_clamp_limit(limit), since_id=since_id)}
 
 
+@app.get("/activity-log/verify",
+         dependencies=[Depends(require_api_key), Depends(require_activity_viewer)])
+def verify_activity_log_route():
+    """Recompute the tamper-evident hash chain over the activity log AND the admin
+    audit log and report whether each verifies. Each result is
+    {ok, checked, broken_at, keyed} — `ok=false` with `broken_at` pinpoints the
+    first altered/removed row; `keyed=true` means the chain is HMAC-keyed
+    (unforgeable without the master key) rather than merely SHA-256 tamper-evident.
+    Visible to superusers and the read-only auditor role."""
+    from backend.db import verify_activity_chain, verify_admin_audit_chain
+    result = dict(verify_activity_chain())
+    result["admin_audit"] = verify_admin_audit_chain()
+    return result
+
+
+def _cert_fingerprints(path):
+    """SHA-256 fingerprints (hex) of every certificate in a PEM file, as a
+    frozenset. Parses the DER so PEM whitespace/ordering differences don't
+    produce false mismatches. Returns None if the file is missing or can't
+    be read/parsed (best-effort — a warning must never be a false alarm just
+    because the controller service user can't read a path)."""
+    import hashlib
+    from pathlib import Path
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+        raw = Path(path).read_bytes()
+    except Exception:
+        return None
+    fps = set()
+    marker = b"-----BEGIN CERTIFICATE-----"
+    try:
+        idx = raw.find(marker)
+        while idx != -1:
+            nxt = raw.find(marker, idx + len(marker))
+            block = raw[idx:] if nxt == -1 else raw[idx:nxt]
+            try:
+                cert = x509.load_pem_x509_certificate(block)
+                der = cert.public_bytes(serialization.Encoding.DER)
+                fps.add(hashlib.sha256(der).hexdigest())
+            except Exception:
+                pass
+            idx = nxt
+    except Exception:
+        return None
+    return frozenset(fps) if fps else None
+
+
+def _health_warnings():
+    """Cheap, defensive fleet-health signals for the console warning banner.
+    Each detector is independently wrapped so a failure in one can't blank the
+    others or throw. Returns a list of {id, severity, title, detail, hint}."""
+    warnings = []
+
+    # --- Stale pinned TLS cert (the classic "agents can't check in after a
+    # controller cert regen / reinstall / new-IP reissue" outage). Compare what
+    # the controller now hands out for pinning (trust.crt, falling back to the
+    # serving leaf) against the cert the controller's own loopback agent has
+    # pinned locally. If they diverge, every agent pinning the old cert will
+    # fail TLS verification until re-deployed.
+    try:
+        from backend import tls_manager
+        expected_src = tls_manager.TRUST_FILE if tls_manager.TRUST_FILE.exists() \
+            else tls_manager.CERT_FILE
+        expected = _cert_fingerprints(expected_src)
+        pinned_path = os.getenv("SYSIBLE_CA_CERT", "/etc/sysible/controller.crt")
+        pinned = _cert_fingerprints(pinned_path)
+        # Only warn when BOTH are readable and genuinely differ — an unreadable
+        # pinned file (permissions, not co-located) means "can't tell", not "drift".
+        if expected and pinned and expected != pinned:
+            warnings.append({
+                "id": "tls_cert_pin_drift",
+                "severity": "critical",
+                "title": "Controller TLS certificate changed — agents can't check in",
+                "detail": ("The controller is now serving a TLS certificate that "
+                           "differs from the one agents pinned. Agents that pinned "
+                           "the old certificate will fail to connect (TLS verify) "
+                           "until they receive the new one."),
+                "hint": ("Refresh the pinned cert on each host: copy the controller's "
+                         "current cert to the agent's pinned path (default "
+                         "/etc/sysible/controller.crt) and restart sysible-agent, or "
+                         "re-enroll with a fresh bundle. Remote hosts also need the "
+                         "new controller address if it moved."),
+            })
+    except Exception:
+        pass
+
+    # --- Mass host silence. A high fraction of enrolled hosts going stale at
+    # once is the fleet-wide symptom of the outage above (cert drift, address
+    # change, controller down), distinct from a single host being powered off.
+    try:
+        now = time.time()
+        stale_after = int(os.getenv("SYSIBLE_HEALTH_OFFLINE_S",
+                                    str(max(300, _REENROLL_LIVE_HOST_GRACE_S))))
+        agents = [a for a in list_agents() if not a.get("revoked")]
+        total = len(agents)
+        offline = [a for a in agents
+                   if (now - (a.get("last_seen") or 0)) > stale_after]
+        n_off = len(offline)
+        if total >= 2 and n_off >= 2 and (n_off / total) >= 0.5:
+            mins = max(1, stale_after // 60)
+            warnings.append({
+                "id": "hosts_offline",
+                "severity": "warning",
+                "title": f"{n_off} of {total} hosts have stopped checking in",
+                "detail": (f"{n_off} of {total} enrolled hosts have not reported in "
+                           f"over {mins} min. When most of the fleet goes quiet at "
+                           "once it usually points at a controller-side change — a "
+                           "regenerated TLS certificate, a moved controller address, "
+                           "or the controller being down."),
+                "hint": ("Check the controller service and its TLS cert first; if the "
+                         "cert or address changed, re-deploy the pinned cert/bundle to "
+                         "the affected hosts."),
+            })
+    except Exception:
+        pass
+
+    return warnings
+
+
+@app.get("/admin/health-warnings",
+         dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def health_warnings_route():
+    """Operational warnings for the console banner: stale/mismatched pinned TLS
+    cert and mass host silence. Cheap enough to poll; read-only and defensive."""
+    return {"warnings": _health_warnings()}
+
+
 @app.get("/controller-log", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def get_controller_log_route(lines: int = 400):
     """Recent controller (sysible-backend) log lines from the journal, for
@@ -1208,6 +1651,15 @@ def get_metrics_timeseries(window: int = 3600):
     samples are reported by the agents themselves on heartbeat."""
     hosts = get_metric_samples(window)
     return {"hosts": hosts, "window": window, "now": time.time()}
+
+
+@app.get("/metrics/fleet-health", dependencies=[Depends(require_api_key)])
+def get_fleet_health_readings_route():
+    """Latest fleet-HEALTH reading for every host, keyed by host_id, from what the
+    agents reported on heartbeat (disk/mem/load + failed-units/systemd/OOM). Lets
+    the console render the dashboard health donut without a live probe per host.
+    Read-only; the console computes the verdict + freshness from these."""
+    return {"hosts": get_all_host_health(), "now": time.time()}
 
 
 @app.get("/metrics/snapshot/{host_id}", dependencies=[Depends(require_api_key)])
@@ -1256,6 +1708,23 @@ def _controller_identity():
     ips = {"127.0.0.1", "::1"}
     try:
         ips.update(detect_local_ips())
+    except Exception:
+        pass
+    # Also fold in the operator-configured controller address (the same identity
+    # baked into agent bundles). The OS hostname / NIC-detected IPs can diverge
+    # from how the controller is actually addressed — e.g. after a LAN renumber or
+    # on a multi-homed box — which would stop the controller recognising its OWN
+    # self-managed host (drawing it as a duplicate managed host in the topology).
+    # DNS-free: this only reads the stored config row.
+    try:
+        from backend.db import get_controller_config
+        _cfg = get_controller_config() or {}
+        _chn = (_cfg.get("hostname") or "").strip().lower()
+        if _chn:
+            names.add(_chn); names.add(_chn.split(".")[0])
+        _cip = (_cfg.get("ip") or "").strip()
+        if _cip:
+            ips.add(_cip)
     except Exception:
         pass
     val = (names, ips)
@@ -1605,21 +2074,15 @@ def get_controller_config_route():
 @app.post("/controller-config", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def set_controller_config_route(body: SetControllerConfigRequest):
 
-    hostname = body.hostname.strip()
+    # IP-ONLY by design: agent bundles never bake in a hostname (that assumes DNS
+    # is configured on every managed host). A legacy "hostname" mode is coerced to
+    # "ip", and any hostname value is dropped.
     ip = body.ip.strip()
-    address_mode = body.address_mode if body.address_mode in ("hostname", "ip", "all") else "hostname"
-
-    # "all" mode needs neither field - every detected local IP is what
-    # ships in the bundle, computed fresh at download time (see
-    # resolve_controller_addresses), not typed in here.
-    if address_mode != "all" and not hostname and not ip:
-        raise HTTPException(status_code=400, detail="Hostname and IP cannot both be empty")
-
-    if address_mode == "hostname" and not hostname:
-        raise HTTPException(status_code=400, detail="Hostname is selected but empty")
+    hostname = ""
+    address_mode = body.address_mode if body.address_mode in ("ip", "all") else "ip"
 
     if address_mode == "ip" and not ip:
-        raise HTTPException(status_code=400, detail="IP Address is selected but empty")
+        raise HTTPException(status_code=400, detail="Enter the controller's IP address (or choose 'all detected IPs').")
 
     if address_mode == "all" and not detect_local_ips():
         raise HTTPException(
@@ -2325,6 +2788,17 @@ def admin_login(body: AdminLoginRequest, request: Request):
         log_admin_audit("login_failed", username, "Invalid username or password")
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
+    # Transparently upgrade a legacy/under-cost password hash to the current PBKDF2
+    # cost now that we hold the plaintext and it verified — so no under-cost hash
+    # (and the enumeration timing asymmetry it creates vs the fixed-cost decoy) lingers.
+    if admin is not None and portal_auth.needs_rehash(admin.get("password_hash")):
+        try:
+            _salt, _hash = portal_auth.hash_password(body.password)
+            update_administrator_password(username, _hash, _salt,
+                                          must_change_password=admin.get("must_change_password", 0))
+        except Exception:
+            pass
+
     _admin_login_clear(throttle_key)
     record_administrator_login(username)
     log_admin_audit("login_success", username, "")
@@ -2554,6 +3028,14 @@ def change_admin_credentials(body: ChangeAdminCredentialsRequest):
     if not changed:
         raise HTTPException(status_code=400, detail="Enter a new username or a new password to change.")
 
+    # Invalidate every live admin token for this account after a credential change,
+    # matching the admin-reset path — a password change must not leave other
+    # already-issued sessions valid (resolve_admin_token can't retroactively catch
+    # them). The caller re-authenticates with the new credentials on their next call.
+    delete_admin_tokens_for_user(body.username)
+    if new_username != body.username:
+        delete_admin_tokens_for_user(new_username)
+
     log_admin_audit("credentials_changed", new_username, "self-service username/password change")
 
     return {"username": new_username, "status": "updated"}
@@ -2584,6 +3066,11 @@ def force_admin_password_change(body: ForcePasswordChangeRequest):
 
     salt, password_hash = portal_auth.hash_password(body.new_password)
     update_administrator_password(body.username, password_hash, salt, must_change_password=0)
+
+    # Drop any tokens issued against the temporary/expired credential so the forced
+    # change can't leave a pre-rotation session valid — the admin re-logs in with the
+    # new password (matching the reset path).
+    delete_admin_tokens_for_user(body.username)
 
     log_admin_audit("forced_password_change_completed", body.username, "")
 
@@ -2691,7 +3178,7 @@ def fetch_portal_upload_route(filename: str):
     return FileResponse(path, filename=path.name)
 
 
-@app.delete("/portal/files/uploads/{filename}", dependencies=[Depends(require_api_key)])
+@app.delete("/portal/files/uploads/{filename}", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def delete_portal_upload_route(filename: str):
 
     try:
@@ -2711,10 +3198,25 @@ def list_portal_downloads_route():
     return {"files": portal_files.list_downloads()}
 
 
-@app.post("/portal/files/downloads", dependencies=[Depends(require_api_key)])
-async def stage_portal_download_route(file: UploadFile = File(...)):
+@app.post("/portal/files/downloads", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+async def stage_portal_download_route(request: Request, file: UploadFile = File(...)):
 
-    data = await file.read()
+    # Bounded read so a single staged upload can't drive unbounded memory: reject an
+    # oversized declared Content-Length up front, and cap the actual read so a
+    # mis-declared/chunked body can't exceed the ceiling either.
+    _max = _PORTAL_STAGE_MAX_BYTES
+    _clen = request.headers.get("content-length")
+    if _clen:
+        try:
+            if int(_clen) > _max + 4096:
+                raise HTTPException(status_code=413,
+                                    detail=f"File exceeds the {_max}-byte staging limit.")
+        except ValueError:
+            pass
+    data = await file.read(_max + 1)
+    if len(data) > _max:
+        raise HTTPException(status_code=413,
+                            detail=f"File exceeds the {_max}-byte staging limit.")
 
     try:
         saved_as = portal_files.save_download(file.filename, data)
@@ -2724,7 +3226,7 @@ async def stage_portal_download_route(file: UploadFile = File(...)):
     return {"status": "staged", "filename": saved_as}
 
 
-@app.delete("/portal/files/downloads/{filename}", dependencies=[Depends(require_api_key)])
+@app.delete("/portal/files/downloads/{filename}", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def delete_portal_download_route(filename: str):
 
     try:

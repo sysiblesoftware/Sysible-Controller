@@ -134,6 +134,7 @@ export const api = {
   controllerUpdateLog: (lines = 400) => req(`/api/controller-update-log?lines=${lines}`),
   updateAgents: () => req("/api/update-agents", { method: "POST" }),
   updateStatus: () => req("/api/update-status"),
+  healthWarnings: () => req("/api/health-warnings"),
   auditLog: (limit = 200) => req(`/api/audit-log?limit=${limit}`),
   license: () => req("/api/license"),
   changeMyCredentials: (current_password, new_username, new_password) =>
@@ -183,10 +184,19 @@ export const api = {
   restoreHost: (hostId) =>
     req(`/api/host/${encodeURIComponent(hostId)}/restore`, { method: "POST" }),
   enrollToken: () => req("/api/enroll-token", { method: "POST" }),
+  // Mint a host-bound reissue token to re-enroll an EXISTING host after a reinstall
+  // that wiped its agent secret (a bare enroll token is refused for re-binding).
+  reissueToken: (hostId) =>
+    req("/api/enroll-token/reissue", { method: "POST", body: { host_id: hostId } }),
   // Runaway kill-switch: pause/resume all new agent enrollment (superuser).
   enrollmentPause: () => req("/api/enrollment-pause"),
   setEnrollmentPause: (paused) =>
     req("/api/enrollment-pause", { method: "POST", body: { paused } }),
+  enrollAllowlist: () => req("/api/enroll-allowlist"),
+  addEnrollAllowlist: (cidr, note) =>
+    req("/api/enroll-allowlist", { method: "POST", body: { cidr, note } }),
+  removeEnrollAllowlist: (id) =>
+    req(`/api/enroll-allowlist/${id}`, { method: "DELETE" }),
   // Cache-buster so a repeat download after a controller hostname/IP change
   // can't be served from the browser cache (server also sends no-store).
   agentBundleUrl: () => `/api/agent-bundle?t=${Date.now()}`,

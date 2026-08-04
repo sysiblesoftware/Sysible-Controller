@@ -5,7 +5,7 @@
 # script's own lifetime. This wraps `systemctl` for that service and
 # the web console service.
 #
-# Usage: sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|destroy}
+# Usage: sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|self-enroll|disenroll|destroy}
 
 BASE="/opt/sysible"
 VENV="$BASE/venv"
@@ -116,23 +116,63 @@ cmd_start() {
 cmd_self_enroll() {
   _require_root self-enroll
   local agent_dir="/opt/sysible-agent"
-
+  local agent_on_disk=0
   if systemctl is-enabled sysible-agent >/dev/null 2>&1 || [[ -f "$agent_dir/agent.py" ]]; then
-    echo "Controller is already enrolled as a managed host (agent at $agent_dir)."
-    return 0
+    agent_on_disk=1
   fi
+
   if [[ ! -f "$CERT_FILE" ]]; then
+    [[ "$agent_on_disk" == "1" ]] && { echo "Controller agent already present at $agent_dir."; return 0; }
     echo "ERROR: TLS certificate not found at $CERT_FILE - run the installer first." >&2
     return 1
   fi
   local key
   key="$(cat "$BASE/api_key.txt" 2>/dev/null)"
   if [[ -z "$key" ]]; then
+    [[ "$agent_on_disk" == "1" ]] && { echo "Controller agent already present at $agent_dir."; return 0; }
     echo "ERROR: admin API key not found at $BASE/api_key.txt." >&2
     return 1
   fi
-  # The controller mints the single-use enrollment token, so it must be up.
-  if ! curl -s --cacert "$CERT_FILE" "https://127.0.0.1:$PORT/" >/dev/null 2>&1; then
+
+  # Is the controller reachable on loopback right now? (It mints the single-use token.)
+  local controller_up=0
+  curl -s --cacert "$CERT_FILE" "https://127.0.0.1:$PORT/" >/dev/null 2>&1 && controller_up=1
+
+  # Decide whether we actually need to (re)enroll. The old gate trusted on-disk
+  # presence ALONE, so after a DB reset or `disenroll --self` — both of which can
+  # leave $agent_dir on disk while the controller no longer holds a host row — this
+  # wrongly reported "already enrolled" and the controller never reappeared in the
+  # fleet. Now we ask the controller's OWN API whether this host is a live member
+  # before skipping; if it isn't, we re-enroll even though the files exist on disk.
+  if [[ "$agent_on_disk" == "1" ]]; then
+    if [[ "$controller_up" != "1" ]]; then
+      # Can't verify membership while the controller is down; don't churn the agent
+      # on every `start`. It gets re-checked the next time the controller is up.
+      echo "Controller agent already present at $agent_dir."
+      return 0
+    fi
+    local state_file="${SYSIBLE_AGENT_STATE:-/var/lib/sysible/agent_state.json}"
+    local sid=""
+    if [[ -f "$state_file" ]]; then
+      sid="$(python3 -c 'import json,sys
+try:
+    print(json.load(open(sys.argv[1])).get("host_id",""))
+except Exception:
+    pass' "$state_file" 2>/dev/null)"
+    fi
+    if [[ -n "$sid" ]] && curl -fsS --cacert "$CERT_FILE" -H "X-API-Key: $key" \
+         "https://127.0.0.1:$PORT/agents" 2>/dev/null | grep -qF -- "\"$sid\""; then
+      echo "Controller is already enrolled as a managed host and present in the fleet."
+      return 0
+    fi
+    echo "Controller agent is on disk but is NOT a live member of the fleet (DB reset"
+    echo "or self-disenroll) - re-enrolling so it reappears in the console ..."
+    systemctl disable --now sysible-agent.service >/dev/null 2>&1 || true
+    rm -f "$state_file" 2>/dev/null || true
+  fi
+
+  # From here we (re)enroll, which needs the controller up.
+  if [[ "$controller_up" != "1" ]]; then
     echo "Controller isn't responding on https://127.0.0.1:$PORT - start it first, then re-run: sudo sysible_controller self-enroll" >&2
     return 1
   fi
@@ -171,6 +211,201 @@ cmd_self_enroll() {
     return 1
   fi
   echo "Controller self-enrolled — it will appear in the fleet shortly (Host Enrollment)."
+}
+
+# Force-remove an enrolled host from THIS controller — the operator escape hatch for
+# when the normal disenroll can't complete: a stale pinned TLS cert (the agent can't
+# verify the controller), an offline/zombie agent, or a graceful disenroll that keeps
+# re-enrolling. Talks to the controller's OWN API over loopback using the LIVE serving
+# cert, so it works even when every agent's pinned cert has drifted. Defaults to a FORCE
+# removal (purges the host's enrollment token so a still-running agent can't re-enroll);
+# pass --keep-token for a plain removal. Falls back to a direct database delete if the
+# controller API is unreachable.
+#
+#   sudo sysible_controller disenroll --self             # this controller's own host record
+#   sudo sysible_controller disenroll --name rocky-02
+#   sudo sysible_controller disenroll --ip 192.168.8.42
+#   sudo sysible_controller disenroll <host_id>
+#   sudo sysible_controller disenroll --self --dry-run   # preview only
+_disenroll_usage() {
+  cat >&2 <<'EOF'
+Usage: sysible_controller disenroll (--self | --name NAME | --ip IP | --host-id ID | <host_id>) [options]
+
+Force-remove an enrolled host from this controller. Talks to the controller over
+loopback with the live TLS cert, so it works even when an agent's pinned cert has
+drifted. Defaults to a FORCE removal (purges the host's enrollment token so a
+still-running agent can't re-enroll).
+
+  --self          This controller's own managed-host record
+  --name NAME     Match by hostname
+  --ip IP         Match by IP address
+  --host-id ID    Match by exact host_id (also accepted positionally)
+  --keep-token    Plain removal — leave the enrollment token valid (host may re-enroll)
+  --dry-run       Show what would be removed; change nothing
+  -y, --yes       Don't prompt for confirmation
+EOF
+}
+
+# Filter the /agents roster (JSON on stdin) to host_id<TAB>hostname<TAB>ip lines.
+# The program is passed with -c (NOT a heredoc) so the piped roster stays on stdin.
+_DISENROLL_FILTER_PY='
+import json, sys
+mode = sys.argv[1]
+value = sys.argv[2] if len(sys.argv) > 2 else ""
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+agents = data.get("agents", []) if isinstance(data, dict) else (data or [])
+v = value.strip().lower()
+for a in agents:
+    if not isinstance(a, dict):
+        continue
+    hid = str(a.get("host_id") or "")
+    hn = str(a.get("hostname") or "")
+    ip = str(a.get("ip") or "")
+    if mode == "self":
+        hit = bool(a.get("is_controller"))
+    elif mode == "host_id":
+        hit = hid.lower() == v
+    elif mode == "name":
+        hit = hn.lower() == v
+    elif mode == "ip":
+        hit = ip == value.strip()
+    else:
+        hit = False
+    if hit:
+        print("\t".join([hid, hn, ip]))
+'
+_disenroll_filter() {
+  local pybin="$1" mode="$2" value="$3"
+  "$pybin" -c "$_DISENROLL_FILTER_PY" "$mode" "$value"
+}
+
+# Last-resort direct database removal (controller API unreachable).
+_disenroll_db_fallback() {
+  local pybin="$1" mode="$2" value="$3" dry="$4"
+  if [[ "$mode" == "self" ]]; then
+    echo "ERROR: --self resolves the controller's own record via the API, which is unreachable." >&2
+    echo "       Start the controller ('sysible_controller start') and retry, or use --name/--ip/<host_id>." >&2
+    return 1
+  fi
+  local tool="$BASE/tools/unenroll_agent.py"
+  [[ -f "$tool" ]] || tool="$(dirname "$0")/tools/unenroll_agent.py"
+  if [[ ! -f "$tool" ]]; then
+    echo "ERROR: direct-removal helper not found (tools/unenroll_agent.py); cannot fall back." >&2
+    return 1
+  fi
+  local args=()
+  case "$mode" in
+    name)    args=(--name "$value") ;;
+    ip)      args=(--ip "$value") ;;
+    host_id) args=("$value") ;;
+  esac
+  [[ "$dry" == "1" ]] && args+=(--dry-run)
+  "$pybin" "$tool" "${args[@]}"
+}
+
+cmd_disenroll() {
+  _require_root disenroll
+  shift  # drop the "disenroll" subcommand
+
+  local selector="" value="" assume_yes=0 dry_run=0 keep_token=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --self)       selector="self" ;;
+      --name)       selector="name";    value="$2"; shift ;;
+      --name=*)     selector="name";    value="${1#*=}" ;;
+      --ip)         selector="ip";      value="$2"; shift ;;
+      --ip=*)       selector="ip";      value="${1#*=}" ;;
+      --host-id|-i) selector="host_id"; value="$2"; shift ;;
+      --host-id=*)  selector="host_id"; value="${1#*=}" ;;
+      -y|--yes)     assume_yes=1 ;;
+      --dry-run)    dry_run=1 ;;
+      --keep-token) keep_token=1 ;;
+      -h|--help)    _disenroll_usage; return 0 ;;
+      -*)           echo "Unknown option: $1" >&2; _disenroll_usage; return 1 ;;
+      *)            selector="host_id"; value="$1" ;;
+    esac
+    shift
+  done
+
+  if [[ -z "$selector" ]]; then _disenroll_usage; return 1; fi
+  if [[ "$selector" != "self" && -z "$value" ]]; then
+    echo "ERROR: --$selector needs a value." >&2; return 1
+  fi
+
+  local PYBIN="python3"
+  [[ -x "$VENV/bin/python" ]] && PYBIN="$VENV/bin/python"
+
+  local key; key="$(cat "$BASE/api_key.txt" 2>/dev/null)"
+  local base="https://127.0.0.1:$PORT"
+
+  # Pull the roster over loopback with the LIVE serving cert (immune to any agent
+  # pinned-cert drift). If the controller API can't be reached, fall back to the DB.
+  local roster rc
+  roster="$(curl -fsS --cacert "$CERT_FILE" -H "X-API-Key: $key" "$base/agents" 2>/dev/null)"; rc=$?
+  if [[ $rc -ne 0 || -z "$roster" ]]; then
+    echo "Controller API not reachable on $base — falling back to a direct database removal."
+    _disenroll_db_fallback "$PYBIN" "$selector" "$value" "$dry_run"
+    return $?
+  fi
+
+  local matches
+  matches="$(printf '%s' "$roster" | _disenroll_filter "$PYBIN" "$selector" "$value")"
+  if [[ -z "$matches" ]]; then
+    echo "No enrolled host matches --$selector${value:+ $value}."
+    echo "Tip: list enrolled hosts with"
+    echo "  curl -s --cacert $CERT_FILE -H \"X-API-Key: \$(cat $BASE/api_key.txt)\" $base/agents | ${PYBIN} -m json.tool"
+    return 1
+  fi
+
+  local n; n="$(printf '%s\n' "$matches" | grep -c .)"
+  if [[ "$n" -gt 1 ]]; then
+    echo "Multiple hosts match — narrow it down with --host-id <id>:" >&2
+    printf '%s\n' "$matches" | awk -F'\t' '{printf "  %-38s %-24s %s\n", $1, $2, $3}' >&2
+    return 2
+  fi
+
+  local host_id hostname ip
+  host_id="$(printf '%s' "$matches" | cut -f1)"
+  hostname="$(printf '%s' "$matches" | cut -f2)"
+  ip="$(printf '%s' "$matches" | cut -f3)"
+
+  local pt=1; [[ "$keep_token" == "1" ]] && pt=0
+  local mode_desc="Force-remove (purges the enrollment token so it can't re-enroll)"
+  [[ "$pt" == "0" ]] && mode_desc="Remove (keeps the enrollment token — the host may re-enroll)"
+
+  echo "Target host: ${hostname:-?}${ip:+  ($ip)}  [$host_id]"
+  echo "Action:      $mode_desc"
+  if [[ "$dry_run" == "1" ]]; then echo "(dry run — nothing changed)"; return 0; fi
+
+  if [[ "$assume_yes" != "1" ]]; then
+    read -r -p "Disenroll this host from the controller? [y/N] " ans
+    case "$ans" in y|Y|yes|YES) ;; *) echo "Aborted."; return 1 ;; esac
+  fi
+
+  local out drc
+  out="$(curl -fsS -X DELETE --cacert "$CERT_FILE" -H "X-API-Key: $key" \
+        "$base/agents/$host_id?purge_token=$pt" 2>&1)"; drc=$?
+  if [[ $drc -ne 0 ]]; then
+    echo "ERROR: the controller refused the removal: $out" >&2
+    echo "Trying a direct database removal instead..."
+    _disenroll_db_fallback "$PYBIN" "host_id" "$host_id" 0
+    return $?
+  fi
+  echo "Removed '${hostname:-$host_id}' from the controller."
+
+  # If we just removed THIS controller's own agent record, stop the local agent so
+  # it doesn't keep hammering the controller (with the token purged it can't
+  # re-enroll anyway). Full local file cleanup is the bundle's disenroll_agent.sh.
+  if [[ "$selector" == "self" ]]; then
+    if systemctl list-unit-files sysible-agent.service >/dev/null 2>&1; then
+      echo "Stopping the local agent (sysible-agent)…"
+      systemctl disable --now sysible-agent.service >/dev/null 2>&1 || true
+      echo "Local agent stopped. To also remove its files, run the bundle's disenroll_agent.sh."
+    fi
+  fi
 }
 
 cmd_stop() {
@@ -282,10 +517,72 @@ cmd_update() {
   #    path inline (no global git config change) so the update actually applies.
   if [[ -d "$SRC/.git" ]] && command -v git >/dev/null 2>&1; then
     echo "Pulling latest code (git) ..."
-    _git() { git -C "$SRC" -c safe.directory="$SRC" "$@"; }
-    _pull_out="$(_git pull --ff-only 2>&1)"; _pull_rc=$?
-    printf '%s\n' "$_pull_out"
+    # GIT_TERMINAL_PROMPT=0 + BatchMode ssh: the updater runs headless (systemd-run,
+    # no TTY), so a private-repo fetch with no stored credentials otherwise tries to
+    # read a username from a terminal that isn't there and dies with the cryptic
+    # "could not read Username for 'https://github.com': No such device or address".
+    # Forcing non-interactive makes it fail FAST with a clean, classifiable auth error
+    # (handled below) instead of hanging or emitting that confusing message.
+    _git() { GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new" git -C "$SRC" -c safe.directory="$SRC" "$@"; }
+
+    # SELF-HEAL a detached / gone-upstream checkout BEFORE pulling, so a state like
+    # "## dev...origin/dev [gone]" repairs itself instead of blocking the operator with
+    # manual 'set-upstream' steps (a prior interrupted update, or a ref-store prune that
+    # couldn't refetch, can leave it this way). Best-effort and NON-destructive: it never
+    # discards commits or working-tree changes, and if the remote can't be reached (e.g.
+    # missing credentials) the fetch is a clean no-op and the auth check below takes over.
+    _cur="$(_git symbolic-ref --quiet --short HEAD 2>/dev/null || echo '')"
+    if [[ -z "$_cur" ]]; then
+      # Detached HEAD — try to land on a real branch that has a remote counterpart.
+      _def="$(_git remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p' | head -1)"
+      for _cand in "$_def" main master dev; do
+        if [[ -n "$_cand" ]] && _git rev-parse --verify --quiet "refs/remotes/origin/$_cand" >/dev/null 2>&1; then
+          _git checkout "$_cand" >/dev/null 2>&1 && { _cur="$_cand"; echo "Re-attached $SRC to branch $_cand (was detached HEAD)."; break; }
+        fi
+      done
+    fi
+    if [[ -n "$_cur" ]] && ! _git rev-parse --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+      _git fetch --quiet origin "$_cur" 2>/dev/null || true
+      if _git rev-parse --verify --quiet "refs/remotes/origin/$_cur" >/dev/null 2>&1 \
+         && _git branch --set-upstream-to="origin/$_cur" "$_cur" >/dev/null 2>&1; then
+        echo "Re-attached $SRC to origin/$_cur (upstream tracking was missing)."
+      fi
+    fi
+    # --quiet keeps the update log clean: it drops git's noisy per-branch fetch
+    # summary ("From github.com … * [new branch] dependabot/…") and progress
+    # chatter — the bulk of what the operator was seeing — while any real error
+    # still goes to stderr (captured here and classified structurally below). A
+    # clean fast-forward is silent, so only echo the output when there is some.
+    _pull_out="$(_git pull --quiet --ff-only 2>&1)"; _pull_rc=$?
+    [[ -n "$_pull_out" ]] && printf '%s\n' "$_pull_out"
     if [[ $_pull_rc -ne 0 ]]; then
+      # (0) AUTHENTICATION / unreachable remote — the checkout can't reach its (private)
+      # remote to pull: no stored credentials, an expired token, or no deploy key. This is
+      # NOT a ref/tracking problem, and it MUST be caught before the ref-store repair below
+      # — that repair DELETES the origin/* cache and then refetches, so on an auth failure
+      # it would wipe origin/<branch> and be unable to restore it, manufacturing the very
+      # "origin/<branch> [gone]" state whose 'set-upstream' advice then can't work either.
+      # Detect it, tell the operator exactly what to fix (credentials), and STOP.
+      if printf '%s' "$_pull_out" | grep -qiE 'could not read (Username|Password)|Authentication failed|terminal prompts disabled|Permission denied \(publickey\)|Invalid username or password|Support for password authentication was removed|fatal: unable to access|The requested URL returned error: 40[0-9]|could not read from remote repository'; then
+        _remote_url="$(_git remote get-url origin 2>/dev/null || echo '(no "origin" remote configured)')"
+        echo "ERROR: update blocked — $SRC could not AUTHENTICATE to its git remote to pull the update."
+        echo "       Remote: $_remote_url"
+        echo "       git has no usable credentials for it (private repo, expired token, or no deploy key), so a"
+        echo "       headless pull can't read a username. This is a CREDENTIALS problem, NOT a branch/tracking one"
+        echo "       — the 'set-upstream' advice does not apply. Fix ONE of these on the host, then retry the update:"
+        echo "         • Store a token (HTTPS) — prompts once, then caches it:"
+        echo "             sudo git config --system credential.helper store"
+        echo "             sudo git -C $SRC -c safe.directory=\"$SRC\" fetch origin   # enter your user + a PAT"
+        echo "           …or bake a read-only token straight into the remote URL:"
+        echo "             sudo git -C $SRC -c safe.directory=\"$SRC\" remote set-url origin https://<user>:<TOKEN>@github.com/<org>/<repo>.git"
+        echo "         • …or switch to an SSH deploy key:"
+        echo "             sudo git -C $SRC -c safe.directory=\"$SRC\" remote set-url origin git@github.com:<org>/<repo>.git"
+        echo "             # then add that host's public key as a read-only Deploy Key on the repository"
+        echo "       No-git alternative — deploy the code you already have without pulling:"
+        echo "             cd <your-up-to-date-checkout> && sudo ./install_sysible.sh"
+        _write_update_status failed "Update blocked: $SRC cannot authenticate to its git remote ($_remote_url) to pull. Configure credentials on the host (a stored PAT via 'git config --system credential.helper store' then fetch, a token in the remote URL, or an SSH deploy key), then retry. This is NOT a tracking-branch problem. No-git path: run ./install_sysible.sh from an up-to-date checkout."
+        exit 1
+      fi
       # An untracked-file collision ("untracked working tree files would be overwritten
       # by merge") is NOT a ref-store problem — the checkout has untracked files shadowing
       # files the update adds, and a ref repair won't help. Give the exact, safe remedy
@@ -338,11 +635,65 @@ cmd_update() {
       _git remote prune origin 2>&1 || true
       _git for-each-ref --format='%(refname)' refs/remotes/origin 2>/dev/null \
         | while read -r _r; do _git update-ref -d "$_r" 2>/dev/null || true; done
-      _git fetch --prune origin 2>&1 || true
-      if ! _git pull --ff-only 2>&1; then
-        echo "ERROR: 'git pull' still failed in $SRC after a ref-store repair - resolve it there, then re-run update."
-        _write_update_status failed "'git pull --ff-only' failed in $SRC even after an automatic ref-store repair (likely local changes or a diverged branch). On the host: cd $SRC && sudo git -c safe.directory=\$PWD status — commit/stash/discard local changes or reset to origin, then retry."
-        exit 1
+      _git fetch --prune --quiet origin 2>&1 || true
+      if ! _git pull --quiet --ff-only 2>&1; then
+        # A previous interrupted update can leave a half-finished merge/rebase/
+        # cherry-pick that blocks every later pull. Aborting returns the checkout to
+        # its pre-operation state (SAFE — no commits or working-tree edits are lost),
+        # then we retry the pull once.
+        if [[ -e "$SRC/.git/MERGE_HEAD" || -d "$SRC/.git/rebase-merge" || -d "$SRC/.git/rebase-apply" || -e "$SRC/.git/CHERRY_PICK_HEAD" ]]; then
+          echo "Detected an interrupted merge/rebase in $SRC - aborting it (safe) and retrying ..."
+          _git merge --abort 2>/dev/null || true
+          _git rebase --abort 2>/dev/null || true
+          _git cherry-pick --abort 2>/dev/null || true
+        fi
+        if _git pull --quiet --ff-only 2>&1; then
+          echo "Recovered from an interrupted operation; update continues."
+        else
+          # Classify the blocker STRUCTURALLY, not by matching git's English error
+          # text (it varies by git version + locale, so the string checks above can
+          # miss a real dirty tree and dump the operator here with no guidance). A
+          # compact `git status -sb` snapshot is surfaced in every branch so the
+          # failure is never a dead end.
+          _status="$(_git status -sb 2>&1 | head -8)"
+          _branch="$(_git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
+          if ! _git rev-parse --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+            echo "ERROR: update blocked — $SRC has NO upstream to pull from (detached HEAD or missing tracking)."
+            echo "       Current state:"; printf '         %s\n' "$_status"
+            echo "       Put it back on its tracking branch, then retry:"
+            echo "         cd $SRC && sudo git -c safe.directory=\"\$PWD\" checkout $_branch"
+            echo "         cd $SRC && sudo git -c safe.directory=\"\$PWD\" branch --set-upstream-to=origin/$_branch $_branch && sudo sysible_controller update"
+            _write_update_status failed "Update blocked: $SRC has no upstream (detached HEAD / no tracking, branch '$_branch'). On the host put it back on its tracking branch: cd $SRC && sudo git -c safe.directory=\$PWD checkout $_branch && git branch --set-upstream-to=origin/$_branch $_branch, then retry. State: $_status"
+          else
+            _ahead="$(_git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
+            if [[ "${_ahead:-0}" -gt 0 ]]; then
+              echo "ERROR: update blocked — this checkout has $_ahead local commit(s) NOT on origin (a diverged branch)."
+              echo "       These are usually your OWN unpushed changes — do NOT 'reset --hard' or you'll lose them. See them:"
+              echo "         cd $SRC && sudo git -c safe.directory=\"\$PWD\" log --oneline @{u}..HEAD"
+              echo "       KEEP them and still update — rebase your commits onto origin (non-destructive):"
+              echo "         cd $SRC && sudo git -c safe.directory=\"\$PWD\" pull --rebase && sudo sysible_controller update"
+              echo "       Only if those commits are unwanted, DISCARD them (destructive):"
+              echo "         cd $SRC && sudo git -c safe.directory=\"\$PWD\" reset --hard @{u}"
+              _write_update_status failed "Update blocked: $SRC has $_ahead local commit(s) not on origin (diverged branch — likely your own unpushed work). KEEP + update: cd $SRC && sudo git -c safe.directory=\$PWD pull --rebase, then retry. See them with 'git log @{u}..HEAD'. DISCARD (destructive) only if unwanted: git reset --hard @{u}."
+            elif [[ -n "$(_git status --porcelain 2>/dev/null)" ]]; then
+              echo "ERROR: update blocked — $SRC has UNCOMMITTED local changes that stop a clean fast-forward."
+              echo "       Current state:"; printf '         %s\n' "$_status"
+              echo "       Stash them (reversible — recover later with 'stash pop'), then retry:"
+              echo "         cd $SRC && sudo git -c safe.directory=\"\$PWD\" stash push --include-untracked -m pre-update && sudo sysible_controller update"
+              echo "         # reapply later if you still need them: sudo git -c safe.directory=\"\$PWD\" stash pop"
+              echo "       Or discard them entirely (destructive — ONLY if unwanted):"
+              echo "         cd $SRC && sudo git -c safe.directory=\"\$PWD\" reset --hard @{u} && sudo git -c safe.directory=\"\$PWD\" clean -fd"
+              _write_update_status failed "Update blocked: $SRC has uncommitted local changes stopping a fast-forward. On the host (reversible): cd $SRC && sudo git -c safe.directory=\$PWD stash push --include-untracked -m pre-update, then retry; reapply with 'stash pop'. State: $_status"
+            else
+              echo "ERROR: 'git pull --ff-only' still failed in $SRC and the cause isn't a recognised one. Its state:"
+              printf '         %s\n' "$_status"
+              echo "       Inspect and resolve on the host, then retry:"
+              echo "         cd $SRC && sudo git -c safe.directory=\"\$PWD\" status"
+              _write_update_status failed "'git pull --ff-only' failed in $SRC (cause unclear). State: $_status. On the host: cd $SRC && sudo git -c safe.directory=\$PWD status, resolve, then retry."
+            fi
+          fi
+          exit 1
+        fi
       fi
       echo "Ref-store repair succeeded; update continues."
     fi
@@ -576,8 +927,10 @@ cmd_destroy() {
     echo "   - PURGE: also delete /tmp DB backups and the source checkout"
     [[ -n "$SRC" ]] && echo "            ($SRC)"
   fi
+  echo "   - remove THIS machine's own Sysible agent (the controller self-enrolls"
+  echo "     itself; that local agent is torn down so it doesn't crash-loop)"
   echo ""
-  echo " Enrolled hosts' agents are NOT touched by this - their own"
+  echo " OTHER enrolled hosts' agents are NOT touched by this - their own"
   echo " sysible-agent systemd services keep running and will just start"
   echo " failing to reach this controller. Disenroll hosts first (or run"
   echo " disenroll_agent.sh on each one) if you want them cleaned up too."
@@ -598,6 +951,19 @@ cmd_destroy() {
   systemctl disable --now "${WEBGUI_SERVICE}.service" 2>/dev/null
   rm -f "/etc/systemd/system/$SERVICE.service" "/etc/systemd/system/${WEBGUI_SERVICE}.service"
   systemctl daemon-reload
+
+  # Remove THIS machine's own self-enrolled agent (the controller enrolls itself as a
+  # managed host at /opt/sysible-agent). Without this it keeps crash-looping under
+  # systemd Restart=always trying to reach the now-deleted controller. Only the LOCAL
+  # agent is removed; other hosts' agents are untouched.
+  AGENT_DIR="/opt/sysible-agent"
+  if systemctl list-unit-files 2>/dev/null | grep -q '^sysible-agent\.service' || [[ -e "$AGENT_DIR" ]]; then
+    echo "Removing this machine's Sysible agent (sysible-agent)..."
+    systemctl disable --now sysible-agent.service 2>/dev/null
+    rm -f /etc/systemd/system/sysible-agent.service
+    systemctl daemon-reload
+    rm -rf "$AGENT_DIR"
+  fi
 
   DB_FILE="$BASE/backend/sysible.db"
   if [[ -f "$DB_FILE" && "$PURGE" != "1" ]]; then
@@ -630,6 +996,66 @@ cmd_destroy() {
   rm -f "$0"
 }
 
+cmd_rotate_api_key() {
+  # Generate a fresh controller admin API key, replacing $BASE/api_key.txt (0600),
+  # and restart the services so both the backend and the web console load it. Use
+  # after a suspected key exposure. The key is a PRIVILEGED bearer credential (it
+  # authorizes the entire admin API), so it is printed ONCE here and never logged.
+  _require_root "rotate-api-key"
+  local key_file="$BASE/api_key.txt"
+  if [[ ! -d "$BASE" ]]; then
+    echo "ERROR: $BASE not found - is the controller installed here?" >&2
+    exit 1
+  fi
+  local newkey
+  newkey="$("$VENV/bin/python" -c 'import secrets; print(secrets.token_hex(32))' 2>/dev/null)"
+  if [[ -z "$newkey" ]]; then
+    echo "ERROR: could not generate a new key." >&2
+    exit 1
+  fi
+  # Write privately: create the replacement at 0600 before any bytes land, then
+  # atomically move it over the old key so it is never world-readable, even briefly.
+  local tmp="$key_file.new.$$"
+  if ! ( umask 077; printf '%s\n' "$newkey" > "$tmp" ); then
+    echo "ERROR: could not write the new key to $BASE." >&2
+    exit 1
+  fi
+  chmod 600 "$tmp" 2>/dev/null
+  mv -f "$tmp" "$key_file"
+  chmod 600 "$key_file" 2>/dev/null
+  echo "New admin API key written to $key_file. Restarting services to load it ..."
+  # The key is resolved at import time, so BOTH services must restart to pick it up.
+  cmd_restart >/dev/null 2>&1 || true
+  systemctl is-enabled sysible-webgui >/dev/null 2>&1 && systemctl restart sysible-webgui >/dev/null 2>&1 || true
+  local R='\033[1;91m' Z='\033[0m'
+  echo "==================================================================="
+  echo -e "${R} Controller admin API key rotated. New key (shown once):${Z}"
+  echo -e "${R}     $newkey${Z}"
+  echo " Update any external client/automation that sends X-API-Key. The web"
+  echo " console re-reads the key automatically now that it has restarted."
+  echo "==================================================================="
+}
+
+cmd_revoke_enroll_tokens() {
+  # Invalidate every minted-but-unclaimed enrollment token. Use if a token may have
+  # leaked (a pasted curl one-liner, a CI log). Already-claimed tokens are left alone
+  # so a legitimate host's within-window re-enroll still works.
+  _require_root "revoke-enroll-tokens"
+  local n
+  n="$("$VENV/bin/python" - "$BASE" <<'PY' 2>/dev/null
+import sys
+sys.path.insert(0, sys.argv[1])
+from backend.db import purge_unconsumed_enroll_tokens
+print(purge_unconsumed_enroll_tokens())
+PY
+)"
+  if [[ -z "$n" ]]; then
+    echo "ERROR: could not revoke tokens (is the controller installed at $BASE?)." >&2
+    exit 1
+  fi
+  echo "Revoked $n unconsumed enrollment token(s). Mint a fresh one from Host Enrollment when needed."
+}
+
 case "$1" in
   start)   cmd_start ;;
   stop)    cmd_stop ;;
@@ -639,10 +1065,13 @@ case "$1" in
   logs)    cmd_logs ;;
   webgui)  cmd_webgui "$@" ;;
   reset-admin) cmd_reset_admin "$@" ;;
+  rotate-api-key) cmd_rotate_api_key ;;
+  revoke-enroll-tokens) cmd_revoke_enroll_tokens ;;
   self-enroll) cmd_self_enroll ;;
+  disenroll) cmd_disenroll "$@" ;;
   destroy) cmd_destroy ;;
   *)
-    echo "Usage: sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|self-enroll|destroy}"
+    echo "Usage: sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|rotate-api-key|revoke-enroll-tokens|self-enroll|disenroll|destroy}"
     exit 1
     ;;
 esac

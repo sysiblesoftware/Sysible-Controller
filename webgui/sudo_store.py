@@ -5,10 +5,19 @@ passwords; the controller holds a copy in RAM only in transit to the agent
 (keyed per task, short TTL — see backend/app.py), and nothing persists them
 in clear text anywhere.
 
-Model: one Fernet key (run/webgui_sudo.key, mode 0600) encrypts every
-stored password. Entries are keyed by (admin username, scope), where scope
-is the literal host label or the sentinel "__all__" (fleet default), so one
-admin's stored passwords are isolated per host/fleet and from other admins.
+Model: a Fernet key encrypts every stored password. When a controller secret
+vault master key is resolvable (SYSIBLE_SECRET_KEY / _CMD / the 0600 local
+key), this store DERIVES its key from it (secret_vault.derive_fernet_key), so
+the sudo vault inherits the same KMS/Vault-pluggable custody as the rest of the
+controller — moving the master key off-box protects these passwords too. When
+no master key is resolvable it falls back to a co-located run/webgui_sudo.key
+(mode 0600), the original zero-config behaviour. Reads try the derived key AND
+the legacy file key, so passwords written before the master key existed keep
+decrypting and re-wrap under the derived key on their next save.
+
+Entries are keyed by (admin username, scope), where scope is the literal host
+label or the sentinel "__all__" (fleet default), so one admin's stored
+passwords are isolated per host/fleet and from other admins.
 """
 import json
 import os
@@ -36,12 +45,49 @@ def encryption_available():
     return _HAVE_FERNET
 
 
-def _get_key():
+def _derived_key():
+    """The master-key-derived Fernet key for this store, or None when no
+    controller secret-vault master key is resolvable. Domain-separated via the
+    'webgui-sudo' purpose so it can never collide with the audit-chain HMAC key
+    or the generic encryption key."""
     if not _HAVE_FERNET:
         return None
     try:
-        if _KEY_FILE.exists():
-            return _KEY_FILE.read_bytes().strip()
+        from backend import secret_vault
+        return secret_vault.derive_fernet_key(b"webgui-sudo")
+    except Exception:
+        return None
+
+
+def _read_key_nofollow():
+    """Read the key file WITHOUT following a symlink — matching the O_NOFOLLOW write
+    path below and secret_vault's read path. A local attacker who can pre-plant a
+    symlink at run/webgui_sudo.key must not be able to redirect this read to a file
+    they control (or to slurp an arbitrary file in as the key). Returns bytes, or
+    None if the file is missing, is a symlink, or can't be read — the caller then
+    fails closed (never stores plaintext) rather than trusting a redirected read."""
+    try:
+        fd = os.open(str(_KEY_FILE), os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        return os.read(fd, 4096).strip()
+    finally:
+        os.close(fd)
+
+
+def _legacy_key(create=True):
+    """The co-located run/webgui_sudo.key. With create=False it is only returned
+    when it already exists (used on the read path so a status/read never mints a
+    fresh legacy key once the store has migrated to a master-derived key)."""
+    if not _HAVE_FERNET:
+        return None
+    existing = _read_key_nofollow()
+    if existing:
+        return existing
+    if not create:
+        return None
+    try:
         _RUN_DIR.mkdir(parents=True, exist_ok=True)
         key = Fernet.generate_key()
         # Create the key file 0600 FROM THE START. The old write_bytes()+chmod
@@ -55,10 +101,27 @@ def _get_key():
             os.close(fd)
         return key
     except FileExistsError:
-        # Another process created it in the race — read theirs.
-        return _KEY_FILE.read_bytes().strip()
+        # Another process created it in the race — read theirs (no-follow).
+        return _read_key_nofollow()
     except OSError:
         return None
+
+
+def _primary_key():
+    """Key used for NEW writes: the master-derived key when a vault master key is
+    resolvable (so the sudo vault inherits KMS/Vault custody), else the legacy
+    co-located file key (generated on first use)."""
+    return _derived_key() or _legacy_key(create=True)
+
+
+def _read_keys():
+    """Every key to try when decrypting, newest-custody first, so a token written
+    under the legacy file key still decrypts after this host gains a master key."""
+    keys = []
+    for k in (_derived_key(), _legacy_key(create=False)):
+        if k and k not in keys:
+            keys.append(k)
+    return keys
 
 
 def _load():
@@ -78,7 +141,7 @@ def set_password(user: str, scope: str, password: str) -> bool:
     encryption isn't available (we never store it in clear)."""
     if not password:
         return False
-    key = _get_key()
+    key = _primary_key()
     if not key:
         return False
     with _LOCK:
@@ -90,18 +153,18 @@ def set_password(user: str, scope: str, password: str) -> bool:
 
 def get_password(user: str, scope: str):
     """Decrypted password for (user, scope), or None. Callers typically try
-    a host-specific scope first, then fall back to ALL."""
+    a host-specific scope first, then fall back to ALL. Tries every custody key
+    (derived, then legacy) so a token survives the migration to a master key."""
     rec = _load().get(user, {})
     token = rec.get(scope)
     if not token or not _HAVE_FERNET:
         return None
-    key = _get_key()
-    if not key:
-        return None
-    try:
-        return Fernet(key).decrypt(token.encode()).decode()
-    except (InvalidToken, ValueError):
-        return None
+    for key in _read_keys():
+        try:
+            return Fernet(key).decrypt(token.encode()).decode()
+        except (InvalidToken, ValueError):
+            continue
+    return None
 
 
 def resolve(user: str, host_label: str):

@@ -356,9 +356,36 @@ def cmd_configure_ldap_client(server: str, base_dn: str, use_ldaps: bool = True)
         "ldap_tls_reqcert = demand\n"
         "cache_credentials = True\n"
     )
+    # SSSD supplies the identity data but does NOT wire itself into NSS or PAM.
+    # Without that, `getent passwd <ldapuser>` returns nothing and directory logins
+    # fail even though sssd is running and the banner says "configured". Add sss to
+    # the NSS passwd/group/shadow databases and enable pam_sss - the PAM tool
+    # differs by distro (RHEL authselect / Debian pam-auth-update / SUSE pam-config),
+    # so mirror the cascade used by Enable mkhomedir.
+    nss_wire = (
+        "for _db in passwd group shadow; do "
+        'if grep -qE "^${_db}:" /etc/nsswitch.conf 2>/dev/null; then '
+        'grep -E "^${_db}:" /etc/nsswitch.conf | grep -qw sss || '
+        'sed -i "/^${_db}:/ s/$/ sss/" /etc/nsswitch.conf; '
+        'else echo "${_db}: files sss" >> /etc/nsswitch.conf; fi; '
+        "done; "
+    )
+    pam_wire = (
+        "if command -v authselect >/dev/null 2>&1; then "
+        "authselect select sssd with-mkhomedir 2>&1 || "
+        "echo 'Run: authselect select sssd with-mkhomedir (add --force if this host has manual PAM edits).'; "
+        "elif command -v pam-auth-update >/dev/null 2>&1; then "
+        "pam-auth-update --enable sss mkhomedir 2>/dev/null || "
+        "echo 'Run pam-auth-update and enable SSS authentication + Create home directory.'; "
+        "elif command -v pam-config >/dev/null 2>&1; then "
+        "pam-config --add --sss --mkhomedir 2>&1 || echo 'Run pam-config --add --sss on this host.'; "
+        "else echo 'Enable pam_sss manually in the PAM stack (no authselect/pam-auth-update/pam-config here).'; fi; "
+    )
     return (
         "cat > /etc/sssd/sssd.conf <<'SYS_SSSD'\n" + conf + "SYS_SSSD\n"
         "chmod 600 /etc/sssd/sssd.conf && "
         "systemctl restart sssd 2>&1 && systemctl enable sssd 2>/dev/null; "
-        f"printf 'Configured SSSD for {scheme}://%s (base %s) and restarted SSSD.\\n' {shlex.quote(server)} {shlex.quote(base_dn)}"
+        + nss_wire + pam_wire +
+        f"printf 'Configured SSSD for {scheme}://%s (base %s), wired NSS (sss) + PAM, and restarted SSSD. "
+        f"Verify with: getent passwd <a-directory-user>.\\n' {shlex.quote(server)} {shlex.quote(base_dn)}"
     )

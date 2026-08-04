@@ -1,8 +1,9 @@
 # Sysible Controller runtime dependencies — pinned for reproducible builds.
 # These exact versions are what the test suite is validated against. Bump them
-# deliberately (not implicitly at install time): CI should run `pip-audit`
-# against this file, and for a fully hash-locked manifest regenerate with
-#   pip-compile --generate-hashes requirements.in
+# deliberately (not implicitly at install time). The pip-audit gate + CycloneDX SBOM
+# this calls for now ship as .github/workflows/security-scan.yml (weekly + on change)
+# and scripts/security_scan.sh (run locally). For a fully hash-locked manifest regenerate
+# with:  pip-compile --generate-hashes requirements.in  (deploy with --require-hashes)
 # (a floating `>=` set previously resolved to whatever was newest on PyPI at
 # install time — non-reproducible and hard to attest for change control).
 

@@ -40,9 +40,13 @@ def test_reenroll_clears_stale_quarantine(controller, enroll_token):
     agent_integrity.evaluate(host_id, {"version": "v2", "manifest": "bbb"})
     assert agent_integrity.is_quarantined(host_id)
 
-    # Host goes stale, then re-enrolls on the SAME id with a fresh token.
+    # Host goes stale, then re-enrolls on the SAME id. Re-binding an existing host
+    # now requires an admin reissue token (a bare fresh token is refused, so it can't
+    # be a takeover); the authorized re-enroll still drops the stale baseline.
     _go_stale(host_id)
-    r2 = _enroll(controller, enroll_token(), "rocky-id", "rocky-1", ip)
+    reissue = "reissue-quar-1"
+    db.create_reissue_token(reissue, host_id)
+    r2 = _enroll(controller, reissue, "rocky-id", "rocky-1", ip)
     assert r2.status_code == 200
     assert r2.json()["host_id"] == host_id
 

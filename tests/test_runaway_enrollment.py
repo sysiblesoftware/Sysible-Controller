@@ -42,23 +42,86 @@ def _rows(host_id):
     return [a for a in db.list_agents() if a["host_id"] == host_id]
 
 
-def test_same_stable_host_id_new_token_does_not_duplicate(controller, enroll_token):
-    hid = "stable-host-abc"
-    r1 = _enroll(controller, enroll_token(), hid)
-    assert r1.status_code == 200, r1.text
-    assert len(_rows(hid)) == 1
-
-    # Simulate a real restart gap so the host is no longer "live".
+def _go_offline(hid):
     conn = db._connect()
     conn.execute("UPDATE agents SET last_seen=? WHERE host_id=?",
                  (time.time() - 10_000, hid))
     conn.commit(); conn.close()
 
-    # A fresh token + the SAME stable host_id (state-less restart) must reuse the
-    # one row, not create a second.
+
+def test_fresh_token_cannot_rebind_existing_offline_host(controller, enroll_token):
+    # A FRESH bearer token + the (machine-derivable, non-secret) host_id of an
+    # existing host must NOT silently re-bind it, even when that host is offline —
+    # that is the offline-host takeover. It is refused (403) with no duplicate and,
+    # crucially, without overwriting the incumbent's agent_secret.
+    hid = "stable-host-abc"
+    assert _enroll(controller, enroll_token(), hid).status_code == 200
+    assert len(_rows(hid)) == 1
+    secret_before = db.get_agent_secret(hid)
+
+    _go_offline(hid)
+
     r2 = _enroll(controller, enroll_token(), hid)
-    assert r2.status_code == 200, r2.text
-    assert len(_rows(hid)) == 1, "a stable host_id must never spawn a duplicate row"
+    assert r2.status_code == 403, r2.text
+    assert len(_rows(hid)) == 1, "refused re-bind must never spawn a duplicate row"
+    assert db.get_agent_secret(hid) == secret_before, "incumbent secret must be intact"
+
+
+def test_reissue_token_authorizes_rebind_of_existing_host(controller, enroll_token):
+    # The supported reinstall path: an admin mints a REISSUE token bound to the
+    # existing host_id, and enrollment re-binds exactly that host onto its one row.
+    hid = "stable-host-reissue"
+    assert _enroll(controller, enroll_token(), hid).status_code == 200
+    _go_offline(hid)
+
+    reissue = "reissue-tok-1"
+    db.create_reissue_token(reissue, hid)
+    r = _enroll(controller, reissue, hid)
+    assert r.status_code == 200, r.text
+    assert len(_rows(hid)) == 1, "reissue must re-bind the one row, not duplicate"
+
+
+def test_reissue_token_cannot_be_redirected_to_another_host(controller, enroll_token):
+    # A reissue token is BOUND to one host_id at generation, so an attacker holding
+    # a reissue token for `other` cannot point it at `victim`: resolve pins the
+    # request onto `other`, leaving victim's identity untouched.
+    victim = "stable-host-victim"
+    other = "stable-host-other"
+    assert _enroll(controller, enroll_token(), victim).status_code == 200
+    assert _enroll(controller, enroll_token(), other).status_code == 200
+    victim_secret = db.get_agent_secret(victim)
+    _go_offline(victim)
+
+    reissue_for_other = "reissue-tok-2"
+    db.create_reissue_token(reissue_for_other, other)   # bound to `other`, not victim
+    # Attacker asks for victim's host_id but presents a reissue token for `other`.
+    _enroll(controller, reissue_for_other, victim)
+    # Whatever happened to `other`, victim's credential must be untouched.
+    assert db.get_agent_secret(victim) == victim_secret, "victim must not be taken over"
+
+
+def test_prev_agent_secret_authorizes_rebind(controller, enroll_token):
+    # Proof of possession: a host that still holds its current agent_secret can
+    # re-enroll onto its own row (e.g. a deliberate secret refresh).
+    hid = "stable-host-pop"
+    assert _enroll(controller, enroll_token(), hid).status_code == 200
+    secret = db.get_agent_secret(hid)
+    _go_offline(hid)
+
+    r = controller.post("/agents/enroll", json={
+        "token": enroll_token(), "host_id": hid, "hostname": "web1",
+        "platform": "linux", "kernel": "6.1", "ip": "10.0.0.5",
+        "prev_agent_secret": secret})
+    assert r.status_code == 200, r.text
+    assert len(_rows(hid)) == 1
+
+    # A WRONG secret does not authorize the re-bind.
+    _go_offline(hid)
+    r2 = controller.post("/agents/enroll", json={
+        "token": enroll_token(), "host_id": hid, "hostname": "web1",
+        "platform": "linux", "kernel": "6.1", "ip": "10.0.0.5",
+        "prev_agent_secret": "not-the-real-secret"})
+    assert r2.status_code == 403, r2.text
 
 
 def test_live_stable_host_reenroll_is_blocked_not_duplicated(controller, enroll_token):

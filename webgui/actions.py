@@ -33,10 +33,13 @@ from client import _api_users  # for the one cmd_* name that collides on `api`
 class Param:
     name: str
     label: str
-    type: str = "text"          # text | password | number | select | checkbox
+    type: str = "text"          # text | password | number | select | checkbox | select-remote
     default: object = ""
     required: bool = True
     options: list = field(default_factory=list)   # for type == "select"
+    # For type == "select-remote": the (hidden) action whose per-host stdout —
+    # one value per line — populates the dropdown for the single selected host.
+    source: str = ""
     help: str = ""
     # Greyed-out example shown in an empty field (HTML placeholder). Always an
     # EXAMPLE of what to type, e.g. "e.g. nginx" — never a value that gets
@@ -56,6 +59,9 @@ class Action:
     danger: bool = False        # UI confirms before running (delete, etc.)
     tab: str = ""               # desktop tab this action lives under
     group: str = ""             # titled section (QGroupBox) within the tab
+    hidden: bool = False        # dispatchable, but not rendered as a button
+                                # (used by remote-select fields that fetch their
+                                # own option list, e.g. vm_names for the VM picker)
 
 
 # ----------------------------------------------------------------------
@@ -252,6 +258,38 @@ _register(Action(
     name="pkg_clean_cache", tool="Host Software Management",
     label="Clean package cache", params=[],
     build=lambda p: api.cmd_clean_package_cache()))
+
+# ---- Tool: OS Release Upgrade ----------------------------------------
+# Major / distribution version upgrades (RHEL 8->9 via Leapp, Fedora via
+# dnf system-upgrade, Ubuntu via do-release-upgrade, openSUSE/SLES via
+# zypper dup / migration). Kept OUT of "Host Software Management" (which is
+# package-level patching) because it's a distinct, higher-blast-radius
+# operation. The builders pick the mechanism from the host's /etc/os-release.
+_relup_target = Param(
+    "target", "Target version", required=False,
+    help="Required for Fedora and openSUSE Leap (e.g. 40, 15.6). "
+         "RHEL/Ubuntu/Tumbleweed/SLES auto-select the next release; an Ubuntu "
+         "codename (e.g. noble) is also accepted.",
+    placeholder="e.g. 9.4, 40, 15.6, noble")
+_register(Action(
+    name="relup_check", tool="OS Release Upgrade",
+    label="Pre-flight assessment (safe)",
+    description="Detect the host's distro and run its NON-destructive pre-upgrade "
+                "assessment — Leapp preupgrade, do-release-upgrade -c, or zypper "
+                "dup --dry-run. Does not reboot; RHEL installs the Leapp tooling "
+                "to produce its report.",
+    params=[_relup_target],
+    build=lambda p: api.cmd_release_upgrade_check(_s(p, "target"))))
+_register(Action(
+    name="relup_run", tool="OS Release Upgrade",
+    label="Upgrade to next release",
+    danger=True,
+    description="Perform a major/distribution upgrade with the right mechanism per "
+                "distro (Leapp, dnf system-upgrade, do-release-upgrade, zypper "
+                "migration/dup). Assess first. Nothing auto-reboots — the RPM-family "
+                "paths stage the transaction and print the reboot command.",
+    params=[_relup_target],
+    build=lambda p: api.cmd_release_upgrade(_s(p, "target"))))
 
 # ---- Tool: Repository Management --------------------------------------
 _register(Action(
@@ -600,10 +638,10 @@ _register(Action(name="cont_list", tool="Containers & VMs", label="List containe
     params=[], build=lambda p: api.cmd_list_containers()))
 _register(Action(name="cont_images", tool="Containers & VMs", label="List images",
     params=[], build=lambda p: api.cmd_list_images()))
-_register(Action(name="cont_action", tool="Containers & VMs", label="Container action",
+_register(Action(name="cont_action", tool="Containers & VMs", label="Run action",
     params=[Param("action", "Action", type="select",
                   options=["start", "stop", "restart", "rm", "pause", "unpause"], default="start"),
-            Param("name", "Container")],
+            Param("name", "Container(s) — one or more, or 'all'")],
     build=lambda p: api.cmd_container_action(_s(p, "action", "start"), _s(p, "name"))))
 _register(Action(name="cont_logs", tool="Containers & VMs", label="Container logs",
     params=[Param("name", "Container"),
@@ -1383,13 +1421,20 @@ _register(Action(name="cert_verify_chain", tool="Certificate Management", label=
     build=lambda p: api.cmd_verify_chain(_s(p, "cert_path"), _s(p, "chain_path"))))
 
 # ---- Containers & VMs (advanced) -------------------------------------
-_register(Action(name="vm_action", tool="Containers & VMs", label="VM action",
+# Hidden helper: the VM-name picker fetches this action's stdout (one domain per
+# line) to populate its dropdown for the single selected host. Not shown as a button.
+_register(Action(name="vm_names", tool="Containers & VMs", label="List VM names",
+    hidden=True, params=[], build=lambda p: api.cmd_list_vm_names()))
+_register(Action(name="vm_action", tool="Containers & VMs", label="Run action",
     params=[Param("action", "Action", type="select",
                   options=["start", "shutdown", "destroy", "reboot", "suspend", "resume"], default="start"),
-            Param("name", "VM name")],
+            Param("name", "VM name", type="select-remote", source="vm_names",
+                  help="pick a VM on the selected host, or type one or more names / 'all'")],
     build=lambda p: api.cmd_vm_action(_s(p, "action", "start"), _s(p, "name"))))
 _register(Action(name="vm_info", tool="Containers & VMs", label="VM info",
-    params=[Param("name", "VM name")], build=lambda p: api.cmd_vm_info(_s(p, "name"))))
+    params=[Param("name", "VM name", type="select-remote", source="vm_names",
+                  help="pick a VM on the selected host, or type a name")],
+    build=lambda p: api.cmd_vm_info(_s(p, "name"))))
 
 # ---- Directory Services (advanced) -----------------------------------
 _register(Action(name="dir_install_ldap", tool="Directory Services (Active Directory / LDAP)",
@@ -1495,6 +1540,10 @@ _LAYOUT: dict[str, list] = {
         ("iptables", "Rules", ["fw_iptables_list", "fw_iptables_save",
                                "fw_iptables_add", "fw_iptables_delete", "fw_iptables_flush"]),
     ],
+    "OS Release Upgrade": [
+        ("Release Upgrade", "1. Assess (safe, run first)", ["relup_check"]),
+        ("Release Upgrade", "2. Upgrade to next release", ["relup_run"]),
+    ],
     "Network Management": [
         ("Diagnostics", "Show", ["net_ip", "net_devices", "net_routes", "net_connections", "net_listening"]),
         ("Diagnostics", "Test", ["net_ping", "net_traceroute", "net_monitor_ports", "net_tcpdump"]),
@@ -1558,8 +1607,8 @@ _LAYOUT: dict[str, list] = {
         ("SUSE (SCC)", "SUSE", ["sub_suse_status", "sub_suse_register", "sub_suse_extensions", "sub_suse_deregister"]),
     ],
     "Containers & VMs": [
-        ("Containers", "Containers", ["cont_runtime", "cont_list", "cont_images", "cont_action", "cont_logs", "cont_prune"]),
-        ("Virtual Machines", "Virtual Machines", ["vm_list", "vm_action", "vm_info"]),
+        ("Containers", "Containers", ["cont_runtime", "cont_list", "cont_images", "cont_logs", "cont_action", "cont_prune"]),
+        ("Virtual Machines", "Virtual Machines", ["vm_list", "vm_info", "vm_action"]),
     ],
     "Directory Services (Active Directory / LDAP)": [
         ("Active Directory", "Active Directory", ["dir_prepare_ad", "dir_install_ad", "dir_realm_status", "dir_join_ad", "dir_leave_ad", "dir_realm_permit", "dir_mkhomedir"]),
@@ -1824,6 +1873,8 @@ def catalog():
     dicts. The build= callable is intentionally not serialized."""
     by_tool: dict[str, list] = {}
     for a in _ACTIONS.values():
+        if a.hidden:            # dispatchable, but never rendered as a button
+            continue
         by_tool.setdefault(a.tool, []).append({
             "name": a.name,
             "label": (a.label[:1].upper() + a.label[1:]) if a.label else a.label,
@@ -1835,7 +1886,7 @@ def catalog():
                 {
                     "name": pr.name, "label": pr.label, "type": pr.type,
                     "default": pr.default, "required": pr.required,
-                    "options": pr.options, "help": pr.help,
+                    "options": pr.options, "source": pr.source, "help": pr.help,
                     "placeholder": _placeholder_for(pr),
                 }
                 for pr in a.params

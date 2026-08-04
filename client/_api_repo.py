@@ -48,18 +48,33 @@ def cmd_add_repository(url: str, alias: str = "") -> str:
     url = (url or "").strip()
     if not url:
         raise ValueError("Repository URL or source line is required.")
+    if "\n" in url or "\r" in url:
+        # shlex.quote preserves an embedded newline inside its single-quoted arg,
+        # and `echo {q_url} > sources.list.d/<alias>.list` would then write a
+        # SECOND, attacker-chosen apt source line (e.g. a [trusted=yes] repo).
+        # Reject CR/LF, matching cmd_create_repository below.
+        raise ValueError("Repository URL / source line must be a single line (no newlines).")
     q_url = shlex.quote(url)
     alias = (alias or "").strip()
 
     # dnf5 (Fedora 41+, RHEL 10) rewrote config-manager: `--add-repo <url>` became
     # `addrepo --from-repofile=<url>`. Probe the help text (present only on dnf4)
     # so the right form is emitted regardless of the installed dnf major version.
+    # dnf5 (Fedora 41+, RHEL 10) removed `config-manager --add-repo`. Its addrepo
+    # subcommand has TWO non-interchangeable forms: `--from-repofile=<url>` copies an
+    # actual .repo FILE, while a bare package baseurl needs `addrepo --set=baseurl=`
+    # (optionally `--id=`). dnf4's `--add-repo` accepted either. So: probe for the
+    # dnf4 flag; on dnf5, pick the form by whether the URL is a .repo file.
+    id_arg = f" --id={shlex.quote(_validate_repo_alias(alias))}" if alias else ""
     rpm_cmd = (
         'if [ "$PKGMGR" = "dnf" ]; then '
         '  if dnf config-manager --help 2>&1 | grep -q -- "--add-repo"; then '
         f'    dnf config-manager --add-repo {q_url} 2>&1; '
         '  else '
-        f'    dnf config-manager addrepo --from-repofile={q_url} 2>&1; '
+        f'    _u={q_url}; case "$_u" in '
+        f'      *.repo) dnf config-manager addrepo --from-repofile={q_url} 2>&1;; '
+        f'      *) dnf config-manager addrepo{id_arg} --set=baseurl={q_url} --set=enabled=1 2>&1;; '
+        '    esac; '
         '  fi || '
         '  echo "Failed - install the config-manager plugin (dnf4: dnf-plugins-core, dnf5: dnf5-plugins)."; '
         'else '

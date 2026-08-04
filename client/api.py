@@ -107,6 +107,26 @@ def _headers():
 
 _SESSION = requests.Session()
 
+# Optional CLIENT certificate for mutual TLS. When the controller is started with
+# --mtls it requires callers to present a cert signed by its client-CA; set
+# SYSIBLE_CLIENT_CERT (plus SYSIBLE_CLIENT_KEY, unless the cert file already bundles
+# the key) so this BFF/CLI presents one. Attached at the session level so it covers
+# ping(), every _request(), and _download_binary(). OFF by default: with neither var
+# set the session is byte-for-byte the previous behaviour (server-auth TLS only), so
+# a non-mTLS controller is unaffected — and a client cert can be pre-provisioned
+# before the server enforces mTLS, enabling a two-phase rollout. _VERIFY (server-auth
+# pinning) is orthogonal and unchanged.
+_CLIENT_CERT = os.getenv("SYSIBLE_CLIENT_CERT")
+_CLIENT_KEY = os.getenv("SYSIBLE_CLIENT_KEY")
+if _CLIENT_CERT and os.path.exists(_CLIENT_CERT):
+    if _CLIENT_KEY and os.path.exists(_CLIENT_KEY):
+        _SESSION.cert = (_CLIENT_CERT, _CLIENT_KEY)
+    else:
+        _SESSION.cert = _CLIENT_CERT
+elif _CLIENT_CERT:
+    print(f"[api] warning: SYSIBLE_CLIENT_CERT set but not found at {_CLIENT_CERT}; "
+          "not presenting a client certificate.")
+
 
 def ping():
     try:
@@ -149,6 +169,13 @@ def generate_enroll_token():
     return _request("POST", "/admin/enroll-token/generate")
 
 
+def reissue_enroll_token(host_id):
+    """Mint a host-bound REISSUE token that authorizes re-enrolling ONE existing host
+    (e.g. after a reinstall that wiped the agent's saved secret). Ordinary re-enroll of
+    an existing host is refused without it, so a bearer token can't hijack a host."""
+    return _request("POST", "/admin/enroll-token/reissue", json={"host_id": host_id})
+
+
 def get_agents():
     return _request("GET", "/agents").get("agents", [])
 
@@ -172,6 +199,13 @@ def get_host_snapshot(host_id):
     Returns {"host_id", "ts", "snapshot": {...}|None}."""
     from urllib.parse import quote
     return _request("GET", f"/metrics/snapshot/{quote(str(host_id), safe='')}")
+
+
+def get_fleet_health_readings():
+    """Latest fleet-health reading per host from heartbeat data (disk/mem/load +
+    failed-units/systemd/OOM), so the dashboard can render health without a live
+    probe. Returns {"hosts": {host_id: {...}}, "now": float}."""
+    return _request("GET", "/metrics/fleet-health")
 
 
 def get_edition():
@@ -201,6 +235,22 @@ def set_enrollment_pause(paused: bool, actor: str = ""):
     """Pause/resume all new agent enrollment. Superuser-only on the controller."""
     return _request("POST", "/admin/enrollment-pause",
                     json={"paused": bool(paused), "actor": actor})
+
+
+def get_enroll_allowlist():
+    """The enrollment source-IP allowlist (empty == all sources allowed)."""
+    return _request("GET", "/admin/enroll-allowlist")
+
+
+def add_enroll_allowlist(cidr: str, note: str = ""):
+    """Add an allowed source CIDR/IP to the enrollment allowlist. Superuser-only."""
+    return _request("POST", "/admin/enroll-allowlist",
+                    json={"cidr": cidr, "note": note})
+
+
+def remove_enroll_allowlist(entry_id):
+    """Remove an enrollment-allowlist entry by id. Superuser-only."""
+    return _request("DELETE", f"/admin/enroll-allowlist/{entry_id}")
 
 
 def revoke_agent(host_id: str):
@@ -435,6 +485,11 @@ def get_activity_log(limit: int = 200, since_id: int = 0):
 
 def get_controller_log(lines: int = 400):
     return _request("GET", "/controller-log", params={"lines": lines}).get("log", "")
+
+
+def health_warnings():
+    """Operational warning banners (stale pinned TLS cert, mass host silence)."""
+    return _request("GET", "/admin/health-warnings")
 
 
 def get_portal_status():

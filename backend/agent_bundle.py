@@ -69,12 +69,20 @@ def resolve_controller_addresses(config: dict) -> list[str]:
     detect_local_ips() every time a bundle is downloaded rather than
     once at save time - if the controller's NICs change later, the next
     download just picks that up instead of shipping a stale list."""
+    # IP-ONLY by design: a bundle must never bake in a hostname, because that
+    # assumes DNS is configured on every managed host — the exact fragility that
+    # strands agents after a rename / DNS change. "all" ships every NIC IP; "ip"
+    # ships the one configured IP. A legacy "hostname" config is transparently
+    # migrated to IP here (prefer the stored IP, else every detected NIC IP) so an
+    # old install keeps producing working bundles without ever emitting a hostname.
     mode = config.get("address_mode")
     if mode == "all":
         return detect_local_ips()
-    if mode == "ip":
-        return [config["ip"]] if config.get("ip") else []
-    return [config["hostname"]] if config.get("hostname") else []
+    if mode == "ip" and config.get("ip"):
+        return [config["ip"]]
+    if config.get("ip"):
+        return [config["ip"]]
+    return detect_local_ips()
 
 
 _CERT_INSTALL_DIR = "/etc/sysible"
@@ -177,6 +185,23 @@ echo "Python dependencies OK (requests present)." """
 # this fragment (rather than the full line it now sits inside) means
 # this keeps working regardless of what surrounds it.
 _CONTROLLER_DEFAULT_LINE = 'os.getenv("SYSIBLE_CONTROLLER", "https://127.0.0.1:9000")'
+
+
+def agent_version_of(src_text: str) -> str:
+    """The 12-char version hash the fleet reports for a given agent source.
+
+    The enrollment bundle bakes the resolved controller URL into agent.py's
+    os.getenv("SYSIBLE_CONTROLLER", "...") default, so the installed file differs
+    per host. Normalize that line back to its canonical placeholder before
+    hashing (the agent does the same in AGENT_VERSION) so a patched-but-current
+    agent isn't reported as permanently outdated. Used by both the version-check
+    (_current_agent_version) and the update push (_build_agent_update_command)."""
+    import hashlib
+    import re
+    canon = re.sub(
+        r'os\.getenv\("SYSIBLE_CONTROLLER",\s*"[^"]*"\)',
+        lambda _m: _CONTROLLER_DEFAULT_LINE, src_text)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:12]
 
 
 def _env_file(controller_url: str, token: str, include_cert: bool) -> str:
@@ -383,7 +408,7 @@ fi
 if [[ -f "$STATE_FILE" ]]; then
   echo "Notifying controller..."
 {_PIP_INSTALL_BLOCK}
-  python3 - "$STATE_FILE" "$ENV_FILE" "$CERT_FILE" <<'PYEOF'
+  if python3 - "$STATE_FILE" "$ENV_FILE" "$CERT_FILE" <<'PYEOF'
 import json
 import os
 import sys
@@ -427,9 +452,12 @@ try:
         print("[disenroll] controller acknowledged - host removed from enrollment")
     else:
         print(f"[disenroll] controller responded {{r.status_code}}: {{r.text}} - continuing with local cleanup anyway")
+        sys.exit(3)
 except Exception as e:
     print(f"[disenroll] could not reach controller ({{e}}) - continuing with local cleanup anyway")
+    sys.exit(3)
 PYEOF
+  then NOTIFY_OK=1; else NOTIFY_OK=0; fi
 else
   echo "No local agent state found (already disenrolled, or never enrolled) - skipping controller notification."
 fi
@@ -477,6 +505,18 @@ fi
 
 echo
 echo "Agent disenrolled and removed from this host."
+
+# If the controller notification didn't get through, the host's row is still on the
+# controller. Point the operator at the one-liner that force-removes it from the
+# controller side (uses the live TLS cert, so it works even when this host's pinned
+# cert had drifted — the usual reason the notify above failed).
+if [[ "${{NOTIFY_OK:-1}}" != "1" ]]; then
+  echo
+  echo "NOTE: the controller was NOT notified, so it may still list this host."
+  echo "      Finish the cleanup ON THE CONTROLLER with:"
+  echo "        sudo sysible_controller disenroll --name \\"$(hostname)\\""
+  echo "      (or --ip <this host's IP>, or the host_id shown in Host Enrollment)."
+fi
 """
 
 

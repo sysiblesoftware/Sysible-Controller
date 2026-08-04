@@ -33,6 +33,8 @@ export default function HostEnrollment() {
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState("");   // in-progress label for host actions
   const [copied, setCopied] = useState(false);
+  const [copiedAnsible, setCopiedAnsible] = useState(false);
+  const [curlUseIp, setCurlUseIp] = useState(false);   // curl one-liner: address by IP (no DNS) vs hostname
   const [portPort, setPortPort] = useState("");
   const [portalBusy, setPortalBusy] = useState("");
   const [tab, setTab] = useState("hosts");
@@ -287,8 +289,34 @@ export default function HostEnrollment() {
     await run(async () => { await api.restoreHost(idOf(a)); }, `Restored ${name}; its agent resumes on the next heartbeat.`, `Restoring ${name}…`);
   }
 
-  // curl one-liner (built from portal status + controller config)
-  const curlHost = cfg.address || "<this machine's address>";
+  async function reissueHost(a, e) {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    const name = a.hostname || a.host_id;
+    if (!window.confirm(
+      `Reissue enrollment for ${name}?\n\n` +
+      "Re-enrolling an existing host (after a reinstall that wiped its agent secret) " +
+      "is refused with an ordinary token, so a leaked token can't hijack a host. This " +
+      "mints a single-use token bound to THIS host only. Run the agent with it on the " +
+      "reinstalled machine to reclaim this same record. Continue?")) return;
+    await run(async () => {
+      const r = await api.reissueToken(idOf(a));
+      const tok = r && (r.token || (r.data && r.data.token));
+      if (tok) {
+        try { await navigator.clipboard.writeText(tok); } catch { /* clipboard optional */ }
+        setMsg(`Reissue token for ${name} (copied): ${tok} — run the agent on the reinstalled host with this token to reclaim its record. Single-use; expires per policy.`);
+      }
+    }, "", `Reissuing ${name}…`);
+  }
+
+  // curl one-liner (built from portal status + controller config).
+  // The controller may be addressed by hostname OR IP. If the console is configured
+  // with a hostname, a target host with no DNS for it can't resolve it — so when an IP
+  // is also known, offer a toggle to build the command against the IP instead (curl
+  // uses -k, so the self-signed cert not covering the IP doesn't matter).
+  const curlHostName = cfg.hostname || (cfg.address_mode !== "ip" ? cfg.address : "") || "";
+  const curlIp = cfg.ip || "";
+  const curlHost = (curlUseIp && curlIp) ? curlIp
+    : (curlHostName || curlIp || "<this machine's address>");
   const curlPort = portPort || portal.configured_port || portal.port || 8090;
   const curlUser = portal.credentials_configured ? portal.username : "<username>";
   const curlCmd =
@@ -296,6 +324,18 @@ export default function HostEnrollment() {
     `"https://${curlHost}:${curlPort}/cli/bundle" ` +
     `&& unzip -o sysible-agent-bundle.zip -d sysible-agent-bundle ` +
     `&& cd sysible-agent-bundle && chmod +x run_agent.sh && sudo ./run_agent.sh`;
+
+  // Mass enrollment: the same portal-authenticated headless install, wrapped as an
+  // Ansible ad-hoc shell command so an operator can enroll a whole inventory group in
+  // one shot. `--become` supplies privilege (so no inner sudo), and the URL's inner
+  // double-quotes are dropped so the whole script fits inside `-a "…"` without a quote
+  // collision. Each host's own curl pulls its own fresh one-time enrollment token.
+  const ansibleCmd =
+    `ansible <group> -i <inventory> --become -m shell -a ` +
+    `"curl -k -sS -f -u '${curlUser}:<password>' -o /tmp/sysible-agent-bundle.zip ` +
+    `https://${curlHost}:${curlPort}/cli/bundle ` +
+    `&& unzip -o /tmp/sysible-agent-bundle.zip -d /tmp/sysible-agent-bundle ` +
+    `&& cd /tmp/sysible-agent-bundle && chmod +x run_agent.sh && ./run_agent.sh"`;
 
   const reachable = `https://${cfg.address || "<controller>"}:${curlPort}`;
 
@@ -377,6 +417,8 @@ export default function HostEnrollment() {
                           <button className="btn ghost sm" title="Un-revoke in place, keeping the existing secret — the still-installed agent resumes immediately (no re-enroll)" onClick={(e) => restoreHost(a, e)}>Restore</button>}
                         {!a.revoked && a.integrity_quarantined &&
                           <button className="btn ghost sm" title="Rebaseline: clear the quarantine and resume dispatch (use after a legitimate change)" onClick={(e) => resumeHost(a, e)}>Resume</button>}
+                        {!a.revoked &&
+                          <button className="btn ghost sm" title="Mint a single-use token bound to THIS host to re-enroll it after a reinstall that wiped its agent secret (a plain token can't re-bind an existing host)" onClick={(e) => reissueHost(a, e)}>Reissue</button>}
                         {!a.revoked &&
                           <button className="btn outline-danger sm" title="Hard lock-out: revoke this agent's secret until re-enrolled" onClick={(e) => revokeHost(a, e)}>Revoke</button>}
                       </span>
@@ -495,6 +537,13 @@ export default function HostEnrollment() {
             portal login (curl -u). Replace <code>&lt;password&gt;</code> with the real portal password; <code>-k</code> skips
             the self-signed-cert check; the install step needs sudo.
           </p>
+          {curlIp && curlHostName && (
+            <label className="faint" style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+              <input type="checkbox" checked={curlUseIp} onChange={(e) => setCurlUseIp(e.target.checked)} />
+              Address the controller by IP ({curlIp}) instead of hostname ({curlHostName}) — use this when the
+              target host has no DNS for the hostname.
+            </label>
+          )}
           <div className="cmd-preview" style={{ whiteSpace: "pre-wrap" }}>{curlCmd}</div>
           <button className="btn sm ghost" style={{ marginTop: 8 }}
                   onClick={() => navigator.clipboard?.writeText(curlCmd).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })}>
@@ -504,6 +553,26 @@ export default function HostEnrollment() {
             The curl download needs the Webserver Portal {portal.running
               ? <>running (it is) with a login set.</>
               : <>running — start it and set a login on the <button className="linklike" onClick={() => setTab("portal")}>Webserver Portal</button> tab.</>}
+          </p>
+        </fieldset>
+
+        <fieldset className="tool-group-box"><legend>Mass enrollment (Ansible ad-hoc)</legend>
+          <p className="faint" style={{ marginTop: 0 }}>
+            Enroll a whole inventory group at once — the headless install above, run across every host by Ansible.
+            Replace <code>&lt;group&gt;</code> and <code>&lt;inventory&gt;</code> with your target group and inventory
+            file, and <code>&lt;password&gt;</code> with the real portal password. <code>--become</code> handles privilege
+            escalation (so no <code>sudo</code> in the command); each host pulls its own fresh one-time enrollment token.
+          </p>
+          <div className="cmd-preview" style={{ whiteSpace: "pre-wrap" }}>{ansibleCmd}</div>
+          <button className="btn sm ghost" style={{ marginTop: 8 }}
+                  onClick={() => navigator.clipboard?.writeText(ansibleCmd).then(() => { setCopiedAnsible(true); setTimeout(() => setCopiedAnsible(false), 1500); })}>
+            {copiedAnsible ? "Copied ✓" : "Copy to Clipboard"}
+          </button>
+          <p className="faint" style={{ marginTop: 10 }}>
+            Needs Ansible on the control node with SSH reach to the group, plus the Webserver Portal {portal.running
+              ? <>running (it is) with a login set.</>
+              : <>running with a login set — configure it on the <button className="linklike" onClick={() => setTab("portal")}>Webserver Portal</button> tab.</>}
+            {" "}Add <code>-u</code>/<code>--ask-become-pass</code> or <code>-e</code> vars as your SSH access requires.
           </p>
         </fieldset>
       </div>

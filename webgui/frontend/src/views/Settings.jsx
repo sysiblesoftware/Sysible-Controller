@@ -9,7 +9,8 @@ export default function Settings({ initialTab }) {
     <div>
       <div className="tabs" style={{ marginBottom: 16 }}>
         {[["admins", "Administrators"], ["me", "My Account"], ["policy", "Password Policy"],
-          ["controller", "Controller"], ["tls", "TLS / Certificates"], ["license", "License"], ["audit", "Audit Log"]].map(([k, l]) => (
+          ["controller", "Controller"], ["enrollacl", "Enrollment Access"], ["tls", "TLS / Certificates"],
+          ["license", "License"], ["audit", "Audit Log"]].map(([k, l]) => (
           <button key={k} className={tab === k ? "active" : ""} onClick={() => setTab(k)}>{l}</button>
         ))}
       </div>
@@ -17,6 +18,7 @@ export default function Settings({ initialTab }) {
       {tab === "me" && <MyAccount />}
       {tab === "policy" && <PasswordPolicy />}
       {tab === "controller" && <><ControllerCfg /><SoftwareUpdate /></>}
+      {tab === "enrollacl" && <EnrollAllowlist />}
       {tab === "tls" && <Tls />}
       {tab === "license" && <License />}
       {tab === "audit" && <Audit />}
@@ -293,8 +295,8 @@ function ControllerCfg() {
   async function save() {
     setErr(""); setMsg(""); setBusy(true);
     try {
-      const res = await api.setControllerConfig({ hostname: cfg.hostname || "", ip: cfg.ip || "",
-        address_mode: cfg.address_mode || "hostname", port: Number(cfg.port) || 9000 });
+      const res = await api.setControllerConfig({ hostname: "", ip: cfg.ip || "",
+        address_mode: cfg.address_mode === "all" ? "all" : "ip", port: Number(cfg.port) || 9000 });
       let m = "Saved. Existing agents keep their current address until updated.";
       // The controller regenerates the self-signed cert when the address changes;
       // surface that so the admin knows to restart + redistribute trust.
@@ -328,21 +330,28 @@ function ControllerCfg() {
           )}
         </div>
       )}
+      <p className="faint" style={{ marginTop: 0, marginBottom: 10 }}>
+        The controller is addressed by <b>IP</b> so agents never depend on DNS being configured
+        on each host. Choose a single IP, or ship every detected NIC address.
+      </p>
       <label className="field"><span>Address mode</span>
-        <select value={cfg.address_mode || "hostname"} onChange={set("address_mode")}>
-          <option value="hostname">hostname</option><option value="ip">ip</option>
+        <select value={cfg.address_mode === "all" ? "all" : "ip"} onChange={set("address_mode")}>
+          <option value="ip">Single IP</option>
+          <option value="all">All detected IPs</option>
         </select></label>
-      <label className="field"><span>Hostname</span><input value={cfg.hostname || ""} onChange={set("hostname")} /></label>
-      <label className="field"><span>IP</span>
-        <div className="row"><input style={{ flex: 1 }} value={cfg.ip || ""} onChange={set("ip")} />
-          <button className="btn ghost sm" type="button" onClick={async () => {
-            try { const d = await api.localIps(); const ip = (d.ips || [])[0];
-              if (ip) setCfg((c) => ({ ...c, ip })); } catch (e) { setErr(e.message); } }}>Detect Local IPs</button></div>
-      </label>
+      {cfg.address_mode !== "all" && (
+        <label className="field"><span>IP address</span>
+          <div className="row"><input style={{ flex: 1 }} value={cfg.ip || ""} placeholder="192.168.8.5"
+            onChange={set("ip")} />
+            <button className="btn ghost sm" type="button" onClick={async () => {
+              try { const d = await api.localIps(); const ip = (d.ips || [])[0];
+                if (ip) setCfg((c) => ({ ...c, ip })); } catch (e) { setErr(e.message); } }}>Detect Local IPs</button></div>
+        </label>
+      )}
       <label className="field"><span>Port</span><input type="number" value={cfg.port || 9000} onChange={set("port")} /></label>
       <div className="row" style={{ marginTop: 14, gap: 8 }}>
         <button className="btn" disabled={busy} onClick={save}>{busy ? <span className="spin" /> : "Save"}</button>
-        <button className="btn ghost" disabled={busy} title="Rebuild the self-signed TLS certificate so its SAN matches the current hostname/IP, then restart the backend to serve it. Use after changing the address."
+        <button className="btn ghost" disabled={busy} title="Rebuild the self-signed TLS certificate so its SAN matches the current IP, then restart the backend to serve it. Use after changing the address."
           onClick={async () => {
             if (!window.confirm("Regenerate the self-signed TLS certificate for the current address and restart the controller backend? Agents must then trust the new certificate (redistribute trust.crt / re-download the agent bundle).")) return;
             setErr(""); setMsg(""); setBusy(true);
@@ -353,7 +362,7 @@ function ControllerCfg() {
             finally { setBusy(false); }
           }}>Regenerate self-signed cert</button>
         <button className="btn ghost" disabled={busy}
-          title="Re-mint a fresh agent bundle for the CURRENT controller address/port with a new single-use enrollment token, and download it. Use after changing the controller hostname/IP or regenerating the cert."
+          title="Re-mint a fresh agent bundle for the CURRENT controller address/port with a new single-use enrollment token, and download it. Use after changing the controller IP or regenerating the cert."
           onClick={async () => {
             setErr(""); setMsg(""); setBusy(true);
             try {
@@ -379,7 +388,7 @@ function ControllerCfg() {
         </button>
       </div>
       <p className="faint" style={{ marginTop: 6 }}>
-        After changing the controller hostname/IP: Save, then <b>Regenerate self-signed cert</b> (reissues for the
+        After changing the controller IP: Save, then <b>Regenerate self-signed cert</b> (reissues for the
         new address and restarts), then <b>Regenerate agent bundle</b> and re-run it on your hosts so they trust and reach the new address.
         (Every bundle is freshly built for the current address with a new single-use enrollment token.)
       </p>
@@ -972,6 +981,14 @@ function Tls() {
                   <InfoRow label="Days remaining" value={String(info.days_remaining)} />}
                 {info.is_self_signed !== undefined &&
                   <InfoRow label="Self-signed" value={info.is_self_signed ? "Yes" : "No"} />}
+                {info.sha256_fingerprint &&
+                  <InfoRow label="SHA-256 fingerprint" value={info.sha256_fingerprint} />}
+                {info.sha256_fingerprint && info.is_self_signed &&
+                  <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>
+                    Read this fingerprint out-of-band to confirm agents and browsers pinned the
+                    genuine self-signed certificate. It changes when the certificate is
+                    regenerated or replaced — redistribute the trust bundle afterwards.
+                  </div>}
               </>
             )}
         </div>
@@ -992,6 +1009,113 @@ function Tls() {
         {msg && <div className="ok-text" style={{ marginTop: 8 }}>{msg}</div>}
         {err && <div className="error-box">{err}</div>}
       </form>
+    </div>
+  );
+}
+
+function EnrollAllowlist() {
+  const [entries, setEntries] = useState(null);
+  const [cidr, setCidr] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useErr(); const [msg, setMsg] = useState("");
+
+  const load = () => api.enrollAllowlist()
+    .then((d) => setEntries(d.entries || []))
+    .catch((e) => setErr(e.message));
+  useEffect(() => { load(); }, []);
+
+  async function add(e) {
+    e.preventDefault();
+    const c = cidr.trim();
+    if (!c) return;
+    setErr(""); setMsg(""); setBusy(true);
+    try {
+      const d = await api.addEnrollAllowlist(c, note.trim());
+      setEntries(d.entries || []);
+      setMsg(`Added ${c}.`); setCidr(""); setNote("");
+    } catch (e2) { setErr(e2.message); } finally { setBusy(false); }
+  }
+
+  async function remove(entry) {
+    if (!window.confirm(`Remove ${entry.cidr} from the enrollment allowlist?`
+      + ((entries && entries.length === 1)
+        ? "\n\nThis is the last entry — removing it re-opens enrollment to ALL source networks (a valid token is still required)."
+        : ""))) return;
+    setErr(""); setMsg("");
+    try {
+      const d = await api.removeEnrollAllowlist(entry.id);
+      setEntries(d.entries || []);
+      setMsg(`Removed ${entry.cidr}.`);
+    } catch (e) { setErr(e.message); }
+  }
+
+  const open = entries && entries.length === 0;
+
+  return (
+    <div className="card" style={{ maxWidth: 640 }}>
+      <strong>Enrollment Access — source IP allowlist</strong>
+      <div className="faint" style={{ marginTop: 6 }}>
+        Restrict which source networks may enroll a NEW host on <code>/agents/enroll</code>.
+        A one-time enrollment token is still required on top of this — the allowlist just
+        narrows <em>where</em> a token may be presented from, so a leaked bundle can't enroll
+        from an off-subnet source. Already-enrolled agents (heartbeat/tasks) are unaffected.
+        The controller (loopback) is always allowed.
+      </div>
+
+      {entries === null ? (
+        <div className="muted" style={{ marginTop: 10 }}>Loading…</div>
+      ) : (
+        <>
+          <div style={{ marginTop: 12, padding: "8px 12px", borderRadius: 6,
+            border: "1px solid " + (open ? "#e0a83a" : "#3a8f5a"),
+            background: open ? "rgba(224,168,58,0.12)" : "rgba(58,143,90,0.12)" }}>
+            {open
+              ? "⚠ Allowlist is EMPTY — any source with a valid token can enroll. Add a CIDR to restrict it."
+              : `🔒 Restricted — only the ${entries.length} network(s) below (plus loopback) may enroll.`}
+          </div>
+
+          {entries.length > 0 && (
+            <table className="tbl" style={{ marginTop: 12, width: "100%" }}>
+              <thead><tr><th>CIDR / IP</th><th>Note</th><th></th></tr></thead>
+              <tbody>
+                {entries.map((en) => (
+                  <tr key={en.id}>
+                    <td><code>{en.cidr}</code></td>
+                    <td className="muted">{en.note || "—"}</td>
+                    <td style={{ textAlign: "right" }}>
+                      <button className="btn sm danger" onClick={() => remove(en)}>Remove</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <form onSubmit={add} style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span className="faint">CIDR or IP</span>
+              <input value={cidr} onChange={(e) => setCidr(e.target.value)}
+                placeholder="192.168.8.0/24" style={{ width: 200 }} />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 160 }}>
+              <span className="faint">Note (optional)</span>
+              <input value={note} onChange={(e) => setNote(e.target.value)}
+                placeholder="e.g. lab subnet" />
+            </label>
+            <button className="btn" type="submit" disabled={busy || !cidr.trim()}>
+              {busy ? <span className="spin" /> : "Add"}
+            </button>
+          </form>
+          <div className="faint" style={{ marginTop: 8 }}>
+            Accepts IPv4/IPv6 CIDRs or a bare IP (stored as a /32 or /128). For behind-a-bastion
+            hosts, allow the <em>relay's</em> address — the controller sees the tunnel peer, not the agent.
+          </div>
+        </>
+      )}
+
+      {msg && <div className="ok-box" style={{ marginTop: 10 }}>{msg}</div>}
+      {err && <div className="error-box" style={{ marginTop: 10 }}>{err}</div>}
     </div>
   );
 }

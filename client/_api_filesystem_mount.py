@@ -232,16 +232,37 @@ def cmd_resize_filesystem(target: str, new_size: str = "") -> str:
 # --- repair ------------------------------------------------------------------
 
 def cmd_repair_filesystem(device: str, auto_yes: bool = True) -> str:
-    """Runs fsck against `device`. Refuses outright if it's currently
-    mounted - fsck on a mounted filesystem can corrupt it further;
-    unmount it first (Unmount Filesystem above)."""
+    """Checks/repairs the filesystem on `device`, dispatching to the tool that
+    actually repairs that filesystem type. A bare `fsck` is only a front-end and
+    execs a do-NOTHING stub for XFS and btrfs (fsck.xfs / fsck.btrfs print a
+    notice and exit 0 without checking anything), so running plain fsck on the
+    default root fs of RHEL/Rocky/Alma (XFS) or Fedora/openSUSE (btrfs) would
+    report success while repairing nothing. Dispatch by detected type instead:
+    e2fsck for ext*, xfs_repair for XFS, `btrfs check` for btrfs, fsck.fat for
+    FAT/vfat, generic fsck otherwise. Refuses if the device is currently mounted
+    (checking a mounted filesystem can corrupt it further; unmount it first)."""
     device = _validate_path(device, "Device")
     q_dev = shlex.quote(device)
-    flag = "-y" if auto_yes else "-n"
+    if auto_yes:
+        ext, xfs, btrfs, fat, gen = "e2fsck -y", "xfs_repair", "btrfs check --repair", "fsck.fat -a", "fsck -y"
+    else:
+        ext, xfs, btrfs, fat, gen = "e2fsck -n", "xfs_repair -n", "btrfs check", "fsck.fat -n", "fsck -n"
     return (
         f"if findmnt -no TARGET {q_dev} >/dev/null 2>&1; then "
-        "echo 'Refusing to fsck - target is currently mounted. Unmount it first.' >&2; exit 1; fi; "
-        f"fsck {flag} {q_dev} 2>&1"
+        "echo 'Refusing to check/repair - target is currently mounted. Unmount it first.' >&2; exit 1; fi; "
+        f"t=$(blkid -o value -s TYPE {q_dev} 2>/dev/null); "
+        f'[ -z "$t" ] && t=$(lsblk -dno FSTYPE {q_dev} 2>/dev/null | head -n1); '
+        'case "$t" in '
+        f"ext2|ext3|ext4) {ext} {q_dev} 2>&1;; "
+        f"xfs) if command -v xfs_repair >/dev/null 2>&1; then {xfs} {q_dev} 2>&1; "
+        "else echo 'xfs_repair not installed on this host (package: xfsprogs).' >&2; exit 1; fi;; "
+        f"btrfs) if command -v btrfs >/dev/null 2>&1; then {btrfs} {q_dev} 2>&1; "
+        "else echo 'btrfs tools not installed on this host (package: btrfs-progs).' >&2; exit 1; fi;; "
+        f"vfat|fat|msdos) {fat} {q_dev} 2>&1;; "
+        "'') echo 'Could not determine the filesystem type - refusing to guess. "
+        "Verify the device path, or format it first.' >&2; exit 1;; "
+        f"*) {gen} {q_dev} 2>&1;; "
+        "esac"
     )
 
 
@@ -312,10 +333,21 @@ def cmd_remove_fstab_entry(mount_point: str, allow_critical: bool = False) -> st
 
 def cmd_enable_quotas(mount_point: str) -> str:
     """quotacheck + quotaon for a filesystem already mounted with
-    usrquota/grpquota (set that in /etc/fstab and remount first)."""
+    usrquota/grpquota (set that in /etc/fstab and remount first).
+
+    XFS is the exception: it accounts quotas in-kernel and does NOT use the
+    quotacheck/quotaon workflow (quotacheck skips/errors on XFS). XFS quotas are
+    turned on via the uquota/gquota mount options, so on an XFS mount this reports
+    what to do instead of running the ext-only tools that would fail there. XFS is
+    the default root fs on RHEL/Rocky/Alma/Fedora, so this branch matters."""
     mount_point = _validate_path(mount_point, "Mount point")
     q_mnt = shlex.quote(mount_point)
     return (
+        f"t=$(findmnt -no FSTYPE {q_mnt} 2>/dev/null); "
+        'if [ "$t" = xfs ]; then '
+        "echo 'XFS manages quotas in-kernel: add uquota,gquota (or prjquota) to the "
+        "/etc/fstab options for this mount and remount (or reboot). quotacheck/quotaon "
+        "are not used on XFS; use xfs_quota to set limits.' >&2; exit 1; fi; "
         "if ! command -v quotacheck >/dev/null 2>&1 || ! command -v quotaon >/dev/null 2>&1; then "
         "echo 'quotacheck/quotaon not installed on this host (package: quota).' >&2; exit 1; fi; "
         f"quotacheck -ugm {q_mnt} 2>&1 && quotaon {q_mnt} 2>&1"

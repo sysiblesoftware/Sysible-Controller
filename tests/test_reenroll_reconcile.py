@@ -35,25 +35,43 @@ def _agents_at_ip(ip):
 # ---------------------------------------------------------------------------
 # Reconciliation: re-enroll with a fresh token adopts a stale SAME-hostname record
 # ---------------------------------------------------------------------------
-def test_stale_same_host_reenroll_with_new_token_adopts_not_duplicates(controller, enroll_token):
+def test_stale_same_host_reenroll_with_fresh_token_is_refused(controller, enroll_token):
+    # A FRESH token + a spoofable (hostname, IP) match must NOT silently adopt/re-bind
+    # a stale existing record — that is the offline-host takeover (an attacker who can
+    # claim a victim's hostname+IP would otherwise seize its identity). It is refused,
+    # and — importantly — no duplicate zombie row is created either.
     ip = "192.168.100.23"
-    # First enrollment.
     r1 = _enroll(controller, enroll_token(), "rocky-old-id", "rocky-030", ip)
     assert r1.status_code == 200
     old_id = r1.json()["host_id"]
 
-    # It goes stale (no longer heartbeating) — NOT revoked.
     conn = db._connect(); conn.execute(
         "UPDATE agents SET last_seen=? WHERE host_id=?", (time.time() - 10_000, old_id))
     conn.commit(); conn.close()
 
-    # The box re-enrolls: brand-new random host_id, a FRESH token, SAME hostname+IP.
     r2 = _enroll(controller, enroll_token(), "rocky-new-random-id", "rocky-030", ip)
+    assert r2.status_code == 403
+    assert len(_agents_at_ip(ip)) == 1           # refused, and no zombie duplicate
+
+
+def test_stale_same_host_reenroll_with_reissue_token_adopts(controller, enroll_token):
+    # The supported reinstall path: an admin mints a REISSUE token bound to the stale
+    # host's id, and re-enrollment then re-binds that one record (no duplicate).
+    ip = "192.168.100.24"
+    r1 = _enroll(controller, enroll_token(), "rocky-old-id2", "rocky-031", ip)
+    assert r1.status_code == 200
+    old_id = r1.json()["host_id"]
+
+    conn = db._connect(); conn.execute(
+        "UPDATE agents SET last_seen=? WHERE host_id=?", (time.time() - 10_000, old_id))
+    conn.commit(); conn.close()
+
+    reissue = "reissue-adopt-1"
+    db.create_reissue_token(reissue, old_id)
+    r2 = _enroll(controller, reissue, "rocky-new-random-id2", "rocky-031", ip)
     assert r2.status_code == 200
-    # It adopted the ORIGINAL record instead of creating a zombie.
-    assert r2.json()["host_id"] == old_id
-    at_ip = _agents_at_ip(ip)
-    assert len(at_ip) == 1                       # exactly one record, no zombie
+    assert r2.json()["host_id"] == old_id        # re-bound onto the original record
+    assert len(_agents_at_ip(ip)) == 1           # exactly one record, no zombie
 
 
 def test_revoked_host_is_not_resurrected_by_fresh_token_reenroll(controller, enroll_token):
@@ -111,8 +129,14 @@ def test_empty_hostname_reenroll_adopts_own_stale_record_by_ip(controller, enrol
         "UPDATE agents SET last_seen=? WHERE host_id=?", (time.time() - 10_000, old_id))
     conn.commit(); conn.close()
 
-    # Re-enroll via bastion: fresh random host_id, EMPTY hostname, same IP.
-    r2 = _enroll(controller, enroll_token(), "98647310-eb00-new-random", "", ip)
+    # Re-enroll via bastion with a reissue token bound to the stale id: fresh random
+    # host_id, EMPTY hostname, same IP → re-binds the original record, no duplicate.
+    # (A plain fresh token here is refused — an empty-hostname/IP claim must not be
+    # able to seize an existing record; see test_..._refused above.)
+    assert _enroll(controller, enroll_token(), "98647310-eb00-new-random", "", ip).status_code == 403
+    reissue = "reissue-empty-1"
+    db.create_reissue_token(reissue, old_id)
+    r2 = _enroll(controller, reissue, "98647310-eb00-new-random", "", ip)
     assert r2.status_code == 200
     assert r2.json()["host_id"] == old_id          # adopted, not duplicated
     assert len(_agents_at_ip(ip)) == 1             # no second row

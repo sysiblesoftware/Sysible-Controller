@@ -1,9 +1,12 @@
 import contextlib
 import hashlib
+import hmac
+import ipaddress
 import json
 import os
 import socket
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -265,6 +268,32 @@ def init_db():
     """)
 
     # -----------------------------------------------------
+    # Latest fleet-HEALTH reading per host (one row, overwritten each metrics
+    # heartbeat). Lets the dashboard's fleet-health donut render straight from
+    # what the agent already reports — disk/mem/load + failed-units/systemd/OOM —
+    # instead of dispatching a live probe to every host on each load. `sysd` is
+    # NULL for agents that predate this (or non-systemd hosts); the controller
+    # then falls back to a live probe for that host, so health is never degraded.
+    # -----------------------------------------------------
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS host_health (
+        host_id TEXT PRIMARY KEY,
+        ts REAL NOT NULL,
+        disk INTEGER, mem INTEGER, load1 REAL, cores INTEGER,
+        failed INTEGER, oom INTEGER, uptime INTEGER,
+        sysd TEXT, mount TEXT, units TEXT
+    )
+    """)
+    # Hypervisor role (kvm/proxmox/xen-dom0/…) + running-guest count, added later
+    # so the console can warn before rebooting/powering off a VM host. Nullable so
+    # older agents (which omit them) and existing rows keep working.
+    for _col, _type in (("hyp", "TEXT"), ("vms", "INTEGER")):
+        try:
+            cur.execute(f"ALTER TABLE host_health ADD COLUMN {_col} {_type}")
+        except sqlite3.OperationalError:
+            pass
+
+    # -----------------------------------------------------
     # Enrollment Tokens
     #
     # bound_host_id/last_used (migrated in below) let an already-used
@@ -295,6 +324,15 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
+    # A reissue token is an admin-authorized credential to RE-BIND an already-enrolled
+    # host_id (bound at generation). Ordinary enroll tokens can only ever create a NEW
+    # host; re-binding an existing record additionally requires proof of possession
+    # (the current agent_secret) or one of these reissue tokens. See the enroll handler.
+    try:
+        cur.execute("ALTER TABLE enroll_tokens ADD COLUMN reissue INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+
     # -----------------------------------------------------
     # Enrollment control (single row, id=1) — a kill-switch for /agents/enroll.
     # When paused, the controller refuses all new enrollments. This is the
@@ -308,6 +346,27 @@ def init_db():
         id INTEGER PRIMARY KEY CHECK (id = 1),
         paused INTEGER DEFAULT 0,
         updated REAL,
+        actor TEXT
+    )
+    """)
+
+    # -----------------------------------------------------
+    # Enrollment IP allowlist (source-CIDR gate for /agents/enroll)
+    # A NON-EMPTY list restricts which source networks may enroll a new
+    # host — the token is still required on top, this just narrows WHERE
+    # a valid token may be presented from (a leaked bundle can't enroll
+    # from an off-subnet source). EMPTY == allow all (backward compatible),
+    # and loopback is always allowed (self-enroll / the console BFF).
+    # Managed from Settings → Enrollment Access. Steady-state agent traffic
+    # (heartbeat/tasks/results) is deliberately NOT gated by this — only the
+    # open, token-gated enroll path is.
+    # -----------------------------------------------------
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS enroll_allowlist (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cidr TEXT UNIQUE,
+        note TEXT,
+        created REAL,
         actor TEXT
     )
     """)
@@ -673,7 +732,36 @@ def init_db():
     )
     """)
 
+    # -----------------------------------------------------
+    # Tamper-evident audit chain. Both audit tables get three chain columns
+    # (prev_hash, entry_hash, hash_algo); a high-water-mark table records each
+    # chain's tail so a truncation of the END of the log is detectable (the
+    # prev_hash walk alone can't see a tail cut). Idempotent: the ALTERs are
+    # guarded by table_info, so a re-run on an already-migrated DB is a no-op.
+    # -----------------------------------------------------
+    for _tbl in ("admin_audit_log", "activity_log"):
+        cur.execute("PRAGMA table_info(%s)" % _tbl)
+        _cols = {c[1] for c in cur.fetchall()}
+        if "prev_hash" not in _cols:
+            cur.execute("ALTER TABLE %s ADD COLUMN prev_hash TEXT" % _tbl)
+        if "entry_hash" not in _cols:
+            cur.execute("ALTER TABLE %s ADD COLUMN entry_hash TEXT" % _tbl)
+        if "hash_algo" not in _cols:
+            cur.execute("ALTER TABLE %s ADD COLUMN hash_algo TEXT DEFAULT 'sha256'" % _tbl)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS audit_chain_head (
+        chain TEXT PRIMARY KEY,
+        last_id INTEGER,
+        last_entry_hash TEXT,
+        updated_at REAL
+    )
+    """)
+
     conn.commit()
+    # One-time backfill of the chain over any rows that predate this upgrade, in
+    # insertion (id) order, so the WHOLE retained history verifies — not just rows
+    # written afterwards. Only runs while a table has rows but none are hashed yet.
+    _backfill_audit_chains(conn)
     conn.close()
 
 
@@ -724,11 +812,46 @@ def create_or_update_agent(
         kernel,
         status,
         last_seen,
-        agent_secret,
+        # Store only the SHA-256 of the agent secret at rest — the same hash-at-rest
+        # treatment every other bearer credential gets (admin/enroll/portal tokens,
+        # API keys). A leaked DB snapshot then yields no directly-replayable agent
+        # credential. Hash only when a secret is actually supplied (enroll); a None
+        # here would otherwise be hashed to a fixed value instead of staying NULL.
+        _token_at_rest(agent_secret) if agent_secret else agent_secret,
         ip
     ))
 
     conn.commit()
+
+
+def _upgrade_agent_secret_hash(host_id, hashed):
+    with contextlib.closing(_connect()) as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE agents SET agent_secret=? WHERE host_id=?", (hashed, host_id))
+        conn.commit()
+
+
+def agent_secret_matches(host_id, presented):
+    """Constant-time check of a presented agent secret against the hash stored at
+    rest. Transparently upgrades a legacy row that still holds the plaintext secret
+    (accept once, then re-store the hash) so no already-enrolled agent is locked out
+    by the move to hash-at-rest. Returns True on match."""
+    if not presented:
+        return False
+    stored = get_agent_secret(host_id)
+    if not stored:
+        return False
+    if hmac.compare_digest(_token_at_rest(presented), stored):
+        return True
+    # Legacy plaintext row: accept once, then upgrade in place so the cleartext
+    # secret does not survive another heartbeat.
+    if hmac.compare_digest(presented, stored):
+        try:
+            _upgrade_agent_secret_hash(host_id, _token_at_rest(presented))
+        except Exception:
+            pass
+        return True
+    return False
 
 
 def update_agent_heartbeat(host_id, ip=None, hostname=None, agent_version=None):
@@ -900,12 +1023,85 @@ def get_host_snapshot(host_id):
     return {"ts": row["ts"], "data": row["data"]}
 
 
+def upsert_host_health(host_id, ts, disk, mem, load1, cores, failed, oom,
+                       uptime, sysd, mount, units, hyp=None, vms=None):
+    """Store the LATEST fleet-health reading for one host (one row, overwritten).
+    `units` is a list of failed-unit names, stored as JSON. `hyp`/`vms` carry the
+    hypervisor role + running-guest count (None when the host isn't a VM host, or
+    for older agents that don't report them). Called from the heartbeat handler
+    when the agent attaches health signals; lets the dashboard read health without
+    a live probe. Best-effort at the call site."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO host_health "
+        "(host_id, ts, disk, mem, load1, cores, failed, oom, uptime, sysd, mount, units, hyp, vms) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (host_id, float(ts), disk, mem, load1, cores, failed, oom, uptime,
+         sysd, mount, json.dumps(units or []), hyp, vms),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_all_host_health():
+    """Latest fleet-health reading for EVERY host, keyed by host_id, in one query
+    (so the dashboard sweep can serve health without fanning out to the fleet):
+        {host_id: {ts, disk, mem, load1, cores, failed, oom, uptime, sysd, mount, units[]}}
+    `units` is decoded back to a list. Rows whose agent didn't report health
+    (sysd NULL) are still returned; the caller decides to live-probe those."""
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT host_id, ts, disk, mem, load1, cores, failed, oom, uptime, "
+                "sysd, mount, units, hyp, vms FROM host_health")
+    rows = cur.fetchall()
+    conn.close()
+    out = {}
+    for r in rows:
+        try:
+            units = json.loads(r["units"]) if r["units"] else []
+        except (ValueError, TypeError):
+            units = []
+        out[r["host_id"]] = {
+            "ts": r["ts"], "disk": r["disk"], "mem": r["mem"], "load1": r["load1"],
+            "cores": r["cores"], "failed": r["failed"], "oom": r["oom"],
+            "uptime": r["uptime"], "sysd": r["sysd"], "mount": r["mount"], "units": units,
+            "hyp": r["hyp"], "vms": r["vms"],
+        }
+    return out
+
+
+# Cap on the number of time-series points returned PER HOST, regardless of
+# window width or how many raw samples the retention window holds. At the 60s
+# metrics cadence a 24h window is ~1440 raw samples/host; without a cap the
+# endpoint's payload (and the client-side render) grew linearly with retention
+# AND fleet size — the "fast when the DB was small, slow now" regression on the
+# Performance view. Downsampling to a fixed budget keeps cost flat: a chart only
+# a few hundred pixels wide can't show more points than this anyway.
+_METRIC_MAX_POINTS = 300
+
+
+def _downsample(samples, max_points=_METRIC_MAX_POINTS):
+    """Reduce an ascending-time sample list to at most `max_points` by keeping
+    every k-th sample (k chosen so the result fits the budget) and always the
+    most recent one, so the tail of the chart stays accurate."""
+    n = len(samples)
+    if n <= max_points:
+        return samples
+    step = (n + max_points - 1) // max_points  # ceil(n/max_points)
+    out = samples[::step]
+    if out[-1] is not samples[-1]:
+        out.append(samples[-1])
+    return out
+
+
 def get_metric_samples(window_s=3600):
     """Return per-host performance time-series within the last `window_s`
     seconds, joined to the agent inventory for hostname/environment. Shape:
     [{host_id, hostname, environment, samples: [{t, load1, cores, mem, disk}, ...]}]
-    with samples in ascending time order. Hosts with no samples in the window
-    are omitted."""
+    with samples in ascending time order, downsampled to <=_METRIC_MAX_POINTS per
+    host. Hosts with no samples in the window are omitted."""
     window_s = max(60, min(int(window_s or 3600), METRIC_RETENTION_S))
     cutoff = time.time() - window_s
     conn = _connect()
@@ -945,6 +1141,8 @@ def get_metric_samples(window_s=3600):
             "swap": r["swap"], "net_rx": r["net_rx"], "net_tx": r["net_tx"],
             "io_r": r["io_r"], "io_w": r["io_w"], "procs": r["procs"],
         })
+    for h in by_host.values():
+        h["samples"] = _downsample(h["samples"])
     return list(by_host.values())
 
 
@@ -1122,9 +1320,18 @@ def delete_environment(name):
 # corrected back to the original one on a within-window reuse.
 # =========================================================
 
-# 7 days - matches the user-facing "...unless it's been 7 days or
-# more" requirement for re-using a token tied to the same host.
-ENROLL_TOKEN_REUSE_WINDOW = 7 * 24 * 60 * 60
+# Grace window during which the SAME host may re-present its already-bound token
+# (e.g. a disenroll immediately followed by re-running the same bundle) and land
+# back on its original inventory row instead of spawning a duplicate. Shortened
+# from 7 days to 24h by default and made tunable: a bound token scraped from a
+# log/bundle is a bearer credential, so the shorter this window, the less time a
+# captured token stays replayable. Re-binding still requires authorization (a
+# reissue token or the current agent_secret) — see the enroll handler.
+try:
+    ENROLL_TOKEN_REUSE_WINDOW = int(
+        os.getenv("SYSIBLE_ENROLL_TOKEN_REUSE_HOURS", "24")) * 60 * 60
+except ValueError:
+    ENROLL_TOKEN_REUSE_WINDOW = 24 * 60 * 60
 try:
     ENROLL_TOKEN_VALID_DAYS = int(os.getenv("SYSIBLE_ENROLL_TOKEN_VALID_DAYS", "30"))
 except ValueError:
@@ -1172,6 +1379,79 @@ def set_enrollment_paused(paused, actor=None):
     return bool(paused)
 
 
+def _normalize_cidr(value):
+    """Validate and canonicalize a CIDR or bare IP (v4 or v6). A bare address
+    becomes a host route (/32 or /128). Raises ValueError on anything unparseable
+    so the caller can return a 400 rather than storing junk that never matches."""
+    v = (value or "").strip()
+    if not v:
+        raise ValueError("empty CIDR")
+    return str(ipaddress.ip_network(v, strict=False))
+
+
+def list_enroll_allowlist():
+    """All enrollment-allowlist entries: [{id, cidr, note, created, actor}]."""
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, cidr, note, created, actor FROM enroll_allowlist ORDER BY id")
+        rows = [dict(r) for r in cur.fetchall()]
+    except sqlite3.Error:
+        rows = []
+    conn.close()
+    return rows
+
+
+def add_enroll_allowlist_cidr(cidr, note=None, actor=None):
+    """Add (or update the note on) an allowed source CIDR. Returns the normalized
+    CIDR string. Raises ValueError for an invalid CIDR/IP."""
+    norm = _normalize_cidr(cidr)
+    note = (note or "").strip() or None
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO enroll_allowlist (cidr, note, created, actor) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(cidr) DO UPDATE SET note=excluded.note",
+        (norm, note, time.time(), actor))
+    conn.commit()
+    conn.close()
+    return norm
+
+
+def remove_enroll_allowlist_cidr(entry_id, actor=None):
+    """Delete an allowlist entry by row id. Returns True if a row was removed."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM enroll_allowlist WHERE id=?", (entry_id,))
+    conn.commit()
+    changed = cur.rowcount
+    conn.close()
+    return changed > 0
+
+
+def enroll_ip_allowed(ip):
+    """Whether `ip` is permitted to enroll a new host. EMPTY allowlist => allow all
+    (backward compatible). Loopback is always allowed (self-enroll / the BFF). A
+    NON-empty allowlist with an unparseable source IP fails CLOSED (deny)."""
+    rows = list_enroll_allowlist()
+    if not rows:
+        return True
+    try:
+        addr = ipaddress.ip_address((ip or "").strip())
+    except ValueError:
+        return False
+    if addr.is_loopback:
+        return True
+    for r in rows:
+        try:
+            if addr in ipaddress.ip_network(r["cidr"], strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def create_enroll_token(token):
     conn = _connect()
     cur = conn.cursor()
@@ -1194,13 +1474,59 @@ def create_enroll_token(token):
     VALUES (?, ?, ?, 0)
     """,
     (
-        token,
+        _token_at_rest(token),
         created,
         expires
     ))
 
     conn.commit()
     conn.close()
+
+
+def create_reissue_token(token, host_id):
+    """Mint an admin-authorized REISSUE token, pre-bound to an existing host_id.
+
+    Ordinary enroll tokens can only create a brand-new host; re-binding an
+    already-enrolled host_id (e.g. after a reinstall that wiped the agent's
+    saved secret) requires either the current agent_secret or one of these
+    tokens. Stored hashed and single-use like any enroll token, but marked
+    reissue=1 and bound to host_id at generation so the enroll handler can
+    authorize the re-bind of exactly that host and no other."""
+    conn = _connect()
+    cur = conn.cursor()
+    created = time.time()
+    expires = created + (ENROLL_TOKEN_VALID_DAYS * 24 * 60 * 60)
+    cur.execute("""
+    INSERT INTO enroll_tokens (token, created, expires, used, bound_host_id, reissue)
+    VALUES (?, ?, ?, 0, ?, 1)
+    """, (_token_at_rest(token), created, expires, host_id))
+    conn.commit()
+    conn.close()
+
+
+def enroll_token_authorizes_rebind(token, host_id):
+    """True if `token` is a valid, unexpired admin REISSUE token bound to `host_id`
+    — i.e. an administrator explicitly authorized re-binding this specific existing
+    host. Used, unknown, expired, non-reissue, or differently-bound tokens return
+    False. This is the authorization gate that lets a reinstalled host reclaim its
+    inventory row without letting a bearer-token holder hijack an arbitrary host."""
+    if not token or not host_id:
+        return False
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT expires, used, bound_host_id, reissue FROM enroll_tokens WHERE token=?",
+        (_token_at_rest(token),))
+    row = cur.fetchone()
+    conn.close()
+    if row is None:
+        return False
+    expires, used, bound_host_id, reissue = row
+    if not reissue or used:
+        return False
+    if time.time() > (expires or 0):
+        return False
+    return bound_host_id == host_id
 
 
 def validate_enroll_token(token):
@@ -1212,7 +1538,7 @@ def validate_enroll_token(token):
     FROM enroll_tokens
     WHERE token=?
     """,
-    (token,))
+    (_token_at_rest(token),))
 
     row = cur.fetchone()
 
@@ -1249,7 +1575,7 @@ def resolve_enroll_token_host(token, requested_host_id):
     conn = _connect()
     cur = conn.cursor()
 
-    cur.execute("SELECT bound_host_id FROM enroll_tokens WHERE token=?", (token,))
+    cur.execute("SELECT bound_host_id FROM enroll_tokens WHERE token=?", (_token_at_rest(token),))
     row = cur.fetchone()
 
     conn.close()
@@ -1262,8 +1588,8 @@ def resolve_enroll_token_host(token, requested_host_id):
 
 def invalidate_enroll_tokens_for_host(host_id):
     """Delete every enrollment token bound to this host_id so it can't be reused to
-    re-enroll (within the 7-day reuse window). Called on a FORCE removal, which is
-    the "make this host gone for good" action: without this, a still-running zombie
+    re-enroll (within the reuse window). Called on a FORCE removal, which is the
+    "make this host gone for good" action: without this, a still-running zombie
     agent whose token is baked into sysible_agent.env just re-enrolls onto the same
     host_id and the record you deleted reappears. Returns the number removed."""
     if not host_id:
@@ -1277,20 +1603,48 @@ def invalidate_enroll_tokens_for_host(host_id):
     return n
 
 
+def purge_unconsumed_enroll_tokens():
+    """Delete every enrollment token that has NOT yet been claimed (used=0).
+
+    A minted-but-undelivered token is a 30-day (default) bearer that lets any host
+    inside the IP allowlist enroll. If a token leaks — pasted into a shared log, a
+    CI artifact, a chat — this lets an operator invalidate every outstanding one in
+    a single action without waiting for expiry. Already-claimed tokens are left
+    intact so a legitimate host's within-window re-enroll (disenroll → re-run bundle)
+    still works. Returns the number removed."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM enroll_tokens WHERE used=0")
+    n = cur.rowcount
+    conn.commit()
+    conn.close()
+    return n
+
+
 def consume_enroll_token(token, host_id):
+    """Atomically claim an enroll token for host_id. Returns True exactly once for a
+    valid, still-claimable token; False if it was already consumed by a concurrent
+    request (a different host_id). Single-use is enforced by the DB with a conditional
+    UPDATE — NOT merely by a process-local lock — so two replicas racing the same
+    token can't both enroll (mirrors consume_relay_token)."""
     # closing(): release the writer even if the UPDATE raises, so a locked-DB
     # error on the enroll path can't leak the single WAL writer.
     with contextlib.closing(_connect()) as conn:
         cur = conn.cursor()
 
+        # used=0 → a fresh first claim; bound_host_id=host_id → the same host
+        # re-presenting its own token within the reuse window (idempotent re-bind).
+        # Any other case (used=1 bound to a DIFFERENT host) claims 0 rows → False.
         cur.execute("""
         UPDATE enroll_tokens
         SET used=1, bound_host_id=?, last_used=?
-        WHERE token=?
+        WHERE token=? AND (used=0 OR bound_host_id=?)
         """,
-        (host_id, time.time(), token))
+        (host_id, time.time(), _token_at_rest(token), host_id))
 
+        claimed = cur.rowcount == 1
         conn.commit()
+        return claimed
 
 
 # =========================================================
@@ -1305,15 +1659,23 @@ def get_controller_config():
     row = cur.fetchone()
 
     if row is None:
-        # First read - seed a sane default (this machine's own
-        # hostname, the controller's standard port) rather than
-        # leaving the admin staring at blank fields. Left unconfigured
-        # (configured=0) since the admin hasn't actually saved
-        # anything yet - this hostname may not even be reachable from
-        # other hosts on the network.
-        hostname = socket.gethostname()
+        # First read - seed a sane IP-based default rather than leaving the admin
+        # staring at blank fields. IP-only by design: a bundle must never bake in a
+        # hostname (that assumes DNS is set up on every managed host). Seed the
+        # first detected NIC IP in "ip" mode, or "all" if none is detectable yet.
+        # Left unconfigured (configured=0) since the admin hasn't saved anything.
+        hostname = ""
         ip = ""
-        address_mode = "hostname"
+        try:
+            from backend.agent_bundle import detect_local_ips
+            _detected = detect_local_ips()
+        except Exception:
+            _detected = []
+        if _detected:
+            ip = _detected[0]
+            address_mode = "ip"
+        else:
+            address_mode = "all"
         port = 9000
         configured = 0
 
@@ -1324,7 +1686,9 @@ def get_controller_config():
         conn.commit()
     else:
         hostname, ip, address_mode, port, configured = row
-        address_mode = address_mode or "hostname"
+        # Legacy "hostname" mode is migrated to IP on read — never surface a
+        # hostname as the baked-in bundle address.
+        address_mode = address_mode or ("ip" if ip else "all")
 
     conn.close()
 
@@ -1334,10 +1698,12 @@ def get_controller_config():
     # this controller's current NICs (see backend/agent_bundle.py's
     # resolve_controller_addresses), so there's nothing meaningful to
     # put here.
+    # Never surface a hostname as the bundle address — IP-only by design. A legacy
+    # "hostname" config falls back to the stored IP (blank until re-saved).
     if address_mode == "all":
         address = ""
     else:
-        address = ip if address_mode == "ip" else hostname
+        address = ip
 
     return {
         "hostname": hostname or "",
@@ -1962,36 +2328,290 @@ def _redact_secrets(command):
     return out
 
 
+# ---------------------------------------------------------------------------
+# Tamper-evident audit chain (activity_log + admin_audit_log)
+#
+# Each appended row's hash covers the PREVIOUS row's hash plus this row's own
+# content, so editing, reordering or deleting a retained row breaks the chain
+# and verify_*_chain() reports the first break. When a controller secret-vault
+# master key is resolvable the digest is a keyed HMAC-SHA256 — unforgeable
+# without the key, so even an attacker with DB write access can't recompute a
+# valid chain; without a key it degrades to plain SHA-256 (tamper-EVIDENT, but
+# forgeable). The writes are serialized under a lock so concurrent writers can't
+# fork the chain (two rows sharing one prev_hash). Activity is per-admin-action,
+# not a hot path, so the lock is cheap.
+# ---------------------------------------------------------------------------
+_ACTIVITY_LOCK = threading.Lock()
+_ACTIVITY_GENESIS = "sysible-activity-genesis-v1"
+_ADMIN_AUDIT_LOCK = threading.Lock()
+_ADMIN_AUDIT_GENESIS = "sysible-admin-audit-genesis-v1"
+
+
+def _digest_payload(fields):
+    """INJECTIVE encoding of the row fields: each is length-prefixed (4-byte
+    big-endian) so no field value can be confused with a field boundary (a plain
+    separator join would let a field containing the separator re-split across
+    columns to the same digest)."""
+    import struct as _struct
+    out = bytearray()
+    for f in fields:
+        b = (f or "").encode("utf-8")
+        out += _struct.pack(">I", len(b))
+        out += b
+    return bytes(out)
+
+
+def _audit_key():
+    """The HMAC key for the audit chain (bytes) or None if no master key is
+    resolvable. Isolated so tests can monkeypatch it."""
+    try:
+        from backend import secret_vault
+        return secret_vault.audit_hmac_key()
+    except Exception:
+        return None
+
+
+_AUDIT_UNKEYED_WARNED = False
+
+
+def _warn_audit_unkeyed_once():
+    """Warn once when the chain is being written UNKEYED (plain SHA-256), which is
+    forgeable by anyone with DB write access — so an operator running the keyed
+    posture notices a key outage rather than discovering it only via verify."""
+    global _AUDIT_UNKEYED_WARNED
+    if _AUDIT_UNKEYED_WARNED:
+        return
+    _AUDIT_UNKEYED_WARNED = True
+    import sys
+    print("[audit] WARNING: no master key available — the activity/audit log is being "
+          "written UNKEYED (plain SHA-256) and is forgeable by anyone with DB write "
+          "access. Set SYSIBLE_SECRET_KEY / SYSIBLE_SECRET_KEY_CMD to key the chain.",
+          file=sys.stderr)
+
+
+def _activity_digest(prev_hash, timestamp, username, host, description, command,
+                     algo="sha256", key=None):
+    """Digest over the previous entry's hash plus this row's canonical content. The
+    algo is bound into the payload so a row can't be silently downgraded to the
+    weaker (unkeyed) scheme without changing its hash."""
+    payload = _digest_payload([
+        algo, prev_hash or "", "%.6f" % float(timestamp or 0.0),
+        username or "", host or "", description or "", command or "",
+    ])
+    if algo == "hmac-sha256" and key:
+        return hmac.new(key, payload, hashlib.sha256).hexdigest()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _admin_audit_digest(prev_hash, timestamp, event, username, detail,
+                        algo="sha256", key=None):
+    """Admin-audit counterpart of _activity_digest (event/username/detail)."""
+    payload = _digest_payload([
+        algo, prev_hash or "", "%.6f" % float(timestamp or 0.0),
+        event or "", username or "", detail or "",
+    ])
+    if algo == "hmac-sha256" and key:
+        return hmac.new(key, payload, hashlib.sha256).hexdigest()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _bump_chain_head(chain, last_id, last_entry_hash):
+    """Best-effort advance of a chain's high-water mark, in its OWN short
+    transaction AFTER the append committed. NEVER raises — a failure here must not
+    fail/roll back the audit write it follows. The mark only ADVANCES (WHERE
+    last_id <= ?), and retention trims the OLDEST rows, so a stale mark can only
+    under-report, never raise a false truncation alarm."""
+    if last_id is None:
+        return
+    try:
+        with contextlib.closing(_connect()) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE audit_chain_head SET last_id = ?, last_entry_hash = ?, updated_at = ? "
+                "WHERE chain = ? AND last_id <= ?",
+                (last_id, last_entry_hash, time.time(), chain, last_id))
+            if cur.rowcount == 0:
+                try:
+                    cur.execute(
+                        "INSERT INTO audit_chain_head (chain, last_id, last_entry_hash, updated_at) "
+                        "VALUES (?, ?, ?, ?)", (chain, last_id, last_entry_hash, time.time()))
+                except Exception:
+                    pass
+            conn.commit()
+    except Exception:
+        pass
+
+
+def _chain_head_last_id(chain):
+    """The recorded high-water-mark id for `chain`, or None. Never raises."""
+    try:
+        with contextlib.closing(_connect()) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT last_id FROM audit_chain_head WHERE chain = ?", (chain,))
+            row = cur.fetchone()
+            return int(row[0]) if row and row[0] is not None else None
+    except Exception:
+        return None
+
+
+def _seed_chain_head(conn, chain, last_id, last_entry_hash):
+    """Set a chain's high-water mark during the one-time backfill (uses the passed
+    connection so it participates in init_db's setup). Never raises."""
+    if last_id is None:
+        return
+    try:
+        conn.execute(
+            "INSERT INTO audit_chain_head (chain, last_id, last_entry_hash, updated_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(chain) DO UPDATE SET "
+            "last_id=excluded.last_id, last_entry_hash=excluded.last_entry_hash, "
+            "updated_at=excluded.updated_at",
+            (chain, last_id, last_entry_hash, time.time()))
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _backfill_audit_chains(conn):
+    """One-time: hash-chain any pre-existing audit rows (in id order) so the whole
+    retained history is tamper-evident, then seed the chain high-water marks. Runs
+    only while a table has rows but NONE are hashed yet (the first upgrade); a
+    live, already-chained table is left untouched so a re-run can't rewrite it."""
+    key = _audit_key()
+    algo = "hmac-sha256" if key else "sha256"
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) FROM activity_log")
+    total = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM activity_log WHERE entry_hash IS NOT NULL")
+    hashed = cur.fetchone()[0]
+    if total and not hashed:
+        prev = _ACTIVITY_GENESIS
+        last_id = None
+        for r in cur.execute(
+                "SELECT id, timestamp, username, host, description, command "
+                "FROM activity_log ORDER BY id ASC").fetchall():
+            entry = _activity_digest(prev, r[1], r[2], r[3], r[4], r[5], algo=algo, key=key)
+            conn.execute("UPDATE activity_log SET prev_hash=?, entry_hash=?, hash_algo=? WHERE id=?",
+                         (prev, entry, algo, r[0]))
+            prev, last_id = entry, r[0]
+        conn.commit()
+        _seed_chain_head(conn, "activity", last_id, prev)
+
+    cur.execute("SELECT COUNT(*) FROM admin_audit_log")
+    total = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM admin_audit_log WHERE entry_hash IS NOT NULL")
+    hashed = cur.fetchone()[0]
+    if total and not hashed:
+        prev = _ADMIN_AUDIT_GENESIS
+        last_id = None
+        for r in cur.execute(
+                "SELECT id, timestamp, event, username, detail "
+                "FROM admin_audit_log ORDER BY id ASC").fetchall():
+            entry = _admin_audit_digest(prev, r[1], r[2], r[3], r[4], algo=algo, key=key)
+            conn.execute("UPDATE admin_audit_log SET prev_hash=?, entry_hash=?, hash_algo=? WHERE id=?",
+                         (prev, entry, algo, r[0]))
+            prev, last_id = entry, r[0]
+        conn.commit()
+        _seed_chain_head(conn, "admin_audit", last_id, prev)
+
+
 # --- Activity log (Live Activity & Logs feed) ---
 def log_activity(username, host, description, command=""):
-  with contextlib.closing(_connect()) as conn:  # close even if the write raises
+  ts = time.time()
+  uname = username or "(unknown)"
+  h = host or ""
+  desc = description or ""
+  cmd = _redact_secrets(command or "")
+  entry = None
+  _new_id = None
+  key = _audit_key()
+  algo = "hmac-sha256" if key else "sha256"
+  if not key:
+    _warn_audit_unkeyed_once()
+  with _ACTIVITY_LOCK:
+    with contextlib.closing(_connect()) as conn:  # close even if the write raises
+      cur = conn.cursor()
+      # Chain this row to the most recent one's hash (genesis for the first).
+      cur.execute("SELECT entry_hash FROM activity_log ORDER BY id DESC LIMIT 1")
+      _row = cur.fetchone()
+      prev = (_row[0] if _row and _row[0] else _ACTIVITY_GENESIS)
+      entry = _activity_digest(prev, ts, uname, h, desc, cmd, algo=algo, key=key)
+      cur.execute(
+          "INSERT INTO activity_log (timestamp, username, host, description, command, prev_hash, entry_hash, hash_algo) "
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          (ts, uname, h, desc, cmd, prev, entry, algo),
+      )
+      _new_id = cur.lastrowid
+      conn.commit()
+      # Cap the table so it can't grow unbounded, but keep enough history to be
+      # useful as an audit record. SYSIBLE_ACTIVITY_LOG_MAX_ROWS (default 500000,
+      # ~months of history) tunes it; set 0 to disable trimming when an external
+      # SIEM/export owns retention. Trim by id window off the just-inserted rowid
+      # (indexed range delete of the rows that fell out of the window). Trimming
+      # the OLDEST rows is authorized retention, not tampering — the chain still
+      # verifies forward from the oldest RETAINED row.
+      if _ACTIVITY_LOG_MAX_ROWS > 0:
+          cutoff = cur.lastrowid - _ACTIVITY_LOG_MAX_ROWS
+          if cutoff > 0:
+              cur.execute("DELETE FROM activity_log WHERE id <= ?", (cutoff,))
+              conn.commit()
+  # Advance the chain high-water mark AFTER the append committed — isolated and
+  # best-effort, so it can never fail or roll back the audit write above.
+  _bump_chain_head("activity", _new_id, entry)
+
+
+def verify_activity_chain():
+    """Recompute the hash chain over the retained activity_log and report the
+    first break. Returns {ok, checked, broken_at, keyed}. Trimmed-away history is
+    not a break (verified from the oldest retained hashed row). `keyed` is True
+    only when every checked row is HMAC-keyed — i.e. unforgeable without the
+    master key rather than merely SHA-256 tamper-evident."""
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO activity_log (timestamp, username, host, description, command) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (time.time(), username or "(unknown)", host or "", description or "",
-         _redact_secrets(command or "")),
+        "SELECT id, timestamp, username, host, description, command, prev_hash, entry_hash, hash_algo "
+        "FROM activity_log WHERE entry_hash IS NOT NULL ORDER BY id ASC"
     )
-    conn.commit()
-    # Cap the table so it can't grow unbounded, but keep enough history to be
-    # useful as an audit record. The old 5000-row cap silently discarded
-    # hours-to-days of activity on a busy fleet (a compliance red flag).
-    # SYSIBLE_ACTIVITY_LOG_MAX_ROWS (default 500000, ~months of history) tunes
-    # it; set 0 to disable trimming entirely when an external SIEM/export owns
-    # retention. Compliance note: this local log is NOT a system of record —
-    # forward it to a SIEM for durable, tamper-evident retention.
-    #
-    # Trim by id window off the just-inserted rowid: an indexed range delete of
-    # only the rows that fell out of the window (usually one), NOT a full
-    # `NOT IN (SELECT ... LIMIT cap)` anti-join that would rescan up to `cap`
-    # rows on every insert — at cap=500k that ran a 500k-row scan per log write,
-    # holding the single WAL writer each time. ids are monotonic (INTEGER PRIMARY
-    # KEY), so `id <= lastrowid - cap` keeps the most recent ~cap rows.
-    if _ACTIVITY_LOG_MAX_ROWS > 0:
-        cutoff = cur.lastrowid - _ACTIVITY_LOG_MAX_ROWS
-        if cutoff > 0:
-            cur.execute("DELETE FROM activity_log WHERE id <= ?", (cutoff,))
-            conn.commit()
+    rows = cur.fetchall()
+    conn.close()
+    key = _audit_key()
+    checked = 0
+    expected_prev = None
+    seen_keyed = False
+    all_keyed = True
+    for r in rows:
+        if expected_prev is not None and (r["prev_hash"] or "") != expected_prev:
+            return {"ok": False, "checked": checked, "broken_at": r["id"], "keyed": False}
+        algo = (r["hash_algo"] or "sha256") if "hash_algo" in r.keys() else "sha256"
+        if algo == "hmac-sha256" and not key:
+            return {"ok": False, "checked": checked, "broken_at": r["id"], "keyed": False}
+        # Downgrade defence: once the chain is keyed it must stay keyed — a later
+        # unkeyed row is an attacker rewriting a keyed entry under plain SHA-256.
+        if algo != "hmac-sha256":
+            all_keyed = False
+            if seen_keyed:
+                return {"ok": False, "checked": checked, "broken_at": r["id"], "keyed": False}
+        else:
+            seen_keyed = True
+        recomputed = _activity_digest(r["prev_hash"], r["timestamp"], r["username"],
+                                      r["host"], r["description"], r["command"],
+                                      algo=algo, key=key)
+        if recomputed != (r["entry_hash"] or ""):
+            return {"ok": False, "checked": checked, "broken_at": r["id"], "keyed": False}
+        expected_prev = r["entry_hash"]
+        checked += 1
+    result = {"ok": True, "checked": checked, "broken_at": None,
+              "keyed": bool(checked and all_keyed)}
+    # Tail-truncation: a recorded high-water mark ABOVE the actual tail id means
+    # rows were deleted from the END of the chain (the prev_hash walk can't see a
+    # tail cut). Best-effort; a missing/behind mark never raises a false alarm.
+    _actual_max = rows[-1]["id"] if rows else 0
+    _head_id = _chain_head_last_id("activity")
+    if _head_id is not None and _head_id > _actual_max:
+        result.update({"ok": False, "truncated": True, "broken_at": _actual_max,
+                       "recorded_head_id": _head_id})
+    return result
 
 
 def get_agent_hostname(host_id):
@@ -2007,12 +2627,27 @@ def get_activity_log(limit=200, since_id=0):
     conn = _connect()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute(
-        "SELECT id, timestamp, username, host, description, command FROM activity_log "
-        "WHERE id > ? ORDER BY id DESC LIMIT ?",
-        (since_id, limit),
-    )
-    rows = [dict(r) for r in cur.fetchall()]
+    cols = "id, timestamp, username, host, description, command"
+    if since_id and since_id > 0:
+        # Incremental poll: select the CONTIGUOUS oldest-unseen window above since_id
+        # (ORDER BY id ASC), not the newest `limit`. A plain `id > since_id ORDER BY id
+        # DESC LIMIT n` returns only the newest n rows and silently drops the rows in
+        # (since_id, max-n] — a poller advancing its cursor to the max it saw never
+        # gets them again (audit-feed data loss during a fleet-wide burst). We keep the
+        # newest-first RESPONSE shape by reversing, so callers are unaffected.
+        cur.execute(
+            f"SELECT {cols} FROM activity_log WHERE id > ? ORDER BY id ASC LIMIT ?",
+            (since_id, limit),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        rows.reverse()
+    else:
+        # Initial / latest-N view: newest-first.
+        cur.execute(
+            f"SELECT {cols} FROM activity_log ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
 
@@ -2115,15 +2750,82 @@ def record_administrator_login(username):
 # ADMIN AUDIT LOG (login + administrator account changes only)
 # =========================================================
 def log_admin_audit(event, username, detail=""):
-    conn = _connect()
-    cur = conn.cursor()
+    ts = time.time()
+    ev = event or ""
+    uname = username or ""
+    det = detail or ""
+    entry = None
+    _new_id = None
+    key = _audit_key()
+    algo = "hmac-sha256" if key else "sha256"
+    if not key:
+        _warn_audit_unkeyed_once()
+    with _ADMIN_AUDIT_LOCK:
+        with contextlib.closing(_connect()) as conn:  # close even if the write raises
+            cur = conn.cursor()
+            # Chain this row to the most recent one's hash (genesis for the first),
+            # so editing or deleting a retained auth/account event breaks the chain.
+            cur.execute("SELECT entry_hash FROM admin_audit_log ORDER BY id DESC LIMIT 1")
+            _row = cur.fetchone()
+            prev = (_row[0] if _row and _row[0] else _ADMIN_AUDIT_GENESIS)
+            entry = _admin_audit_digest(prev, ts, ev, uname, det, algo=algo, key=key)
+            cur.execute(
+                "INSERT INTO admin_audit_log (timestamp, event, username, detail, prev_hash, entry_hash, hash_algo) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (ts, ev, uname, det, prev, entry, algo),
+            )
+            _new_id = cur.lastrowid
+            conn.commit()
+    # Advance the chain high-water mark AFTER the append committed — isolated and
+    # best-effort, so it can never fail or roll back the audit write above.
+    _bump_chain_head("admin_audit", _new_id, entry)
 
-    cur.execute("""
-    INSERT INTO admin_audit_log (timestamp, event, username, detail)
-    VALUES (?, ?, ?, ?)
-    """, (time.time(), event, username, detail))
-    conn.commit()
+
+def verify_admin_audit_chain():
+    """Recompute the hash chain over admin_audit_log and report the first break.
+    Mirrors verify_activity_chain: trimmed history isn't a break, a keyed→unkeyed
+    transition is a break (downgrade defence), and `keyed` is True only when every
+    checked row is HMAC-keyed."""
+    conn = _connect()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, timestamp, event, username, detail, prev_hash, entry_hash, hash_algo "
+        "FROM admin_audit_log WHERE entry_hash IS NOT NULL ORDER BY id ASC"
+    )
+    rows = cur.fetchall()
     conn.close()
+    key = _audit_key()
+    checked = 0
+    expected_prev = None
+    seen_keyed = False
+    all_keyed = True
+    for r in rows:
+        if expected_prev is not None and (r["prev_hash"] or "") != expected_prev:
+            return {"ok": False, "checked": checked, "broken_at": r["id"], "keyed": False}
+        algo = (r["hash_algo"] or "sha256") if "hash_algo" in r.keys() else "sha256"
+        if algo == "hmac-sha256" and not key:
+            return {"ok": False, "checked": checked, "broken_at": r["id"], "keyed": False}
+        if algo != "hmac-sha256":
+            all_keyed = False
+            if seen_keyed:
+                return {"ok": False, "checked": checked, "broken_at": r["id"], "keyed": False}
+        else:
+            seen_keyed = True
+        recomputed = _admin_audit_digest(r["prev_hash"], r["timestamp"], r["event"],
+                                         r["username"], r["detail"], algo=algo, key=key)
+        if recomputed != (r["entry_hash"] or ""):
+            return {"ok": False, "checked": checked, "broken_at": r["id"], "keyed": False}
+        expected_prev = r["entry_hash"]
+        checked += 1
+    result = {"ok": True, "checked": checked, "broken_at": None,
+              "keyed": bool(checked and all_keyed)}
+    _actual_max = rows[-1]["id"] if rows else 0
+    _head_id = _chain_head_last_id("admin_audit")
+    if _head_id is not None and _head_id > _actual_max:
+        result.update({"ok": False, "truncated": True, "broken_at": _actual_max,
+                       "recorded_head_id": _head_id})
+    return result
 
 
 def get_admin_audit_log(limit=200):

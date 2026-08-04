@@ -60,15 +60,31 @@ def test_regenerate_classifies_numeric_as_ip_not_dns(tmp_certs):
     assert "192.168.1.50" in ips and "192.168.1.50" not in dns
 
 
+def test_tls_info_exposes_sha256_fingerprint(tmp_certs):
+    """get_tls_info surfaces a colon-hex SHA-256 fingerprint matching the DER of the
+    serving cert (the value an admin reads out-of-band for TOFU verification)."""
+    import hashlib
+    from cryptography.hazmat.primitives import serialization
+    cert, _, _ = tmp_certs
+    tls_manager.regenerate_self_signed(hostnames=["ctrl.corp.example"])
+    info = tls_manager.get_tls_info()
+    fp = info.get("sha256_fingerprint")
+    assert fp and fp == fp.upper()
+    assert len(fp.split(":")) == 32          # 32 bytes, colon-separated
+    leaf = tls_manager._load_cert(cert.read_bytes())
+    expected = hashlib.sha256(leaf.public_bytes(serialization.Encoding.DER)).hexdigest().upper()
+    assert fp.replace(":", "") == expected
+
+
 # ---------------------------------------------------------------------------
 # Config-change endpoint triggers regeneration
 # ---------------------------------------------------------------------------
 def test_config_change_flags_cert_stale_without_touching_live_cert(controller, superuser_headers, tmp_certs):
     cert, _, _ = tmp_certs
-    # Seed a starting self-signed cert for a known address.
-    tls_manager.regenerate_self_signed(hostnames=["old.example"])
+    # Seed a starting self-signed cert for a known address (IP-only config).
+    tls_manager.regenerate_self_signed(ips=["192.168.1.50"])
     r = controller.post("/controller-config", headers=superuser_headers, json={
-        "hostname": "new.example", "ip": "", "address_mode": "hostname", "port": 9000,
+        "hostname": "", "ip": "192.168.1.60", "address_mode": "ip", "port": 9000,
     })
     assert r.status_code == 200
     body = r.json()
@@ -80,15 +96,15 @@ def test_config_change_flags_cert_stale_without_touching_live_cert(controller, s
     # the restart-bearing regenerate action applies the new cert.
     assert body.get("cert_regenerated") is not True
     assert body.get("cert_stale") is True and body.get("cert_note")
-    dns, _ = _san(cert)
-    assert "old.example" in dns and "new.example" not in dns   # live cert untouched
+    _, ips = _san(cert)
+    assert "192.168.1.50" in ips and "192.168.1.60" not in ips   # live cert untouched
 
 
 def test_unchanged_address_does_not_regenerate(controller, superuser_headers, tmp_certs):
-    tls_manager.regenerate_self_signed(hostnames=["same.example"])
-    db.set_controller_config("same.example", "", "hostname", 9000)
+    tls_manager.regenerate_self_signed(ips=["192.168.1.70"])
+    db.set_controller_config("", "192.168.1.70", "ip", 9000)
     r = controller.post("/controller-config", headers=superuser_headers, json={
-        "hostname": "same.example", "ip": "", "address_mode": "hostname", "port": 9000,
+        "hostname": "", "ip": "192.168.1.70", "address_mode": "ip", "port": 9000,
     })
     assert r.status_code == 200
     assert "cert_regenerated" not in r.json()   # address didn't change
@@ -99,12 +115,12 @@ def test_regenerate_endpoint_on_demand(controller, superuser_headers, tmp_certs,
     # config was already saved at that value (the auto-on-change path wouldn't fire).
     monkeypatch.setattr(tls_manager, "restart_backend", lambda *a, **k: None)
     cert, _, _ = tmp_certs
-    tls_manager.regenerate_self_signed(hostnames=["stale.example"])
-    db.set_controller_config("ondemand.example", "", "hostname", 9000)
+    tls_manager.regenerate_self_signed(ips=["192.168.1.80"])
+    db.set_controller_config("", "192.168.1.90", "ip", 9000)
     r = controller.post("/controller-config/tls/regenerate-self-signed", headers=superuser_headers)
     assert r.status_code == 200 and r.json().get("restarting") is True
-    dns, _ = _san(cert)
-    assert "ondemand.example" in dns and "stale.example" not in dns
+    _, ips = _san(cert)
+    assert "192.168.1.90" in ips and "192.168.1.80" not in ips
 
 
 def test_regenerate_endpoint_refuses_pki(controller, superuser_headers, tmp_certs, monkeypatch):
@@ -174,9 +190,9 @@ def test_pki_cert_is_not_clobbered(controller, superuser_headers, tmp_certs, mon
     # If a custom (non-self-signed) cert is installed, an address change must NOT
     # regenerate over it — only surface a note.
     monkeypatch.setattr(tls_manager, "current_is_self_signed", lambda: False)
-    db.set_controller_config("a.example", "", "hostname", 9000)
+    db.set_controller_config("", "192.168.1.100", "ip", 9000)
     r = controller.post("/controller-config", headers=superuser_headers, json={
-        "hostname": "b.example", "ip": "", "address_mode": "hostname", "port": 9000,
+        "hostname": "", "ip": "192.168.1.101", "address_mode": "ip", "port": 9000,
     })
     assert r.status_code == 200
     body = r.json()

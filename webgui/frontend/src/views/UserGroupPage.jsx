@@ -11,14 +11,49 @@ import HostResults from "../components/HostResults.jsx";
 // shown as a coverage count with a per-environment drill-down instead of an
 // unusable inline list of host names.
 
+// Cryptographically-secure uniform integer in [0, n) via rejection sampling over
+// crypto.getRandomValues — Math.random() is NOT a CSPRNG (V8 uses xorshift128+),
+// which is inappropriate for a value applied to real OS-account passwords.
+function _randInt(n) {
+  const g = (typeof window !== "undefined" && window.crypto) || globalThis.crypto;
+  const limit = Math.floor(0x100000000 / n) * n; // largest multiple of n ≤ 2^32
+  const buf = new Uint32Array(1);
+  let x;
+  do { g.getRandomValues(buf); x = buf[0]; } while (x >= limit);
+  return x % n;
+}
+
 function genPassword(len = 16) {
   const lower = "abcdefghijkmnpqrstuvwxyz", upper = "ABCDEFGHJKLMNPQRSTUVWXYZ",
     dig = "23456789", sym = "!@#$%^&*()-_=+";
   const all = lower + upper + dig + sym;
-  const pick = (s) => s[Math.floor(Math.random() * s.length)];
-  let out = [pick(lower), pick(upper), pick(dig), pick(sym)];
+  const pick = (s) => s[_randInt(s.length)];
+  const out = [pick(lower), pick(upper), pick(dig), pick(sym)];
   for (let i = out.length; i < len; i++) out.push(pick(all));
-  return out.sort(() => Math.random() - 0.5).join("");
+  // Unbiased Fisher-Yates shuffle (the Array.sort random comparator is both biased
+  // and, like the picks above, must not depend on Math.random for a secret).
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = _randInt(i + 1);
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out.join("");
+}
+
+// A password entry field masked by default (so a set/reset password is not left
+// shoulder-surfable on screen), with an explicit Show/Hide toggle and the
+// existing Generate button. `extra` renders alongside (e.g. a Set button).
+function PasswordField({ value, onChange, extra }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="row">
+      <input style={{ flex: 1 }} type={show ? "text" : "password"} autoComplete="new-password"
+             value={value} onChange={onChange} />
+      <button className="btn ghost sm" type="button" aria-pressed={show}
+              onClick={() => setShow((s) => !s)}>{show ? "Hide" : "Show"}</button>
+      <button className="btn ghost sm" type="button" onClick={() => onChange({ target: { value: genPassword() } })}>Generate</button>
+      {extra}
+    </div>
+  );
 }
 
 const LockIcon = () => (
@@ -390,8 +425,7 @@ function CreateUser({ checked, run, running }) {
       <div className="muted">Creates the account on every currently checked host ({checked.length}).</div>
       <Field label="Username" value={u} onChange={(e) => setU(e.target.value)} />
       <label className="field"><span>Password (optional)</span>
-        <div className="row"><input style={{ flex: 1 }} type="text" value={pw} onChange={(e) => setPw(e.target.value)} />
-          <button className="btn ghost sm" type="button" onClick={() => setPw(genPassword())}>Generate</button></div>
+        <PasswordField value={pw} onChange={(e) => setPw(e.target.value)} />
       </label>
       <Field label="Shell" value={sh} onChange={(e) => setSh(e.target.value)} />
       <button className="btn" style={{ marginTop: 14 }} disabled={running || !u.trim() || checked.length === 0}
@@ -475,9 +509,8 @@ function Password({ user, targets, run, running }) {
     <div>
       <h3 style={{ margin: "0 0 8px" }}>Password — {user}</h3>
       <label className="field"><span>New password</span>
-        <div className="row"><input style={{ flex: 1 }} type="text" value={pw} onChange={(e) => setPw(e.target.value)} />
-          <button className="btn ghost sm" type="button" onClick={() => setPw(genPassword())}>Generate</button>
-          <button className="btn sm" disabled={running || !pw} onClick={() => run("user_set_password", targets, { username: user, password: pw }, `Set password for ${user}`)}>Set</button></div>
+        <PasswordField value={pw} onChange={(e) => setPw(e.target.value)}
+          extra={<button className="btn sm" disabled={running || !pw} onClick={() => run("user_set_password", targets, { username: user, password: pw }, `Set password for ${user}`)}>Set</button>} />
       </label>
       <button className="btn sm ghost" style={{ marginTop: 10 }} disabled={running}
               onClick={() => run("user_force_reset", targets, { username: user }, `Force reset for ${user}`)}>Force password reset at next login</button>

@@ -20,8 +20,8 @@ const GROUP_HELP = {
 // Within a group the parameter fields are SHARED across that group's actions
 // (rendered once), and each action is a button that uses them — matching the
 // desktop's "one Service name field + a row of action buttons" pattern.
-export default function ToolPage({ tool, hosts, onRefreshHosts }) {
-  const [targets, setTargets] = useState([]);
+export default function ToolPage({ tool, hosts, onRefreshHosts, prefill }) {
+  const [targets, setTargets] = useState(prefill?.host ? [prefill.host] : []);
   const [groupParams, setGroupParams] = useState({}); // { [groupKey]: { [param]: value } }
   const [results, setResults] = useState([]);          // newest first
   const [runningAction, setRunningAction] = useState("");
@@ -31,6 +31,12 @@ export default function ToolPage({ tool, hosts, onRefreshHosts }) {
   const [activeResult, setActiveResult] = useState(0); // which result tab is shown
   const [role, setRole] = useState("");
   useEffect(() => { api.me().then((d) => setRole(d.role || "")).catch(() => {}); }, []);
+  // Deep-link support: a "Fix →" action from the per-host posture view can open a
+  // tool with a host pre-selected. Add it to the target set (idempotent) so the
+  // operator lands ready to run without re-picking the host they came from.
+  useEffect(() => {
+    if (prefill?.host) setTargets((t) => (t.includes(prefill.host) ? t : [...t, prefill.host]));
+  }, [prefill]);
 
   // Tool actions run through the host's Sysible agent, so only agent-managed
   // hosts are valid targets here. Pure-SSH connection records (no agent) are
@@ -227,7 +233,7 @@ export default function ToolPage({ tool, hosts, onRefreshHosts }) {
           {[...groups.entries()].map(([groupTitle, acts]) => (
             <GroupSection key={groupTitle || "_"}
                           title={tabs.autoTabbed && groupTitle === currentTab ? "" : groupTitle}
-                          desc={GROUP_HELP[groupTitle]} acts={acts}
+                          desc={GROUP_HELP[groupTitle]} acts={acts} targets={targets}
                           gkey={gkey(currentTab, groupTitle)} gval={gval} setGParam={setGParam}
                           runningAction={runningAction} onRun={run} />
           ))}
@@ -244,7 +250,7 @@ export default function ToolPage({ tool, hosts, onRefreshHosts }) {
 // A titled group: shared parameter fields (the ordered union across the
 // group's actions, rendered once) followed by a wrapping row of action
 // buttons. Param-less groups are just a button row.
-function GroupSection({ title, desc, acts, gkey, gval, setGParam, runningAction, onRun }) {
+function GroupSection({ title, desc, acts, targets, gkey, gval, setGParam, runningAction, onRun }) {
   const sharedParams = useMemo(() => {
     const seen = new Map();
     for (const a of acts) for (const p of a.params) if (!seen.has(p.name)) seen.set(p.name, p);
@@ -259,7 +265,7 @@ function GroupSection({ title, desc, acts, gkey, gval, setGParam, runningAction,
         <div className="group-fields">
           {sharedParams.map((p) => (
             <div key={p.name} className="group-field">
-              <ParamField p={p} value={gval(gkey, p)} onChange={(n, v) => setGParam(gkey, n, v)} />
+              <ParamField p={p} value={gval(gkey, p)} targets={targets} onChange={(n, v) => setGParam(gkey, n, v)} />
             </div>
           ))}
         </div>

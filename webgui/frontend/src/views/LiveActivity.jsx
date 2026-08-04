@@ -70,6 +70,17 @@ function summarizeHosts(hostnames, inv) {
   return parts.join(", ");
 }
 
+// Heuristic: does this actor look like non-human automation — an API key, a
+// service/bot identity — rather than a person? Lets operators hide machine
+// noise (e.g. an integration polling the fleet on a schedule) from the feed
+// VIEW without touching the underlying audit records, which stay intact. The
+// explicit actor dropdown is the precise control; this just powers the default
+// "Hide automation" toggle.
+const AUTOMATION_RX = /(?:^|[\s_-])(?:api[\s_-]?key|apikey|token|bot|robot|svc|service[\s_-]?account|automation|integration|daemon|scheduler|system)(?:[\s_-]|$)/i;
+export function isAutomationActor(name) {
+  return AUTOMATION_RX.test(String(name || ""));
+}
+
 export default function LiveActivity({ role }) {
   // The read-only 'auditor' role may read the activity feed but NOT the
   // controller service log (which stays superuser-only and 403s for them).
@@ -82,6 +93,9 @@ export default function LiveActivity({ role }) {
   const [detail, setDetail] = useState(null);
   const [copied, setCopied] = useState(false);
   const [hostInv, setHostInv] = useState([]);  // fleet inventory for env-aware host labels
+  const [q, setQ] = useState("");              // free-text filter (user / host / action)
+  const [filterUser, setFilterUser] = useState("");   // "" = all users
+  const [hideAuto, setHideAuto] = useState(true);     // hide API-key/automation noise by default
   const timer = useRef(null);
 
   useEffect(() => { api.hosts().then((d) => setHostInv(d.hosts || [])).catch(() => {}); }, []);
@@ -105,6 +119,27 @@ export default function LiveActivity({ role }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, auto]);
 
+  // Group first, then apply the view filters. Filtering is purely presentational
+  // — the audit records behind these rows are untouched (and remain in the
+  // tamper-evident chain); this only changes what THIS operator is looking at.
+  const grouped = groupActivity(activity);
+  const actors = [...new Set(grouped.map((g) => g.username).filter(Boolean))].sort(
+    (a, b) => a.localeCompare(b));
+  const ql = q.trim().toLowerCase();
+  const shown = grouped.filter((g) => {
+    if (filterUser && g.username !== filterUser) return false;
+    // Selecting a specific actor overrides "hide automation" so you can still
+    // inspect exactly what an API key has been doing.
+    if (hideAuto && !filterUser && isAutomationActor(g.username)) return false;
+    if (ql) {
+      const hay = `${g.username || ""} ${(g.hosts || []).join(" ")} ${g.description || ""}`.toLowerCase();
+      if (!hay.includes(ql)) return false;
+    }
+    return true;
+  });
+  const hiddenAuto = (hideAuto && !filterUser)
+    ? grouped.reduce((n, g) => n + (isAutomationActor(g.username) ? 1 : 0), 0) : 0;
+
   return (
     <div>
       <div className="tabs" style={{ marginBottom: 14 }}>
@@ -121,13 +156,35 @@ export default function LiveActivity({ role }) {
 
       {err && <div className="error-box">{err}</div>}
 
+      {tab === "activity" && activity.length > 0 && (
+        <div className="spread" style={{ gap: 10, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter user / host / action…"
+                   style={{ minWidth: 200 }} />
+            <select value={filterUser} onChange={(e) => setFilterUser(e.target.value)} title="Filter by user">
+              <option value="">All users</option>
+              {actors.map((u) => (
+                <option key={u} value={u}>{u}{isAutomationActor(u) ? " (automation)" : ""}</option>
+              ))}
+            </select>
+            <label className="checkrow" style={{ margin: 0 }}
+                   title="Hide API-key / service-account rows from this view. The records are kept — this only filters what you see.">
+              <input type="checkbox" checked={hideAuto} onChange={(e) => setHideAuto(e.target.checked)} />
+              <span className="faint">Hide automation{hiddenAuto ? ` (${hiddenAuto} hidden)` : ""}</span>
+            </label>
+          </div>
+          <span className="faint" style={{ fontSize: 12 }}>{shown.length} of {grouped.length} shown</span>
+        </div>
+      )}
+
       {tab === "activity" ? (
-        activity.length === 0 ? <div className="empty">No activity recorded yet.</div> : (
+        activity.length === 0 ? <div className="empty">No activity recorded yet.</div> :
+        shown.length === 0 ? <div className="empty">No activity matches this filter. {hiddenAuto > 0 && "Untick “Hide automation” or "}Clear the filters to see all {grouped.length} entries.</div> : (
           <div style={{ overflowX: "auto" }}>
           <table>
             <thead><tr><th>Time</th><th>User</th><th>Host</th><th>Action</th></tr></thead>
             <tbody>
-              {groupActivity(activity).map((a, i) => (
+              {shown.map((a, i) => (
                 <tr key={a.id ?? i} style={{ cursor: "pointer" }}
                     onClick={() => { setDetail({ ...a, host: a.hosts.join(", ") }); setCopied(false); }}
                     title="Click to see the exact command">

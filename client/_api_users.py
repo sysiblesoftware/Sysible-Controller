@@ -442,7 +442,19 @@ def _hash_password(password: str):
     return _sha512_crypt(password, salt)
 
 
+def _reject_leading_dash(username: str):
+    """Reject a username beginning with '-'. shlex.quote stops shell metacharacters but
+    a leading dash makes useradd/usermod/userdel/chage parse the value as an OPTION
+    instead of an operand. Linux usernames can't start with '-' anyway, so this only
+    blocks the option-injection shape — defense-in-depth (these tools have no
+    command-executing option, so it was never RCE), keeping the validators consistent
+    with _api_security's."""
+    if (username or "").strip().startswith("-"):
+        raise ValueError("Invalid username: cannot begin with '-'.")
+
+
 def cmd_create_user(username: str, password: str = "", shell: str = "/bin/bash") -> str:
+    _reject_leading_dash(username)
     u = shlex.quote(username)
     sh = shlex.quote(shell or "/bin/bash")
     # `useradd -m` should create and populate the home directory, but a few
@@ -487,14 +499,17 @@ def cmd_create_user(username: str, password: str = "", shell: str = "/bin/bash")
 # `$(id)` would command-substitute inside the double-quoted string, exactly the
 # injection cmd_set_sudo's comment warns about; the caller already knows the user).
 def cmd_delete_user(username: str) -> str:
+    _reject_leading_dash(username)
     return f'userdel -r {shlex.quote(username)} && echo "User deleted (home directory removed)."'
 
 
 def cmd_lock_user(username: str) -> str:
+    _reject_leading_dash(username)
     return f'usermod -L {shlex.quote(username)} && echo "User locked — password authentication is now disabled."'
 
 
 def cmd_unlock_user(username: str) -> str:
+    _reject_leading_dash(username)
     return f'usermod -U {shlex.quote(username)} && echo "User unlocked — password authentication is re-enabled."'
 
 
@@ -515,7 +530,20 @@ def cmd_set_sudo(username: str, enable: bool) -> str:
             # raw nor shlex-quoted is safe inside a double-quoted string, since a
             # value like `$(id)` still command-substitutes there. Keep the echo
             # value-free; the caller already knows which user it acted on.
-            f'usermod -aG "$grp" {u} && echo "Granted sudo (added to group $grp)."'
+            f'usermod -aG "$grp" {u} || exit 1; '
+            # Group membership only confers sudo if the sudoers policy actually
+            # references that group. Debian (%sudo) and RHEL/Fedora (%wheel) enable
+            # it by default, but openSUSE/SLES ship the %wheel line COMMENTED OUT, so
+            # adding the user to wheel would grant nothing while still reporting
+            # success. Install a minimal, visudo-validated drop-in that grants the
+            # detected group standard admin sudo (no NOPASSWD, no extra privilege).
+            # On distros that already grant the group this is a harmless duplicate.
+            'tmp=$(mktemp) || exit 1; '
+            'printf \'%%%s ALL=(ALL:ALL) ALL\\n\' "$grp" > "$tmp"; '
+            'if visudo -cf "$tmp" >/dev/null 2>&1; then '
+            'install -m 0440 -o root -g root "$tmp" /etc/sudoers.d/sysible-sudo-group; '
+            'fi; rm -f "$tmp"; '
+            'echo "Granted sudo (added to group $grp)."'
         )
     return (
         f"{detect}; "
@@ -558,6 +586,7 @@ def cmd_kill_user_sessions(username: str) -> str:
 
 
 def cmd_force_password_reset(username: str) -> str:
+    _reject_leading_dash(username)
     return f"chage -d 0 {shlex.quote(username)}"
 
 
@@ -585,6 +614,7 @@ def cmd_set_account_expiration(username: str, expire_date: str = "") -> str:
 
 
 def cmd_set_user_shell(username: str, shell: str) -> str:
+    _reject_leading_dash(username)
     return f"usermod -s {shlex.quote(shell)} {shlex.quote(username)}"
 
 
@@ -626,7 +656,16 @@ def cmd_set_password_quality_policy(minlen=None, retry=None, dcredit=None, ucred
     settings = {k: int(v) for k, v in raw.items() if v is not None}
     if not settings:
         raise ValueError("Specify at least one password-quality setting")
-    return _set_security_conf_keys("/etc/security/pwquality.conf", settings)
+    # pwquality.conf is inert unless pam_pwquality is wired into the password stack.
+    # RHEL/Fedora/SUSE do this by default; Debian/Ubuntu do not install/reference
+    # libpam-pwquality by default, so warn rather than imply the policy is enforced.
+    return (
+        _set_security_conf_keys("/etc/security/pwquality.conf", settings)
+        + "; if command -v apt-get >/dev/null 2>&1 && ! grep -rq pam_pwquality /etc/pam.d/ 2>/dev/null; then "
+        "echo 'Note: pam_pwquality is not referenced in this host'\"'\"'s PAM stack "
+        "(Debian/Ubuntu default). Install libpam-pwquality and enable it in "
+        "/etc/pam.d/common-password for this to take effect.' >&2; fi"
+    )
 
 
 def cmd_set_account_lockout_policy(deny=None, unlock_time=None) -> str:
@@ -634,7 +673,18 @@ def cmd_set_account_lockout_policy(deny=None, unlock_time=None) -> str:
     settings = {k: int(v) for k, v in raw.items() if v is not None}
     if not settings:
         raise ValueError("Specify at least one of deny / unlock_time")
-    return _set_security_conf_keys("/etc/security/faillock.conf", settings)
+    # faillock.conf only takes effect where pam_faillock is actually wired into the
+    # PAM stack. RHEL 8+/Fedora own it through authselect, so enable the feature;
+    # SUSE references it by default. Debian/Ubuntu (pam_faillock not in common-auth
+    # by default) and RHEL7/Amazon Linux 2 (pam_tally2) need a manual PAM edit -
+    # warn instead of silently reporting success on a policy that isn't in force.
+    return (
+        _set_security_conf_keys("/etc/security/faillock.conf", settings)
+        + "; if command -v authselect >/dev/null 2>&1 && authselect current >/dev/null 2>&1; then "
+        "authselect enable-feature with-faillock 2>&1 || true; fi; "
+        "echo 'faillock.conf updated. Confirm /etc/pam.d/system-auth (or common-auth) references "
+        "pam_faillock on this host - on Debian/Ubuntu and RHEL7/Amazon Linux 2 it may need adding manually.'"
+    )
 
 
 def cmd_set_umask_policy(value: str) -> str:

@@ -349,7 +349,18 @@ def cmd_format_filesystem(device: str, fs_type: str, label: str = "", force: boo
         flags += f"{_MKFS_FORCE_FLAG[fs_type]} "
     if label:
         flags += f"{_MKFS_LABEL_FLAG[fs_type]} {shlex.quote(label)} "
-    return f"mkfs.{fs_type} {flags}{q_dev} 2>&1"
+    # Not every mkfs.<type> ships everywhere: mkfs.btrfs is absent on RHEL 8+
+    # (btrfs unsupported), mkfs.ntfs (ntfs-3g) is EPEL-only on RHEL, mkfs.xfs
+    # needs xfsprogs, etc. Give the "package not installed" message the rest of
+    # this module gives instead of a bare "mkfs.btrfs: command not found".
+    pkg = {"btrfs": "btrfs-progs", "xfs": "xfsprogs", "ntfs": "ntfs-3g",
+           "vfat": "dosfstools", "fat": "dosfstools", "exfat": "exfatprogs",
+           "f2fs": "f2fs-tools", "reiserfs": "reiserfsprogs"}.get(fs_type, "the relevant filesystem tools")
+    return (
+        f"if ! command -v mkfs.{fs_type} >/dev/null 2>&1; then "
+        f"echo 'mkfs.{fs_type} is not installed on this host (package: {pkg}).' >&2; exit 1; fi; "
+        f"mkfs.{fs_type} {flags}{q_dev} 2>&1"
+    )
 
 
 # ---------------------------------------------------------
@@ -635,6 +646,14 @@ def cmd_create_swap_file(path: str, size_mb, persist: bool = True) -> str:
         # creates a file with unwritten/preallocated extents and RETURNS 0, so
         # the old `fallocate || dd` fallback never fired - then `swapon` fails
         # with "swapfile has holes" (Invalid argument). dd fills real blocks.
+        #
+        # btrfs needs one more step: a swap file must be NOCOW (chattr +C, which
+        # only takes effect while the file is empty) and uncompressed, or swapon
+        # rejects it ("Invalid argument"). When the target dir is btrfs, create the
+        # file empty and mark it +C before dd fills it.
+        f"_d=$(dirname {q_path}); "
+        f'if [ "$(findmnt -no FSTYPE -T "$_d" 2>/dev/null)" = btrfs ]; then '
+        f"rm -f {q_path} 2>/dev/null; : > {q_path} && chattr +C {q_path} 2>/dev/null; fi; "
         f"dd if=/dev/zero of={q_path} bs=1M count={size_mb} 2>&1 "
         f"&& chmod 600 {q_path} "
         f"&& mkswap {q_path} 2>&1 "
@@ -645,7 +664,11 @@ def cmd_create_swap_file(path: str, size_mb, persist: bool = True) -> str:
         q_line = shlex.quote(f"{path}\tnone\tswap\tsw\t0\t0")
         q_path_match = shlex.quote(path)
         cmd += (
-            f" && (grep -qF {q_path_match} /etc/fstab 2>/dev/null "
+            # Exact first-field match (via awk ENVIRON, no regex/escape pitfalls) so a
+            # prefix-colliding path (/swap vs /swapfile) isn't mistaken for an existing
+            # entry — the old `grep -qF` substring match would skip the append and still
+            # claim success, so the new swap never survived a reboot.
+            f" && (p={q_path_match} awk '$1==ENVIRON[\"p\"]{{f=1}} END{{exit !f}}' /etc/fstab 2>/dev/null "
             f"|| (cp /etc/fstab /etc/fstab.bak.$(date +%s) && echo {q_line} >> /etc/fstab)) "
             "&& echo 'Added to /etc/fstab.'"
         )
@@ -675,6 +698,11 @@ def cmd_resize_swap_file(path: str, size_mb, persist: bool = True) -> str:
         # creates a file with unwritten/preallocated extents and RETURNS 0, so
         # the old `fallocate || dd` fallback never fired - then `swapon` fails
         # with "swapfile has holes" (Invalid argument). dd fills real blocks.
+        # On btrfs the file must additionally be NOCOW (chattr +C on the empty
+        # file) and uncompressed, or swapon rejects it ("Invalid argument").
+        f"_d=$(dirname {q_path}); "
+        f'if [ "$(findmnt -no FSTYPE -T "$_d" 2>/dev/null)" = btrfs ]; then '
+        f": > {q_path} && chattr +C {q_path} 2>/dev/null; fi; "
         f"dd if=/dev/zero of={q_path} bs=1M count={size_mb} 2>&1 "
         f"&& chmod 600 {q_path} "
         f"&& mkswap {q_path} 2>&1 "
@@ -685,7 +713,9 @@ def cmd_resize_swap_file(path: str, size_mb, persist: bool = True) -> str:
         q_line = shlex.quote(f"{path}\tnone\tswap\tsw\t0\t0")
         q_path_match = shlex.quote(path)
         cmd += (
-            f" && (grep -qF {q_path_match} /etc/fstab 2>/dev/null "
+            # Exact first-field fstab match (see cmd_create_swap_file) so a prefix-
+            # colliding path isn't wrongly treated as already-present.
+            f" && (p={q_path_match} awk '$1==ENVIRON[\"p\"]{{f=1}} END{{exit !f}}' /etc/fstab 2>/dev/null "
             f"|| (cp /etc/fstab /etc/fstab.bak.$(date +%s) && echo {q_line} >> /etc/fstab)) "
             "&& echo 'Confirmed entry in /etc/fstab.'"
         )
@@ -706,7 +736,9 @@ def cmd_create_swap_partition(device: str, persist: bool = True) -> str:
         q_line = shlex.quote(f"{device}\tnone\tswap\tsw\t0\t0")
         q_dev_match = shlex.quote(device)
         cmd += (
-            f" && (grep -qF {q_dev_match} /etc/fstab 2>/dev/null "
+            # Exact first-field fstab match (see cmd_create_swap_file) so a prefix-
+            # colliding device (/dev/sdb vs /dev/sdb1) isn't treated as already-present.
+            f" && (p={q_dev_match} awk '$1==ENVIRON[\"p\"]{{f=1}} END{{exit !f}}' /etc/fstab 2>/dev/null "
             f"|| (cp /etc/fstab /etc/fstab.bak.$(date +%s) && echo {q_line} >> /etc/fstab)) "
             "&& echo 'Added to /etc/fstab.'"
         )

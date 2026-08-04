@@ -24,9 +24,11 @@ The token may also be passed as the first CLI argument, e.g.:
   python3 agent.py <token>
 """
 
+import hashlib
 import json
 import os
 import platform
+import re
 import shlex
 import socket
 import subprocess
@@ -52,11 +54,72 @@ except Exception:
 # progress bar) can tell which hosts are already running the current agent.
 # Matches the controller's hash of host_agent/agent.py (sha256 of the same
 # bytes). Best-effort - never let it break startup.
+# The enrollment bundle bakes the resolved controller URL into the
+# os.getenv("SYSIBLE_CONTROLLER", "...") default further down, so hashing the raw
+# file made EVERY enrolled agent's version differ from the controller's (which
+# hashes the unpatched source) — the fleet looked permanently "outdated". Reset
+# that one default to its canonical placeholder before hashing so a patched-but-
+# current agent matches; the controller normalizes identically
+# (backend/app.py:_current_agent_version).
+_CONTROLLER_DEFAULT_RE = re.compile(r'os\.getenv\("SYSIBLE_CONTROLLER",\s*"[^"]*"\)')
+_CONTROLLER_DEFAULT_CANON = 'os.getenv("SYSIBLE_CONTROLLER", "https://127.0.0.1:9000")'
+
+
+def _source_version(path):
+    """12-char build hash of an agent source file, with the baked controller-URL
+    default normalized out. Matches backend/app.py:_current_agent_version, so an
+    enrolled (URL-patched) agent reads as current against the controller."""
+    src = open(path, "r", encoding="utf-8").read()
+    src = _CONTROLLER_DEFAULT_RE.sub(lambda _m: _CONTROLLER_DEFAULT_CANON, src)
+    return hashlib.sha256(src.encode("utf-8")).hexdigest()[:12]
+
+
 try:
-    import hashlib as _hashlib
-    AGENT_VERSION = _hashlib.sha256(open(__file__, "rb").read()).hexdigest()[:12]
+    AGENT_VERSION = _source_version(os.path.abspath(__file__))
 except Exception:
     AGENT_VERSION = ""
+
+
+# A self-update task rewrites this file on disk and asks systemd to restart us.
+# When that external restart doesn't take (a wedged transient unit, systemd-run
+# missing, a restart that races the task), the process keeps running the OLD
+# bytes and reporting the OLD build forever — so the console shows the host stuck
+# "updating" even though agent.py on disk is already current. Re-exec into the
+# new build ourselves instead of depending on the restart. Throttled; only acts
+# when the on-disk source both DIFFERS from what we're running and compiles (so a
+# truncated/corrupt write can't spin us in a crash-reexec loop — systemd stays
+# the backstop for that).
+_last_reexec_check = 0.0
+
+
+def _reexec_if_source_changed():
+    global _last_reexec_check
+    now = time.time()
+    if now - _last_reexec_check < 10:
+        return
+    _last_reexec_check = now
+    if not AGENT_VERSION:
+        return
+    path = os.path.abspath(__file__)
+    try:
+        if _source_version(path) == AGENT_VERSION:
+            return
+    except Exception:
+        return
+    try:
+        import py_compile
+        py_compile.compile(path, doraise=True)
+    except Exception as e:
+        print(f"[agent] agent.py changed on disk but won't compile ({e}); "
+              "staying on the running build.")
+        return
+    print(f"[agent] agent.py updated on disk (was {AGENT_VERSION}); re-executing to load the new build.")
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os.execv(sys.executable, [sys.executable, path] + sys.argv[1:])
 
 # Cap on stdout/stderr bytes kept from a single command - a runaway
 # command (e.g. `cat` on a huge file, a noisy build log) shouldn't be
@@ -87,6 +150,29 @@ STATE_FILE = os.getenv("SYSIBLE_AGENT_STATE", "/var/lib/sysible/agent_state.json
 # queued commands (e.g. System Health & Logs running a few checks
 # back to back) doesn't pay this delay between each one either.
 POLL_INTERVAL = float(os.getenv("SYSIBLE_POLL_INTERVAL", "1.5"))
+
+# Reconnect backoff. When the controller is UNREACHABLE (e.g. it was renumbered
+# onto a new IP, or a network/firewall change cut this host off), retrying every
+# POLL_INTERVAL forever just spams the log and burns CPU/network. Instead the poll
+# and heartbeat loops back off exponentially from POLL_INTERVAL up to
+# CONN_BACKOFF_MAX, and snap back to POLL_INTERVAL the instant a request succeeds.
+CONN_BACKOFF_MAX = float(os.getenv("SYSIBLE_CONN_BACKOFF_MAX", "60"))
+_conn_fail_count = 0
+
+
+def _note_conn_result(ok):
+    """Record whether a controller request actually reached the controller, so the
+    poll/heartbeat loops can back off while it's unreachable and recover instantly."""
+    global _conn_fail_count
+    _conn_fail_count = 0 if ok else min(_conn_fail_count + 1, 20)
+
+
+def _current_poll_delay():
+    """POLL_INTERVAL when healthy; exponentially longer (capped at CONN_BACKOFF_MAX)
+    while every controller candidate is unreachable."""
+    if _conn_fail_count <= 0:
+        return POLL_INTERVAL
+    return min(POLL_INTERVAL * (2 ** min(_conn_fail_count, 8)), CONN_BACKOFF_MAX)
 
 # How often the agent samples and reports performance metrics (load, memory,
 # worst-disk %). Deliberately decoupled from POLL_INTERVAL: heartbeats fire
@@ -180,8 +266,10 @@ def _request(method, path, **kwargs):
             print(f"[agent] switched to controller candidate: {candidate}")
             CONTROLLER = candidate
 
+        _note_conn_result(True)   # a candidate answered — reset reconnect backoff
         return r
 
+    _note_conn_result(False)      # every candidate was unreachable — back off
     raise last_exc
 
 
@@ -349,6 +437,14 @@ def register():
         "kernel": platform.release(),
         "ip": _local_ip(),
     }
+
+    # Proof of possession: if we still hold a saved agent_secret for this host, send
+    # it so the controller can confirm we ARE the incumbent agent and let us re-enroll
+    # onto our own row. A host that legitimately lost its secret (reimaged) omits this
+    # and instead uses an admin-issued reissue token. (A brand-new host has no secret
+    # and lands on a fresh host_id, so this is simply absent there.)
+    if state.get("agent_secret") and state.get("host_id"):
+        payload["prev_agent_secret"] = state["agent_secret"]
 
     r = _request("POST", "/agents/enroll", json=payload, timeout=15)
     _raise_with_detail(r)
@@ -851,6 +947,112 @@ def _read_top_procs(prev_pids, total_delta, ncores):
 _prev_sample = {}
 
 
+_UNIT_SUFFIXES = (".service", ".socket", ".mount", ".timer", ".target",
+                  ".path", ".scope", ".automount", ".swap", ".slice")
+
+
+def _collect_health_signals(mounts):
+    """Best-effort systemd + OOM health signals, gathered on the metrics tick so the
+    controller can render the dashboard fleet-health verdict straight from the
+    heartbeat instead of dispatching a live probe to every host. Mirrors exactly
+    the signals cmd_metrics_snapshot() computes — failed-unit names/count, overall
+    systemd state, OOM-kill count, and the worst-disk mount. Non-systemd or
+    restricted hosts degrade gracefully (sysd=None), and the controller then falls
+    back to a live probe for that host, so this never makes health WRONG."""
+    def _run(argv):
+        try:
+            # universal_newlines (not text=) so this stays Python 3.6-safe for SLES.
+            return subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                  timeout=8, universal_newlines=True).stdout or ""
+        except Exception:
+            return ""
+
+    # Failed units: the first real-unit-looking token per line (robust across
+    # systemd versions and the '●' bullet), same scan the shell snapshot uses.
+    units = []
+    for line in _run(["systemctl", "--failed", "--no-legend", "--plain"]).splitlines():
+        for tok in line.split():
+            if tok.endswith(_UNIT_SUFFIXES):
+                units.append(tok)
+                break
+    # `is-system-running` is the authority for whether systemd exists here; if it
+    # yields nothing, treat this as a non-systemd/unknown host → sysd=None so the
+    # controller live-probes rather than trusting a partial reading.
+    sysd = _run(["systemctl", "is-system-running"]).strip() or None
+    oom = 0
+    if sysd is not None:
+        for line in _run(["dmesg", "-t"]).splitlines():
+            low = line.lower()
+            if "out of memory" in low or "killed process" in low or "oom-killer" in low:
+                oom += 1
+    # Worst-disk mount name (pairs with the scalar `disk` %) from the per-mount detail.
+    mount, worst = None, -1
+    for m in (mounts or []):
+        try:
+            pct = int(m.get("pct"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if pct > worst:
+            worst, mount = pct, m.get("mount")
+    return {"failed": len(units), "units": units[:4], "sysd": sysd, "oom": oom, "mount": mount}
+
+
+def _detect_hypervisor():
+    """Best-effort: is THIS host a hypervisor running guest VMs (a VM HOST), as
+    opposed to a plain server or a guest itself? Cheap, dependency-free /proc +
+    sysfs checks — no virsh/xl/VBoxManage calls. Returns (role, vm_count):
+
+      role      short label — "proxmox" / "kvm" / "xen-dom0" / "virtualbox" /
+                "vmware" — or None if this doesn't look like a VM host.
+      vm_count  number of RUNNING guests we could count (one qemu-system /
+                VBoxHeadless / vmware-vmx process per running VM). 0 is valid for
+                a configured-but-idle hypervisor.
+
+    The point is the reboot warning: taking a VM host down interrupts every guest
+    on it, so the console flags that before an operator reboots/powers it off."""
+    role, vms = None, 0
+    try:
+        if os.path.isdir("/etc/pve"):
+            role = "proxmox"                       # Proxmox VE
+        try:
+            with open("/proc/xen/capabilities") as f:
+                if "control_d" in f.read():
+                    role = role or "xen-dom0"      # Xen control domain, not a guest
+        except OSError:
+            pass
+        kvm = os.path.exists("/dev/kvm")
+        qemu = vbox = vmware = 0
+        # One /proc scan for guest processes. `comm` is truncated to 15 chars, so
+        # qemu-system-x86_64 shows as "qemu-system-x86" — startswith covers it.
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            try:
+                with open("/proc/" + pid + "/comm") as f:
+                    comm = f.read().strip()
+            except OSError:
+                continue
+            if comm.startswith("qemu-system") or comm == "qemu-kvm":
+                qemu += 1
+            elif comm in ("VBoxHeadless", "VirtualBox"):
+                vbox += 1
+            elif comm == "vmware-vmx":
+                vmware += 1
+        if qemu:
+            role = role or ("kvm" if kvm else "qemu"); vms += qemu
+        if vbox:
+            role = role or "virtualbox"; vms += vbox
+        if vmware:
+            role = role or "vmware"; vms += vmware
+        # KVM-capable host with libvirt present but no guests currently running:
+        # still a hypervisor (rebooting it is still disruptive to its inventory).
+        if role is None and kvm and (os.path.isdir("/etc/libvirt") or os.path.exists("/run/libvirt")):
+            role = "kvm"
+    except Exception:
+        return (None, 0)
+    return (role, vms)
+
+
 def _collect_metrics():
     """Build the heartbeat's performance payload: scalar time-series metrics
     plus a rich detail snapshot. Best-effort throughout - any single failure is
@@ -946,11 +1148,33 @@ def _collect_metrics():
     if load1 is None and mem is None and disk is None and cpu_pct is None:
         return None
 
+    # System uptime (seconds) — parity with the live snapshot's `uptime`.
+    uptime = None
+    try:
+        with open("/proc/uptime") as f:
+            uptime = int(float(f.read().split()[0]))
+    except (OSError, ValueError, IndexError):
+        pass
+
+    # systemd / OOM health signals, so the controller can serve the fleet-health
+    # verdict from this heartbeat instead of live-probing every host each load.
+    health = _collect_health_signals(mounts)
+
+    # Hypervisor role + running-guest count, so the console can warn before a
+    # reboot/power-off takes a VM host (and all its guests) down.
+    hyp_role, hyp_vms = _detect_hypervisor()
+
     metrics = {
         "load1": load1, "load5": load5, "load15": load15, "cores": cores,
         "cpu": cpu_pct, "mem": mem, "swap": swap, "disk": disk,
         "net_rx": net_rx, "net_tx": net_tx, "io_r": io_r, "io_w": io_w,
-        "procs": proc_count,
+        "procs": proc_count, "uptime": uptime,
+        # Fleet-health signals (see _collect_health_signals): failed-unit count +
+        # names, overall systemd state, OOM-kills, worst-disk mount.
+        "failed": health["failed"], "units": health["units"],
+        "sysd": health["sysd"], "oom": health["oom"], "mount": health["mount"],
+        # Hypervisor role (None if not a VM host) + running-guest count.
+        "hyp": hyp_role, "vms": hyp_vms,
     }
     snapshot = {
         "percpu": percpu_pct,
@@ -1079,7 +1303,7 @@ def _heartbeat_loop(state):
             heartbeat(state)
         except Exception as e:               # incl. UnknownHostError — the task loop handles exit
             print("[agent] heartbeat thread:", e)
-        time.sleep(POLL_INTERVAL)
+        time.sleep(_current_poll_delay())
 
 
 # =========================================================
@@ -1336,6 +1560,12 @@ def loop(state):
                          name="sysible-metrics").start()
 
     while True:
+        # Self-heal: if a self-update replaced agent.py on disk but the external
+        # service restart didn't take, re-exec into the new build so we stop
+        # reporting the stale one (else the console shows this host stuck
+        # "updating" forever). No-op until the on-disk source actually changes.
+        _reexec_if_source_changed()
+
         ran_task = False
 
         try:
@@ -1415,7 +1645,7 @@ def loop(state):
         # round-trip of heartbeat()+fetch_tasks() itself still bounds
         # how tight this loop can spin either way.
         if not ran_task:
-            time.sleep(POLL_INTERVAL)
+            time.sleep(_current_poll_delay())
 
 
 # =========================================================

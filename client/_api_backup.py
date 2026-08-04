@@ -89,6 +89,25 @@ def cmd_configure_backup_schedule(source: str, dest_dir: str, cron_expr: str) ->
         "chmod +x /usr/local/sbin/sysible-backup.sh && "
         f"printf '%s root /usr/local/sbin/sysible-backup.sh\\n' {shlex.quote(cron_expr)} "
         "> /etc/cron.d/sysible-backup && "
+        # /etc/cron.d is only honored when a cron daemon is installed AND its service
+        # is running. Debian/Ubuntu ship+enable cron by default, but minimal RHEL/
+        # Rocky/Alma, Amazon Linux 2, openSUSE/SLES and Arch frequently have no cron
+        # package at all - the drop-in would sit there inert and the backup would
+        # silently never fire. Ensure a daemon is present and enabled, installing
+        # cronie/cron via the host package manager if needed (service name is crond
+        # on RHEL/SUSE, cron on Debian).
+        "if ! command -v crond >/dev/null 2>&1 && ! command -v cron >/dev/null 2>&1; then "
+        "if command -v dnf >/dev/null 2>&1; then dnf install -y cronie >/dev/null 2>&1; "
+        "elif command -v yum >/dev/null 2>&1; then yum install -y cronie >/dev/null 2>&1; "
+        "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install cron >/dev/null 2>&1; "
+        "elif command -v apt-get >/dev/null 2>&1; then DEBIAN_FRONTEND=noninteractive apt-get install -y cron >/dev/null 2>&1; "
+        "elif command -v pacman >/dev/null 2>&1; then pacman -S --noconfirm cronie >/dev/null 2>&1; fi; fi; "
+        "systemctl enable --now crond 2>/dev/null || systemctl enable --now cron 2>/dev/null || "
+        "systemctl enable --now cronie 2>/dev/null || true; "
+        "if ! command -v crond >/dev/null 2>&1 && ! command -v cron >/dev/null 2>&1; then "
+        "echo 'WARNING: no cron daemon is installed - the schedule was written to "
+        "/etc/cron.d/sysible-backup but will not run until a cron service (cronie/cron) "
+        "is installed and started.' >&2; fi; "
         f"printf 'Scheduled backup of %s to %s on cron: %s\\n' {qs} {qd} {shlex.quote(cron_expr)}"
     )
 

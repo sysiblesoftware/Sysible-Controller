@@ -29,7 +29,9 @@ def test_flags_accept_leading_dashes_and_dedupe():
 
 def test_named_packages_with_flags():
     cmd = a.cmd_update_packages("vim", "nobest")
-    assert '"$PKGMGR" update -y --nobest vim' in cmd
+    # `--` end-of-options separator sits between the flags and the package operands
+    # (defence-in-depth against package-name option injection).
+    assert '"$PKGMGR" update -y --nobest -- vim' in cmd
     # A name with shell metacharacters is quoted (injection-safe), flag still applied.
     assert "'vim;rm'" in a.cmd_update_packages("vim;rm", "nobest")
 

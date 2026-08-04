@@ -103,8 +103,21 @@ def cmd_set_kernel_cmdline(params: str) -> str:
         f"newline='GRUB_CMDLINE_LINUX=\"'{q}'\"'; "
         "if grep -q '^GRUB_CMDLINE_LINUX=' /etc/default/grub; then "
         "sed -i \"s|^GRUB_CMDLINE_LINUX=.*|$newline|\" /etc/default/grub; "
-        "else echo \"$newline\" >> /etc/default/grub; fi && " + _grub_rebuild_fragment() +
-        " && echo 'Kernel parameters updated and grub.cfg rebuilt (effective next boot).'"
+        "else echo \"$newline\" >> /etc/default/grub; fi && "
+        # RHEL 8+/Fedora use BootLoaderSpec: each already-installed kernel takes its
+        # command line from /boot/loader/entries (kernelopts), NOT from a regenerated
+        # grub.cfg - so editing /etc/default/grub + grub2-mkconfig is a silent no-op
+        # for existing kernels there. grubby applies the params to every installed
+        # entry immediately (the /etc/default/grub edit above still covers future
+        # kernels). Fall back to rebuilding grub.cfg only where grubby is absent
+        # (Debian/Ubuntu/Arch/SUSE, which take the cmdline from grub.cfg).
+        "if command -v grubby >/dev/null 2>&1; then "
+        f"grubby --update-kernel=ALL --args={q} 2>&1 && "
+        "echo 'Kernel parameters applied to all installed boot entries via grubby "
+        "(and saved to /etc/default/grub for future kernels). grubby merges args into "
+        "each entry; effective next boot.'; "
+        "else " + _grub_rebuild_fragment() +
+        " && echo 'Kernel parameters updated and grub.cfg rebuilt (effective next boot).'; fi"
     )
 
 
@@ -145,8 +158,14 @@ def cmd_remove_old_kernels(keep: str = "2") -> str:
         f"dnf -y remove --oldinstallonly --setopt installonly_limit={keep} 2>&1 || "
         "echo 'Nothing to remove (or dnf-plugins-core missing).'; "
         "elif command -v apt-get >/dev/null 2>&1; then "
+        # NOTE: the `keep` count is honored ONLY on dnf. apt's autoremove drops every
+        # kernel marked autoremovable, and zypper's purge-kernels obeys the host's
+        # /etc/zypp/zypp.conf `multiversion.kernels` policy - neither takes `keep`.
+        # Surface that so the operator isn't surprised by how many kernels remain.
+        f"echo 'Note: on apt the exact keep-count ({keep}) is governed by APT autoremove, not this field.' >&2; "
         "DEBIAN_FRONTEND=noninteractive apt-get -y --purge autoremove 2>&1; "
         "elif command -v zypper >/dev/null 2>&1; then "
+        f"echo 'Note: on zypper the keep-count ({keep}) is governed by multiversion.kernels in /etc/zypp/zypp.conf, not this field.' >&2; "
         "zypper --non-interactive purge-kernels 2>&1 || echo 'purge-kernels needs the zypper purge-kernels plugin.'; "
         "else echo 'No supported package manager found.' >&2; exit 1; fi; "
         "echo; echo 'Done. Current running kernel is always kept.'"

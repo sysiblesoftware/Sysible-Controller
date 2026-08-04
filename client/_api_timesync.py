@@ -119,9 +119,17 @@ def cmd_set_ntp_servers(servers: str) -> str:
         "if [ ! -f \"$conf\" ]; then echo \"chrony config not found - run Configure chrony first.\" >&2; exit 1; fi; "
         "cp \"$conf\" \"$conf.sysible.bak\" "
         "&& sed -i '/^\\(server\\|pool\\) /d' \"$conf\" "
+        # Debian/Ubuntu ship `sourcedir /run/chrony-dhcp` in the stock chrony.conf,
+        # so chrony keeps syncing from DHCP-provided NTP servers ON TOP of the ones
+        # set here - "point chrony at these servers" wouldn't be exclusive. Comment
+        # that line out so the chosen servers are authoritative. (RHEL/SUSE/Arch have
+        # no sourcedir by default, so this is a no-op there.) Admin-managed conf.d
+        # drop-ins are left untouched - see the note in the result message.
+        "&& sed -i 's|^[[:space:]]*sourcedir[[:space:]]|# &|' \"$conf\" "
         f"&& printf '{server_lines}\\n' >> \"$conf\" "
         "&& " + _chrony_service_fragment().replace("enable --now", "restart") +
-        f" && echo 'Set NTP servers ({servers}) and restarted chrony (backup at $conf.sysible.bak).'"
+        f" && echo 'Set NTP servers ({servers}) and restarted chrony (backup at $conf.sysible.bak; "
+        "DHCP-supplied NTP disabled - any pools in conf.d drop-ins are left as-is).'"
     )
 
 

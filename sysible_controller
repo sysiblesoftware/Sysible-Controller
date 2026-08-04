@@ -1056,6 +1056,55 @@ PY
   echo "Revoked $n unconsumed enrollment token(s). Mint a fresh one from Host Enrollment when needed."
 }
 
+cmd_export() {
+  # Portable migration/reinstall bundle: the controller DB (hosts, plugin configs,
+  # settings, admins) plus config and public certs, as one checksummed tar.gz.
+  # SANITIZED BY DEFAULT — plaintext key material (vault master key, TLS private
+  # key, bootstrap API key, per-host SSH keys) is left out so the bundle is safe to
+  # move between machines. Pass --with-secrets for a full 1:1 clone instead.
+  _require_root "export"
+  local outdir="." sanitize="--sanitize" label=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --with-secrets)  sanitize="" ;;
+      --output-dir|-o) outdir="$2"; shift ;;
+      --label)         label="$2"; shift ;;
+      -*)              echo "Unknown option for export: $1" >&2
+                       echo "Usage: sysible_controller export [DIR] [--with-secrets] [--label TEXT]" >&2
+                       exit 1 ;;
+      *)               outdir="$1" ;;
+    esac
+    shift
+  done
+  SYSIBLE_DATA_DIR="$BASE" SYSIBLE_CERT_DIR="$BASE/certs" SYSIBLE_RUN_DIR="$RUN_DIR" \
+    "$VENV/bin/python" "$BASE/tools/backup.py" --output-dir "$outdir" \
+      ${label:+--label "$label"} $sanitize
+}
+
+cmd_import() {
+  # Load an exported bundle into THIS controller. Overwrites the live DB and config,
+  # so stop the services first and pass --force to confirm the overwrite. Use
+  # --inspect to print the bundle's manifest without changing anything.
+  _require_root "import"
+  local archive="" force="" inspect=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force)   force="--force" ;;
+      --inspect) inspect="--inspect" ;;
+      -*)        echo "Unknown option for import: $1" >&2; exit 1 ;;
+      *)         archive="$1" ;;
+    esac
+    shift
+  done
+  if [[ -z "$archive" ]]; then
+    echo "Usage: sysible_controller import <archive.tar.gz> [--force] [--inspect]" >&2
+    echo "  Stop the controller first (sysible_controller stop) and add --force to overwrite." >&2
+    exit 1
+  fi
+  SYSIBLE_DATA_DIR="$BASE" SYSIBLE_CERT_DIR="$BASE/certs" SYSIBLE_RUN_DIR="$RUN_DIR" \
+    "$VENV/bin/python" "$BASE/tools/restore.py" "$archive" $force $inspect
+}
+
 case "$1" in
   start)   cmd_start ;;
   stop)    cmd_stop ;;
@@ -1069,9 +1118,11 @@ case "$1" in
   revoke-enroll-tokens) cmd_revoke_enroll_tokens ;;
   self-enroll) cmd_self_enroll ;;
   disenroll) cmd_disenroll "$@" ;;
+  export) shift; cmd_export "$@" ;;
+  import) shift; cmd_import "$@" ;;
   destroy) cmd_destroy ;;
   *)
-    echo "Usage: sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|rotate-api-key|revoke-enroll-tokens|self-enroll|disenroll|destroy}"
+    echo "Usage: sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|rotate-api-key|revoke-enroll-tokens|self-enroll|disenroll|export|import|destroy}"
     exit 1
     ;;
 esac

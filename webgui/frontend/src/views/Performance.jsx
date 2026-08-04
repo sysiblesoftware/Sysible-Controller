@@ -93,7 +93,7 @@ function bucketAverage(samples, valueOf, t0, t1, buckets = 80) {
 // A single inline-SVG multi-line chart (no chart-library dependency). The
 // viewBox is scaled to width:100% of its grid cell, so a taller viewBox + wider
 // columns make the charts fill the window instead of sitting as thin slivers.
-function LineChart({ series, t0, t1, kind, onZoom, height = 300 }) {
+function LineChart({ series, t0, t1, kind, onZoom, height = 300, emphasizeKey = null }) {
   const W = 1000, H = height, padL = 60, padR = 16, padT = 12, padB = 34;
   const plotW = W - padL - padR, plotH = H - padT - padB;
   const svgRef = useRef(null);
@@ -164,9 +164,12 @@ function LineChart({ series, t0, t1, kind, onZoom, height = 300 }) {
                 textAnchor={i === 0 ? "start" : i === xticks.length - 1 ? "end" : "middle"}
                 style={{ fontSize: 15, fill: "var(--text)" }}>{fmtClock(t)}</text>
         ))}
-        {series.map((s) => (
+        {/* Draw the emphasized series LAST so it sits on top of the others. */}
+        {[...series].sort((a, b) => (a.key === emphasizeKey ? 1 : 0) - (b.key === emphasizeKey ? 1 : 0)).map((s) => (
           s.points.length === 0 ? null : (
-            <polyline key={s.key} fill="none" stroke={s.color} strokeWidth="2.2"
+            <polyline key={s.key} fill="none" stroke={s.color}
+                      strokeWidth={emphasizeKey === s.key ? "3.6" : "2.2"}
+                      opacity={emphasizeKey && emphasizeKey !== s.key ? 0.18 : 1}
                       strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"
                       points={s.points.map((p) => `${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ")} />
           )
@@ -197,36 +200,50 @@ function LineChart({ series, t0, t1, kind, onZoom, height = 300 }) {
                       borderRadius: 6, padding: "5px 8px", fontSize: 11, whiteSpace: "nowrap", zIndex: 5,
                       boxShadow: "0 4px 14px rgba(0,0,0,0.3)" }}>
           <div className="faint" style={{ marginBottom: 3 }}>{fmtClock(hoverT)}</div>
-          {hoverPts.map((h) => (
-            <div key={h.key} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {hoverPts.map((h) => {
+            const em = emphasizeKey === h.key;
+            return (
+            <div key={h.key} style={{ display: "flex", alignItems: "center", gap: 6,
+                                      opacity: emphasizeKey && !em ? 0.5 : 1 }}>
               <span style={{ width: 8, height: 8, borderRadius: 2, background: h.color }} />
-              <span>{h.label}</span>
+              <span style={{ fontWeight: em ? 700 : 400, fontSize: em ? 12.5 : 11 }}>{h.label}</span>
               <span style={{ marginLeft: 14, fontWeight: 600 }}>{fmtMetric(kind, h.p.v, kind === "bytes")}</span>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
 
-function Legend({ items, onClick, selectedKey }) {
+function Legend({ items, onClick, selectedKey, hoverKey, onHover }) {
   return (
     <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
-      {items.map((it) => (
+      {items.map((it) => {
+        const hovered = hoverKey === it.key;
+        // Dim the rest when one host is hovered (or selected) so the picked one stands out.
+        const dim = (hoverKey && !hovered) || (selectedKey && selectedKey !== it.key && !hovered);
+        return (
         <button key={it.key} onClick={onClick ? () => onClick(it.key) : undefined}
+                onMouseEnter={onHover ? () => onHover(it.key) : undefined}
+                onMouseLeave={onHover ? () => onHover(null) : undefined}
                 className="btn ghost sm"
                 style={{
                   display: "flex", alignItems: "center", gap: 6,
                   cursor: onClick ? "pointer" : "default",
-                  borderColor: selectedKey === it.key ? it.color : "var(--border)",
-                  opacity: selectedKey && selectedKey !== it.key ? 0.55 : 1,
+                  borderColor: hovered || selectedKey === it.key ? it.color : "var(--border)",
+                  opacity: dim ? 0.4 : 1,
+                  transition: "opacity 0.12s ease",
                 }}>
-          <span style={{ width: 10, height: 10, borderRadius: 3, background: it.color }} />
-          <span>{it.label}</span>
+          <span style={{ width: hovered ? 12 : 10, height: hovered ? 12 : 10, borderRadius: 3,
+                         background: it.color, transition: "width 0.12s, height 0.12s" }} />
+          <span style={{ fontSize: hovered ? 15 : 13, fontWeight: hovered ? 700 : 400,
+                         transition: "font-size 0.12s" }}>{it.label}</span>
           {it.sub != null && <span className="faint" style={{ fontSize: 11 }}>{it.sub}</span>}
         </button>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -437,7 +454,10 @@ export default function Performance() {
   // Drag-to-zoom: a sub-range [z0,z1] shared by every chart. Cleared when the
   // window preset or the env/host selection changes.
   const [zoom, setZoom] = useState(null);
-  useEffect(() => { setZoom(null); }, [window, selectedEnv, selectedHostId]);
+  // Legend-hover emphasis: the host key being pointed at, shared by the legend
+  // (enlarges its label) and every chart (pops that line, dims the rest).
+  const [hoverKey, setHoverKey] = useState(null);
+  useEffect(() => { setZoom(null); setHoverKey(null); }, [window, selectedEnv, selectedHostId]);
   const vt0 = zoom ? zoom[0] : t0;
   const vt1 = zoom ? zoom[1] : t1;
 
@@ -629,7 +649,7 @@ export default function Performance() {
             </div>
             <Legend items={selectedEnv ? hostLegend : envLegend}
                     onClick={selectedEnv ? (id) => setSelectedHostId(id) : (env) => setSelectedEnv(env)}
-                    selectedKey={null} />
+                    selectedKey={null} hoverKey={hoverKey} onHover={setHoverKey} />
 
             {richHint}
 
@@ -637,6 +657,7 @@ export default function Performance() {
               {METRICS.map((metric) => (
                 <ChartCard key={metric.key} label={metric.label} onExpand={() => setFocus(metric.key)}>
                   <LineChart series={seriesFor(metric)} t0={vt0} t1={vt1} kind={metric.kind}
+                             emphasizeKey={hoverKey}
                              onZoom={(z0, z1) => setZoom([z0, z1])} />
                 </ChartCard>
               ))}
@@ -675,10 +696,12 @@ export default function Performance() {
                 </div>
               </div>
               <LineChart series={shownSeries} t0={vt0} t1={vt1} kind={metric.kind} height={460}
+                         emphasizeKey={hoverKey}
                          onZoom={(z0, z1) => setZoom([z0, z1])} />
               {legendItems && legendItems.length > 0 && (
                 <div style={{ marginTop: 10 }}>
                   <Legend items={legendItems} selectedKey={focusIso}
+                          hoverKey={hoverKey} onHover={setHoverKey}
                           onClick={(k) => setFocusIso((cur) => (cur === k ? null : k))} />
                   {focusIso && <div className="faint" style={{ fontSize: 11, marginTop: 2 }}>
                     Showing only {(legendItems.find((it) => it.key === focusIso) || {}).label} — click it again to show all.

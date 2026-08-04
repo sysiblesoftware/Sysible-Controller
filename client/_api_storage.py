@@ -30,6 +30,11 @@ def _validate_path(path: str, label: str = "Path") -> str:
     # file this value is written into (e.g. /etc/fstab). Matches the mount copy.
     if "\x00" in path or "\n" in path or "\r" in path:
         raise ValueError(f"{label} contains an invalid character.")
+    # Reject a leading dash so the value can never be read as an option by the tool
+    # it's passed to (du/find/df/etc.), even absent a `--` separator. No real path
+    # starts with '-'; defence in depth on top of shlex.quote.
+    if path.startswith("-"):
+        raise ValueError(f"{label} must not start with '-'.")
     return path
 
 
@@ -114,6 +119,16 @@ def cmd_analyze_disk_usage(path: str = "/", top=20) -> str:
     hr = (r"""awk 'BEGIN{split("K M G T P",a," ")} """
           r"""{s=$1;u="B";for(i=1;i<=5&&s>=1024;i++){s/=1024;u=a[i]}"""
           r""";printf "%9.1f %s  %s\n",s,u,substr($0,index($0,"\t")+1)}'""")
+    # Portability: use only flags common to GNU, BusyBox (Alpine) and BSD `du`/`find`.
+    #  - `du -k -x -d 1` (KiB, one filesystem, depth 1) instead of GNU-only
+    #    `--max-depth`/`-B1`; the awk below rescales KiB→bytes for `hr`.
+    #  - list file sizes via `find … -exec ls -ldn` (size is field 5) instead of
+    #    GNU-only `find -printf`, joining trailing fields so paths with spaces survive.
+    du_norm = (r"""awk -v OFS='\t' '{s=$1;p=substr($0,index($0,"\t")+1);"""
+               r"""if(s ~ /^[0-9]+$/)print s*1024,p}'""")
+    files_cmd = (r"""find "$_p" -xdev -type f -exec ls -ldn {} + 2>/dev/null | """
+                 r"""awk -v OFS='\t' '{s=$5;p=$9;for(i=10;i<=NF;i++)p=p" "$i;"""
+                 r"""if(s ~ /^[0-9]+$/)print s,p}'""")
     lines = [
         "_p=" + q,
         'if [ ! -d "$_p" ]; then echo "Path $_p is not a directory on this host."; exit 1; fi',
@@ -122,10 +137,10 @@ def cmd_analyze_disk_usage(path: str = "/", top=20) -> str:
         'df -h "$_p" 2>/dev/null',
         "echo",
         'echo "== ' + str(n) + ' largest directories under $_p (this filesystem, depth 1) =="',
-        '$TO du -x --max-depth=1 -B1 "$_p" 2>/dev/null | sort -rn | head -n ' + str(n) + ' | ' + hr,
+        '$TO du -k -x -d 1 "$_p" 2>/dev/null | ' + du_norm + ' | sort -rn | head -n ' + str(n) + ' | ' + hr,
         "echo",
         'echo "== ' + str(n) + ' largest files under $_p (this filesystem) =="',
-        '$TO find "$_p" -xdev -type f -printf "%s\\t%p\\n" 2>/dev/null | sort -rn | head -n ' + str(n) + ' | ' + hr,
+        '$TO ' + files_cmd + ' | sort -rn | head -n ' + str(n) + ' | ' + hr,
         "echo",
         'echo "(Read-only scan - nothing changed. Re-run on a subdirectory to drill in.)"',
     ]

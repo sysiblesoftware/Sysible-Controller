@@ -238,6 +238,19 @@ def _strict_required():
         "0", "false", "no", "off")
 
 
+def is_encrypting_at_rest() -> bool:
+    """True if secrets are (or would be) stored ENCRYPTED: a key is resolvable so
+    encrypt() produces ciphertext, OR strict mode is on so a missing key FAILS the
+    write rather than persisting plaintext. False only in the deliberately-degraded
+    combination (no resolvable key AND SYSIBLE_SECRET_REQUIRED=0), where DB-embedded
+    secrets may be cleartext. The sanitized migration export consults this so it warns
+    instead of claiming the bundle is safe to move around."""
+    try:
+        return bool(_fernet()) or _strict_required()
+    except Exception:
+        return True
+
+
 class EncryptionUnavailable(RuntimeError):
     """Raised in strict mode when a secret cannot be encrypted at rest."""
 

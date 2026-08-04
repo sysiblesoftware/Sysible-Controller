@@ -147,7 +147,23 @@ def create_backup(dest_dir, roots=None, label=None, now=None, sanitize=False):
         "db_integrity": None,
         "sanitized": bool(sanitize),
         "omitted": [],
+        "warnings": [],
     }
+    # A sanitized bundle claims to be safe to move because the DB holds only hashes and
+    # vault-encrypted blobs — true ONLY while at-rest encryption is active. If the vault
+    # is in the deliberately-degraded mode (no key + SYSIBLE_SECRET_REQUIRED=0), the DB
+    # may contain PLAINTEXT secrets, so warn rather than assert safety.
+    if sanitize:
+        try:
+            from backend import secret_vault
+            if not secret_vault.is_encrypting_at_rest():
+                manifest["warnings"].append(
+                    "at-rest encryption is DEGRADED (no key + SYSIBLE_SECRET_REQUIRED=0): "
+                    "the database in this sanitized bundle may contain PLAINTEXT secrets "
+                    "(e.g. sudo/become passwords). Treat this bundle as sensitive despite "
+                    "--sanitize.")
+        except Exception:
+            pass
     try:
         # 1) DB snapshot via SQLite's online backup API (no downtime).
         if roots["db"].exists():
@@ -221,9 +237,19 @@ def read_manifest(archive):
 
 
 def _safe_extract(tar, dest):
-    """Extract guarding against path traversal (CVE-2007-4559)."""
+    """Extract guarding against path traversal (CVE-2007-4559) AND link-based escapes.
+
+    A legitimate Sysible bundle contains only regular files and directories
+    (create_backup copies real file bytes into the staging tree — no links), so any
+    symlink/hardlink/device member is rejected outright. Without this, a crafted import
+    archive could ship a symlink member whose *linkname* is an absolute path (which a
+    name-only check misses) plus a follow-up regular member written 'through' it,
+    landing an attacker file anywhere as the root user running restore."""
     dest = Path(dest).resolve()
     for member in tar.getmembers():
+        if member.issym() or member.islnk() or member.isdev():
+            raise ValueError(
+                f"unsafe archive member (links/devices not allowed): {member.name}")
         target = (dest / member.name).resolve()
         if not str(target).startswith(str(dest) + os.sep) and target != dest:
             raise ValueError(f"unsafe path in archive: {member.name}")
@@ -275,11 +301,14 @@ def restore_backup(archive, roots=None, force=False, verify=True):
                 src = base / comp / rel
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dst)
-                # Restore recorded mode for secrets (keys must land 0600).
+                # Restore recorded mode for secrets (keys must land 0600). Mask to the
+                # permission bits only — never honour setuid/setgid/sticky from the
+                # (untrusted) manifest, or a crafted bundle could drop a setuid-root
+                # binary inside a component root that any local user then executes.
                 mode = entry.get("mode")
                 if mode:
                     try:
-                        os.chmod(dst, int(mode, 8))
+                        os.chmod(dst, int(mode, 8) & 0o777)
                     except (ValueError, OSError):
                         pass
         return manifest

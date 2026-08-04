@@ -47,6 +47,8 @@ def main():
     print(f"Backup written: {archive}")
     print(f"  components: {comps or '(none)'}")
     print(f"  db integrity: {manifest.get('db_integrity')}")
+    for w in manifest.get("warnings", []):
+        print(f"  ⚠ WARNING: {w}", file=sys.stderr)
     if manifest.get("sanitized"):
         omitted = backup_lib.omitted_labels(manifest)
         print("  sanitized: yes — plaintext key material was NOT included.")

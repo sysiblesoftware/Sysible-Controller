@@ -517,8 +517,11 @@ def test_remove_old_kernels_notes_keep_is_dnf_only():
 def test_disk_usage_analyzer_readonly_bounded_quoted():
     cmd = St.cmd_analyze_disk_usage("/opt/a b", 10)
     _bash_n(cmd)
-    assert "du -x --max-depth=1" in cmd          # largest dirs, one filesystem
+    # Portable single-filesystem flags (GNU/BusyBox/BSD): du -k -x -d 1, find -xdev.
+    assert "du -k -x -d 1" in cmd                  # largest dirs, one filesystem
+    assert "--max-depth" not in cmd and "-printf" not in cmd  # no GNU-only flags
     assert "find" in cmd and "-xdev" in cmd       # largest files, one filesystem
+    assert "ls -ldn" in cmd                       # portable size listing (not -printf)
     assert "timeout 120" in cmd                   # can't hang the agent
     assert "head -n 10" in cmd                    # bounded output
     assert "'/opt/a b'" in cmd                    # a path with a space is quoted
@@ -531,4 +534,6 @@ def test_disk_usage_analyzer_validates_inputs():
         St.cmd_analyze_disk_usage("bad\npath", 5)     # newline injection rejected
     with pytest.raises(ValueError):
         St.cmd_analyze_disk_usage("/", 9999)          # top must be 1..200
+    with pytest.raises(ValueError):
+        St.cmd_analyze_disk_usage("-rf /tmp", 5)      # leading-dash path rejected
     assert "_p=/" in St.cmd_analyze_disk_usage("", 20)  # empty path defaults to /

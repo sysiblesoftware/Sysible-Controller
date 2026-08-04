@@ -193,3 +193,56 @@ def test_full_export_includes_secrets_by_default(tmp_path):
     assert m["omitted"] == []
     assert "run" in m["components"]
     assert backup_lib.omitted_labels(m) == []
+
+
+def test_restore_rejects_symlink_member(tmp_path):
+    # SEC: reject any symlink/hardlink/device member (link-based path escape → root
+    # file write on import). A legit bundle never contains one.
+    import tarfile
+    roots = _seed_state(tmp_path / "orig")
+    archive = backup_lib.create_backup(tmp_path / "backups", roots=roots)
+    forged = tmp_path / "evil.tar.gz"
+    with tarfile.open(archive, "r:gz") as src, tarfile.open(forged, "w:gz") as dst:
+        for m in src.getmembers():
+            dst.addfile(m, src.extractfile(m) if m.isreg() else None)
+        link = tarfile.TarInfo("sysible-backup/pwn")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "/etc/cron.d"
+        dst.addfile(link)
+    with pytest.raises(ValueError):
+        backup_lib.restore_backup(forged, roots=roots, force=True, verify=False)
+
+
+def test_restore_strips_setuid_from_manifest_mode(tmp_path):
+    # SEC: a crafted 0o6755 mode must not restore a setuid binary; mask to 0o777.
+    import io
+    import json
+    import tarfile
+    roots = _seed_state(tmp_path / "orig")
+    archive = backup_lib.create_backup(tmp_path / "backups", roots=roots)
+    with tarfile.open(archive, "r:gz") as t:
+        man = json.loads(t.extractfile("sysible-backup/manifest.json").read())
+    for e in man["components"]["data"]:
+        if e["path"] == "hosts.json":
+            e["mode"] = "0o6755"
+    forged = tmp_path / "setuid.tar.gz"
+    with tarfile.open(archive, "r:gz") as src, tarfile.open(forged, "w:gz") as dst:
+        for m in src.getmembers():
+            if m.name.endswith("manifest.json"):
+                data = json.dumps(man).encode()
+                m.size = len(data)
+                dst.addfile(m, io.BytesIO(data))
+            else:
+                dst.addfile(m, src.extractfile(m) if m.isreg() else None)
+    roots2 = {
+        "db": tmp_path / "suid" / "backend" / "sysible.db",
+        "data": tmp_path / "suid" / "data",
+        "cert": tmp_path / "suid" / "cert",
+        "run": tmp_path / "suid" / "run",
+    }
+    for k in ("data", "cert", "run"):
+        roots2[k].mkdir(parents=True, exist_ok=True)
+    backup_lib.restore_backup(forged, roots=roots2, force=True, verify=False)
+    st = os.stat(roots2["data"] / "hosts.json").st_mode
+    assert not (st & 0o7000)
+    assert (st & 0o777) == 0o755

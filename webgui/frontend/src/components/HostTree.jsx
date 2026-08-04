@@ -1,6 +1,17 @@
 import React, { useMemo, useState } from "react";
 import HypervisorBadge from "./HypervisorBadge.jsx";
 
+// Compact age ("3s"/"5m"/"2h"/"1d") of a unix timestamp — for an agent's
+// last check-in, so a stale/dead agent is obvious at a glance.
+function agoStr(ts) {
+  if (!ts) return "";
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+
 // Desktop-style host pane: hosts grouped by environment with checkboxes,
 // plus Refresh / Select All / Deselect All / Collapse / Expand controls.
 // `value` is an array of selected host ids; `onChange` gets the next array.
@@ -78,7 +89,15 @@ export default function HostTree({ hosts, value, onChange, onRefresh, footer }) 
                         title={h.online === false ? "Offline" : h.online === true ? "Online" : ""} />
                   <span className="host-name" style={crit ? { color: "#e06c6c", fontWeight: 600 } : undefined} title={critTitle}>{h.label}</span>
                   <HypervisorBadge host={h} compact />
-                  <span className="meta">{h.has_agent ? "Agent" : "SSH"}{h.online === false ? " · offline" : ""}</span>
+                  <span className="meta" title={h.has_agent
+                          ? (h.last_seen ? "Agent last checked in " + new Date(h.last_seen * 1000).toLocaleString()
+                             : "Agent has never checked in")
+                          : "SSH host (no agent)"}>
+                    {h.has_agent ? "Agent" : "SSH"}
+                    {h.has_agent
+                      ? (h.last_seen ? ` · seen ${agoStr(h.last_seen)} ago` : " · never seen")
+                      : (h.online === false ? " · offline" : "")}
+                  </span>
                   {crit && <span className="meta crit" title={critTitle}>critical</span>}
                 </label>
                 );

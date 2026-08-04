@@ -511,3 +511,24 @@ def test_remove_old_kernels_notes_keep_is_dnf_only():
     assert "APT autoremove" in cmd
     assert "multiversion.kernels" in cmd
     _bash_n(cmd)
+
+
+# --- Disk usage analyzer: read-only du/find, single-fs, bounded ---------------
+def test_disk_usage_analyzer_readonly_bounded_quoted():
+    cmd = St.cmd_analyze_disk_usage("/opt/a b", 10)
+    _bash_n(cmd)
+    assert "du -x --max-depth=1" in cmd          # largest dirs, one filesystem
+    assert "find" in cmd and "-xdev" in cmd       # largest files, one filesystem
+    assert "timeout 120" in cmd                   # can't hang the agent
+    assert "head -n 10" in cmd                    # bounded output
+    assert "'/opt/a b'" in cmd                    # a path with a space is quoted
+    for bad in ("rm ", "mkfs", "dd if=", "shred", "truncate", "chmod", "chown", "> /"):
+        assert bad not in cmd                     # strictly read-only
+
+
+def test_disk_usage_analyzer_validates_inputs():
+    with pytest.raises(ValueError):
+        St.cmd_analyze_disk_usage("bad\npath", 5)     # newline injection rejected
+    with pytest.raises(ValueError):
+        St.cmd_analyze_disk_usage("/", 9999)          # top must be 1..200
+    assert "_p=/" in St.cmd_analyze_disk_usage("", 20)  # empty path defaults to /

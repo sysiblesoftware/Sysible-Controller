@@ -381,6 +381,13 @@ _register(Action(name="stor_list_disks", tool="Storage Administration",
     label="List disks", params=[], build=lambda p: api.cmd_list_disks()))
 _register(Action(name="stor_rescan", tool="Storage Administration",
     label="Rescan disks", params=[], build=lambda p: api.cmd_rescan_disks()))
+_register(Action(name="stor_disk_usage", tool="Storage Administration",
+    label="Disk usage (what's using space)",
+    params=[Param("path", "Path to scan", default="/", required=False,
+                  placeholder="e.g. / or /var",
+                  help="Read-only. Scans this path's filesystem only (won't cross into other mounts)."),
+            Param("top", "Show top N", type="number", default="20", required=False)],
+    build=lambda p: api.cmd_analyze_disk_usage(_s(p, "path", "/") or "/", _i(p, "top", 20))))
 _register(Action(name="stor_list_parts", tool="Storage Administration",
     label="List partitions", params=[Param("device", "Device", required=False)],
     build=lambda p: api.cmd_list_partitions(_s(p, "device"))))
@@ -1553,7 +1560,7 @@ _LAYOUT: dict[str, list] = {
         ("Bonding, Teaming, VLANs, Bridges", "Virtual Interfaces", ["net_bond", "net_team", "net_vlan", "net_bridge"]),
     ],
     "Storage Administration": [
-        ("Disks", "Disks", ["stor_list_disks", "stor_rescan", "stor_disk_health", "stor_smart", "stor_remove_disk"]),
+        ("Disks", "Disks", ["stor_list_disks", "stor_disk_usage", "stor_rescan", "stor_disk_health", "stor_smart", "stor_remove_disk"]),
         ("Disks", "Install Tools", ["stor_install_smart", "stor_install_lvm", "stor_install_mdadm"]),
         ("Partitions", "Partitions", ["stor_list_parts", "stor_part_table", "stor_part_create", "stor_part_delete", "stor_part_resize"]),
         ("Format Filesystems", "Format", ["stor_format"]),

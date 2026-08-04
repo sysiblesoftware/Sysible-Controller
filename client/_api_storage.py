@@ -102,6 +102,36 @@ lsblk -o NAME,SIZE,TYPE,MODEL,SERIAL,MOUNTPOINT 2>&1
 """.strip()
 
 
+def cmd_analyze_disk_usage(path: str = "/", top=20) -> str:
+    """Read-only "what's using the disk" report for a path: filesystem usage, the
+    largest directories (this filesystem, depth 1), and the largest files. Pure
+    du/find/sort — writes nothing. Single-filesystem (-x / -xdev) so it can't wander
+    into other mounts, and wrapped in `timeout` so a huge tree can't hang the agent."""
+    p = _validate_path(path or "/", "Path")
+    n = _validate_int_range(top if str(top).strip() else 20, 1, 200, "Top N")
+    q = shlex.quote(p)
+    # awk that turns a "<bytes>\t<path>" line into a human-readable size + path.
+    hr = (r"""awk 'BEGIN{split("K M G T P",a," ")} """
+          r"""{s=$1;u="B";for(i=1;i<=5&&s>=1024;i++){s/=1024;u=a[i]}"""
+          r""";printf "%9.1f %s  %s\n",s,u,substr($0,index($0,"\t")+1)}'""")
+    lines = [
+        "_p=" + q,
+        'if [ ! -d "$_p" ]; then echo "Path $_p is not a directory on this host."; exit 1; fi',
+        'if command -v timeout >/dev/null 2>&1; then TO="timeout 120"; else TO=""; fi',
+        'echo "== Filesystem usage for $_p =="',
+        'df -h "$_p" 2>/dev/null',
+        "echo",
+        'echo "== ' + str(n) + ' largest directories under $_p (this filesystem, depth 1) =="',
+        '$TO du -x --max-depth=1 -B1 "$_p" 2>/dev/null | sort -rn | head -n ' + str(n) + ' | ' + hr,
+        "echo",
+        'echo "== ' + str(n) + ' largest files under $_p (this filesystem) =="',
+        '$TO find "$_p" -xdev -type f -printf "%s\\t%p\\n" 2>/dev/null | sort -rn | head -n ' + str(n) + ' | ' + hr,
+        "echo",
+        'echo "(Read-only scan - nothing changed. Re-run on a subdirectory to drill in.)"',
+    ]
+    return "\n".join(lines)
+
+
 def cmd_remove_disk(device: str) -> str:
     """Safely offlines a whole disk before physical removal. Refuses
     if the disk (or any partition on it) is mounted, is an active LVM

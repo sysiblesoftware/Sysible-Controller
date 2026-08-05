@@ -5,6 +5,23 @@ Each item: symptom → root cause (where known) → suggested fix.
 
 ---
 
+## 3. Settings: place the Controller IP card to the RIGHT of Software updates
+
+**Symptom / request:** In Settings → Controller the "Controller IP" card
+(Address mode / IP address / Port / Regenerate cert+bundle) and the "Software
+updates" card are stacked vertically, wasting the wide right-hand space.
+
+**Request:** lay them side by side — Software updates on the left, the
+Controller IP card to its right — so both are visible without scrolling.
+
+**Where:** `webgui/frontend/src/views/Settings.jsx` — the Controller IP block
+(~L793, "The controller is addressed by IP…") and the Software updates block
+(~L1142, `<strong>Software updates</strong>`). Wrap the two cards in a
+two-column flex/grid row that collapses back to stacked on narrow widths.
+(EE + CE — Settings is shared.)
+
+---
+
 ## 1. Firewall tool has a stray tab literally named "Firewall Administration"
 
 **Symptom:** Inside the Firewall tool the tab row is

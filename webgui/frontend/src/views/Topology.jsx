@@ -199,16 +199,47 @@ export default function Topology({ onOpen }) {
       const isCollapsed = !!collapsed[grp.key];
       hubs.push({ ...grp, x: hx, y: hy, th, collapsed: isCollapsed });
       if (isCollapsed) return;
-      const n = grp.hosts.length;
-      const cols = Math.max(1, Math.min(6, Math.ceil(Math.sqrt(n))));
+      // Nest guests under their host: a VM whose label appears in a same-group
+      // hypervisor's vmNames is pulled OUT of the flat grid and hung beneath that
+      // hypervisor as a subtree. Everything else (hypervisors + non-VM hosts) is
+      // a "top" host on the hub grid.
+      const here = new Map(grp.hosts.map((h) => [h.label, h]));
+      const parentOf = new Map();          // vm label -> hypervisor host
+      grp.hosts.forEach((h) => {
+        if (h.hypervisor && Array.isArray(h.vmNames)) {
+          h.vmNames.forEach((nm) => { if (nm !== h.label && here.has(nm)) parentOf.set(nm, h); });
+        }
+      });
+      const childrenOf = new Map();        // hypervisor label -> [vm hosts]
+      grp.hosts.forEach((h) => {
+        const par = parentOf.get(h.label);
+        if (par) { if (!childrenOf.has(par.label)) childrenOf.set(par.label, []); childrenOf.get(par.label).push(h); }
+      });
+      const topHosts = grp.hosts.filter((h) => !parentOf.has(h.label));
+
+      const cols = Math.max(1, Math.min(6, Math.ceil(Math.sqrt(topHosts.length))));
       const sp = 42;
-      grp.hosts.forEach((hostn, k) => {
+      const placed = new Map();            // label -> {dist, colOff}
+      topHosts.forEach((hostn, k) => {
         const r = Math.floor(k / cols), c = k % cols;
         const colOff = (c - (cols - 1) / 2) * sp;
         const dist = Rhub + 60 + r * sp;                       // extend outward, row by row
-        const x = cx + rad.x * dist + tan.x * colOff;
-        const y = cy + rad.y * dist + tan.y * colOff;
-        nodes.push({ ...hostn, x, y, hub: grp.key });
+        nodes.push({ ...hostn, x: cx + rad.x * dist + tan.x * colOff, y: cy + rad.y * dist + tan.y * colOff, hub: grp.key });
+        placed.set(hostn.label, { dist, colOff });
+      });
+      // Hang each hypervisor's guests as a fan BEYOND it (further from the
+      // controller), centred on the hypervisor's column.
+      childrenOf.forEach((vms, hypLabel) => {
+        const p = placed.get(hypLabel);
+        if (!p) return;
+        const vcols = Math.max(1, Math.min(5, Math.ceil(Math.sqrt(vms.length))));
+        const vsp = 40;
+        vms.forEach((vm, k) => {
+          const r = Math.floor(k / vcols), c = k % vcols;
+          const colOff = p.colOff + (c - (vcols - 1) / 2) * vsp;
+          const dist = p.dist + 74 + r * vsp;
+          nodes.push({ ...vm, x: cx + rad.x * dist + tan.x * colOff, y: cy + rad.y * dist + tan.y * colOff, hub: grp.key, vmParentLabel: hypLabel });
+        });
       });
     });
     return { hubs, nodes };
@@ -230,21 +261,12 @@ export default function Topology({ onOpen }) {
     });
     const edges = [];
     hubs.forEach((h) => edges.push({ x1: ctrl.x, y1: ctrl.y, x2: h.x, y2: h.y, kind: "hub", worst: h.worst }));
-    nodes.forEach((n) => {
-      const h = hubByKey[n.hub];
-      if (h) edges.push({ x1: h.x, y1: h.y, x2: n.x, y2: n.y, kind: "host", host: n });
-    });
-    // Hypervisor → guest overlay: connect each VM host to the running guests it
-    // reports (agent-supplied vmNames, matched to host records by label), so the
-    // graph shows which VMs live on which host. A dashed "hosts" link, drawn on
-    // top of the normal env/network grouping.
+    // Each node connects to its PARENT: a nested VM to its hypervisor (so it
+    // reads as a subtree hanging off the host), every other host to its group hub.
     const byLabel = {}; nodes.forEach((n) => { byLabel[n.label] = n; });
     nodes.forEach((n) => {
-      if (!n.hypervisor || !Array.isArray(n.vmNames)) return;
-      for (const name of n.vmNames) {
-        const vm = byLabel[name];
-        if (vm && vm.id !== n.id) edges.push({ x1: n.x, y1: n.y, x2: vm.x, y2: vm.y, kind: "vm" });
-      }
+      const parent = n.vmParentLabel ? byLabel[n.vmParentLabel] : hubByKey[n.hub];
+      if (parent) edges.push({ x1: parent.x, y1: parent.y, x2: n.x, y2: n.y, kind: "host", host: n });
     });
     return { hubs, nodes, edges, ctrl };
   }, [layout, positions]);
@@ -395,14 +417,6 @@ export default function Topology({ onOpen }) {
               {/* Edges. */}
               {laid.edges.map((e, i) => {
                 const isHub = e.kind === "hub";
-                if (e.kind === "vm") {
-                  // Hypervisor → guest overlay: a thin dashed link so it reads as
-                  // "this VM is hosted here" without competing with the health-
-                  // coloured grouping edges.
-                  return <line key={i} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
-                               stroke="var(--accent, #4c8bf5)" strokeOpacity={0.38}
-                               strokeWidth={1.1} strokeDasharray="2 4" />;
-                }
                 const h = e.host;
                 const col = isHub ? (COLOR[e.worst] || COLOR.UNKNOWN)
                   : h.revoked ? COLOR.CRITICAL : h.quarantined ? COLOR.WARNING : nodeColor(h);

@@ -5,24 +5,25 @@ Each item: symptom → root cause (where known) → suggested fix.
 
 ---
 
-## 3. Settings: place the Controller IP card to the RIGHT of Software updates
+## 3. Settings: place the Controller IP card to the RIGHT of Software updates — DONE
 
-**Symptom / request:** In Settings → Controller the "Controller IP" card
-(Address mode / IP address / Port / Regenerate cert+bundle) and the "Software
-updates" card are stacked vertically, wasting the wide right-hand space.
-
-**Request:** lay them side by side — Software updates on the left, the
-Controller IP card to its right — so both are visible without scrolling.
-
-**Where:** `webgui/frontend/src/views/Settings.jsx` — the Controller IP block
-(~L793, "The controller is addressed by IP…") and the Software updates block
-(~L1142, `<strong>Software updates</strong>`). Wrap the two cards in a
-two-column flex/grid row that collapses back to stacked on narrow widths.
-(EE + CE — Settings is shared.)
+Wrapped both cards in a `.settings-cols` flex row (Software updates left,
+Controller IP right) that wraps to stacked on narrow widths; dropped the now-
+redundant `marginTop` on the updates card. `views/Settings.jsx` + `styles.css`,
+both editions.
 
 ---
 
-## 1. Firewall tool has a stray tab literally named "Firewall Administration"
+## 1. Firewall tool has a stray tab literally named "Firewall Administration" — DONE
+
+Fixed: `fw_nft_persist` ("nft: save") was the only firewall action missing from
+`_LAYOUT`, so it fell through to a tab named after the tool. Added it to the
+nftables → Ruleset group. Audited all 34 firewall actions: 0 fall-throughs
+remain. `webgui/actions.py`, both editions.
+
+<details><summary>original notes</summary>
+
+## 1 (orig). Firewall tool has a stray tab literally named "Firewall Administration"
 
 **Symptom:** Inside the Firewall tool the tab row is
 `Firewalld · Ports · Zones · Rich Rules · ufw · nftables · iptables · Firewall
@@ -41,6 +42,8 @@ action is tab-less, so it lands there alone.
 Audit all `tool="Firewall Administration"` actions for a missing `tab=` so none
 fall through. Decide whether "Nft: save" belongs under nftables or should be
 folded into a broader "save/persist" control. (EE + CE — shared actions.py.)
+
+</details>
 
 ---
 

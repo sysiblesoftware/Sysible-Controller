@@ -17,7 +17,12 @@ export default function Settings({ initialTab }) {
       {tab === "admins" && <Admins />}
       {tab === "me" && <MyAccount />}
       {tab === "policy" && <PasswordPolicy />}
-      {tab === "controller" && <><ControllerCfg /><SoftwareUpdate /></>}
+      {tab === "controller" && (
+        <div className="settings-cols">
+          <SoftwareUpdate />
+          <ControllerCfg />
+        </div>
+      )}
       {tab === "enrollacl" && <EnrollAllowlist />}
       {tab === "tls" && <Tls />}
       {tab === "license" && <License />}
@@ -684,7 +689,7 @@ function SoftwareUpdate() {
 
   const showConsole = ctrl || ctrlLog;
   return (
-    <div className="card" style={{ maxWidth: 680, marginTop: 16 }}>
+    <div className="card" style={{ maxWidth: 680 }}>
       <strong>Software updates</strong>
       <p className="faint" style={{ marginTop: 8 }}>
         Update the controller in place (git pull → redeploy → restart) and push the current

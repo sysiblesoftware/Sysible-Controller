@@ -1550,7 +1550,7 @@ _LAYOUT: dict[str, list] = {
         ("ufw", "Service State", ["fw_install_ufw", "fw_ufw_status", "fw_ufw_set_enabled"]),
         ("ufw", "Rules", ["fw_ufw_add_rule", "fw_ufw_delete_rule"]),
         ("ufw", "Defaults & Reset", ["fw_ufw_default", "fw_ufw_reset"]),
-        ("nftables", "Ruleset", ["fw_nft_ruleset", "fw_nft_flush"]),
+        ("nftables", "Ruleset", ["fw_nft_ruleset", "fw_nft_persist", "fw_nft_flush"]),
         ("nftables", "Tables & Chains", ["fw_nft_add_table", "fw_nft_add_chain"]),
         ("nftables", "Rules", ["fw_nft_add_rule", "fw_nft_delete_rule"]),
         ("iptables", "Rules", ["fw_iptables_list", "fw_iptables_save",

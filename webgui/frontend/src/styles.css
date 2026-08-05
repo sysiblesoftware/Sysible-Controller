@@ -646,6 +646,11 @@ tr:hover td { background: var(--row-hover); }
 .host-pane-resizer { position: absolute; top: 0; right: -3px; width: 7px; height: 100%;
   cursor: col-resize; z-index: 3; }
 .host-pane-resizer:hover { background: var(--btn-border); }
+
+/* Settings → Controller: lay the Software updates and Controller IP cards side
+   by side (updates left, IP right), wrapping to stacked on narrow widths. */
+.settings-cols { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.settings-cols > .card { flex: 1 1 420px; margin-bottom: 0; }
 .tool-actions-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1; }
 .tool-actions-scroll { flex: 1; overflow-y: auto; padding-right: 4px; }
 .col-resizer {

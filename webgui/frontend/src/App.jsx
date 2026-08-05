@@ -111,10 +111,13 @@ const SKINS = [
 const SKIN_IDS = new Set(SKINS.map((s) => s.id));
 function applySkin(s) { document.documentElement.setAttribute("data-skin", s); }
 
-function SkinPicker({ skin, onChange }) {
+// `block` renders a full-width row (rail footer); the default compact pill is
+// for the horizontal Connect toolbar.
+function SkinPicker({ skin, onChange, block }) {
   return (
-    <label className="skin-picker" title="Console skin">
+    <label className={"skin-picker" + (block ? " block" : "")} title="Console skin">
       <SkinIcon />
+      {block && <span className="skin-picker-label">Skin</span>}
       <select value={skin} onChange={(e) => onChange(e.target.value)} aria-label="Console skin">
         {SKINS.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
       </select>
@@ -413,8 +416,8 @@ export default function App() {
           </div>
           <div className="rail-actions">
             <button className="btn ghost sm" onClick={() => setSudoOpen(true)}>Sudo Password</button>
-            <SkinPicker skin={skin} onChange={chooseSkin} />
           </div>
+          <SkinPicker skin={skin} onChange={chooseSkin} block />
           <button className="btn ghost sm rail-logout" onClick={onLogout}>Log Out</button>
         </div>
       </nav>

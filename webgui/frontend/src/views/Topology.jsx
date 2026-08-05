@@ -81,7 +81,7 @@ export default function Topology({ onOpen }) {
   const userAdjusted = useRef(false);   // once the user pans/zooms, stop auto-fitting
   const lastFitSig = useRef("");        // structural signature we last fit to
 
-  const load = useCallback(() => {
+  const load = useCallback((force = false) => {
     if (inFlight.current) return;
     inFlight.current = true;
     setLoading(true); setErr("");
@@ -91,7 +91,7 @@ export default function Topology({ onOpen }) {
     const fast = [
       api.hosts().then((v) => { _snap.hosts = v.hosts || []; setHosts(_snap.hosts); },
                        (e) => setErr(e?.message || "Couldn't load hosts")),
-      api.fleetHealth().then((v) => { _snap.health = v.hosts || []; setHealth(_snap.health); }, () => {}),
+      api.fleetHealth(force).then((v) => { _snap.health = v.hosts || []; setHealth(_snap.health); }, () => {}),
       api.agents().then((v) => { _snap.agents = v.agents || []; setAgents(_snap.agents); }, () => {}),
       // Suppressions (cheap) so a node's critical ring clears when its finding is
       // suppressed — the map must match the dashboard, not re-flag silenced ones.
@@ -403,7 +403,7 @@ export default function Topology({ onOpen }) {
             <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
             <span className="faint">Auto</span>
           </label>
-          <button className="btn ghost sm" onClick={load} disabled={loading}>{loading ? <span className="spin" /> : "Refresh"}</button>
+          <button className="btn ghost sm" onClick={() => load(true)} disabled={loading}>{loading ? <span className="spin" /> : "Refresh"}</button>
         </div>
       </div>
 

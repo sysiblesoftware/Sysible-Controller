@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 #
-# provision-lab-vms.sh — create the 9 Sysible lab VMs on a KVM/libvirt host
+# provision-lab-vms.sh — create the 12 Sysible lab VMs on a KVM/libvirt host
 # (e.g. sysible-virt) in one shot, from current cloud images, via virt-install.
 #
 #   3x openSUSE   opensuse-01 opensuse-02 opensuse-03
 #   3x Rocky      rocky-01    rocky-02    rocky-03
 #   3x Ubuntu     ubuntu-01   ubuntu-02   ubuntu-03
+#   3x Arch       arch-01     arch-02     arch-03
 #
 # Each VM boots a current cloud image, is seeded with cloud-init (hostname, a
 # login user with your SSH key + a password, qemu-guest-agent, grown root disk),
@@ -13,9 +14,10 @@
 # `virsh console <name>` works. Runs against qemu:///system.
 #
 # Usage (on the hypervisor, as root):
-#   sudo ./provision-lab-vms.sh                 # create all 9 (skips existing)
+#   sudo ./provision-lab-vms.sh                 # create all 12 (skips existing)
 #   sudo ./provision-lab-vms.sh --recreate      # destroy+undefine existing first
 #   sudo ./provision-lab-vms.sh --only rocky-01,ubuntu-02
+#   sudo ./provision-lab-vms.sh --only arch-01,arch-02   # just the two Arch VMs
 #   sudo ./provision-lab-vms.sh --dry-run
 #
 # Override anything via env, e.g.:
@@ -31,6 +33,7 @@ set -euo pipefail
 : "${IMG_UBUNTU_URL:=https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img}"       # Ubuntu 24.04 LTS
 : "${IMG_ROCKY_URL:=https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2}" # Rocky 9 (latest 9.x)
 : "${IMG_SUSE_URL:=https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.6/images/openSUSE-Leap-15.6.x86_64-NoCloud.qcow2}" # openSUSE Leap 15.6
+: "${IMG_ARCH_URL:=https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2}" # Arch (rolling, official cloud image w/ cloud-init)
 
 : "${VM_VCPUS:=2}"
 : "${VM_RAM_MB:=2048}"
@@ -43,11 +46,13 @@ set -euo pipefail
 : "${OS_VARIANT_UBUNTU:=ubuntu24.04}"
 : "${OS_VARIANT_ROCKY:=rocky9}"
 : "${OS_VARIANT_SUSE:=opensuseleap15.6}"
+: "${OS_VARIANT_ARCH:=archlinux}"        # if libosinfo lacks it, set OS_VARIANT_ARCH=generic
 
-# host:os for each of the 9 VMs.
+# host:os for each of the 12 VMs.
 LAB_VMS="opensuse-01:suse opensuse-02:suse opensuse-03:suse \
 rocky-01:rocky rocky-02:rocky rocky-03:rocky \
-ubuntu-01:ubuntu ubuntu-02:ubuntu ubuntu-03:ubuntu"
+ubuntu-01:ubuntu ubuntu-02:ubuntu ubuntu-03:ubuntu \
+arch-01:arch arch-02:arch arch-03:arch"
 
 RECREATE=0; DRY_RUN=0; ONLY=""
 while [ $# -gt 0 ]; do
@@ -103,6 +108,7 @@ base_for() {
     ubuntu) echo "$WORK_DIR/base-ubuntu.qcow2  $IMG_UBUNTU_URL" ;;
     rocky)  echo "$WORK_DIR/base-rocky.qcow2   $IMG_ROCKY_URL" ;;
     suse)   echo "$WORK_DIR/base-suse.qcow2    $IMG_SUSE_URL" ;;
+    arch)   echo "$WORK_DIR/base-arch.qcow2    $IMG_ARCH_URL" ;;
   esac
 }
 fetch_base() {
@@ -122,7 +128,7 @@ provision() {
   local vm="$1" os="$2"
   selected "$vm" || return 0
   set -- $(base_for "$os"); local base="$1"
-  local variant; case "$os" in ubuntu) variant="$OS_VARIANT_UBUNTU";; rocky) variant="$OS_VARIANT_ROCKY";; suse) variant="$OS_VARIANT_SUSE";; esac
+  local variant; case "$os" in ubuntu) variant="$OS_VARIANT_UBUNTU";; rocky) variant="$OS_VARIANT_ROCKY";; suse) variant="$OS_VARIANT_SUSE";; arch) variant="$OS_VARIANT_ARCH";; esac
   local disk="$POOL_DIR/$vm.qcow2" seed="$WORK_DIR/$vm-seed.iso"
   local dir="$WORK_DIR/$vm"; mkdir -p "$dir"
 
@@ -191,14 +197,15 @@ EOF
 # --------------------------------------------------------------------------- #
 log "provisioning lab VMs on $(hostname) (qemu:///system, network=$NETWORK, ${VM_VCPUS}vCPU/${VM_RAM_MB}MB/${VM_DISK_GB}GB each)"
 # Which OS families are actually needed given --only?
-need_suse=0; need_rocky=0; need_ubuntu=0
+need_suse=0; need_rocky=0; need_ubuntu=0; need_arch=0
 for pair in $LAB_VMS; do
   vm="${pair%%:*}" os="${pair##*:}"; selected "$vm" || continue
-  case "$os" in suse) need_suse=1;; rocky) need_rocky=1;; ubuntu) need_ubuntu=1;; esac
+  case "$os" in suse) need_suse=1;; rocky) need_rocky=1;; ubuntu) need_ubuntu=1;; arch) need_arch=1;; esac
 done
 [ "$need_suse" = 1 ]   && fetch_base suse
 [ "$need_rocky" = 1 ]  && fetch_base rocky
 [ "$need_ubuntu" = 1 ] && fetch_base ubuntu
+[ "$need_arch" = 1 ]   && fetch_base arch
 
 for pair in $LAB_VMS; do provision "${pair%%:*}" "${pair##*:}"; done
 

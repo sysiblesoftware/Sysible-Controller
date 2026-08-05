@@ -956,6 +956,7 @@ def heartbeat(req: HeartbeatRequest):
                 req.metrics.get("units") or [],
                 (req.metrics.get("hyp") or None),
                 _num("vms", int),
+                (req.metrics.get("vm_names") or []),
             )
         except Exception:
             pass

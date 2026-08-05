@@ -1002,20 +1002,48 @@ def _collect_health_signals(mounts):
     return {"failed": len(units), "units": units[:4], "sysd": sysd, "oom": oom, "mount": mount}
 
 
+def _qemu_guest_name(pid):
+    """The libvirt/qemu domain name from a qemu process's cmdline, e.g.
+    '-name guest=arch-01,debug-threads=on' -> 'arch-01' (or a bare '-name arch-01').
+    Dependency-free (/proc only). Returns '' when no name is present."""
+    try:
+        with open("/proc/" + pid + "/cmdline", "rb") as f:
+            args = f.read().split(b"\0")
+    except OSError:
+        return ""
+    for i, a in enumerate(args):
+        if a == b"-name" and i + 1 < len(args):
+            val = args[i + 1].decode("utf-8", "replace")
+        elif a.startswith(b"-name=") and len(a) > 6:
+            val = a[6:].decode("utf-8", "replace")
+        else:
+            continue
+        # 'guest=arch-01,debug-threads=on' -> arch-01; 'arch-01' -> arch-01.
+        for part in val.split(","):
+            if part.startswith("guest="):
+                return part[6:].strip()
+        return val.split(",")[0].strip()
+    return ""
+
+
 def _detect_hypervisor():
     """Best-effort: is THIS host a hypervisor running guest VMs (a VM HOST), as
     opposed to a plain server or a guest itself? Cheap, dependency-free /proc +
-    sysfs checks — no virsh/xl/VBoxManage calls. Returns (role, vm_count):
+    sysfs checks — no virsh/xl/VBoxManage calls. Returns (role, vm_count, vm_names):
 
       role      short label — "proxmox" / "kvm" / "xen-dom0" / "virtualbox" /
                 "vmware" — or None if this doesn't look like a VM host.
       vm_count  number of RUNNING guests we could count (one qemu-system /
                 VBoxHeadless / vmware-vmx process per running VM). 0 is valid for
                 a configured-but-idle hypervisor.
+      vm_names  domain names of running qemu/KVM guests, parsed from their
+                cmdlines, so the console can map guests to their host records
+                (topology nesting). Empty for backends we can't name cheaply.
 
     The point is the reboot warning: taking a VM host down interrupts every guest
     on it, so the console flags that before an operator reboots/powers it off."""
     role, vms = None, 0
+    vm_names = []
     try:
         if os.path.isdir("/etc/pve"):
             role = "proxmox"                       # Proxmox VE
@@ -1039,6 +1067,9 @@ def _detect_hypervisor():
                 continue
             if comm.startswith("qemu-system") or comm == "qemu-kvm":
                 qemu += 1
+                _nm = _qemu_guest_name(pid)
+                if _nm:
+                    vm_names.append(_nm)
             elif comm in ("VBoxHeadless", "VirtualBox"):
                 vbox += 1
             elif comm == "vmware-vmx":
@@ -1054,8 +1085,8 @@ def _detect_hypervisor():
         if role is None and kvm and (os.path.isdir("/etc/libvirt") or os.path.exists("/run/libvirt")):
             role = "kvm"
     except Exception:
-        return (None, 0)
-    return (role, vms)
+        return (None, 0, [])
+    return (role, vms, sorted(set(vm_names)))
 
 
 def _collect_metrics():
@@ -1167,7 +1198,7 @@ def _collect_metrics():
 
     # Hypervisor role + running-guest count, so the console can warn before a
     # reboot/power-off takes a VM host (and all its guests) down.
-    hyp_role, hyp_vms = _detect_hypervisor()
+    hyp_role, hyp_vms, hyp_vm_names = _detect_hypervisor()
 
     metrics = {
         "load1": load1, "load5": load5, "load15": load15, "cores": cores,
@@ -1178,8 +1209,9 @@ def _collect_metrics():
         # names, overall systemd state, OOM-kills, worst-disk mount.
         "failed": health["failed"], "units": health["units"],
         "sysd": health["sysd"], "oom": health["oom"], "mount": health["mount"],
-        # Hypervisor role (None if not a VM host) + running-guest count.
-        "hyp": hyp_role, "vms": hyp_vms,
+        # Hypervisor role (None if not a VM host) + running-guest count + the
+        # guest domain names (so the console can nest VMs under their host).
+        "hyp": hyp_role, "vms": hyp_vms, "vm_names": hyp_vm_names,
     }
     snapshot = {
         "percpu": percpu_pct,

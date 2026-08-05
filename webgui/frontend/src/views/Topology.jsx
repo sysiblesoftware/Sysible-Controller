@@ -158,7 +158,7 @@ export default function Topology({ onOpen }) {
         online: hh.online, verdict, disk: hh.disk, mem: hh.mem,
         agentVersion: ag.agent_version, ip, gateway: gw,
         subnet: subnetOf(ip), revoked: !!ag.revoked, quarantined: !!ag.integrity_quarantined,
-        hasCrit, hypervisor: hh.hyp, vms: hh.vms,
+        hasCrit, hypervisor: hh.hyp, vms: hh.vms, vmNames: hh.vm_names || [],
       };
     });
   }, [hosts, health, agents, posture, supps]);
@@ -233,6 +233,18 @@ export default function Topology({ onOpen }) {
     nodes.forEach((n) => {
       const h = hubByKey[n.hub];
       if (h) edges.push({ x1: h.x, y1: h.y, x2: n.x, y2: n.y, kind: "host", host: n });
+    });
+    // Hypervisor → guest overlay: connect each VM host to the running guests it
+    // reports (agent-supplied vmNames, matched to host records by label), so the
+    // graph shows which VMs live on which host. A dashed "hosts" link, drawn on
+    // top of the normal env/network grouping.
+    const byLabel = {}; nodes.forEach((n) => { byLabel[n.label] = n; });
+    nodes.forEach((n) => {
+      if (!n.hypervisor || !Array.isArray(n.vmNames)) return;
+      for (const name of n.vmNames) {
+        const vm = byLabel[name];
+        if (vm && vm.id !== n.id) edges.push({ x1: n.x, y1: n.y, x2: vm.x, y2: vm.y, kind: "vm" });
+      }
     });
     return { hubs, nodes, edges, ctrl };
   }, [layout, positions]);
@@ -383,6 +395,14 @@ export default function Topology({ onOpen }) {
               {/* Edges. */}
               {laid.edges.map((e, i) => {
                 const isHub = e.kind === "hub";
+                if (e.kind === "vm") {
+                  // Hypervisor → guest overlay: a thin dashed link so it reads as
+                  // "this VM is hosted here" without competing with the health-
+                  // coloured grouping edges.
+                  return <line key={i} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
+                               stroke="var(--accent, #4c8bf5)" strokeOpacity={0.38}
+                               strokeWidth={1.1} strokeDasharray="2 4" />;
+                }
                 const h = e.host;
                 const col = isHub ? (COLOR[e.worst] || COLOR.UNKNOWN)
                   : h.revoked ? COLOR.CRITICAL : h.quarantined ? COLOR.WARNING : nodeColor(h);

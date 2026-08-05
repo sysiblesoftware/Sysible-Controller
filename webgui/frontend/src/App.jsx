@@ -90,6 +90,18 @@ const ICONS = {
   book: <><path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H19v15H6a2 2 0 0 0-2 2z"/><path d="M4 19.5A1.5 1.5 0 0 0 5.5 21H19"/></>,
 };
 
+// Distinct per-icon accent colors for the left rail — muted at rest, brightening
+// on hover/active (see `.rail-item svg` in styles.css). Mid-tone hues chosen to
+// read on both the dark skins and the light "Porcelain" one; adjacent items are
+// kept in different hue families so the strip doesn't smear together. The
+// monochrome terminal skins (amber/phos) override these back to a single hue.
+const RAIL_ICON_COLORS = {
+  grid: "#3b82f6", share: "#14b8a6", chart: "#a855f7", server: "#6366f1",
+  terminal: "#10b981", bolt: "#f59e0b", tools: "#f97316", search: "#0ea5e9",
+  download: "#06b6d4", clock: "#ca8a04", bell: "#ef4444", activity: "#65a30d",
+  cog: "#64748b", book: "#c084fc",
+};
+
 function NavIcon({ name }) {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -382,6 +394,7 @@ export default function App() {
           {nav.map((n) => (
             n.download ? (
               <a key={n.key ?? "dash"} className="rail-item" href={n.download} download
+                 style={{ "--rail-icon": RAIL_ICON_COLORS[n.icon] }}
                  title="Download the offline documentation">
                 <NavIcon name={n.icon} /><span>{n.label}</span>
                 <span className="rail-ext" aria-hidden="true">↓</span>
@@ -389,6 +402,7 @@ export default function App() {
             ) : (
               <a key={n.key ?? "dash"} href={hrefForView(n.key)}
                  className={"rail-item" + (view === n.key ? " active" : "")}
+                 style={{ "--rail-icon": RAIL_ICON_COLORS[n.icon] }}
                  title={n.key === "connect" ? "Opens in a new tab" : undefined}
                  onClick={(e) => {
                    // Let the browser handle modifier-clicks (⌘/Ctrl/Shift/Alt) so

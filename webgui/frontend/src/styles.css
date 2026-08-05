@@ -439,14 +439,22 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
   text-decoration: none; box-sizing: border-box;
 }
 .rail-item:hover, .rail-item.active { text-decoration: none; }
-.rail-item svg { flex-shrink: 0; opacity: 0.85; }
+/* Each nav item carries its own hue via the inline --rail-icon var (set in
+   App.jsx). Muted at rest so the strip stays calm; full-strength on hover/active
+   so the current section pops. Icons fall back to currentColor if no hue is set. */
+.rail-item svg { flex-shrink: 0; color: var(--rail-icon, currentColor); opacity: 0.72;
+  transition: opacity 0.12s ease; }
+.rail-item:hover svg, .rail-item.active svg { opacity: 1; }
 .rail-item .rail-ext { margin-left: auto; font-size: 12px; opacity: 0.55; }
 .rail-item:hover { background: var(--row-hover); color: var(--text); }
 .rail-item.active {
   background: var(--accent-soft); color: var(--text);
   border-left-color: var(--accent); border-radius: 0 8px 8px 0;
 }
-.rail-item.active svg { color: var(--accent); opacity: 1; }
+/* Monochrome terminal skins keep the rail single-hue — icons inherit the skin's
+   text color instead of their per-item hue. */
+:root[data-skin="amber"] .rail-item svg,
+:root[data-skin="phos"]  .rail-item svg { color: inherit; }
 .rail-footer { margin-top: 18px; display: flex; flex-direction: column; gap: 10px;
   padding-top: 14px; border-top: 1px solid var(--border); }
 .rail-edition { color: var(--text-dim); font-size: 12px; text-align: center;

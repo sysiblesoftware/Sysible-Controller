@@ -579,9 +579,13 @@ tr:hover td { background: var(--row-hover); }
 /* The host name is the flexible part: it truncates with an ellipsis so the type
    tag and the "critical" marker to its right are never clipped in the narrow
    pane. */
-.host-row .host-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.host-row .meta { color: var(--text-faint); font-size: 12px; flex-shrink: 0; }
-.host-row .meta.crit { color: #e06c6c; font-weight: 600; margin-left: auto; }
+/* The hostname is the primary identifier, so it grows to fill the row and keeps
+   a floor width so it never collapses to "o…". The agent/seen meta is the part
+   that yields first (shrinks + ellipsizes); the short critical badge stays
+   pinned to the right and never shrinks away. */
+.host-row .host-name { flex: 1 1 auto; min-width: 4.5em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-row .meta { color: var(--text-faint); font-size: 12px; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-row .meta.crit { color: #e06c6c; font-weight: 600; margin-left: auto; flex-shrink: 0; }
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 14px; flex-wrap: wrap; }
 .tabs button { background: transparent; border: 1px solid transparent; border-bottom: none;
   color: var(--text-dim); padding: 7px 13px; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 13px; }

@@ -533,6 +533,11 @@ _PRIV_ERROR_HINTS = (
     # dnf/yum AND zypper print this verbatim when run as a non-root user:
     # "This command has to be run with superuser privileges ...".
     "superuser privileges", "run with superuser",
+    # pacman (Arch) has its own phrasing that matches none of the above:
+    # "error: you cannot perform this operation unless you are root." Without
+    # this, an unprivileged agent never retries pacman under sudo, so every
+    # package op on Arch fails with a bare not-root error.
+    "unless you are root",
     # polkit / D-Bus (systemctl, hostnamectl, timedatectl, etc. run as a
     # non-root user answer this instead of a plain permission error):
     "interactive authentication required", "authentication is required",

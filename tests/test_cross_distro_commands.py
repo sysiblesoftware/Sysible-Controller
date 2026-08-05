@@ -537,3 +537,108 @@ def test_disk_usage_analyzer_validates_inputs():
     with pytest.raises(ValueError):
         St.cmd_analyze_disk_usage("-rf /tmp", 5)      # leading-dash path rejected
     assert "_p=/" in St.cmd_analyze_disk_usage("", 20)  # empty path defaults to /
+
+
+# ===========================================================================
+# Functionality + cross-distro sweep regressions (dnf/apt/zypper/pacman)
+# ===========================================================================
+import client._api_certs as Certs  # noqa: E402
+
+
+def test_update_named_packages_pacman_is_full_upgrade_not_partial():
+    # Arch can't safely update individual packages (partial upgrade); the pacman branch
+    # must run a full -Syu, not `pacman -Sy <pkg>`.
+    cmd = A.cmd_update_packages("nginx")
+    _bash_n(cmd)
+    assert "pacman -Syu --noconfirm" in cmd
+    assert "pacman -Sy --noconfirm nginx" not in cmd
+    assert "pacman -Sy nginx" not in cmd
+
+
+def test_security_check_updates_pacman_is_read_only():
+    # A read-only "check" must never mutate the live sync db with `pacman -Sy`.
+    cmd = S.cmd_check_security_updates()
+    _bash_n(cmd)
+    assert "pacman -Sy >" not in cmd and "pacman -Sy;" not in cmd
+    assert "checkupdates" in cmd and "pacman -Qu" in cmd
+
+
+def test_list_and_remove_kernels_have_pacman_branches():
+    lk = B.cmd_list_kernels(); _bash_n(lk)
+    assert "pacman -Q" in lk and "linux-lts" in lk
+    rk = B.cmd_remove_old_kernels("2"); _bash_n(rk)
+    assert "command -v pacman" in rk and "does not retain old kernel" in rk
+
+
+def test_timer_enable_disable_use_now():
+    en = A.cmd_timer_enable("mytimer"); _bash_n(en)
+    dis = A.cmd_timer_disable("mytimer"); _bash_n(dis)
+    assert "enable --now" in en and "disable --now" in dis
+
+
+def test_certbot_single_domain_renew_uses_cert_name_not_certonly():
+    cmd = Certs.cmd_renew_certbot("example.com"); _bash_n(cmd)
+    assert "renew --force-renewal --cert-name" in cmd
+    assert "certonly" not in cmd
+    assert Certs.cmd_renew_certbot("") .strip().endswith("certbot renew 2>&1")
+
+
+def test_destructive_storage_creators_refuse_busy_devices():
+    for cmd in (St.cmd_create_physical_volume("/dev/sdb"),
+                St.cmd_create_raid_array("/dev/md0", "1", "/dev/sdb /dev/sdc"),
+                St.cmd_create_swap_partition("/dev/sdb1", False)):
+        _bash_n(cmd)
+        assert "Refusing" in cmd and "swapon" in cmd
+
+
+def test_raid_per_level_minimum_members():
+    with pytest.raises(ValueError):
+        St.cmd_create_raid_array("/dev/md0", "5", "/dev/sdb /dev/sdc")   # RAID5 needs 3
+    with pytest.raises(ValueError):
+        St.cmd_create_raid_array("/dev/md0", "6", "/dev/sdb /dev/sdc /dev/sdd")  # RAID6 needs 4
+    _bash_n(St.cmd_create_raid_array("/dev/md0", "5", "/dev/sdb /dev/sdc /dev/sdd"))
+
+
+def test_cron_job_rejects_newline_injection():
+    with pytest.raises(ValueError):
+        A.cmd_add_cron_job("*/5 * * * *", "/bin/foo\n0 0 * * * /bin/evil", "")
+    with pytest.raises(ValueError):
+        A.cmd_add_cron_job("*/5 * * * *\nMAILTO=x", "/bin/foo", "")
+
+
+def test_network_diagnostics_reject_leading_dash():
+    for fn in (lambda: N.cmd_ping("-flood", 4),
+               lambda: N.cmd_traceroute("-x"),
+               lambda: N.cmd_dns_lookup("-h")):
+        with pytest.raises(ValueError):
+            fn()
+
+
+def test_set_password_keeps_hash_off_argv():
+    cmd = U.cmd_set_password("alice", "hunter2"); _bash_n(cmd)
+    assert "chpasswd -e" in cmd and "usermod -p" not in cmd
+    with pytest.raises(ValueError):
+        U.cmd_set_password("-alice", "x")
+
+
+def test_group_ops_reject_leading_dash():
+    for fn in (lambda: U.cmd_create_group("-g"),
+               lambda: U.cmd_delete_group("-g"),
+               lambda: U.cmd_add_user_to_group("-g", "u"),
+               lambda: U.cmd_remove_user_from_group("g", "-u")):
+        with pytest.raises(ValueError):
+            fn()
+
+
+def test_nft_and_iptables_persistence_cover_arch():
+    nft = FW.cmd_nft_save_persist(); _bash_n(nft)
+    assert "nftables.service" in nft and "nft list ruleset" in nft
+    ipt = FW.cmd_iptables_save_persist(); _bash_n(ipt)
+    assert "/etc/iptables/iptables.rules" in ipt
+
+
+def test_install_filesystem_tools_all_managers():
+    cmd = St.cmd_install_filesystem_tools(); _bash_n(cmd)
+    assert "parted e2fsprogs xfsprogs dosfstools" in cmd
+    for tok in ("zypper --non-interactive install", "apt-get install -y", "pacman -Sy"):
+        assert tok in cmd

@@ -657,7 +657,13 @@ def cmd_check_security_updates() -> str:
             "echo 'Arch Linux is a rolling release and does not classify updates as "
             "security-only; showing all available updates.'; "
             "if command -v checkupdates >/dev/null 2>&1; then checkupdates 2>&1 || echo 'No updates available.'; "
-            "else pacman -Sy >/dev/null 2>&1; pacman -Qu 2>&1 || echo 'No updates available.'; fi"
+            # Do NOT run `pacman -Sy` here: this is a READ-ONLY check, and a bare -Sy
+            # mutates the live sync db (arming a partial-upgrade hazard). Without
+            # checkupdates, compare against the current local db and point the operator
+            # at pacman-contrib for an accurate, non-mutating check.
+            "else echo 'Install pacman-contrib (provides checkupdates) for an accurate, "
+            "non-mutating check; listing upgrades against the current local sync db:' >&2; "
+            "pacman -Qu 2>&1 || echo 'No updates available (local db may be stale).'; fi"
         ),
     )
 
@@ -810,10 +816,15 @@ def cmd_get_hardening_overview() -> str:
     """Read-only snapshot of common hardening-relevant settings:
     SELinux mode, whether root SSH login is allowed, whether password
     auth is enabled, and currently-listening network services."""
+    # Resolve the sshd binary path (it's not on a non-root PATH on openSUSE), same as
+    # every other sshd command in this module — otherwise the section falsely reports
+    # "sshd -T unavailable" on a healthy SUSE host.
+    binf = _sshd_bin_fragment()
     return (
         "echo '-- SELinux --' && (getenforce 2>&1 || echo 'not installed'); "
         "echo; echo '-- sshd: root login / password auth --' && "
-        "(sshd -T 2>&1 | grep -iE '^(permitrootlogin|passwordauthentication)' || echo 'sshd -T unavailable'); "
+        f"({binf} \"$SSHDBIN\" -T 2>/dev/null | grep -iE '^(permitrootlogin|passwordauthentication)' "
+        "|| echo 'sshd -T unavailable'); "
         "echo; echo '-- Listening services --' && "
         "(ss -tulpn 2>&1 || netstat -tulpn 2>&1)"
     )

@@ -45,6 +45,11 @@ def cmd_add_cron_job(schedule: str, command: str, comment: str = "") -> str:
     """Appends one line to the connecting user's crontab."""
     schedule = (schedule or "").strip()
     command = (command or "").strip()
+    # Reject CR/LF: an embedded newline survives shlex.quote and would inject an extra
+    # crontab line (and bypass the 5-field check), just like the unit-file builders guard.
+    _reject_newlines(schedule, "schedule")
+    _reject_newlines(command, "command")
+    _reject_newlines(comment or "", "comment")
     if not schedule:
         raise ValueError("Schedule cannot be empty (e.g. '*/15 * * * *', or '@reboot')")
     if not command:
@@ -135,11 +140,16 @@ def cmd_timer_stop(name: str) -> str:
 
 
 def cmd_timer_enable(name: str) -> str:
-    return f"systemctl enable {shlex.quote(_timer_unit(name))}"
+    # --now so "Enable timer" actually starts it too (not just at next boot), matching
+    # what the label implies and what cmd_create_systemd_timer does.
+    u = shlex.quote(_timer_unit(name))
+    return f"systemctl enable --now {u} && systemctl is-active {u} 2>&1; systemctl status {u} --no-pager -l 2>&1 | head -n 4; true"
 
 
 def cmd_timer_disable(name: str) -> str:
-    return f"systemctl disable {shlex.quote(_timer_unit(name))}"
+    # --now so "Disable timer" also stops it immediately.
+    u = shlex.quote(_timer_unit(name))
+    return f"systemctl disable --now {u} 2>&1; echo 'Timer disabled and stopped.'"
 
 
 def cmd_create_systemd_timer(
@@ -488,7 +498,12 @@ def cmd_update_packages(names: str = "", flags: str = "") -> str:
             rpm_cmd=f'"$PKGMGR" update -y{rf} -- {pkgs}',
             zypper_cmd=f'zypper --non-interactive update -- {pkgs}',
             apt_cmd=f'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --only-upgrade -y -- {pkgs}',
-            pacman_cmd=f'pacman -Sy --noconfirm {pkgs}',
+            # Arch does NOT support partial upgrades (`pacman -Sy pkg` is a documented
+            # system-breaker). The only safe way to update anything is a full sync-upgrade,
+            # so run that and say why rather than emitting the footgun.
+            pacman_cmd=('echo "Arch does not support upgrading individual packages safely; '
+                        'running a full system upgrade (pacman -Syu) instead." >&2; '
+                        'pacman -Syu --noconfirm'),
         )
     return _pkgmgr_dispatch(
         rpm_cmd=f'"$PKGMGR" upgrade -y{rf}',

@@ -554,25 +554,37 @@ def cmd_set_sudo(username: str, enable: bool) -> str:
 
 
 def cmd_set_password(username: str, password: str) -> str:
+    _reject_leading_dash(username)
+    if "\n" in (username or "") or "\r" in (username or "") or ":" in (username or ""):
+        raise ValueError("Username must not contain a newline or ':'.")
     hashed = _hash_password(password)
     if hashed is None:
         raise RuntimeError("Password hashing unavailable on this client (the `crypt` module requires a POSIX system) - refusing to queue a remote password change rather than send it as plaintext.")
-    return f"usermod -p {shlex.quote(hashed)} {shlex.quote(username)}"
+    # Feed the crypt hash to chpasswd on STDIN (heredoc) rather than usermod -p on argv,
+    # so the hash is never exposed via `ps`/procfs during the exec. A crypt hash contains
+    # no newline, and the username is validated above, so the `user:hash` line is safe.
+    return f"chpasswd -e <<'SYSIBLE_PW_EOF'\n{username}:{hashed}\nSYSIBLE_PW_EOF"
 
 
 def cmd_create_group(name: str) -> str:
+    _reject_leading_dash(name)
     return f"groupadd {shlex.quote(name)}"
 
 
 def cmd_delete_group(name: str) -> str:
+    _reject_leading_dash(name)
     return f"groupdel {shlex.quote(name)}"
 
 
 def cmd_add_user_to_group(group: str, username: str) -> str:
+    _reject_leading_dash(group)
+    _reject_leading_dash(username)
     return f"usermod -aG {shlex.quote(group)} {shlex.quote(username)}"
 
 
 def cmd_remove_user_from_group(group: str, username: str) -> str:
+    _reject_leading_dash(group)
+    _reject_leading_dash(username)
     return f"gpasswd -d {shlex.quote(username)} {shlex.quote(group)}"
 
 

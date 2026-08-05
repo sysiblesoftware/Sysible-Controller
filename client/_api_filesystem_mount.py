@@ -257,7 +257,7 @@ def cmd_repair_filesystem(device: str, auto_yes: bool = True) -> str:
         f"xfs) if command -v xfs_repair >/dev/null 2>&1; then {xfs} {q_dev} 2>&1; "
         "else echo 'xfs_repair not installed on this host (package: xfsprogs).' >&2; exit 1; fi;; "
         f"btrfs) if command -v btrfs >/dev/null 2>&1; then {btrfs} {q_dev} 2>&1; "
-        "else echo 'btrfs tools not installed on this host (package: btrfs-progs).' >&2; exit 1; fi;; "
+        "else echo 'btrfs tools not installed on this host (package: btrfs-progs; btrfsprogs on openSUSE).' >&2; exit 1; fi;; "
         f"vfat|fat|msdos) {fat} {q_dev} 2>&1;; "
         "'') echo 'Could not determine the filesystem type - refusing to guess. "
         "Verify the device path, or format it first.' >&2; exit 1;; "

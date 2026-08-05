@@ -143,7 +143,11 @@ def cmd_list_kernels() -> str:
         "| grep -vE -- '-(devel|devel-base|doc|source|syms|macros|firmware|debug|debuginfo|debugsource|default-devel|preempt-devel)($|-)' "
         "| sort -V; "
         "elif command -v dpkg-query >/dev/null 2>&1; then dpkg-query -W -f='${Package} ${Version}\\n' 'linux-image-*' 2>/dev/null | grep -v -- '-dbg'; "
-        "else echo 'Neither rpm nor dpkg found.'; fi"
+        # Arch: kernels are ordinary packages (linux, linux-lts, linux-zen, linux-hardened).
+        "elif command -v pacman >/dev/null 2>&1; then "
+        "pacman -Q 2>/dev/null | grep -E '^(linux|linux-lts|linux-zen|linux-hardened|linux-rt|linux-rt-lts)[[:space:]]' "
+        "|| echo 'No standard linux kernel packages found.'; "
+        "else echo 'Neither rpm, dpkg, nor pacman found.'; fi"
     )
 
 
@@ -167,6 +171,12 @@ def cmd_remove_old_kernels(keep: str = "2") -> str:
         "elif command -v zypper >/dev/null 2>&1; then "
         f"echo 'Note: on zypper the keep-count ({keep}) is governed by multiversion.kernels in /etc/zypp/zypp.conf, not this field.' >&2; "
         "zypper --non-interactive purge-kernels 2>&1 || echo 'purge-kernels needs the zypper purge-kernels plugin.'; "
+        # Arch keeps exactly the installed kernel package(s) — there is no accumulation of
+        # old versions to prune (an upgrade replaces the package in place), so this is a
+        # no-op-by-design rather than a failure.
+        "elif command -v pacman >/dev/null 2>&1; then "
+        "echo 'Arch Linux does not retain old kernel versions (pacman replaces the kernel "
+        "package in place on upgrade), so there is nothing to prune.'; "
         "else echo 'No supported package manager found.' >&2; exit 1; fi; "
         "echo; echo 'Done. Current running kernel is always kept.'"
     )

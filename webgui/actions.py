@@ -400,6 +400,9 @@ _register(Action(name="stor_install_lvm", tool="Storage Administration",
     label="Install LVM tools", params=[], build=lambda p: api.cmd_install_lvm_tools()))
 _register(Action(name="stor_install_mdadm", tool="Storage Administration",
     label="Install mdadm", params=[], build=lambda p: api.cmd_install_mdadm()))
+_register(Action(name="stor_install_fstools", tool="Storage Administration",
+    label="Install filesystem tools (parted, mkfs.*)", params=[],
+    build=lambda p: api.cmd_install_filesystem_tools()))
 _register(Action(name="stor_format", tool="Storage Administration",
     label="Format filesystem", danger=True,
     params=[Param("device", "Device / partition"),
@@ -834,6 +837,7 @@ for _tn, _fn, _lbl in [
         ("svc_enable", "cmd_service_enable", "Enable service"),
         ("svc_disable", "cmd_service_disable", "Disable service"),
         ("svc_troubleshoot", "cmd_troubleshoot_service", "Troubleshoot service"),
+        ("svc_reset_failed", "cmd_reset_failed_unit", "Reset failed unit"),
         ("svc_dependencies", "cmd_service_dependencies", "Service dependencies")]:
     _register(Action(name=_tn, tool="Service Management", label=_lbl,
         params=[Param("name", "Service name")],
@@ -1016,6 +1020,7 @@ _register(Action(name="stor_part_resize", tool="Storage Administration", label="
             Param("end", "New end", help="e.g. 100%")],
     build=lambda p: api.cmd_resize_partition(_s(p, "device"), _i(p, "part_number"), _s(p, "end"))))
 _register(Action(name="stor_pv_create", tool="Storage Administration", label="Create physical volume(s)",
+    danger=True,
     params=[Param("devices", "Devices", help="space-separated")],
     build=lambda p: api.cmd_create_physical_volume(_s(p, "devices"))))
 _register(Action(name="stor_vg_create", tool="Storage Administration", label="Create volume group",
@@ -1036,6 +1041,7 @@ _register(Action(name="stor_lv_reduce", tool="Storage Administration", label="Re
     danger=True, params=[Param("vg_name", "VG name"), Param("lv_name", "LV name"), Param("new_size", "New size")],
     build=lambda p: api.cmd_reduce_logical_volume(_s(p, "vg_name"), _s(p, "lv_name"), _s(p, "new_size"))))
 _register(Action(name="stor_raid_create", tool="Storage Administration", label="Create RAID array",
+    danger=True,
     params=[Param("raid_device", "md device", help="e.g. /dev/md0"),
             Param("level", "Level", type="select", options=["0", "1", "5", "6", "10"], default="1"),
             Param("devices", "Devices", help="space-separated")],
@@ -1058,6 +1064,7 @@ _register(Action(name="stor_swap_resize", tool="Storage Administration", label="
     build=lambda p: api.cmd_resize_swap_file(_s(p, "path", "/swapfile") or "/swapfile",
                                              _i(p, "size_mb", 2048), _b(p, "persist", True))))
 _register(Action(name="stor_swap_partition", tool="Storage Administration", label="Create swap partition",
+    danger=True,
     params=[Param("device", "Device"), Param("persist", "Persist in fstab", type="checkbox", default=True, required=False)],
     build=lambda p: api.cmd_create_swap_partition(_s(p, "device"), _b(p, "persist", True))))
 _register(Action(name="stor_swap_disable", tool="Storage Administration", label="Disable swap",
@@ -1106,6 +1113,8 @@ _register(Action(name="fw_nft_delete_rule", tool="Firewall Administration", labe
             Param("chain", "Chain"), Param("handle", "Handle")],
     build=lambda p: api.cmd_nft_delete_rule(_s(p, "family", "inet"), _s(p, "table"),
                                             _s(p, "chain"), _s(p, "handle"))))
+_register(Action(name="fw_nft_persist", tool="Firewall Administration", label="nft: save (persist across reboot)",
+    params=[], build=lambda p: api.cmd_nft_save_persist()))
 _register(Action(name="fw_iptables_add", tool="Firewall Administration", label="iptables: add rule",
     params=[Param("table", "Table", default="filter"), Param("chain", "Chain"), Param("rule_spec", "Rule spec")],
     build=lambda p: api.cmd_iptables_add_rule(_s(p, "table", "filter") or "filter",
@@ -1561,7 +1570,7 @@ _LAYOUT: dict[str, list] = {
     ],
     "Storage Administration": [
         ("Disks", "Disks", ["stor_list_disks", "stor_disk_usage", "stor_rescan", "stor_disk_health", "stor_smart", "stor_remove_disk"]),
-        ("Disks", "Install Tools", ["stor_install_smart", "stor_install_lvm", "stor_install_mdadm"]),
+        ("Disks", "Install Tools", ["stor_install_smart", "stor_install_lvm", "stor_install_mdadm", "stor_install_fstools"]),
         ("Partitions", "Partitions", ["stor_list_parts", "stor_part_table", "stor_part_create", "stor_part_delete", "stor_part_resize"]),
         ("Format Filesystems", "Format", ["stor_format"]),
         ("LVM", "Physical & Volume Groups", ["stor_pv_list", "stor_vg_list", "stor_pv_create", "stor_vg_create", "stor_vg_extend", "stor_vg_reduce"]),

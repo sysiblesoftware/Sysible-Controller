@@ -394,6 +394,21 @@ def cmd_nft_flush_ruleset() -> str:
     return _NFT_MISSING + "nft flush ruleset 2>&1 && echo 'nftables ruleset flushed.'"
 
 
+def cmd_nft_save_persist() -> str:
+    """Persist the live nftables ruleset so it survives a reboot. nft rules added at
+    runtime are otherwise lost — this writes them to the distro's boot-loaded file
+    (/etc/nftables.conf on most; /etc/sysconfig/nftables.conf on RHEL/SUSE) and enables
+    nftables.service. nftables is the default backend on Arch and modern distros, so
+    without this an operator's rules silently vanish on reboot."""
+    return _NFT_MISSING + r"""
+if [ -f /etc/sysconfig/nftables.conf ] || [ -d /etc/sysconfig ]; then _f=/etc/sysconfig/nftables.conf; else _f=/etc/nftables.conf; fi
+{ echo '#!/usr/sbin/nft -f'; echo 'flush ruleset'; nft list ruleset; } > "$_f" 2>&1 \
+  && chmod 0600 "$_f" \
+  && (systemctl enable --now nftables.service 2>/dev/null || true) \
+  && echo "Saved live ruleset to $_f and enabled nftables.service (loads on boot)."
+""".strip()
+
+
 # ---------------------------------------------------------
 # iptables
 # ---------------------------------------------------------
@@ -484,8 +499,13 @@ elif command -v service >/dev/null 2>&1 && service iptables save >/dev/null 2>&1
     echo "Saved via 'service iptables save'."
 elif [ -d /etc/sysconfig ]; then
     iptables-save > /etc/sysconfig/iptables 2>&1 && echo "Saved to /etc/sysconfig/iptables."
+elif [ -d /etc/iptables ] || command -v pacman >/dev/null 2>&1; then
+    # Arch: iptables.service loads /etc/iptables/iptables.rules on boot.
+    mkdir -p /etc/iptables && iptables-save > /etc/iptables/iptables.rules 2>&1 \
+      && { command -v ip6tables-save >/dev/null 2>&1 && ip6tables-save > /etc/iptables/ip6tables.rules 2>/dev/null; true; } \
+      && echo "Saved to /etc/iptables/iptables.rules (enable iptables.service to load on boot)."
 else
-    echo "No known persistence mechanism found (tried netfilter-persistent, service iptables save, /etc/sysconfig/iptables) - install iptables-persistent or iptables-services." >&2
+    echo "No known persistence mechanism found (tried netfilter-persistent, service iptables save, /etc/sysconfig/iptables, /etc/iptables) - install iptables-persistent or iptables-services." >&2
     exit 1
 fi
 """.strip()

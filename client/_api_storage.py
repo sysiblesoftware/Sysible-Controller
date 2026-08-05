@@ -46,6 +46,29 @@ def _devices_list(text: str, label: str = "Device(s)") -> list:
     return [_validate_path(p, label) for p in paths]
 
 
+def _device_busy_guard(device: str) -> str:
+    """Shell fragment (for a single device) that REFUSES with exit 1 if the device — or
+    any partition on it — is mounted or an active swap. Prepended to destructive
+    creators (pvcreate/mdadm/mkswap) so a mistyped device carrying a live filesystem
+    can't be silently overwritten even after the console's danger-confirm. Read-only
+    checks only; degrades to a no-op if lsblk/swapon are absent (nothing to lose)."""
+    q = shlex.quote(device)
+    return (
+        f'_d={q}; '
+        f'if command -v lsblk >/dev/null 2>&1 && '
+        f'lsblk -rno MOUNTPOINT "$_d" 2>/dev/null | grep -q "[^[:space:]]"; then '
+        f'echo "Refusing: $_d (or a partition on it) is mounted; unmount it first." >&2; exit 1; fi; '
+        f'if command -v swapon >/dev/null 2>&1 && '
+        f'swapon --show=NAME --noheadings 2>/dev/null | grep -qx "$_d"; then '
+        f'echo "Refusing: $_d is an active swap device; run swapoff first." >&2; exit 1; fi'
+    )
+
+
+def _devices_busy_guard(dev_list) -> str:
+    """The busy guard applied to every device in a list, in sequence."""
+    return "; ".join(_device_busy_guard(d) for d in dev_list)
+
+
 _SAFE_LVM_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]*$")
 
 
@@ -274,6 +297,32 @@ def cmd_install_mdadm() -> str:
     ) + " && echo 'mdadm installed.'"
 
 
+def cmd_install_filesystem_tools() -> str:
+    """Install the common partitioning + filesystem userspace tools so Format / Create
+    partition / Repair / Resize don't dead-end with 'command not found' on a minimal
+    Debian/Arch host. The core set (parted, e2fsprogs, xfsprogs, dosfstools) exists on
+    every supported package manager and must succeed; btrfs/ntfs/exfat tools are optional
+    extras installed best-effort (absent or EPEL-only on some distros), so a distro that
+    lacks one doesn't fail the whole action."""
+    core = _pkgmgr_dispatch(
+        rpm_cmd='"$PKGMGR" install -y parted e2fsprogs xfsprogs dosfstools',
+        zypper_cmd="zypper --non-interactive install parted e2fsprogs xfsprogs dosfstools",
+        apt_cmd=("apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y "
+                 "parted e2fsprogs xfsprogs dosfstools"),
+        pacman_cmd="pacman -Sy --needed --noconfirm parted e2fsprogs xfsprogs dosfstools",
+    )
+    extras = _pkgmgr_dispatch(
+        rpm_cmd='"$PKGMGR" install -y btrfs-progs ntfs-3g exfatprogs 2>/dev/null || true',
+        zypper_cmd="zypper --non-interactive install btrfsprogs ntfs-3g exfatprogs 2>/dev/null || true",
+        apt_cmd=("DEBIAN_FRONTEND=noninteractive apt-get install -y "
+                 "btrfs-progs ntfs-3g exfatprogs 2>/dev/null || true"),
+        pacman_cmd="pacman -Sy --needed --noconfirm btrfs-progs ntfs-3g exfatprogs 2>/dev/null || true",
+    )
+    return (f"({core}) && echo 'Core filesystem tools installed (parted, e2fsprogs, "
+            f"xfsprogs, dosfstools).'; ({extras}); "
+            f"echo 'Done — btrfs/ntfs/exfat tools installed where available.'")
+
+
 # ---------------------------------------------------------
 # Partitions (parted)
 # ---------------------------------------------------------
@@ -398,7 +447,7 @@ def cmd_format_filesystem(device: str, fs_type: str, label: str = "", force: boo
     # (btrfs unsupported), mkfs.ntfs (ntfs-3g) is EPEL-only on RHEL, mkfs.xfs
     # needs xfsprogs, etc. Give the "package not installed" message the rest of
     # this module gives instead of a bare "mkfs.btrfs: command not found".
-    pkg = {"btrfs": "btrfs-progs", "xfs": "xfsprogs", "ntfs": "ntfs-3g",
+    pkg = {"btrfs": "btrfs-progs (btrfsprogs on openSUSE)", "xfs": "xfsprogs", "ntfs": "ntfs-3g",
            "vfat": "dosfstools", "fat": "dosfstools", "exfat": "exfatprogs",
            "f2fs": "f2fs-tools", "reiserfs": "reiserfsprogs"}.get(fs_type, "the relevant filesystem tools")
     return (
@@ -417,6 +466,8 @@ def cmd_create_physical_volume(devices: str) -> str:
     return (
         "if ! command -v pvcreate >/dev/null 2>&1; then "
         "echo 'LVM tools are not installed on this host (package: lvm2).' >&2; exit 1; fi; "
+        # Refuse if any target is mounted / active swap before we wipe its signature.
+        f"{_devices_busy_guard(dev_list)}; "
         # -y: auto-confirm wiping any existing filesystem/partition signature
         # on the device. The agent runs non-interactively, so without this an
         # existing signature triggers a "Wipe it? [y/n]" prompt that defaults
@@ -616,13 +667,19 @@ def cmd_create_raid_array(raid_device: str, level: str, devices: str) -> str:
     if level not in _VALID_RAID_LEVELS:
         raise ValueError(f"Unsupported RAID level '{level}'. Supported: {', '.join(sorted(_VALID_RAID_LEVELS))}")
     dev_list = _devices_list(devices, "Member device(s)")
-    if len(dev_list) < 2:
-        raise ValueError("RAID requires at least 2 member devices.")
+    # Per-level minimums so the operator gets clear up-front feedback instead of a late
+    # mdadm error (RAID5 needs 3, RAID6/10 need 4; the rest need 2).
+    _min_members = {"5": 3, "6": 4, "10": 4}.get(level, 2)
+    if len(dev_list) < _min_members:
+        raise ValueError(f"RAID{level} requires at least {_min_members} member devices "
+                         f"(got {len(dev_list)}).")
     q_raid = shlex.quote(raid_device)
     q_devs = " ".join(shlex.quote(d) for d in dev_list)
     return (
         "if ! command -v mdadm >/dev/null 2>&1; then "
         "echo 'mdadm is not installed on this host (package: mdadm).' >&2; exit 1; fi; "
+        # Refuse if any member is mounted / active swap before mdadm wipes it.
+        f"{_devices_busy_guard(dev_list)}; "
         # Feed 'y' on stdin: when a member device already carries a filesystem or
         # partition signature (the common "repurpose these disks" case), mdadm
         # --create asks "appears to contain ... Continue creating array? (y/n)"
@@ -773,6 +830,8 @@ def cmd_create_swap_partition(device: str, persist: bool = True) -> str:
     device = _validate_path(device, "Device")
     q_dev = shlex.quote(device)
     cmd = (
+        # Refuse if the target is mounted / already active swap before mkswap wipes it.
+        f"{_device_busy_guard(device)}; "
         f"mkswap {q_dev} 2>&1 "
         f"&& swapon {q_dev} 2>&1 "
         f"&& printf 'Swap partition %s created and activated.\\n' {q_dev}"

@@ -198,6 +198,8 @@ def cmd_ping(target: str, count=4) -> str:
     target = (target or "").strip()
     if not target:
         raise ValueError("Target host or IP is required.")
+    if target.startswith("-"):
+        raise ValueError("Target must not start with '-'.")
     count = _validate_int_range(count, 1, 20, "Ping count")
     q = shlex.quote(target)
     return f"ping -c {count} -W 2 {q} 2>&1"
@@ -207,6 +209,8 @@ def cmd_traceroute(target: str) -> str:
     target = (target or "").strip()
     if not target:
         raise ValueError("Target host or IP is required.")
+    if target.startswith("-"):
+        raise ValueError("Target must not start with '-'.")
     q = shlex.quote(target)
     return (
         "if command -v traceroute >/dev/null 2>&1; then "
@@ -221,8 +225,12 @@ def cmd_dns_lookup(name: str, server: str = "") -> str:
     name = (name or "").strip()
     if not name:
         raise ValueError("A hostname to resolve is required.")
+    if name.startswith("-"):
+        raise ValueError("Hostname must not start with '-'.")
     q_name = shlex.quote(name)
     server = (server or "").strip()
+    if server.startswith("-"):
+        raise ValueError("DNS server must not start with '-'.")
     q_server = shlex.quote(server) if server else ""
 
     return (

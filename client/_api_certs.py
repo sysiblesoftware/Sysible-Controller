@@ -111,7 +111,12 @@ def cmd_renew_certbot(domain: str = "") -> str:
     domain = (domain or "").strip()
     if domain and not _HOSTPORT_RE.match(domain):
         raise ValueError("Domain must be a hostname/FQDN.")
-    inner = "certbot renew" if not domain else f"certbot certonly --force-renewal -d {shlex.quote(domain)}"
+    # For one domain use `renew --cert-name`, which reuses that lineage's stored
+    # authenticator (webroot/nginx/standalone). `certonly -d` instead re-runs full
+    # issuance and, with no TTY, fails non-interactively ("Unable to determine
+    # authenticator"). `renew` is the correct headless single-cert path.
+    inner = "certbot renew" if not domain else \
+        f"certbot renew --force-renewal --cert-name {shlex.quote(domain)}"
     return (
         "if ! command -v certbot >/dev/null 2>&1; then "
         "echo 'certbot is not installed on this host. Use the \"Install certbot\" button above first.' >&2; exit 1; fi; "

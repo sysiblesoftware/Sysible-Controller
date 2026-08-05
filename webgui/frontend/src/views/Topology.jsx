@@ -438,7 +438,18 @@ export default function Topology({ onOpen }) {
                                      strokeDasharray={n.revoked || n.quarantined ? "3 3" : undefined} />}
                     <circle r={hovered ? 11 : 9} fill={nodeColor(n)} stroke="var(--bg,#0d1117)" strokeWidth={2} />
                     {n.kind === "Agent + SSH" && <circle r={hovered ? 4.5 : 3.5} fill="var(--bg,#0d1117)" />}
-                    <text y={24} textAnchor="middle" style={{ fontSize: 11.5, fill: "var(--text,#e6e6e6)", fontWeight: hovered ? 700 : 400 }}>{n.hypervisor ? "🖥 " : ""}{trunc(n.label)}</text>
+                    {n.hypervisor && (
+                      // Yellow server glyph marking a VM host (hypervisor). Drawn as
+                      // SVG (not the 🖥 emoji, which can't be recoloured) so it's a
+                      // clear, consistent yellow above the node.
+                      <g transform="translate(0 -16)" stroke="#eab308" fill="none" strokeWidth={1.5} strokeLinecap="round">
+                        <rect x={-6} y={-5} width={12} height={4.5} rx={1} />
+                        <rect x={-6} y={0.5} width={12} height={4.5} rx={1} />
+                        <line x1={-3.5} y1={-2.75} x2={-3.4} y2={-2.75} />
+                        <line x1={-3.5} y1={2.75} x2={-3.4} y2={2.75} />
+                      </g>
+                    )}
+                    <text y={24} textAnchor="middle" style={{ fontSize: 11.5, fill: "var(--text,#e6e6e6)", fontWeight: hovered ? 700 : 400 }}>{trunc(n.label)}</text>
                   </g>
                 );
               })}

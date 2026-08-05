@@ -97,7 +97,40 @@ function NavIcon({ name }) {
   );
 }
 
-function applyTheme(t) { document.documentElement.setAttribute("data-theme", t); }
+// Selectable console skins. Each is a complete look defined as a token block in
+// styles.css ([data-skin="…"]); "base" is the original Slate palette. There is no
+// separate light/dark toggle — "Porcelain" is the light skin.
+const SKINS = [
+  { id: "base",  name: "Slate" },
+  { id: "amber", name: "Amber Control Room" },
+  { id: "nord",  name: "Nord Frost" },
+  { id: "phos",  name: "Phosphor" },
+  { id: "blue",  name: "Blueprint" },
+  { id: "porc",  name: "Porcelain (light)" },
+];
+const SKIN_IDS = new Set(SKINS.map((s) => s.id));
+function applySkin(s) { document.documentElement.setAttribute("data-skin", s); }
+
+function SkinPicker({ skin, onChange }) {
+  return (
+    <label className="skin-picker" title="Console skin">
+      <SkinIcon />
+      <select value={skin} onChange={(e) => onChange(e.target.value)} aria-label="Console skin">
+        {SKINS.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+      </select>
+    </label>
+  );
+}
+function SkinIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="13.5" cy="6.5" r="2.5" /><circle cx="17.5" cy="10.5" r="2.5" />
+      <circle cx="8.5" cy="7.5" r="2.5" /><circle cx="6.5" cy="12.5" r="2.5" />
+      <path d="M12 2a10 10 0 0 0 0 20c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.4-.5-.8-.5-1.2 0-1 .8-1.5 1.7-1.5H16a6 6 0 0 0 6-6c0-4.9-4.5-8-10-8Z" />
+    </svg>
+  );
+}
 
 // --- URL-addressable views ------------------------------------------------
 // Nav items are real links (?view=<key>) so they can be opened in a new tab,
@@ -163,7 +196,10 @@ export default function App() {
   const [history, setHistory] = useState([]); // breadcrumb stack of {view,target}
   const [edition, setEdition] = useState(null);
   const [sudoOpen, setSudoOpen] = useState(false);
-  const [theme, setTheme] = useState(localStorage.getItem("sysible_theme") || "dark");
+  const [skin, setSkin] = useState(() => {
+    const s = localStorage.getItem("sysible_skin");
+    return s && SKIN_IDS.has(s) ? s : "base";
+  });
 
   // Transient toast notifications (host enrolled, etc.). App owns the auto-
   // dismiss timers; a monotonic ref counter keeps ids unique.
@@ -176,7 +212,7 @@ export default function App() {
   }, []);
   const dismissToast = useCallback((id) => setToasts((t) => t.filter((x) => x.id !== id)), []);
 
-  useEffect(() => { applyTheme(theme); }, [theme]);
+  useEffect(() => { applySkin(skin); }, [skin]);
 
   // Notify when a host enrolls: poll the agent inventory and toast any host_id
   // that appears after the first (baseline) fetch. Runs while signed in.
@@ -265,10 +301,9 @@ export default function App() {
     });
   }, []);
 
-  const toggleTheme = () => {
-    const next = theme === "dark" ? "light" : "dark";
-    setTheme(next);
-    localStorage.setItem("sysible_theme", next);
+  const chooseSkin = (next) => {
+    setSkin(next);
+    localStorage.setItem("sysible_skin", next);
   };
 
   // Redirect away from a view the current role can't access — a URL-seeded ?view=
@@ -305,9 +340,7 @@ export default function App() {
             </div>
             <div className="row" style={{ alignItems: "center", gap: 12 }}>
               <button className="btn ghost sm" onClick={() => setSudoOpen(true)}>Sudo Password</button>
-              <button className="iconbtn" title="Toggle light/dark" onClick={toggleTheme}>
-                {theme === "dark" ? "☾" : "☀"}
-              </button>
+              <SkinPicker skin={skin} onChange={chooseSkin} />
             </div>
           </div>
           <div className="main-scroll"><Connect /></div>
@@ -380,9 +413,7 @@ export default function App() {
           </div>
           <div className="rail-actions">
             <button className="btn ghost sm" onClick={() => setSudoOpen(true)}>Sudo Password</button>
-            <button className="iconbtn" title="Toggle light/dark" onClick={toggleTheme}>
-              {theme === "dark" ? "☾" : "☀"}
-            </button>
+            <SkinPicker skin={skin} onChange={chooseSkin} />
           </div>
           <button className="btn ghost sm rail-logout" onClick={onLogout}>Log Out</button>
         </div>

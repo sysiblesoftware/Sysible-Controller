@@ -27,19 +27,14 @@ folded into a broader "save/persist" control. (EE + CE — shared actions.py.)
 
 ---
 
-## 2. Left-rail icon palette still renders monochrome on the running instance
+## 2. Left-rail per-icon colors — tried, then REVERTED by request
 
-**Symptom:** The nav rail icons are all one gray color — "no colors in this
-palette" — despite per-icon colors having been added in code.
+**History:** per-icon rail colors were added, then removed at the user's
+request — "makes it look like a toy." The rail is back to its original look:
+monochrome icons that take the skin accent only on the active item.
 
-**Root cause (likely):** the color change (per-icon `--rail-icon` hues in
-`App.jsx` + `styles.css`) is committed to the branch/`dev` but the running
-instance hasn't rebuilt/redeployed the frontend, so it's serving the old
-bundle. Not a code defect — a deploy-lag.
-
-**Fix / verify:** rebuild + redeploy the webgui on the instance, then confirm
-the rail shows distinct hues. If it's *still* monochrome after a clean deploy,
-debug: (a) the inline `style={{ "--rail-icon": ... }}` is present on
-`.rail-item`, (b) `.rail-item svg { color: var(--rail-icon, currentColor) }`
-isn't being overridden, (c) the active skin isn't one of the intentionally
-monochrome ones (amber/phos). (EE + CE.)
+**Decision / if revisited:** distinct per-icon hues read as toy-like here. Any
+future attempt should be subtler — e.g. accent-tint only, or color solely the
+active item (already the case) — not a full rainbow. Reverted in both editions
+(`App.jsx` RAIL_ICON_COLORS + the `.rail-item svg` hue CSS). Leave monochrome
+unless the user explicitly asks again. (EE + CE.)

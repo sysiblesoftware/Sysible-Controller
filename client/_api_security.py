@@ -93,7 +93,14 @@ def cmd_install_selinux_tools() -> str:
     (AppArmor by default) this installs the tools but does NOT switch the host
     to SELinux - that's a separate, reboot-level decision."""
     return _pkgmgr_dispatch(
-        rpm_cmd='"$PKGMGR" install -y policycoreutils policycoreutils-python-utils setools-console libselinux-utils',
+        # The Python management package (semanage/audit2allow/audit2why) is
+        # policycoreutils-python-utils on dnf (RHEL8+/Fedora/Rocky/Alma) but
+        # policycoreutils-python on yum (EL7/CentOS7/Oracle 7/Amazon Linux 2).
+        rpm_cmd=(
+            'if [ "$PKGMGR" = "dnf" ]; then '
+            '"$PKGMGR" install -y policycoreutils policycoreutils-python-utils setools-console libselinux-utils; '
+            'else yum install -y policycoreutils policycoreutils-python setools-console libselinux-utils; fi'
+        ),
         # openSUSE/SLES: install each package separately so one wrong/renamed name on
         # a given SUSE release doesn't abort the whole zypper transaction (exit 104)
         # and leave NONE of the tools installed. Mirrors cmd_install_firewalld's loop.
@@ -103,7 +110,7 @@ def cmd_install_selinux_tools() -> str:
             "    echo \"Warning: could not install $_p on this SUSE release.\" >&2; "
             "done"
         ),
-        apt_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y policycoreutils selinux-utils setools",
+        apt_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y policycoreutils policycoreutils-python-utils selinux-utils setools",
         # Arch does NOT ship the SELinux userspace in its official repos - the
         # whole SELinux stack lives in the AUR 'selinux' group, so there's nothing
         # pacman can install here. Fail with a clear pointer instead of a wrong
@@ -675,7 +682,7 @@ def cmd_install_security_updates() -> str:
     return _pkgmgr_dispatch(
         rpm_cmd=(
             'if [ "$PKGMGR" = "dnf" ]; then dnf upgrade --security -y 2>&1; '
-            "else (yum --security update -y 2>&1 || echo 'yum-plugin-security may be required for security-only updates.' >&2); fi"
+            "else (yum --security update -y 2>&1; rc=$?; [ \"$rc\" -ne 0 ] && echo 'yum-plugin-security may be required for security-only updates.' >&2; exit \"$rc\"); fi"
         ),
         # --auto-agree-with-licenses: without it, zypper in non-interactive mode
         # auto-DECLINES (and silently skips) any security patch that needs a

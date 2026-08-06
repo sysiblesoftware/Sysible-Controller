@@ -143,13 +143,24 @@ def cmd_timer_enable(name: str) -> str:
     # --now so "Enable timer" actually starts it too (not just at next boot), matching
     # what the label implies and what cmd_create_systemd_timer does.
     u = shlex.quote(_timer_unit(name))
-    return f"systemctl enable --now {u} && systemctl is-active {u} 2>&1; systemctl status {u} --no-pager -l 2>&1 | head -n 4; true"
+    # Capture the enable's real status so a polkit/sudo refusal surfaces as
+    # non-zero (agent then retries under sudo) instead of the trailing `; true`
+    # masking it as success. Status tail stays as a diagnostic.
+    return (
+        f"systemctl enable --now {u} 2>&1; rc=$?; "
+        f"systemctl status {u} --no-pager -l 2>&1 | head -n 4; "
+        f'exit "$rc"'
+    )
 
 
 def cmd_timer_disable(name: str) -> str:
     # --now so "Disable timer" also stops it immediately.
     u = shlex.quote(_timer_unit(name))
-    return f"systemctl disable --now {u} 2>&1; echo 'Timer disabled and stopped.'"
+    return (
+        f"systemctl disable --now {u} 2>&1; rc=$?; "
+        f"if [ \"$rc\" -eq 0 ]; then echo 'Timer disabled and stopped.'; fi; "
+        f'exit "$rc"'
+    )
 
 
 def cmd_create_systemd_timer(
@@ -439,13 +450,18 @@ def cmd_install_local_package(remote_path: str) -> str:
     remote_path = (remote_path or "").strip()
     if not remote_path:
         raise ValueError("No package file path given.")
+    # A leading '-' would be parsed as an option by every manager; reject it, and
+    # put a `--` end-of-options separator before the path as defense in depth
+    # (apt-get/dnf/yum/zypper/pacman all honor `--`).
+    if remote_path.startswith("-"):
+        raise ValueError("Package file path cannot begin with '-' (it would be parsed as a command-line option); use an absolute path such as /tmp/foo.rpm.")
     q = _shlex.quote(remote_path)
     return _pkgmgr_dispatch(
-        rpm_cmd=f'"$PKGMGR" install -y {q}',
-        zypper_cmd=f'zypper --non-interactive install --allow-unsigned-rpm {q}',
-        apt_cmd=f'DEBIAN_FRONTEND=noninteractive apt-get install -y {q}',
+        rpm_cmd=f'"$PKGMGR" install -y -- {q}',
+        zypper_cmd=f'zypper --non-interactive install --allow-unsigned-rpm -- {q}',
+        apt_cmd=f'DEBIAN_FRONTEND=noninteractive apt-get install -y -- {q}',
         # Arch installs a local package FILE (.pkg.tar.zst) with -U.
-        pacman_cmd=f'pacman -U --noconfirm {q}',
+        pacman_cmd=f'pacman -U --noconfirm -- {q}',
     )
 
 

@@ -28,7 +28,7 @@ _PACMAN_REPO_MANUAL = (
 
 def cmd_list_repositories() -> str:
     return _pkgmgr_dispatch(
-        rpm_cmd='"$PKGMGR" repolist all',
+        rpm_cmd='"$PKGMGR" repolist --all 2>/dev/null || "$PKGMGR" repolist all',
         zypper_cmd='zypper repos --details',
         apt_cmd=(
             'for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do '
@@ -75,11 +75,9 @@ def cmd_add_repository(url: str, alias: str = "") -> str:
         f'      *.repo) dnf config-manager addrepo --from-repofile={q_url} 2>&1;; '
         f'      *) dnf config-manager addrepo{id_arg} --set=baseurl={q_url} --set=enabled=1 2>&1;; '
         '    esac; '
-        '  fi || '
-        '  echo "Failed - install the config-manager plugin (dnf4: dnf-plugins-core, dnf5: dnf5-plugins)."; '
+        '  fi || { rc=$?; echo "Failed - install the config-manager plugin (dnf4: dnf-plugins-core, dnf5: dnf5-plugins)." >&2; exit "$rc"; }; '
         'else '
-        f'yum-config-manager --add-repo {q_url} 2>&1 || '
-        'echo "Failed - is yum-utils installed? (Install Packages: yum-utils)"; '
+        f'yum-config-manager --add-repo {q_url} 2>&1 || {{ rc=$?; echo "Failed - is yum-utils installed? (Install Packages: yum-utils)" >&2; exit "$rc"; }}; '
         'fi'
     )
 

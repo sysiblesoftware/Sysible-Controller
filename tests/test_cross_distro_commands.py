@@ -508,7 +508,8 @@ def test_pwquality_warns_on_debian():
 
 def test_remove_old_kernels_notes_keep_is_dnf_only():
     cmd = B.cmd_remove_old_kernels("5")
-    assert "APT autoremove" in cmd
+    assert "apt-get autoremove" in cmd   # note explains apt runs a broad autoremove
+    assert "not honored here" in cmd     # …and that the keep-count isn't applied on apt
     assert "multiversion.kernels" in cmd
     _bash_n(cmd)
 

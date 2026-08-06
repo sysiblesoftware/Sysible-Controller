@@ -9,7 +9,7 @@ import shlex
 _BOOT_TARGETS = {"rescue", "emergency", "multi-user", "graphical"}
 # Conservative kernel-cmdline allowlist (params like "quiet splash
 # console=ttyS0,115200 nomodeset" - no shell metacharacters).
-_CMDLINE_RE = re.compile(r"^[\w\s=,.:/+\-]*$")
+_CMDLINE_RE = re.compile(r"^[\w =,.:/+\-]*$")  # literal space only — \s would admit newline/CR
 
 
 def _grub_rebuild_fragment() -> str:
@@ -155,7 +155,10 @@ def cmd_list_kernels() -> str:
         # filter out the non-kernel-image subpackages (devel/doc/source/etc.).
         "if command -v rpm >/dev/null 2>&1; then "
         "rpm -qa 'kernel*' 2>/dev/null "
-        "| grep -vE -- '-(devel|devel-base|doc|source|syms|macros|firmware|debug|debuginfo|debugsource|default-devel|preempt-devel)($|-)' "
+        # Allowlist the real bootable-image package names followed by a version, so
+        # kernel-headers/-tools/-modules/-devel and friends are excluded (and it's
+        # future-proof against new subpackages).
+        "| grep -E -- '^(kernel|kernel-core|kernel-default|kernel-preempt|kernel-pae|kernel-rt|kernel-rt-core|kernel-64k|kernel-64k-core)-[0-9]' "
         "| sort -V; "
         "elif command -v dpkg-query >/dev/null 2>&1; then dpkg-query -W -f='${Package} ${Version}\\n' 'linux-image-*' 2>/dev/null | grep -v -- '-dbg'; "
         # Arch: kernels are ordinary packages (linux, linux-lts, linux-zen, linux-hardened).
@@ -181,8 +184,8 @@ def cmd_remove_old_kernels(keep: str = "2") -> str:
         # kernel marked autoremovable, and zypper's purge-kernels obeys the host's
         # /etc/zypp/zypp.conf `multiversion.kernels` policy - neither takes `keep`.
         # Surface that so the operator isn't surprised by how many kernels remain.
-        f"echo 'Note: on apt the exact keep-count ({keep}) is governed by APT autoremove, not this field.' >&2; "
-        "DEBIAN_FRONTEND=noninteractive apt-get -y --purge autoremove 2>&1; "
+        f"echo 'Note: on apt this runs apt-get autoremove, which removes ALL packages APT considers no longer required (not only old kernels); the keep-count ({keep}) is not honored here.' >&2; "
+        "DEBIAN_FRONTEND=noninteractive apt-get -y autoremove 2>&1; "
         "elif command -v zypper >/dev/null 2>&1; then "
         f"echo 'Note: on zypper the keep-count ({keep}) is governed by multiversion.kernels in /etc/zypp/zypp.conf, not this field.' >&2; "
         "zypper --non-interactive purge-kernels 2>&1 || echo 'purge-kernels needs the zypper purge-kernels plugin.'; "

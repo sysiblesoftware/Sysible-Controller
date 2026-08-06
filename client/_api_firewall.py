@@ -402,7 +402,7 @@ def cmd_nft_save_persist() -> str:
     without this an operator's rules silently vanish on reboot."""
     return _NFT_MISSING + r"""
 if [ -f /etc/sysconfig/nftables.conf ] || [ -d /etc/sysconfig ]; then _f=/etc/sysconfig/nftables.conf; else _f=/etc/nftables.conf; fi
-{ echo '#!/usr/sbin/nft -f'; echo 'flush ruleset'; nft list ruleset; } > "$_f" 2>&1 \
+{ echo '#!/usr/sbin/nft -f'; echo 'flush ruleset'; nft list ruleset; } > "$_f" \
   && chmod 0600 "$_f" || { echo "Could not write nftables ruleset to $_f." >&2; exit 1; }
 systemctl enable --now nftables.service 2>&1; rc=$?
 if [ "$rc" -eq 0 ]; then

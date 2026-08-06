@@ -262,9 +262,13 @@ def cmd_selinux_add_fcontext(path_regex: str, file_type: str) -> str:
     q_path = shlex.quote(path_regex)
     return (
         _SEMANAGE_MISSING +
-        f"semanage fcontext -a -t {file_type} {q_path} 2>&1 "
-        f"&& restorecon -Rv {q_path} 2>&1; "
-        f"printf 'File context rule added for %s -> {file_type}.\\n' {q_path}"
+        # -a fails with "already defined" if the rule exists, so fall back to -m
+        # (modify) for an idempotent upsert. Gate restorecon + the success line on
+        # && so success (and exit 0) is reported only when the rule actually took.
+        f"{{ semanage fcontext -a -t {file_type} {q_path} 2>/dev/null "
+        f"|| semanage fcontext -m -t {file_type} {q_path} 2>&1; }} "
+        f"&& restorecon -Rv {q_path} 2>&1 "
+        f"&& printf 'File context rule added for %s -> {file_type}.\\n' {q_path}"
     )
 
 
@@ -856,11 +860,17 @@ def cmd_disable_core_dumps() -> str:
     at runtime/on boot and adds a hard limit of 0 in
     /etc/security/limits.conf so per-process ulimit settings can't
     re-enable them."""
-    q_file = shlex.quote("/etc/security/limits.conf")
+    q_limits = shlex.quote("/etc/security/limits.conf")
+    q_sysctl = shlex.quote("/etc/sysctl.d/99-sysible-coredumps.conf")
     return (
-        "sysctl -w fs.suid_dumpable=0 2>&1 && "
-        f"grep -qxF '* hard core 0' {q_file} || printf '* hard core 0\\n' >> {q_file}; "
-        "echo 'Core dumps disabled (fs.suid_dumpable=0, limits.conf hard core 0).'"
+        # Persist across reboot via a drop-in (systemd-sysctl re-applies it at boot)
+        # and apply it now — the previous `sysctl -w` was runtime-only despite the
+        # "on boot" claim.
+        f"printf 'fs.suid_dumpable = 0\\n' > {q_sysctl} && "
+        f"sysctl --system 2>&1 | tail -n 5; "
+        # Idempotent ulimit backstop; the guard runs regardless of the sysctl outcome.
+        f"grep -qxF '* hard core 0' {q_limits} || printf '* hard core 0\\n' >> {q_limits}; "
+        "echo 'Core dumps disabled (fs.suid_dumpable=0 persisted, limits.conf hard core 0).'"
     )
 
 

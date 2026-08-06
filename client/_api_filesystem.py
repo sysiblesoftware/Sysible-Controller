@@ -31,6 +31,10 @@ def _validate_path(path: str, label: str = "Path") -> str:
     # file this value is written into (e.g. /etc/fstab). Matches the mount copy.
     if "\x00" in path or "\n" in path or "\r" in path:
         raise ValueError(f"{label} contains an invalid character.")
+    # A leading '-' would be parsed as an option by the coreutils commands these
+    # paths flow into (chmod/chown/rm/cp/mv/ln). Reject it, matching _api_storage.
+    if path.startswith("-"):
+        raise ValueError(f"{label} must not start with '-'.")
     return path
 
 

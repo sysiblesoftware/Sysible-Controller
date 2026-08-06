@@ -460,9 +460,7 @@ def cmd_set_hostname(new_hostname: str) -> str:
 
 def cmd_set_gateway(connection: str, gateway: str) -> str:
     conn = _validate_connection_name(connection)
-    gateway = (gateway or "").strip()
-    if not gateway:
-        raise ValueError("Gateway IP address is required.")
+    gateway = _validate_ip((gateway or "").strip(), "Gateway")
     q_conn = shlex.quote(conn)
     q_gw = shlex.quote(gateway)
     return (
@@ -484,12 +482,8 @@ def cmd_show_routes() -> str:
 
 def cmd_add_static_route(connection: str, destination_cidr: str, via_gateway: str) -> str:
     conn = _validate_connection_name(connection)
-    destination_cidr = (destination_cidr or "").strip()
-    via_gateway = (via_gateway or "").strip()
-    if not destination_cidr:
-        raise ValueError("Destination network (CIDR form, e.g. 10.0.5.0/24) is required.")
-    if not via_gateway:
-        raise ValueError("Via gateway IP is required.")
+    destination_cidr = _validate_cidr((destination_cidr or "").strip(), "Destination network")
+    via_gateway = _validate_ip((via_gateway or "").strip(), "Via gateway")
     q_conn = shlex.quote(conn)
     q_route = shlex.quote(f"{destination_cidr} {via_gateway}")
     return (

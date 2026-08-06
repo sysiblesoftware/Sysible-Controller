@@ -102,6 +102,7 @@ function NavIcon({ name }) {
 // separate light/dark toggle — "Porcelain" is the light skin.
 const SKINS = [
   { id: "base",  name: "Slate" },
+  { id: "brand", name: "Sysible" },
   { id: "amber", name: "Amber Control Room" },
   { id: "nord",  name: "Nord Frost" },
   { id: "phos",  name: "Phosphor" },

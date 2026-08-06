@@ -1501,6 +1501,19 @@ def _pty_bridge(state, sid, user, cols, rows):
             info = (pw.pw_uid, pw.pw_gid, pw.pw_dir, pw.pw_shell)
         except Exception:
             info = None
+        if info is None:
+            # A SPECIFIC operator account was requested (run_as) but does not
+            # exist on this host. Fail CLOSED: _pty_child_exec would otherwise
+            # fall through to a root login shell (the `user is None => root`
+            # path), silently escalating an operator mapped to a missing local
+            # account to root. Refuse instead.
+            _pty_post_output(
+                state, sid,
+                f"[sysible] cannot open a terminal: user '{user}' does not exist "
+                "on this host.\r\n",
+                ended=True,
+            )
+            return
 
     try:
         pid, master = _pty.fork()   # child gets the slave as its controlling tty

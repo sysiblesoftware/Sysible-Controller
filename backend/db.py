@@ -831,6 +831,18 @@ def _upgrade_agent_secret_hash(host_id, hashed):
         conn.commit()
 
 
+def _is_hash_at_rest(value):
+    """True if `value` looks like a _token_at_rest() output — a 64-char lowercase
+    SHA-256 hex digest — rather than a legacy raw agent secret (secrets.token_hex(24)
+    = 48 hex chars). Used so the legacy plaintext-acceptance path can never treat a
+    stored HASH as a usable secret (pass-the-hash)."""
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(c in "0123456789abcdef" for c in value)
+    )
+
+
 def agent_secret_matches(host_id, presented):
     """Constant-time check of a presented agent secret against the hash stored at
     rest. Transparently upgrades a legacy row that still holds the plaintext secret
@@ -843,9 +855,12 @@ def agent_secret_matches(host_id, presented):
         return False
     if hmac.compare_digest(_token_at_rest(presented), stored):
         return True
-    # Legacy plaintext row: accept once, then upgrade in place so the cleartext
-    # secret does not survive another heartbeat.
-    if hmac.compare_digest(presented, stored):
+    # Legacy plaintext row (created before hash-at-rest): `stored` held the raw
+    # token_hex(24) secret. Accept the presented value verbatim ONLY for such a
+    # row, then upgrade it in place. If `stored` is already a SHA-256 hash we must
+    # NOT accept presented == stored — that would make the at-rest hash itself a
+    # replayable bearer credential (pass-the-hash from a leaked DB snapshot).
+    if not _is_hash_at_rest(stored) and hmac.compare_digest(presented, stored):
         try:
             _upgrade_agent_secret_hash(host_id, _token_at_rest(presented))
         except Exception:

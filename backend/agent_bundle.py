@@ -714,7 +714,15 @@ def _patch_agent_controller_default(agent_source: str, controller_url: str) -> s
             "_patch_agent_controller_default to match."
         )
 
-    patched_fragment = f'os.getenv("SYSIBLE_CONTROLLER", "{controller_url}")'
+    # Embed the URL as a JSON string literal (valid, fully-escaped Python) rather
+    # than raw f-string interpolation, so a stray quote/backslash/newline in the
+    # controller address can never break out of the string and inject code into
+    # agent.py (which runs as root on every host). The ingest-time validator on
+    # SetControllerConfigRequest.ip is the primary guard; this is defense in depth.
+    # For a normal URL json.dumps yields the identical `"https://host:port"` form,
+    # so agent_version_of()'s canonicalization regex still matches.
+    import json
+    patched_fragment = f'os.getenv("SYSIBLE_CONTROLLER", {json.dumps(controller_url)})'
 
     return agent_source.replace(_CONTROLLER_DEFAULT_LINE, patched_fragment, 1)
 

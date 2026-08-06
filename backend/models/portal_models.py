@@ -19,11 +19,35 @@ def _validate_admin_name(v: str) -> str:
     return s
 
 
+# The controller `ip` is baked into the generated agent.py source and the
+# enrollment env file (agent_bundle._patch_agent_controller_default). A value
+# with a quote/paren/newline would break out of that Python string literal and
+# inject code that runs as root on every enrolled host, so constrain it to a
+# plain host address at ingest — same charset the agent-facing models enforce.
+_CTRL_ADDR_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9._:-]*)?$")
+
+
 class SetControllerConfigRequest(BaseModel):
     hostname: str = ""
     ip: str = ""
     address_mode: str = "ip"  # "ip" or "all" (every detected local IP, with failover) - agent bundles are IP-only; a legacy "hostname" value is coerced to "ip"
     port: int = 9000
+
+    @field_validator("ip")
+    @classmethod
+    def _validate_ip(cls, v):
+        if v is None or v == "":
+            return v
+        if not _CTRL_ADDR_RE.match(v):
+            raise ValueError("ip must be a plain host address (letters, digits, . _ : - ; no leading '-', quotes, spaces, or control characters)")
+        return v
+
+    @field_validator("hostname")
+    @classmethod
+    def _validate_hostname(cls, v):
+        if v and any(ord(c) < 0x20 or ord(c) == 0x7f for c in v):
+            raise ValueError("hostname must not contain control characters")
+        return v
 
 
 class SetLicenseKeyRequest(BaseModel):

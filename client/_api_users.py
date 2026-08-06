@@ -631,6 +631,7 @@ def cmd_set_user_shell(username: str, shell: str) -> str:
 
 
 def cmd_set_user_comment(username: str, comment: str) -> str:
+    _reject_leading_dash(username)  # consistency with every other account builder
     return f"usermod -c {shlex.quote(comment)} {shlex.quote(username)}"
 
 

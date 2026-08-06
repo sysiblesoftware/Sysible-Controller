@@ -60,12 +60,13 @@ def test_host_health_stores_hypervisor_fields(db):
 
 
 def test_agent_detect_hypervisor_shape():
-    """_detect_hypervisor must always return (role|None, int) and never raise,
-    whatever /proc looks like on the host running the test."""
+    """_detect_hypervisor must always return (role|None, int, list) and never
+    raise, whatever /proc looks like on the host running the test."""
     import host_agent.agent as a
-    role, vms = a._detect_hypervisor()
+    role, vms, vm_names = a._detect_hypervisor()
     assert role is None or isinstance(role, str)
     assert isinstance(vms, int) and vms >= 0
+    assert isinstance(vm_names, list)
 
 
 @pytest.mark.parametrize("disk,failed,sysd,oom,expected", [

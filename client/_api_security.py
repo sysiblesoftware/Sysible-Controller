@@ -823,7 +823,7 @@ def cmd_get_hardening_overview() -> str:
     return (
         "echo '-- SELinux --' && (getenforce 2>&1 || echo 'not installed'); "
         "echo; echo '-- sshd: root login / password auth --' && "
-        f"({binf} \"$SSHDBIN\" -T 2>/dev/null | grep -iE '^(permitrootlogin|passwordauthentication)' "
+        f"({binf}; \"$SSHDBIN\" -T 2>/dev/null | grep -iE '^(permitrootlogin|passwordauthentication)' "
         "|| echo 'sshd -T unavailable'); "
         "echo; echo '-- Listening services --' && "
         "(ss -tulpn 2>&1 || netstat -tulpn 2>&1)"

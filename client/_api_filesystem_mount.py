@@ -218,12 +218,14 @@ def cmd_resize_filesystem(target: str, new_size: str = "") -> str:
         f"_fst=$(findmnt -no FSTYPE {q_target} 2>/dev/null || lsblk -no FSTYPE {q_target} 2>/dev/null); "
         f"_mnt=$(findmnt -no TARGET {q_target} 2>/dev/null); "
         'case "$_fst" in '
-        f"ext2|ext3|ext4) command -v resize2fs >/dev/null 2>&1 && resize2fs {q_target} {q_size} 2>&1 "
-        "|| echo 'resize2fs not installed on this host (package: e2fsprogs).' >&2;; "
-        f'xfs) [ -n "$_mnt" ] && command -v xfs_growfs >/dev/null 2>&1 && xfs_growfs "$_mnt" 2>&1 '
-        "|| echo 'xfs_growfs not installed, or target is not a mounted xfs filesystem (xfs can only grow while mounted).' >&2;; "
-        f'btrfs) [ -n "$_mnt" ] && command -v btrfs >/dev/null 2>&1 && btrfs filesystem resize {btrfs_size} "$_mnt" 2>&1 '
-        "|| echo 'btrfs-progs not installed, or target is not a mounted btrfs filesystem (btrfs can only resize while mounted).' >&2;; "
+        f"ext2|ext3|ext4) if command -v resize2fs >/dev/null 2>&1; then resize2fs {q_target} {q_size} 2>&1; "
+        "else echo 'resize2fs not installed on this host (package: e2fsprogs).' >&2; exit 1; fi;; "
+        'xfs) if [ -z "$_mnt" ]; then echo \'Target is not a mounted xfs filesystem (xfs can only grow while mounted).\' >&2; exit 1; '
+        "elif ! command -v xfs_growfs >/dev/null 2>&1; then echo 'xfs_growfs not installed on this host (package: xfsprogs).' >&2; exit 1; "
+        'else xfs_growfs "$_mnt" 2>&1; fi;; '
+        'btrfs) if [ -z "$_mnt" ]; then echo \'Target is not a mounted btrfs filesystem (btrfs can only resize while mounted).\' >&2; exit 1; '
+        "elif ! command -v btrfs >/dev/null 2>&1; then echo 'btrfs-progs not installed on this host.' >&2; exit 1; "
+        f'else btrfs filesystem resize {btrfs_size} "$_mnt" 2>&1; fi;; '
         '*) echo "Unsupported or undetected filesystem type (\\"$_fst\\") - supported: ext2/ext3/ext4, xfs, btrfs." >&2; exit 1;; '
         "esac"
     )

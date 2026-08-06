@@ -268,7 +268,7 @@ for u in pwd.getpwall():
     groups = _groups(u.pw_name)
     users.append({
         "username": u.pw_name, "uid": u.pw_uid, "gid": u.pw_gid, "home": u.pw_dir,
-        "shell": u.pw_shell, "groups": groups, "sudo": "sudo" in groups, "locked": _locked(u.pw_name),
+        "shell": u.pw_shell, "groups": groups, "sudo": bool(set(groups) & {"sudo", "wheel", "admin"}), "locked": _locked(u.pw_name),
     })
 
 groups = []
@@ -591,9 +591,17 @@ def cmd_remove_user_from_group(group: str, username: str) -> str:
 def cmd_kill_user_sessions(username: str) -> str:
     user = shlex.quote(username)
     return (
-        f"if command -v loginctl >/dev/null 2>&1; then loginctl terminate-user {user} 2>&1; "
-        f"else pkill -KILL -u {user} 2>&1; fi; "
-        f"echo 'Done (no error above means it worked, or there were no active sessions).'"
+        "if command -v loginctl >/dev/null 2>&1; then "
+        f"loginctl terminate-user {user}; rc=$?; "
+        f"else pkill -KILL -u {user}; rc=$?; "
+        # pkill exits 1 when NO processes matched — that is "no active sessions",
+        # not a failure; normalise so we do not report a spurious error.
+        "[ \"$rc\" -eq 1 ] && rc=0; fi; "
+        # Propagate a REAL failure (e.g. polkit 'Interactive authentication
+        # required' on the unprivileged run-as-user attempt) so the agent/SSH
+        # path retries under sudo, instead of a trailing echo masking it as 0.
+        "if [ \"$rc\" -ne 0 ]; then exit \"$rc\"; fi; "
+        "echo 'Done (sessions terminated, or there were none).'"
     )
 
 
@@ -674,10 +682,11 @@ def cmd_set_password_quality_policy(minlen=None, retry=None, dcredit=None, ucred
     # libpam-pwquality by default, so warn rather than imply the policy is enforced.
     return (
         _set_security_conf_keys("/etc/security/pwquality.conf", settings)
-        + "; if command -v apt-get >/dev/null 2>&1 && ! grep -rq pam_pwquality /etc/pam.d/ 2>/dev/null; then "
+        + "; rc=$?; if command -v apt-get >/dev/null 2>&1 && ! grep -rq pam_pwquality /etc/pam.d/ 2>/dev/null; then "
         "echo 'Note: pam_pwquality is not referenced in this host'\"'\"'s PAM stack "
         "(Debian/Ubuntu default). Install libpam-pwquality and enable it in "
-        "/etc/pam.d/common-password for this to take effect.' >&2; fi"
+        "/etc/pam.d/common-password for this to take effect.' >&2; fi; "
+        "exit \"$rc\""
     )
 
 
@@ -693,10 +702,11 @@ def cmd_set_account_lockout_policy(deny=None, unlock_time=None) -> str:
     # warn instead of silently reporting success on a policy that isn't in force.
     return (
         _set_security_conf_keys("/etc/security/faillock.conf", settings)
-        + "; if command -v authselect >/dev/null 2>&1 && authselect current >/dev/null 2>&1; then "
+        + "; rc=$?; if command -v authselect >/dev/null 2>&1 && authselect current >/dev/null 2>&1; then "
         "authselect enable-feature with-faillock 2>&1 || true; fi; "
         "echo 'faillock.conf updated. Confirm /etc/pam.d/system-auth (or common-auth) references "
-        "pam_faillock on this host - on Debian/Ubuntu and RHEL7/Amazon Linux 2 it may need adding manually.'"
+        "pam_faillock on this host - on Debian/Ubuntu and RHEL7/Amazon Linux 2 it may need adding manually.'; "
+        "exit \"$rc\""
     )
 
 

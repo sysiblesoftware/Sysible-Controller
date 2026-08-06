@@ -182,6 +182,7 @@ def cmd_kerberos_config(realm: str, kdc: str, admin_server: str = "") -> str:
     return (
         "[ -f /etc/krb5.conf ] && cp /etc/krb5.conf /etc/krb5.conf.sysible.bak; "
         "cat > /etc/krb5.conf <<'SYS_KRB5'\n" + conf + "SYS_KRB5\n"
+        "rc=$?; if [ \"$rc\" -ne 0 ]; then echo 'Failed to write /etc/krb5.conf.' >&2; exit \"$rc\"; fi; "
         f"echo 'Wrote /etc/krb5.conf for realm {realm} (KDC {kdc}); a backup of any prior config is at /etc/krb5.conf.sysible.bak.'"
     )
 
@@ -383,9 +384,13 @@ def cmd_configure_ldap_client(server: str, base_dn: str, use_ldaps: bool = True)
     )
     return (
         "cat > /etc/sssd/sssd.conf <<'SYS_SSSD'\n" + conf + "SYS_SSSD\n"
-        "chmod 600 /etc/sssd/sssd.conf && "
-        "systemctl restart sssd 2>&1 && systemctl enable sssd 2>/dev/null; "
+        "chmod 600 /etc/sssd/sssd.conf && systemctl restart sssd\n"
+        "rc=$?\n"
+        "systemctl enable sssd 2>/dev/null || true; "
         + nss_wire + pam_wire +
+        'if [ "$rc" -eq 0 ]; then '
         f"printf 'Configured SSSD for {scheme}://%s (base %s), wired NSS (sss) + PAM, and restarted SSSD. "
-        f"Verify with: getent passwd <a-directory-user>.\\n' {shlex.quote(server)} {shlex.quote(base_dn)}"
+        f"Verify with: getent passwd <a-directory-user>.\\n' {shlex.quote(server)} {shlex.quote(base_dn)}; "
+        "else echo 'ERROR: writing /etc/sssd/sssd.conf or restarting SSSD failed - directory logins are NOT configured. "
+        "Ensure SSSD is installed, this ran as root, and the config is valid (journalctl -u sssd).' >&2; exit \"$rc\"; fi"
     )

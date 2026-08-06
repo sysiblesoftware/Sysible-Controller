@@ -319,8 +319,8 @@ def cmd_install_filesystem_tools() -> str:
         pacman_cmd="pacman -Sy --needed --noconfirm btrfs-progs ntfs-3g exfatprogs 2>/dev/null || true",
     )
     return (f"({core}) && echo 'Core filesystem tools installed (parted, e2fsprogs, "
-            f"xfsprogs, dosfstools).'; ({extras}); "
-            f"echo 'Done — btrfs/ntfs/exfat tools installed where available.'")
+            f"xfsprogs, dosfstools).' && {{ ({extras}) || true; "
+            f"echo 'Done — btrfs/ntfs/exfat tools installed where available.'; }}")
 
 
 # ---------------------------------------------------------
@@ -375,9 +375,8 @@ def cmd_create_partition(device: str, fs_type: str = "ext4", start: str = "0%", 
     return (
         "if ! command -v parted >/dev/null 2>&1; then "
         "echo 'parted is not installed on this host (package: parted).' >&2; exit 1; fi; "
-        f"parted -s {q_dev} mkpart primary {shlex.quote(fs_type)} {shlex.quote(start)} {shlex.quote(end)} 2>&1; "
-        f"partprobe {q_dev} 2>/dev/null; "
-        f"parted -s {q_dev} print 2>&1"
+        f"parted -s {q_dev} mkpart primary {shlex.quote(fs_type)} {shlex.quote(start)} {shlex.quote(end)} 2>&1 "
+        f"&& {{ partprobe {q_dev} 2>/dev/null; parted -s {q_dev} print 2>&1; }}"
     )
 
 
@@ -388,9 +387,8 @@ def cmd_delete_partition(device: str, part_number) -> str:
     return (
         "if ! command -v parted >/dev/null 2>&1; then "
         "echo 'parted is not installed on this host (package: parted).' >&2; exit 1; fi; "
-        f"parted -s {q_dev} rm {part_number} 2>&1; "
-        f"partprobe {q_dev} 2>/dev/null; "
-        f"printf 'Removed partition %s from %s.\\n' {part_number} {q_dev}"
+        f"parted -s {q_dev} rm {part_number} 2>&1 "
+        f"&& {{ partprobe {q_dev} 2>/dev/null; printf 'Removed partition %s from %s.\\n' {part_number} {q_dev}; }}"
     )
 
 
@@ -405,9 +403,8 @@ def cmd_resize_partition(device: str, part_number, end: str) -> str:
     return (
         "if ! command -v parted >/dev/null 2>&1; then "
         "echo 'parted is not installed on this host (package: parted).' >&2; exit 1; fi; "
-        f"parted -s {q_dev} resizepart {part_number} {shlex.quote(end)} 2>&1; "
-        f"partprobe {q_dev} 2>/dev/null; "
-        f"printf 'Resized partition %s on %s - remember to grow/shrink the filesystem inside it next.\\n' {part_number} {q_dev}"
+        f"parted -s {q_dev} resizepart {part_number} {shlex.quote(end)} 2>&1 "
+        f"&& {{ partprobe {q_dev} 2>/dev/null; printf 'Resized partition %s on %s - remember to grow/shrink the filesystem inside it next.\\n' {part_number} {q_dev}; }}"
     )
 
 
@@ -687,7 +684,22 @@ def cmd_create_raid_array(raid_device: str, level: str, devices: str) -> str:
         # prompt, not this one, so non-interactively it gets EOF -> "no" -> the
         # array is never created. `yes |` answers every such prompt.
         f"yes 2>/dev/null | mdadm --create {q_raid} --level={level} --raid-devices={len(dev_list)} {q_devs} --run 2>&1 "
-        f"&& printf 'Created %s (RAID{level}, {len(dev_list)} member(s)) - check RAID Status for sync progress.\\n' {q_raid}"
+        "&& { "
+        # Persist so the array re-assembles on boot: write its ARRAY stanza to the
+        # distro's mdadm.conf (Debian /etc/mdadm/mdadm.conf, else /etc/mdadm.conf),
+        # idempotently and with a backup, then refresh the initramfs (update-initramfs
+        # on Debian, dracut on RHEL/SUSE, mkinitcpio on Arch). Best-effort — a
+        # persistence hiccup must not undo a successful create — but reported.
+        "if [ -d /etc/mdadm ]; then _md=/etc/mdadm/mdadm.conf; else _md=/etc/mdadm.conf; fi; "
+        "mkdir -p \"$(dirname \"$_md\")\" 2>/dev/null; "
+        "[ -f \"$_md\" ] && cp \"$_md\" \"$_md.sysible.bak\" 2>/dev/null; "
+        f"if [ -f \"$_md\" ]; then grep -vF -- {q_raid} \"$_md\" > \"$_md.tmp\" 2>/dev/null && mv \"$_md.tmp\" \"$_md\"; fi; "
+        f"mdadm --detail --scan {q_raid} >> \"$_md\" 2>/dev/null; "
+        "if command -v update-initramfs >/dev/null 2>&1; then update-initramfs -u >/dev/null 2>&1; "
+        "elif command -v dracut >/dev/null 2>&1; then dracut -f >/dev/null 2>&1; "
+        "elif command -v mkinitcpio >/dev/null 2>&1; then mkinitcpio -P >/dev/null 2>&1; fi; "
+        f"printf 'Created %s (RAID{level}, {len(dev_list)} member(s)), saved its config to %s and refreshed the initramfs - check RAID Status for sync progress.\\n' {q_raid} \"$_md\"; "
+        "}"
     )
 
 

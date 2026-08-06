@@ -208,7 +208,11 @@ export default function UserGroupPage({ initialTab } = {}) {
 
   function AccountRow({ a }) {
     const initial = (a.name[0] || "?").toUpperCase();
-    const mcls = a.locked ? "locked" : ((a.priv || a.obj.uid === 0) ? "priv" : (a.system ? "" : "human"));
+    const mcls = a.locked ? "locked"
+      : a.obj.uid === 0 ? "root"          // superuser → royal blue (brand accent)
+      : a.priv ? "priv"                   // sudo (non-root) → amber
+      : a.system ? "sys"                  // system/service accounts → green
+      : "human";                          // regular login users → neutral slate
     const open = drill === a.name;
     return (
       <React.Fragment>

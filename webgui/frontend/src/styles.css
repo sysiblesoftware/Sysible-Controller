@@ -887,7 +887,9 @@ tr:hover td { background: var(--row-hover); }
 .ug-mono { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 8px; display: grid;
   place-items: center; font-weight: 650; font-size: 12px; border: 1px solid transparent;
   background: var(--slate-bg); color: var(--text-dim); }
-.ug-mono.human { background: var(--accent-soft); color: var(--accent); border-color: rgba(140,149,207,0.3); }
+.ug-mono.root { background: var(--accent-soft); color: var(--accent); border-color: rgba(140,149,207,0.3); }
+.ug-mono.sys { background: var(--green-bg); color: var(--green); border-color: rgba(54,179,126,0.3); }
+.ug-mono.human { background: var(--slate-bg); color: var(--slate); border-color: rgba(138,160,200,0.3); }
 .ug-mono.priv { background: var(--amber-bg); color: var(--amber); border-color: rgba(227,167,47,0.3); }
 .ug-mono.locked { background: var(--panel-2); color: var(--text-faint); }
 
@@ -902,7 +904,7 @@ tr:hover td { background: var(--row-hover); }
   background: var(--slate-bg); color: var(--text-dim); display: inline-flex; align-items: center; gap: 4px; }
 .ug-chip.sudo { background: var(--amber-bg); color: var(--amber); }
 .ug-chip.locked { background: var(--panel-2); color: var(--text-faint); }
-.ug-chip.sys { background: var(--slate-bg); color: var(--text-faint); }
+.ug-chip.sys { background: var(--green-bg); color: var(--green); }
 .ug-sess { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--green-bright); font-weight: 600; }
 .ug-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--green-bright); }
 

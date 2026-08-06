@@ -39,9 +39,12 @@ def _chrony_service_fragment() -> str:
     # retried under sudo (the service silently stayed disabled). Let it fail
     # loudly instead - 'enable --now' returns 0 when the unit is already
     # enabled, so this only errors on a real problem (missing unit / no root).
+    # ONE command with no top-level ';' so it can be spliced into an && chain
+    # (cmd_set_ntp_servers does exactly that) without breaking fail-fast. Resolve
+    # the unit name (chronyd on RHEL/SUSE, chrony on Debian/Ubuntu) inline.
     return (
-        "svc=chronyd; systemctl list-unit-files 2>/dev/null | grep -q '^chrony\\.service' && svc=chrony; "
-        "systemctl enable --now \"$svc\""
+        "systemctl enable --now "
+        "\"$(systemctl list-unit-files 2>/dev/null | grep -q '^chrony\\.service' && echo chrony || echo chronyd)\""
     )
 
 
@@ -84,11 +87,15 @@ def _ntp_service_fragment() -> str:
     # The unit is ntpsec (ntpsec pkg), ntp (Debian classic), or ntpd (RHEL). Find the
     # one that exists first, then enable it as the LAST command so a real enable
     # failure (missing unit / no root) propagates loudly — same rationale as chrony's.
+    # Resolve the unit (ntpsec / ntp / ntpd) via command substitution so there is
+    # no top-level ';' — this stays a single link of the install && ... && enable
+    # chain. Errors loudly if none of the units exist.
     return (
-        "found=; for svc in ntpsec ntp ntpd; do "
-        "if systemctl list-unit-files 2>/dev/null | grep -q \"^${svc}\\.service\"; then found=$svc; break; fi; done; "
-        "if [ -z \"$found\" ]; then echo 'ntp installed but no ntp service unit was found to enable.' >&2; exit 1; fi; "
-        "systemctl enable --now \"$found\""
+        "found=\"$(for s in ntpsec ntp ntpd; do "
+        "systemctl list-unit-files 2>/dev/null | grep -q \"^${s}\\.service\" && { printf %s \"$s\"; break; }; "
+        "done)\" "
+        "&& { [ -n \"$found\" ] || { echo 'ntp installed but no ntp service unit was found to enable.' >&2; exit 1; }; } "
+        "&& systemctl enable --now \"$found\""
     )
 
 

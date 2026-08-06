@@ -58,9 +58,18 @@ def cmd_set_grub_default(entry: str) -> str:
     # shell string — the success banner must NOT concatenate `entry`, or an entry
     # like  x'; <cmd>; echo '  would close the quote and run <cmd> as root. printf
     # with a %s arg passes the value as data, not shell syntax.
+    # Debian/Ubuntu ship GRUB_DEFAULT=0, so grub.cfg emits `set default="0"` and
+    # never consults grubenv — grub-set-default alone is inert there. On that branch,
+    # switch GRUB_DEFAULT to 'saved' and rebuild so the saved_entry is honored.
+    ensure_saved = (
+        "if grep -q '^GRUB_DEFAULT=' /etc/default/grub 2>/dev/null; then "
+        "sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT=saved/' /etc/default/grub; "
+        "else echo 'GRUB_DEFAULT=saved' >> /etc/default/grub; fi"
+    )
     return (
         "if command -v grub2-set-default >/dev/null 2>&1; then grub2-set-default " + q + "; "
-        "elif command -v grub-set-default >/dev/null 2>&1; then grub-set-default " + q + "; "
+        "elif command -v grub-set-default >/dev/null 2>&1; then "
+        + ensure_saved + " && " + _grub_rebuild_fragment() + " && grub-set-default " + q + "; "
         "else echo 'grub-set-default not found.' >&2; exit 1; fi && "
         "printf 'Default boot entry set to %s.\\n' " + q
     )
@@ -100,6 +109,11 @@ def cmd_set_kernel_cmdline(params: str) -> str:
         raise ValueError("Kernel parameters contain unexpected characters.")
     q = shlex.quote(params)
     return (
+        # Capture the params THIS tool previously set (before overwriting the line)
+        # so on grubby hosts we can REMOVE them before adding the new set — grubby
+        # only merges --args, so stale params would otherwise linger. _CMDLINE_RE
+        # blocks shell metacharacters, so quoting "$old" is safe.
+        "old=$(sed -n 's/^GRUB_CMDLINE_LINUX=\"\\(.*\\)\"$/\\1/p' /etc/default/grub | head -n1); "
         f"newline='GRUB_CMDLINE_LINUX=\"'{q}'\"'; "
         "if grep -q '^GRUB_CMDLINE_LINUX=' /etc/default/grub; then "
         "sed -i \"s|^GRUB_CMDLINE_LINUX=.*|$newline|\" /etc/default/grub; "
@@ -112,10 +126,11 @@ def cmd_set_kernel_cmdline(params: str) -> str:
         # kernels). Fall back to rebuilding grub.cfg only where grubby is absent
         # (Debian/Ubuntu/Arch/SUSE, which take the cmdline from grub.cfg).
         "if command -v grubby >/dev/null 2>&1; then "
+        "if [ -n \"$old\" ]; then grubby --update-kernel=ALL --remove-args=\"$old\" 2>&1; fi; "
         f"grubby --update-kernel=ALL --args={q} 2>&1 && "
-        "echo 'Kernel parameters applied to all installed boot entries via grubby "
-        "(and saved to /etc/default/grub for future kernels). grubby merges args into "
-        "each entry; effective next boot.'; "
+        "echo 'Kernel parameters set on all installed boot entries via grubby "
+        "(and saved to /etc/default/grub for future kernels); previously-set params "
+        "were replaced. Effective next boot.'; "
         "else " + _grub_rebuild_fragment() +
         " && echo 'Kernel parameters updated and grub.cfg rebuilt (effective next boot).'; fi"
     )
@@ -123,7 +138,7 @@ def cmd_set_kernel_cmdline(params: str) -> str:
 
 def cmd_regenerate_initramfs() -> str:
     return (
-        "if command -v dracut >/dev/null 2>&1; then dracut -f && echo 'initramfs regenerated (dracut).'; "
+        "if command -v dracut >/dev/null 2>&1; then dracut -f --regenerate-all && echo 'initramfs regenerated for all installed kernels (dracut).'; "
         "elif command -v update-initramfs >/dev/null 2>&1; then update-initramfs -u -k all && echo 'initramfs regenerated (update-initramfs).'; "
         "elif command -v mkinitcpio >/dev/null 2>&1; then mkinitcpio -P && echo 'initramfs regenerated (mkinitcpio).'; "
         "else echo 'No initramfs tool found (dracut/update-initramfs/mkinitcpio).' >&2; exit 1; fi"

@@ -25,9 +25,14 @@ _INSTALL_REALM = (
     "samba-common samba-common-tools krb5-workstation; "
     "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install realmd sssd sssd-ad adcli "
     "samba-client krb5-client; "
-    # Arch: realmd/sssd/adcli match upstream names; krb5 provides kinit/klist and
-    # samba provides the net/AD tooling realmd shells out to during a join.
-    "elif command -v pacman >/dev/null 2>&1; then pacman -Sy --needed --noconfirm realmd sssd adcli krb5 samba; "
+    # Arch: sssd/krb5/samba are in the official repos, but realmd and adcli are
+    # AUR-only — pacman cannot install them. Install what exists, then check for the
+    # realm/adcli binaries and point the operator at the AUR if they're missing
+    # (idempotent: an Arch host that already has them from the AUR proceeds).
+    "elif command -v pacman >/dev/null 2>&1; then "
+    "pacman -Sy --needed --noconfirm sssd krb5 samba; "
+    "miss=; for b in realm adcli; do command -v \"$b\" >/dev/null 2>&1 || miss=\"$miss $b\"; done; "
+    "if [ -n \"$miss\" ]; then echo 'Arch: realmd and adcli are AUR-only (not in the official repos); pacman cannot install them. Install them from the AUR (e.g. yay -S realmd adcli), then re-run.' >&2; exit 1; fi; "
     "else echo 'No supported package manager found.' >&2; exit 1; fi"
 )
 

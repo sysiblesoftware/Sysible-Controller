@@ -117,7 +117,7 @@ def cmd_configure_backup_schedule(source: str, dest_dir: str, cron_expr: str) ->
         "elif command -v yum >/dev/null 2>&1; then yum install -y cronie >/dev/null 2>&1; "
         "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install cron >/dev/null 2>&1; "
         "elif command -v apt-get >/dev/null 2>&1; then DEBIAN_FRONTEND=noninteractive apt-get install -y cron >/dev/null 2>&1; "
-        "elif command -v pacman >/dev/null 2>&1; then pacman -S --noconfirm cronie >/dev/null 2>&1; fi; fi; "
+        "elif command -v pacman >/dev/null 2>&1; then pacman -Sy --needed --noconfirm cronie >/dev/null 2>&1; fi; fi; "
         "systemctl enable --now crond 2>/dev/null || systemctl enable --now cron 2>/dev/null || "
         "systemctl enable --now cronie 2>/dev/null || true; "
         "if ! command -v crond >/dev/null 2>&1 && ! command -v cron >/dev/null 2>&1; then "

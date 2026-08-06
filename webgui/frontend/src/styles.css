@@ -890,8 +890,8 @@ tr:hover td { background: var(--row-hover); }
 /* Root and system markers use FIXED logo-palette colors (royal blue / green) so
    they read the same on every skin — "like the logo" — rather than following the
    per-skin --accent (which is only royal blue on the Sysible brand skin). */
-.ug-mono.root { background: rgba(63,111,224,0.16); color: #3f6fe0; border-color: rgba(63,111,224,0.35); }
-.ug-mono.sys { background: rgba(62,168,50,0.16); color: #3ea832; border-color: rgba(62,168,50,0.35); }
+.ug-mono.root { background: rgba(47,96,212,0.16); color: #2f60d4; border-color: rgba(47,96,212,0.35); }
+.ug-mono.sys { background: rgba(67,160,71,0.16); color: #43a047; border-color: rgba(67,160,71,0.35); }
 .ug-mono.human { background: var(--slate-bg); color: var(--slate); border-color: rgba(138,160,200,0.3); }
 .ug-mono.priv { background: var(--amber-bg); color: var(--amber); border-color: rgba(227,167,47,0.3); }
 .ug-mono.locked { background: var(--panel-2); color: var(--text-faint); }

@@ -263,7 +263,10 @@ def _sessions():
 
 users = []
 for u in pwd.getpwall():
-    if u.pw_uid < 1000:
+    # Skip service/system accounts (uid 1-999) to keep the list focused on login
+    # users, but ALWAYS include root (uid 0) so the superuser shows in the console
+    # (it's what the Users view colours royal blue).
+    if 0 < u.pw_uid < 1000:
         continue
     groups = _groups(u.pw_name)
     users.append({

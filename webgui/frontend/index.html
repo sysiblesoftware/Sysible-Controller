@@ -9,9 +9,9 @@
       // Apply the saved console skin before first paint so a light skin
       // (Porcelain) doesn't flash the dark baseline on load.
       try {
-        var ids = { base:1, amber:1, nord:1, phos:1, blue:1, porc:1 };
+        var ids = { base:1, brand:1, amber:1, nord:1, phos:1, blue:1, porc:1 };
         var s = localStorage.getItem("sysible_skin");
-        document.documentElement.setAttribute("data-skin", ids[s] ? s : "base");
+        document.documentElement.setAttribute("data-skin", ids[s] ? s : "brand");
       } catch (e) {}
     </script>
   </head>

@@ -202,7 +202,7 @@ export default function App() {
   const [sudoOpen, setSudoOpen] = useState(false);
   const [skin, setSkin] = useState(() => {
     const s = localStorage.getItem("sysible_skin");
-    return s && SKIN_IDS.has(s) ? s : "base";
+    return s && SKIN_IDS.has(s) ? s : "brand";
   });
 
   // Transient toast notifications (host enrolled, etc.). App owns the auto-

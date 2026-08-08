@@ -88,19 +88,19 @@ def _page(body: str, message: str = "", wide: bool = False) -> str:
   {favicon_tag}
   <style>
     :root {{
-      --bg: #1E1E1E;
-      --card: #262626;
-      --card-border: #3A3A3A;
-      --input-bg: #2B2B2B;
-      --input-border: #505050;
-      --text: #EAEAEA;
-      --text-dim: #9aa5b1;
-      --accent: #3C4B64;
-      --accent-border: #506080;
-      --accent-hover: #4C6285;
-      --accent-pressed: #23395D;
-      --error: #ff5c5c;
-      --link: #6fa8ff;
+      --bg: #0d1117;
+      --card: #12161f;
+      --card-border: #232b3a;
+      --input-bg: #12161f;
+      --input-border: #33405a;
+      --text: #e9f0f7;
+      --text-dim: #9aa7bd;
+      --accent: #3560d4;
+      --accent-border: #4f79ea;
+      --accent-hover: #4a72e6;
+      --accent-pressed: #2a4fb0;
+      --error: #e5534b;
+      --link: #7aa2ff;
     }}
     * {{ box-sizing: border-box; }}
     body {{

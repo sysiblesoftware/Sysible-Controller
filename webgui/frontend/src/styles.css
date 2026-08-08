@@ -59,38 +59,45 @@
    A handful of scoped "signature" rules give each skin its one distinct move.
    ========================================================================== */
 
-/* --- Sysible: the brand skin — deep navy drawn from the wordmark, the royal
-       blue of "CONTROLLER" as the accent, and the logo's single green circuit
-       trace echoed on the active nav item and the "ok" status dots. ---------- */
+/* --- Sysible: the brand skin — the hexagon-prompt family palette. A near-black
+       engineering ground with the mark's green→blue as accent and status, tying
+       the console to the logo, honeycomb wallpapers, and the boot & lock screens.
+       The active nav item carries the logo's green→blue trace; "ok" dots glow in
+       brand green. ----------------------------------------------------------- */
 :root[data-skin="brand"] {
-  --bg: #0b1526;
-  --bg-raise: #101d33;
-  --panel: #101d33;
-  --panel-2: #0d1830;
-  --border: #213456;
-  --border-strong: #2d4570;
-  --text: #e7edf7;
-  --text-dim: #a0b1d0;
-  --text-faint: #7387ad;   /* ~4.7:1 on --bg */
-  --btn: #1a2c4d;
-  --btn-hover: #243a63;
-  --btn-border: #31497a;
-  --btn-press: #15233f;
-  --accent: #3f6fe0;       /* royal blue — the "CONTROLLER" wordmark */
-  --accent-soft: rgba(63,111,224,0.15);
+  --bg: #0d1117;
+  --bg-raise: #12161f;
+  --panel: #12161f;
+  --panel-2: #161b26;
+  --border: #232b3a;
+  --border-strong: #33405a;
+  --text: #e9f0f7;
+  --text-dim: #9aa7bd;
+  --text-faint: #7d8ca3;   /* ~4.8:1 on --bg */
+  --btn: #1a2233;
+  --btn-hover: #24304a;
+  --btn-border: #33405a;
+  --btn-press: #141b28;
+  --accent: #5580ee;       /* brand blue */
+  --accent-soft: rgba(85,128,238,0.15);
   --on-accent: #ffffff;
-  --rail-bg: #091120;
-  --field: #0d1830;
-  --field-border: #2d4570;
-  --green: #3ea832;        /* the green circuit trace in the mark */
-  --green-bright: #54c245;
+  --rail-bg: #0a0d13;
+  --field: #12161f;
+  --field-border: #33405a;
+  --green: #43a047;        /* brand green (base) */
+  --green-bright: #63c869; /* brand green (bright) — ok dots / online */
   --red: #e5534b;
-  --amber: #e3a72f;
-  --row-hover: #15233f;
+  --amber: #e0a83b;
+  --row-hover: #161b26;
   --shadow: rgba(0,0,0,0.55);
 }
-/* Active nav item: royal-blue stripe capped by a green node — the circuit. */
-:root[data-skin="brand"] .rail-item.active { box-shadow: inset 2px 0 0 var(--accent); }
+/* Active nav item: the logo's green→blue trace down the left edge. */
+:root[data-skin="brand"] .rail-item.active { position: relative; border-left-color: transparent; }
+:root[data-skin="brand"] .rail-item.active::before {
+  content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(180deg, var(--green-bright), var(--accent));
+}
 :root[data-skin="brand"] .dot.ok { box-shadow: 0 0 7px var(--green-bright); }
 
 /* --- Amber Control Room: industrial / SCADA, warm amber on toasted graphite,

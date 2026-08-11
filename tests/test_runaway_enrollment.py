@@ -104,10 +104,23 @@ def test_prev_agent_secret_authorizes_rebind(controller, enroll_token):
     # Proof of possession: a host that still holds its current agent_secret can
     # re-enroll onto its own row (e.g. a deliberate secret refresh).
     hid = "stable-host-pop"
-    assert _enroll(controller, enroll_token(), hid).status_code == 200
-    secret = db.get_agent_secret(hid)
-    _go_offline(hid)
+    resp = _enroll(controller, enroll_token(), hid)
+    assert resp.status_code == 200
+    secret = resp.json()["agent_secret"]      # the RAW secret the agent holds
+    stored_hash = db.get_agent_secret(hid)    # the SHA-256 kept at rest
 
+    # Pass-the-hash regression: the at-rest HASH must NOT authorize a rebind, so a
+    # leaked DB snapshot (or a SQL read primitive) can't be replayed as the agent
+    # credential. Only the raw secret the agent holds may prove possession.
+    _go_offline(hid)
+    r_hash = controller.post("/agents/enroll", json={
+        "token": enroll_token(), "host_id": hid, "hostname": "web1",
+        "platform": "linux", "kernel": "6.1", "ip": "10.0.0.5",
+        "prev_agent_secret": stored_hash})
+    assert r_hash.status_code == 403, r_hash.text
+
+    # The raw secret the agent actually received at enrollment DOES authorize it.
+    _go_offline(hid)
     r = controller.post("/agents/enroll", json={
         "token": enroll_token(), "host_id": hid, "hostname": "web1",
         "platform": "linux", "kernel": "6.1", "ip": "10.0.0.5",

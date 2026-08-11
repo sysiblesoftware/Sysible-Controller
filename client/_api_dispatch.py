@@ -595,8 +595,10 @@ def cmd_update_status(refresh: bool = False) -> str:
             "if command -v dnf >/dev/null 2>&1; then dnf -q makecache --refresh >/dev/null 2>&1; "
             "elif command -v yum >/dev/null 2>&1; then yum -q makecache >/dev/null 2>&1; "
             "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive -q refresh >/dev/null 2>&1; "
-            "elif command -v apt-get >/dev/null 2>&1; then apt-get -qq update >/dev/null 2>&1; "
-            "elif command -v pacman >/dev/null 2>&1; then pacman -Sy >/dev/null 2>&1; fi\n"
+            "elif command -v apt-get >/dev/null 2>&1; then apt-get -qq update >/dev/null 2>&1; fi\n"
+            # NB: no live `pacman -Sy` here — refreshing the real sync db from a
+            # read-only status probe risks a later partial-upgrade. The pacman count
+            # branch below uses checkupdates (a non-mutating temp-db sync) instead.
         )
     return (
         prep +
@@ -621,7 +623,11 @@ def cmd_update_status(refresh: bool = False) -> str:
         # (against the last synced db). Arch ships no per-update security metadata,
         # so security stays 0.
         "elif command -v pacman >/dev/null 2>&1; then mgr=pacman; "
-        "total=$(pacman -Qu 2>/dev/null | grep -c .); sec=0; "
+        # checkupdates does a non-mutating temp-db sync AND lists pending updates, so
+        # the count is current even on a refresh without touching the live db; fall
+        # back to read-only `pacman -Qu` (possibly stale) when it isn't installed.
+        "if command -v checkupdates >/dev/null 2>&1; then total=$(checkupdates 2>/dev/null | grep -c .); "
+        "else total=$(pacman -Qu 2>/dev/null | grep -c .); fi; sec=0; "
         "fi\n"
         "[ -f /var/run/reboot-required ] && rr=1\n"
         "if command -v needs-restarting >/dev/null 2>&1; then needs-restarting -r >/dev/null 2>&1 || rr=1; fi\n"
@@ -1369,8 +1375,15 @@ def cmd_install_auditd() -> str:
         "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install audit; "
         "elif command -v pacman >/dev/null 2>&1; then pacman -Sy --noconfirm audit; "
         "else echo 'No supported package manager found (apt/dnf/yum/zypper/pacman).' >&2; exit 1; fi; "
-        "systemctl enable --now auditd 2>/dev/null || true; "
-        "echo; echo 'auditd installed and started.'"
+        # Keep `|| true` only so a set -e host doesn't abort before the honest
+        # gate; is-active — not enable's exit code — is the source of truth.
+        "systemctl enable --now auditd 2>&1 || true; "
+        "if systemctl is-active --quiet auditd; then "
+        "echo; echo 'auditd installed and started.'; "
+        "else "
+        "echo 'auditd was installed but did NOT start (masked unit, non-systemd host, or policy refusal).' >&2; "
+        "systemctl status auditd --no-pager -l 2>&1 | tail -n 12 >&2; "
+        "exit 1; fi"
     )
 
 

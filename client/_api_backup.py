@@ -9,6 +9,18 @@ import shlex
 
 _CRON_RE = re.compile(r"^[\d*/,\- ]+$")
 
+# Control characters (incl. newline, CR, NUL) never appear in a legitimate path.
+# Rejecting them is what keeps an embedded newline from breaking out of the
+# quoted heredoc that writes the backup helper script — a value containing
+# "\nSYS_EOF\n<shell>" would otherwise terminate the here-document early and run
+# the trailing lines as root (command injection).
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _reject_control_chars(value: str, label: str) -> None:
+    if _CONTROL_RE.search(value or ""):
+        raise ValueError(f"{label} must not contain control characters or newlines.")
+
 
 def cmd_backup_files(source: str, dest_dir: str) -> str:
     """tar.gz `source` into a timestamped archive under `dest_dir`."""
@@ -71,6 +83,10 @@ def cmd_configure_backup_schedule(source: str, dest_dir: str, cron_expr: str) ->
     cron_expr = (cron_expr or "").strip()
     if not source or not dest_dir:
         raise ValueError("Source path and destination directory are required.")
+    # Critical: these are embedded in the heredoc body below. A newline could
+    # otherwise smuggle the heredoc terminator and inject root-run shell.
+    _reject_control_chars(source, "Source path")
+    _reject_control_chars(dest_dir, "Destination directory")
     if len(cron_expr.split()) != 5 or not _CRON_RE.match(cron_expr):
         raise ValueError("Schedule must be 5 cron fields, e.g. '0 2 * * *'.")
     qs, qd = shlex.quote(source), shlex.quote(dest_dir)
@@ -101,7 +117,7 @@ def cmd_configure_backup_schedule(source: str, dest_dir: str, cron_expr: str) ->
         "elif command -v yum >/dev/null 2>&1; then yum install -y cronie >/dev/null 2>&1; "
         "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive install cron >/dev/null 2>&1; "
         "elif command -v apt-get >/dev/null 2>&1; then DEBIAN_FRONTEND=noninteractive apt-get install -y cron >/dev/null 2>&1; "
-        "elif command -v pacman >/dev/null 2>&1; then pacman -S --noconfirm cronie >/dev/null 2>&1; fi; fi; "
+        "elif command -v pacman >/dev/null 2>&1; then pacman -Sy --needed --noconfirm cronie >/dev/null 2>&1; fi; fi; "
         "systemctl enable --now crond 2>/dev/null || systemctl enable --now cron 2>/dev/null || "
         "systemctl enable --now cronie 2>/dev/null || true; "
         "if ! command -v crond >/dev/null 2>&1 && ! command -v cron >/dev/null 2>&1; then "

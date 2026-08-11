@@ -287,7 +287,7 @@ def init_db():
     # Hypervisor role (kvm/proxmox/xen-dom0/…) + running-guest count, added later
     # so the console can warn before rebooting/powering off a VM host. Nullable so
     # older agents (which omit them) and existing rows keep working.
-    for _col, _type in (("hyp", "TEXT"), ("vms", "INTEGER")):
+    for _col, _type in (("hyp", "TEXT"), ("vms", "INTEGER"), ("vm_names", "TEXT")):
         try:
             cur.execute(f"ALTER TABLE host_health ADD COLUMN {_col} {_type}")
         except sqlite3.OperationalError:
@@ -831,6 +831,18 @@ def _upgrade_agent_secret_hash(host_id, hashed):
         conn.commit()
 
 
+def _is_hash_at_rest(value):
+    """True if `value` looks like a _token_at_rest() output — a 64-char lowercase
+    SHA-256 hex digest — rather than a legacy raw agent secret (secrets.token_hex(24)
+    = 48 hex chars). Used so the legacy plaintext-acceptance path can never treat a
+    stored HASH as a usable secret (pass-the-hash)."""
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(c in "0123456789abcdef" for c in value)
+    )
+
+
 def agent_secret_matches(host_id, presented):
     """Constant-time check of a presented agent secret against the hash stored at
     rest. Transparently upgrades a legacy row that still holds the plaintext secret
@@ -843,9 +855,12 @@ def agent_secret_matches(host_id, presented):
         return False
     if hmac.compare_digest(_token_at_rest(presented), stored):
         return True
-    # Legacy plaintext row: accept once, then upgrade in place so the cleartext
-    # secret does not survive another heartbeat.
-    if hmac.compare_digest(presented, stored):
+    # Legacy plaintext row (created before hash-at-rest): `stored` held the raw
+    # token_hex(24) secret. Accept the presented value verbatim ONLY for such a
+    # row, then upgrade it in place. If `stored` is already a SHA-256 hash we must
+    # NOT accept presented == stored — that would make the at-rest hash itself a
+    # replayable bearer credential (pass-the-hash from a leaked DB snapshot).
+    if not _is_hash_at_rest(stored) and hmac.compare_digest(presented, stored):
         try:
             _upgrade_agent_secret_hash(host_id, _token_at_rest(presented))
         except Exception:
@@ -1024,7 +1039,7 @@ def get_host_snapshot(host_id):
 
 
 def upsert_host_health(host_id, ts, disk, mem, load1, cores, failed, oom,
-                       uptime, sysd, mount, units, hyp=None, vms=None):
+                       uptime, sysd, mount, units, hyp=None, vms=None, vm_names=None):
     """Store the LATEST fleet-health reading for one host (one row, overwritten).
     `units` is a list of failed-unit names, stored as JSON. `hyp`/`vms` carry the
     hypervisor role + running-guest count (None when the host isn't a VM host, or
@@ -1035,10 +1050,10 @@ def upsert_host_health(host_id, ts, disk, mem, load1, cores, failed, oom,
     cur = conn.cursor()
     cur.execute(
         "INSERT OR REPLACE INTO host_health "
-        "(host_id, ts, disk, mem, load1, cores, failed, oom, uptime, sysd, mount, units, hyp, vms) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "(host_id, ts, disk, mem, load1, cores, failed, oom, uptime, sysd, mount, units, hyp, vms, vm_names) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (host_id, float(ts), disk, mem, load1, cores, failed, oom, uptime,
-         sysd, mount, json.dumps(units or []), hyp, vms),
+         sysd, mount, json.dumps(units or []), hyp, vms, json.dumps(vm_names or [])),
     )
     conn.commit()
     conn.close()
@@ -1054,7 +1069,7 @@ def get_all_host_health():
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("SELECT host_id, ts, disk, mem, load1, cores, failed, oom, uptime, "
-                "sysd, mount, units, hyp, vms FROM host_health")
+                "sysd, mount, units, hyp, vms, vm_names FROM host_health")
     rows = cur.fetchall()
     conn.close()
     out = {}
@@ -1063,11 +1078,15 @@ def get_all_host_health():
             units = json.loads(r["units"]) if r["units"] else []
         except (ValueError, TypeError):
             units = []
+        try:
+            vm_names = json.loads(r["vm_names"]) if r["vm_names"] else []
+        except (ValueError, TypeError):
+            vm_names = []
         out[r["host_id"]] = {
             "ts": r["ts"], "disk": r["disk"], "mem": r["mem"], "load1": r["load1"],
             "cores": r["cores"], "failed": r["failed"], "oom": r["oom"],
             "uptime": r["uptime"], "sysd": r["sysd"], "mount": r["mount"], "units": units,
-            "hyp": r["hyp"], "vms": r["vms"],
+            "hyp": r["hyp"], "vms": r["vms"], "vm_names": vm_names,
         }
     return out
 

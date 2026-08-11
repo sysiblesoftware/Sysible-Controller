@@ -178,7 +178,7 @@ function NewSchedule({ meta, hosts, onDone, onErr }) {
         <div className="faint" style={{ fontSize: 12, marginBottom: 4 }}>
           Target hosts (none checked = all hosts):
         </div>
-        <HostTree hosts={hosts} value={targets} onChange={setTargets} />
+        <HostTree hosts={hosts} value={targets} onChange={setTargets} resizable={false} />
       </div>
       <button className="btn" style={{ marginTop: 12 }} disabled={saving} onClick={save}>
         {saving ? <span className="spin" /> : "Create schedule"}</button>

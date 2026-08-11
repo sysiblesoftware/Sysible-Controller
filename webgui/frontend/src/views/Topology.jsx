@@ -81,7 +81,7 @@ export default function Topology({ onOpen }) {
   const userAdjusted = useRef(false);   // once the user pans/zooms, stop auto-fitting
   const lastFitSig = useRef("");        // structural signature we last fit to
 
-  const load = useCallback(() => {
+  const load = useCallback((force = false) => {
     if (inFlight.current) return;
     inFlight.current = true;
     setLoading(true); setErr("");
@@ -91,7 +91,7 @@ export default function Topology({ onOpen }) {
     const fast = [
       api.hosts().then((v) => { _snap.hosts = v.hosts || []; setHosts(_snap.hosts); },
                        (e) => setErr(e?.message || "Couldn't load hosts")),
-      api.fleetHealth().then((v) => { _snap.health = v.hosts || []; setHealth(_snap.health); }, () => {}),
+      api.fleetHealth(force).then((v) => { _snap.health = v.hosts || []; setHealth(_snap.health); }, () => {}),
       api.agents().then((v) => { _snap.agents = v.agents || []; setAgents(_snap.agents); }, () => {}),
       // Suppressions (cheap) so a node's critical ring clears when its finding is
       // suppressed — the map must match the dashboard, not re-flag silenced ones.
@@ -158,7 +158,7 @@ export default function Topology({ onOpen }) {
         online: hh.online, verdict, disk: hh.disk, mem: hh.mem,
         agentVersion: ag.agent_version, ip, gateway: gw,
         subnet: subnetOf(ip), revoked: !!ag.revoked, quarantined: !!ag.integrity_quarantined,
-        hasCrit, hypervisor: hh.hyp, vms: hh.vms,
+        hasCrit, hypervisor: hh.hyp, vms: hh.vms, vmNames: hh.vm_names || [],
       };
     });
   }, [hosts, health, agents, posture, supps]);
@@ -199,16 +199,47 @@ export default function Topology({ onOpen }) {
       const isCollapsed = !!collapsed[grp.key];
       hubs.push({ ...grp, x: hx, y: hy, th, collapsed: isCollapsed });
       if (isCollapsed) return;
-      const n = grp.hosts.length;
-      const cols = Math.max(1, Math.min(6, Math.ceil(Math.sqrt(n))));
+      // Nest guests under their host: a VM whose label appears in a same-group
+      // hypervisor's vmNames is pulled OUT of the flat grid and hung beneath that
+      // hypervisor as a subtree. Everything else (hypervisors + non-VM hosts) is
+      // a "top" host on the hub grid.
+      const here = new Map(grp.hosts.map((h) => [h.label, h]));
+      const parentOf = new Map();          // vm label -> hypervisor host
+      grp.hosts.forEach((h) => {
+        if (h.hypervisor && Array.isArray(h.vmNames)) {
+          h.vmNames.forEach((nm) => { if (nm !== h.label && here.has(nm)) parentOf.set(nm, h); });
+        }
+      });
+      const childrenOf = new Map();        // hypervisor label -> [vm hosts]
+      grp.hosts.forEach((h) => {
+        const par = parentOf.get(h.label);
+        if (par) { if (!childrenOf.has(par.label)) childrenOf.set(par.label, []); childrenOf.get(par.label).push(h); }
+      });
+      const topHosts = grp.hosts.filter((h) => !parentOf.has(h.label));
+
+      const cols = Math.max(1, Math.min(6, Math.ceil(Math.sqrt(topHosts.length))));
       const sp = 42;
-      grp.hosts.forEach((hostn, k) => {
+      const placed = new Map();            // label -> {dist, colOff}
+      topHosts.forEach((hostn, k) => {
         const r = Math.floor(k / cols), c = k % cols;
         const colOff = (c - (cols - 1) / 2) * sp;
         const dist = Rhub + 60 + r * sp;                       // extend outward, row by row
-        const x = cx + rad.x * dist + tan.x * colOff;
-        const y = cy + rad.y * dist + tan.y * colOff;
-        nodes.push({ ...hostn, x, y, hub: grp.key });
+        nodes.push({ ...hostn, x: cx + rad.x * dist + tan.x * colOff, y: cy + rad.y * dist + tan.y * colOff, hub: grp.key });
+        placed.set(hostn.label, { dist, colOff });
+      });
+      // Hang each hypervisor's guests as a fan BEYOND it (further from the
+      // controller), centred on the hypervisor's column.
+      childrenOf.forEach((vms, hypLabel) => {
+        const p = placed.get(hypLabel);
+        if (!p) return;
+        const vcols = Math.max(1, Math.min(5, Math.ceil(Math.sqrt(vms.length))));
+        const vsp = 40;
+        vms.forEach((vm, k) => {
+          const r = Math.floor(k / vcols), c = k % vcols;
+          const colOff = p.colOff + (c - (vcols - 1) / 2) * vsp;
+          const dist = p.dist + 74 + r * vsp;
+          nodes.push({ ...vm, x: cx + rad.x * dist + tan.x * colOff, y: cy + rad.y * dist + tan.y * colOff, hub: grp.key, vmParentLabel: hypLabel });
+        });
       });
     });
     return { hubs, nodes };
@@ -230,9 +261,12 @@ export default function Topology({ onOpen }) {
     });
     const edges = [];
     hubs.forEach((h) => edges.push({ x1: ctrl.x, y1: ctrl.y, x2: h.x, y2: h.y, kind: "hub", worst: h.worst }));
+    // Each node connects to its PARENT: a nested VM to its hypervisor (so it
+    // reads as a subtree hanging off the host), every other host to its group hub.
+    const byLabel = {}; nodes.forEach((n) => { byLabel[n.label] = n; });
     nodes.forEach((n) => {
-      const h = hubByKey[n.hub];
-      if (h) edges.push({ x1: h.x, y1: h.y, x2: n.x, y2: n.y, kind: "host", host: n });
+      const parent = n.vmParentLabel ? byLabel[n.vmParentLabel] : hubByKey[n.hub];
+      if (parent) edges.push({ x1: parent.x, y1: parent.y, x2: n.x, y2: n.y, kind: "host", host: n });
     });
     return { hubs, nodes, edges, ctrl };
   }, [layout, positions]);
@@ -369,7 +403,7 @@ export default function Topology({ onOpen }) {
             <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
             <span className="faint">Auto</span>
           </label>
-          <button className="btn ghost sm" onClick={load} disabled={loading}>{loading ? <span className="spin" /> : "Refresh"}</button>
+          <button className="btn ghost sm" onClick={() => load(true)} disabled={loading}>{loading ? <span className="spin" /> : "Refresh"}</button>
         </div>
       </div>
 
@@ -418,7 +452,18 @@ export default function Topology({ onOpen }) {
                                      strokeDasharray={n.revoked || n.quarantined ? "3 3" : undefined} />}
                     <circle r={hovered ? 11 : 9} fill={nodeColor(n)} stroke="var(--bg,#0d1117)" strokeWidth={2} />
                     {n.kind === "Agent + SSH" && <circle r={hovered ? 4.5 : 3.5} fill="var(--bg,#0d1117)" />}
-                    <text y={24} textAnchor="middle" style={{ fontSize: 11.5, fill: "var(--text,#e6e6e6)", fontWeight: hovered ? 700 : 400 }}>{n.hypervisor ? "🖥 " : ""}{trunc(n.label)}</text>
+                    {n.hypervisor && (
+                      // Yellow server glyph marking a VM host (hypervisor). Drawn as
+                      // SVG (not the 🖥 emoji, which can't be recoloured) so it's a
+                      // clear, consistent yellow above the node.
+                      <g transform="translate(0 -16)" stroke="#eab308" fill="none" strokeWidth={1.5} strokeLinecap="round">
+                        <rect x={-6} y={-5} width={12} height={4.5} rx={1} />
+                        <rect x={-6} y={0.5} width={12} height={4.5} rx={1} />
+                        <line x1={-3.5} y1={-2.75} x2={-3.4} y2={-2.75} />
+                        <line x1={-3.5} y1={2.75} x2={-3.4} y2={2.75} />
+                      </g>
+                    )}
+                    <text y={24} textAnchor="middle" style={{ fontSize: 11.5, fill: "var(--text,#e6e6e6)", fontWeight: hovered ? 700 : 400 }}>{trunc(n.label)}</text>
                   </g>
                 );
               })}

@@ -70,16 +70,16 @@ def cmd_container_action(action: str, name: str) -> str:
         return _RT + (
             f'ids=$("$rt" ps -aq 2>/dev/null); '
             f'[ -n "$ids" ] || {{ echo "No containers found."; exit 0; }}; '
-            f'for c in $ids; do echo "== {action} $c =="; "$rt" {action} "$c" 2>&1; done; '
-            f'echo "{action}: requested on all containers."'
+            f'rc=0; for c in $ids; do echo "== {action} $c =="; "$rt" {action} "$c" 2>&1 || rc=1; done; '
+            f'echo "{action}: requested on all containers."; exit "$rc"'
         )
     targets = _split_targets(name)
     if len(targets) == 1:
         return _RT + f'"$rt" {action} {shlex.quote(targets[0])} && echo "{action}: done."'
     quoted = " ".join(shlex.quote(t) for t in targets)
     return _RT + (
-        f'for c in {quoted}; do echo "== {action} $c =="; "$rt" {action} "$c" 2>&1; done; '
-        f'echo "{action}: requested on {len(targets)} container(s)."'
+        f'rc=0; for c in {quoted}; do echo "== {action} $c =="; "$rt" {action} "$c" 2>&1 || rc=1; done; '
+        f'echo "{action}: requested on {len(targets)} container(s)."; exit "$rc"'
     )
 
 
@@ -119,19 +119,21 @@ def cmd_vm_action(action: str, name: str) -> str:
     if name.lower() in ("all", "*"):
         # Every domain (list --all --name yields one per line). Continue past
         # per-VM errors (e.g. start on an already-running one) and report each.
+        # The while-loop is the RHS of the pipe (a subshell), so `exit "$rc"` must
+        # be INSIDE the brace group for the pipeline's status to reflect it.
         return _VIRSH + (
-            'virsh list --all --name 2>/dev/null | while IFS= read -r vm; do '
+            'virsh list --all --name 2>/dev/null | { rc=0; while IFS= read -r vm; do '
             '[ -n "$vm" ] || continue; '
-            f'echo "== {action} $vm =="; virsh {action} "$vm" 2>&1; '
-            f'done; echo "{action}: requested on all VMs."'
+            f'echo "== {action} $vm =="; virsh {action} "$vm" 2>&1 || rc=1; '
+            f'done; echo "{action}: requested on all VMs."; exit "$rc"; }}'
         )
     targets = _split_targets(name)
     if len(targets) == 1:
         return _VIRSH + f'virsh {action} {shlex.quote(targets[0])} 2>&1 && echo "{action}: requested."'
     quoted = " ".join(shlex.quote(t) for t in targets)
     return _VIRSH + (
-        f'for vm in {quoted}; do echo "== {action} $vm =="; virsh {action} "$vm" 2>&1; done; '
-        f'echo "{action}: requested on {len(targets)} VM(s)."'
+        f'rc=0; for vm in {quoted}; do echo "== {action} $vm =="; virsh {action} "$vm" 2>&1 || rc=1; done; '
+        f'echo "{action}: requested on {len(targets)} VM(s)."; exit "$rc"'
     )
 
 

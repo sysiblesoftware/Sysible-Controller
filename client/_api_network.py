@@ -198,6 +198,8 @@ def cmd_ping(target: str, count=4) -> str:
     target = (target or "").strip()
     if not target:
         raise ValueError("Target host or IP is required.")
+    if target.startswith("-"):
+        raise ValueError("Target must not start with '-'.")
     count = _validate_int_range(count, 1, 20, "Ping count")
     q = shlex.quote(target)
     return f"ping -c {count} -W 2 {q} 2>&1"
@@ -207,6 +209,8 @@ def cmd_traceroute(target: str) -> str:
     target = (target or "").strip()
     if not target:
         raise ValueError("Target host or IP is required.")
+    if target.startswith("-"):
+        raise ValueError("Target must not start with '-'.")
     q = shlex.quote(target)
     return (
         "if command -v traceroute >/dev/null 2>&1; then "
@@ -221,8 +225,12 @@ def cmd_dns_lookup(name: str, server: str = "") -> str:
     name = (name or "").strip()
     if not name:
         raise ValueError("A hostname to resolve is required.")
+    if name.startswith("-"):
+        raise ValueError("Hostname must not start with '-'.")
     q_name = shlex.quote(name)
     server = (server or "").strip()
+    if server.startswith("-"):
+        raise ValueError("DNS server must not start with '-'.")
     q_server = shlex.quote(server) if server else ""
 
     return (
@@ -305,14 +313,25 @@ def cmd_configure_static_ip(connection: str, ip_cidr: str, gateway: str = "", dn
     q_conn = shlex.quote(conn)
     q_ip = shlex.quote(ip_cidr)
 
+    # Address family drives which nmcli/netplan keys are emitted. The validators
+    # accept IPv6, so the exec path must too (gateway/DNS must match the family).
+    is_v6 = ":" in ip_cidr
+    if gw and ((":" in gw) != is_v6):
+        raise ValueError("Gateway must be the same address family (IPv4/IPv6) as the IP address.")
+    if dns_parts and any((":" in d) != is_v6 for d in dns_parts):
+        raise ValueError("DNS servers must be the same address family (IPv4/IPv6) as the IP address.")
+    fam = "ipv6" if is_v6 else "ipv4"
+    route_dest = "::/0" if is_v6 else "0.0.0.0/0"
+    dhcp_key = "dhcp6" if is_v6 else "dhcp4"
+
     # --- nmcli path ---
     extra = ""
     if gw:
-        extra += f" ipv4.gateway {shlex.quote(gw)}"
+        extra += f" {fam}.gateway {shlex.quote(gw)}"
     if dns_parts:
-        extra += f" ipv4.dns {shlex.quote(','.join(dns_parts))}"
+        extra += f" {fam}.dns {shlex.quote(','.join(dns_parts))}"
     nmcli = (
-        f"nmcli connection modify {q_conn} ipv4.method manual ipv4.addresses {q_ip}{extra} "
+        f"nmcli connection modify {q_conn} {fam}.method manual {fam}.addresses {q_ip}{extra} "
         f"&& nmcli connection up {q_conn} 2>&1"
     )
 
@@ -321,18 +340,30 @@ def cmd_configure_static_ip(connection: str, ip_cidr: str, gateway: str = "", dn
         f"IFACE={q_conn}; {_NETPLAN_IFACE_GUARD}"
         "f=\"/etc/netplan/90-sysible-$IFACE.yaml\"; "
         "[ -e \"$f\" ] && cp \"$f\" \"$f.bak.$(date +%s)\" 2>/dev/null; umask 077; "
-        "printf 'network:\\n  version: 2\\n  ethernets:\\n    %s:\\n      dhcp4: false\\n' \"$IFACE\" > \"$f\"; "
+        f"printf 'network:\\n  version: 2\\n  ethernets:\\n    %s:\\n      {dhcp_key}: false\\n' \"$IFACE\" > \"$f\"; "
         f"printf '      addresses: [%s]\\n' {q_ip} >> \"$f\"; "
     )
     if gw:
-        # Use the explicit default-route CIDR (0.0.0.0/0), not the `to: default`
+        # Explicit default-route CIDR (0.0.0.0/0 or ::/0), not the `to: default`
         # alias: that alias only landed in netplan ~0.103, so on Ubuntu 18.04 and
-        # un-SRU'd 20.04 (netplan.io 0.99) `netplan generate` rejects `to: default`
-        # and static-IP config hard-fails. 0.0.0.0/0 is accepted by every netplan
-        # version that supports the routes: key.
-        np += f"printf '      routes:\\n        - to: 0.0.0.0/0\\n          via: %s\\n' {shlex.quote(gw)} >> \"$f\"; "
+        # un-SRU'd 20.04 (netplan.io 0.99) `netplan generate` rejects `to: default`.
+        np += f"printf '      routes:\\n        - to: {route_dest}\\n          via: %s\\n' {shlex.quote(gw)} >> \"$f\"; "
     if dns_parts:
         np += f"printf '      nameservers:\\n        addresses: [%s]\\n' {shlex.quote(', '.join(dns_parts))} >> \"$f\"; "
+    # netplan MERGES all /etc/netplan/*.yaml per interface and CONCATENATES the
+    # address/route lists, so a static IP for this interface in another file (e.g.
+    # the installer's 00-installer-config.yaml) would persist ALONGSIDE the one we
+    # just wrote. Warn about any such peer file (same guard as the DHCP path).
+    np += (
+        'for _nf in /etc/netplan/*.yaml; do [ "$_nf" = "$f" ] && continue; '
+        '[ -e "$_nf" ] || continue; '
+        'if grep -qE "^[[:space:]]*${IFACE}:" "$_nf" 2>/dev/null && '
+        'grep -qE "addresses:|gateway4:|routes:" "$_nf" 2>/dev/null; then '
+        'echo "WARNING: $_nf also configures $IFACE with a static address/route. '
+        'netplan appends address lists across files, so that config will persist '
+        'alongside the new address - remove the addresses/routes/gateway4 lines for '
+        '$IFACE from $_nf (or delete that file) so only the requested address remains." >&2; fi; done; '
+    )
     np += _netplan_apply_fragment()
 
     return (
@@ -349,6 +380,7 @@ def cmd_configure_dhcp(connection: str) -> str:
     q_conn = shlex.quote(conn)
     nmcli = (
         f'nmcli connection modify {q_conn} ipv4.method auto ipv4.addresses "" ipv4.gateway "" '
+        f'ipv4.dns "" ipv4.ignore-auto-dns no ipv4.routes "" ipv4.ignore-auto-routes no '
         f"&& nmcli connection up {q_conn} 2>&1"
     )
     np = (
@@ -428,9 +460,7 @@ def cmd_set_hostname(new_hostname: str) -> str:
 
 def cmd_set_gateway(connection: str, gateway: str) -> str:
     conn = _validate_connection_name(connection)
-    gateway = (gateway or "").strip()
-    if not gateway:
-        raise ValueError("Gateway IP address is required.")
+    gateway = _validate_ip((gateway or "").strip(), "Gateway")
     q_conn = shlex.quote(conn)
     q_gw = shlex.quote(gateway)
     return (
@@ -452,12 +482,8 @@ def cmd_show_routes() -> str:
 
 def cmd_add_static_route(connection: str, destination_cidr: str, via_gateway: str) -> str:
     conn = _validate_connection_name(connection)
-    destination_cidr = (destination_cidr or "").strip()
-    via_gateway = (via_gateway or "").strip()
-    if not destination_cidr:
-        raise ValueError("Destination network (CIDR form, e.g. 10.0.5.0/24) is required.")
-    if not via_gateway:
-        raise ValueError("Via gateway IP is required.")
+    destination_cidr = _validate_cidr((destination_cidr or "").strip(), "Destination network")
+    via_gateway = _validate_ip((via_gateway or "").strip(), "Via gateway")
     q_conn = shlex.quote(conn)
     q_route = shlex.quote(f"{destination_cidr} {via_gateway}")
     return (

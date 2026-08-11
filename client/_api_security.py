@@ -93,7 +93,14 @@ def cmd_install_selinux_tools() -> str:
     (AppArmor by default) this installs the tools but does NOT switch the host
     to SELinux - that's a separate, reboot-level decision."""
     return _pkgmgr_dispatch(
-        rpm_cmd='"$PKGMGR" install -y policycoreutils policycoreutils-python-utils setools-console libselinux-utils',
+        # The Python management package (semanage/audit2allow/audit2why) is
+        # policycoreutils-python-utils on dnf (RHEL8+/Fedora/Rocky/Alma) but
+        # policycoreutils-python on yum (EL7/CentOS7/Oracle 7/Amazon Linux 2).
+        rpm_cmd=(
+            'if [ "$PKGMGR" = "dnf" ]; then '
+            '"$PKGMGR" install -y policycoreutils policycoreutils-python-utils setools-console libselinux-utils; '
+            'else yum install -y policycoreutils policycoreutils-python setools-console libselinux-utils; fi'
+        ),
         # openSUSE/SLES: install each package separately so one wrong/renamed name on
         # a given SUSE release doesn't abort the whole zypper transaction (exit 104)
         # and leave NONE of the tools installed. Mirrors cmd_install_firewalld's loop.
@@ -103,7 +110,7 @@ def cmd_install_selinux_tools() -> str:
             "    echo \"Warning: could not install $_p on this SUSE release.\" >&2; "
             "done"
         ),
-        apt_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y policycoreutils selinux-utils setools",
+        apt_cmd="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y policycoreutils policycoreutils-python-utils selinux-utils setools",
         # Arch does NOT ship the SELinux userspace in its official repos - the
         # whole SELinux stack lives in the AUR 'selinux' group, so there's nothing
         # pacman can install here. Fail with a clear pointer instead of a wrong
@@ -255,9 +262,13 @@ def cmd_selinux_add_fcontext(path_regex: str, file_type: str) -> str:
     q_path = shlex.quote(path_regex)
     return (
         _SEMANAGE_MISSING +
-        f"semanage fcontext -a -t {file_type} {q_path} 2>&1 "
-        f"&& restorecon -Rv {q_path} 2>&1; "
-        f"printf 'File context rule added for %s -> {file_type}.\\n' {q_path}"
+        # -a fails with "already defined" if the rule exists, so fall back to -m
+        # (modify) for an idempotent upsert. Gate restorecon + the success line on
+        # && so success (and exit 0) is reported only when the rule actually took.
+        f"{{ semanage fcontext -a -t {file_type} {q_path} 2>/dev/null "
+        f"|| semanage fcontext -m -t {file_type} {q_path} 2>&1; }} "
+        f"&& restorecon -Rv {q_path} 2>&1 "
+        f"&& printf 'File context rule added for %s -> {file_type}.\\n' {q_path}"
     )
 
 
@@ -657,7 +668,13 @@ def cmd_check_security_updates() -> str:
             "echo 'Arch Linux is a rolling release and does not classify updates as "
             "security-only; showing all available updates.'; "
             "if command -v checkupdates >/dev/null 2>&1; then checkupdates 2>&1 || echo 'No updates available.'; "
-            "else pacman -Sy >/dev/null 2>&1; pacman -Qu 2>&1 || echo 'No updates available.'; fi"
+            # Do NOT run `pacman -Sy` here: this is a READ-ONLY check, and a bare -Sy
+            # mutates the live sync db (arming a partial-upgrade hazard). Without
+            # checkupdates, compare against the current local db and point the operator
+            # at pacman-contrib for an accurate, non-mutating check.
+            "else echo 'Install pacman-contrib (provides checkupdates) for an accurate, "
+            "non-mutating check; listing upgrades against the current local sync db:' >&2; "
+            "pacman -Qu 2>&1 || echo 'No updates available (local db may be stale).'; fi"
         ),
     )
 
@@ -669,7 +686,7 @@ def cmd_install_security_updates() -> str:
     return _pkgmgr_dispatch(
         rpm_cmd=(
             'if [ "$PKGMGR" = "dnf" ]; then dnf upgrade --security -y 2>&1; '
-            "else (yum --security update -y 2>&1 || echo 'yum-plugin-security may be required for security-only updates.' >&2); fi"
+            "else (yum --security update -y 2>&1; rc=$?; [ \"$rc\" -ne 0 ] && echo 'yum-plugin-security may be required for security-only updates.' >&2; exit \"$rc\"); fi"
         ),
         # --auto-agree-with-licenses: without it, zypper in non-interactive mode
         # auto-DECLINES (and silently skips) any security patch that needs a
@@ -810,10 +827,15 @@ def cmd_get_hardening_overview() -> str:
     """Read-only snapshot of common hardening-relevant settings:
     SELinux mode, whether root SSH login is allowed, whether password
     auth is enabled, and currently-listening network services."""
+    # Resolve the sshd binary path (it's not on a non-root PATH on openSUSE), same as
+    # every other sshd command in this module — otherwise the section falsely reports
+    # "sshd -T unavailable" on a healthy SUSE host.
+    binf = _sshd_bin_fragment()
     return (
         "echo '-- SELinux --' && (getenforce 2>&1 || echo 'not installed'); "
         "echo; echo '-- sshd: root login / password auth --' && "
-        "(sshd -T 2>&1 | grep -iE '^(permitrootlogin|passwordauthentication)' || echo 'sshd -T unavailable'); "
+        f"({binf}; \"$SSHDBIN\" -T 2>/dev/null | grep -iE '^(permitrootlogin|passwordauthentication)' "
+        "|| echo 'sshd -T unavailable'); "
         "echo; echo '-- Listening services --' && "
         "(ss -tulpn 2>&1 || netstat -tulpn 2>&1)"
     )
@@ -838,11 +860,17 @@ def cmd_disable_core_dumps() -> str:
     at runtime/on boot and adds a hard limit of 0 in
     /etc/security/limits.conf so per-process ulimit settings can't
     re-enable them."""
-    q_file = shlex.quote("/etc/security/limits.conf")
+    q_limits = shlex.quote("/etc/security/limits.conf")
+    q_sysctl = shlex.quote("/etc/sysctl.d/99-sysible-coredumps.conf")
     return (
-        "sysctl -w fs.suid_dumpable=0 2>&1 && "
-        f"grep -qxF '* hard core 0' {q_file} || printf '* hard core 0\\n' >> {q_file}; "
-        "echo 'Core dumps disabled (fs.suid_dumpable=0, limits.conf hard core 0).'"
+        # Persist across reboot via a drop-in (systemd-sysctl re-applies it at boot)
+        # and apply it now — the previous `sysctl -w` was runtime-only despite the
+        # "on boot" claim.
+        f"printf 'fs.suid_dumpable = 0\\n' > {q_sysctl} && "
+        f"sysctl --system 2>&1 | tail -n 5; "
+        # Idempotent ulimit backstop; the guard runs regardless of the sysctl outcome.
+        f"grep -qxF '* hard core 0' {q_limits} || printf '* hard core 0\\n' >> {q_limits}; "
+        "echo 'Core dumps disabled (fs.suid_dumpable=0 persisted, limits.conf hard core 0).'"
     )
 
 

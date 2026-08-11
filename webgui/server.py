@@ -721,9 +721,11 @@ def hosts(user: str = Depends(require_login)):
         # heartbeat predates hypervisor reporting). null when neither knows yet.
         hyp = (hr or {}).get("hyp")
         vms = (hr or {}).get("vms")
+        vm_names = (hr or {}).get("vm_names") or []
         if hyp is None and pc:
             hyp = pc.get("hypervisor")
             vms = pc.get("vms")
+            vm_names = pc.get("vm_names") or vm_names
         out.append({
             "id": e["id"],
             "label": e["label"],
@@ -741,6 +743,10 @@ def hosts(user: str = Depends(require_login)):
             # nothing has reported yet), so reboot/power-off flows can warn.
             "hypervisor": hyp,
             "vms": vms,
+            # Guest domain names (agent-reported), so the console can nest VMs
+            # under their host in the topology. Empty until a hypervisor agent
+            # reports them.
+            "vm_names": vm_names,
         })
     return {"hosts": out}
 
@@ -775,7 +781,7 @@ def _parse_sysmetrics(text):
                 "oom": num("oom", int) or 0,
                 # Hypervisor role + running-guest count (a live-probed host still
                 # reports whether it's a VM host, for the reboot warning/badge).
-                "hyp": hyp, "vms": num("vms", int),
+                "hyp": hyp, "vms": num("vms", int), "vm_names": d.get("vm_names") or [],
             }
     return None
 
@@ -836,7 +842,7 @@ def _health_from_stored(base, hr):
         "disk": disk, "mount": hr.get("mount") or "/", "mem": hr.get("mem"),
         "load1": hr.get("load1"), "cores": hr.get("cores") or 1, "failed": failed,
         "uptime": hr.get("uptime") or 0, "sysd": sysd, "units": hr.get("units") or [],
-        "oom": oom, "hyp": hr.get("hyp"), "vms": hr.get("vms"),
+        "oom": oom, "hyp": hr.get("hyp"), "vms": hr.get("vms"), "vm_names": hr.get("vm_names") or [],
     }
 
 

@@ -15,7 +15,7 @@ function agoStr(ts) {
 // Desktop-style host pane: hosts grouped by environment with checkboxes,
 // plus Refresh / Select All / Deselect All / Collapse / Expand controls.
 // `value` is an array of selected host ids; `onChange` gets the next array.
-export default function HostTree({ hosts, value, onChange, onRefresh, footer }) {
+export default function HostTree({ hosts, value, onChange, onRefresh, footer, resizable = true }) {
   const groups = useMemo(() => {
     const m = {};
     for (const h of hosts) {
@@ -32,8 +32,36 @@ export default function HostTree({ hosts, value, onChange, onRefresh, footer }) 
   const allIds = hosts.map((h) => h.id);
   const allSel = hosts.length > 0 && value.length === hosts.length;
 
+  // Draggable, persisted width for the Target Hosts pane so long hostnames stay
+  // readable. Shared across every tool view via one localStorage key; callers
+  // that render the pane full-width (Schedules) pass resizable={false}.
+  const HP_MIN = 170, HP_MAX = 560, HP_DEF = 220;
+  const [paneW, setPaneW] = useState(() => {
+    const v = parseInt(localStorage.getItem("sysible.hostPaneW"), 10);
+    return Number.isFinite(v) ? Math.min(Math.max(v, HP_MIN), HP_MAX) : HP_DEF;
+  });
+  function startPaneResize(e) {
+    e.preventDefault();
+    const startX = e.clientX, startW = paneW;
+    let latest = startW;
+    const onMove = (ev) => {
+      latest = Math.min(Math.max(startW + (ev.clientX - startX), HP_MIN), HP_MAX);
+      setPaneW(latest);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      try { localStorage.setItem("sysible.hostPaneW", String(latest)); } catch { /* ignore */ }
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
   return (
-    <div className="host-pane">
+    <div className={"host-pane" + (resizable ? " resizable" : "")}
+         style={resizable ? { width: paneW } : undefined}>
+      {resizable && <div className="host-pane-resizer" onMouseDown={startPaneResize}
+                         title="Drag to resize the host panel" />}
       <strong style={{ fontSize: 13 }}>Target Hosts</strong>
       <div className="ctl-row" style={{ marginTop: 8 }}>
         {onRefresh && <button className="btn ghost sm" onClick={onRefresh}>Refresh</button>}

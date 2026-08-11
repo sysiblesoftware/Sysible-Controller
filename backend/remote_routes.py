@@ -759,7 +759,8 @@ def enroll_ssh(body: EnrollSSHRequest):
 _SSH_PRIV_ERR = re.compile(
     r"permission denied|operation not permitted|must be run as root|must be root|"
     r"not in the sudoers|a terminal is required|no tty present|password is required|"
-    r"not allowed to execute|are not allowed|superuser privileges|run with superuser",
+    r"not allowed to execute|are not allowed|superuser privileges|run with superuser|"
+    r"unless you are root",  # pacman (Arch): "you cannot perform this operation unless you are root"
     re.I)
 
 

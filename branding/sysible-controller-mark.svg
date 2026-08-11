@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Sysible Controller — canonical mark. Rendered by branding/render-branding.py.
+
+  Matches the Sysible Linux / SysTerm family EXACTLY (same hexagon body, near-black
+  screen, blue gradient edge, brand green #6ddb73). The DESIGN is preserved from the
+  original controller icon — the orchestration topology of a central hub wired to
+  three managed nodes — only re-housed in the family body and unified to brand green
+  so the three product icons read as one set. Edit here, re-run the generator.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#79a0ff"/>
+      <stop offset="1" stop-color="#2f4d9e"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#101828"/>
+      <stop offset="1" stop-color="#0a0f1c"/>
+    </linearGradient>
+  </defs>
+  <!-- Body: identical to the SysTerm / Sysible Linux marks. -->
+  <path d="M64 9 L111 36.5 L111 91.5 L64 119 L17 91.5 L17 36.5 Z"
+        fill="url(#screen)" stroke="url(#edge)" stroke-width="5" stroke-linejoin="miter"/>
+  <!-- Symbol: hub + three managed nodes (the original controller topology).
+       Green links (structure) + BLUE nodes — the family accent scheme, matching
+       the blue centre node on the Sysible Linux mark. -->
+  <g id="symbol">
+    <path d="M38 64 H64 M64 64 L89 47 M64 64 L89 81" fill="none" stroke="#6ddb73"
+          stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="38" cy="64" r="5.5" fill="#79a0ff"/>
+    <circle cx="64" cy="64" r="6.5" fill="#79a0ff"/>
+    <circle cx="89" cy="47" r="5.5" fill="#79a0ff"/>
+    <circle cx="89" cy="81" r="5.5" fill="#79a0ff"/>
+  </g>
+</svg>

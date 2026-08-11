@@ -1,11 +1,16 @@
-/* Sysible web console — theme mirrors the desktop client (client/theme.py).
-   Dark is default; [data-theme="light"] flips the palette like the desktop
-   moon/sun toggle. Colors are intentionally the desktop's: slate-blue
-   buttons (#3C4B64), #1E1E1E/#2B2B2B panels, amber edition badge, green ticks. */
+/* Sysible web console — selectable skins.
+   The default (":root") is "Slate", the original graphite look. Each
+   [data-skin="…"] block below is a complete look chosen from the header
+   skin picker (see App.jsx) and persisted to localStorage; there is no
+   separate light/dark toggle — "Porcelain" is the light skin.
+   Every surface reads a CSS variable, so a skin is purely a token swap
+   plus a few scoped signature rules. */
 :root,
-:root[data-theme="dark"] {
+:root[data-skin="base"] {
   /* Neutral graphite: warm-gray surfaces, hairline borders, color held back to
      status dots and a restrained accent on the active nav item. */
+  color-scheme: dark;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --bg: #17191d;
   --bg-raise: #1e2127;
   --panel: #1e2127;
@@ -21,6 +26,7 @@
   --btn-press: #313748;
   --accent: #8c95cf;
   --accent-soft: rgba(140,149,207,0.13);
+  --on-accent: #fff;  /* text/tick drawn ON an accent-filled surface (checkbox tick, etc.) */
   --rail-bg: #131519;
   --field: #1b1e23;
   --field-border: #3a3f49;
@@ -46,32 +52,201 @@
   --crimson: #e0564e; --crimson-bg: rgba(224,86,78,0.14);
   --graphite: #9aa7b8; --graphite-bg: rgba(154,167,184,0.14);
 }
-:root[data-theme="light"] {
-  --bg: #eceff3;
+/* ==========================================================================
+   SKINS — each block is a complete look, chosen from the header skin picker.
+   Only the tokens that differ from the Slate baseline are set; everything
+   the app draws flows through these variables, so the palette does the work.
+   A handful of scoped "signature" rules give each skin its one distinct move.
+   ========================================================================== */
+
+/* --- Sysible: the brand skin — deep navy drawn from the wordmark, the royal
+       blue of "CONTROLLER" as the accent, and the logo's single green circuit
+       trace echoed on the active nav item and the "ok" status dots. ---------- */
+:root[data-skin="brand"] {
+  --bg: #0b1526;
+  --bg-raise: #101d33;
+  --panel: #101d33;
+  --panel-2: #0d1830;
+  --border: #213456;
+  --border-strong: #2d4570;
+  --text: #e7edf7;
+  --text-dim: #a0b1d0;
+  --text-faint: #7387ad;   /* ~4.7:1 on --bg */
+  --btn: #1a2c4d;
+  --btn-hover: #243a63;
+  --btn-border: #31497a;
+  --btn-press: #15233f;
+  --accent: #3f6fe0;       /* royal blue — the "CONTROLLER" wordmark */
+  --accent-soft: rgba(63,111,224,0.15);
+  --on-accent: #ffffff;
+  --rail-bg: #091120;
+  --field: #0d1830;
+  --field-border: #2d4570;
+  --green: #3ea832;        /* the green circuit trace in the mark */
+  --green-bright: #54c245;
+  --red: #e5534b;
+  --amber: #e3a72f;
+  --row-hover: #15233f;
+  --shadow: rgba(0,0,0,0.55);
+}
+/* Active nav item: royal-blue stripe capped by a green node — the circuit. */
+:root[data-skin="brand"] .rail-item.active { box-shadow: inset 2px 0 0 var(--accent); }
+:root[data-skin="brand"] .dot.ok { box-shadow: 0 0 7px var(--green-bright); }
+
+/* --- Amber Control Room: industrial / SCADA, warm amber on toasted graphite,
+       a signal stripe down the active nav item. ------------------------------ */
+:root[data-skin="amber"] {
+  --bg: #131210;
+  --bg-raise: #1b1915;
+  --panel: #1b1915;
+  --panel-2: #161410;
+  --border: #332d22;
+  --border-strong: #453d2e;
+  --text: #efe8da;
+  --text-dim: #b3a88f;
+  --text-faint: #7c715a;
+  --btn: #2c2820;
+  --btn-hover: #3a352a;
+  --btn-border: #4a4436;
+  --btn-press: #231f18;
+  --accent: #ff9e2c;
+  --accent-soft: rgba(255,158,44,0.14);
+  --on-accent: #1a1206;
+  --rail-bg: #100f0c;
+  --field: #151310;
+  --field-border: #453d2e;
+  --green: #8ec06a;   --green-bright: #a2d07e;
+  --red: #f2564b;
+  --row-hover: #201d16;
+  --shadow: rgba(0,0,0,0.6);
+}
+:root[data-skin="amber"] .rail-item.active { box-shadow: inset 2px 0 0 var(--accent); }
+
+/* --- Nord Frost: calm arctic, frost-cyan on muted polar navy. --------------- */
+:root[data-skin="nord"] {
+  --bg: #2e3440;
+  --bg-raise: #3b4252;
+  --panel: #3b4252;
+  --panel-2: #353b48;
+  --border: #434c5e;
+  --border-strong: #4c566a;
+  --text: #eceff4;
+  --text-dim: #b6bfcf;
+  --text-faint: #7b869d;
+  --btn: #434c5e;
+  --btn-hover: #4c566a;
+  --btn-border: #586173;
+  --btn-press: #3b4353;
+  --accent: #88c0d0;
+  --accent-soft: rgba(136,192,208,0.16);
+  --on-accent: #22272f;
+  --rail-bg: #2b303b;
+  --field: #2b303b;
+  --field-border: #4c566a;
+  --green: #a3be8c;   --green-bright: #b5cc9f;
+  --red: #bf616a;
+  --amber: #ebcb8b;
+  --row-hover: #3b4252;
+  --shadow: rgba(0,0,0,0.4);
+}
+
+/* --- Phosphor: green-screen terminal — mono type, scanlines, gentle glow. --- */
+:root[data-skin="phos"] {
+  --font: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --bg: #050d09;
+  --bg-raise: #0a170f;
+  --panel: #0a170f;
+  --panel-2: #081310;
+  --border: #14351f;
+  --border-strong: #1d4a2c;
+  --text: #a8f0bf;
+  --text-dim: #5faf78;
+  --text-faint: #357a4c;
+  --btn: #0e2416;
+  --btn-hover: #14331f;
+  --btn-border: #1d4a2c;
+  --btn-press: #0a1c11;
+  --accent: #37ff86;
+  --accent-soft: rgba(55,255,134,0.13);
+  --on-accent: #03210f;
+  --rail-bg: #040a07;
+  --field: #07130c;
+  --field-border: #1d4a2c;
+  --green: #37ff86;   --green-bright: #6bffa6;
+  --red: #ff5f5f;
+  --amber: #ffd24a;
+  --row-hover: #0c1f14;
+  --shadow: rgba(0,0,0,0.6);
+}
+/* Scanline overlay on the main content, glow on the brand + status dots. */
+:root[data-skin="phos"] .main {
+  background-image: repeating-linear-gradient(to bottom, transparent 0 3px, rgba(0,0,0,0.16) 3px 4px);
+}
+:root[data-skin="phos"] .brand h1,
+:root[data-skin="phos"] .rail-item.active { text-shadow: 0 0 8px rgba(55,255,134,0.55); }
+:root[data-skin="phos"] .dot.ok { box-shadow: 0 0 7px var(--green-bright); }
+
+/* --- Blueprint: engineering drawing — cyan lines on a dotted-grid ground. --- */
+:root[data-skin="blue"] {
+  --bg: #0b1420;
+  --bg-raise: #0f1c2b;
+  --panel: #0f1c2b;
+  --panel-2: #0c1826;
+  --border: #203953;
+  --border-strong: #2a4a6a;
+  --text: #d7e6f5;
+  --text-dim: #8faaca;
+  --text-faint: #4e6f92;
+  --btn: #183048;
+  --btn-hover: #204058;
+  --btn-border: #2a4a6a;
+  --btn-press: #12283c;
+  --accent: #4fd0e0;
+  --accent-soft: rgba(79,208,224,0.13);
+  --on-accent: #062028;
+  --rail-bg: #0a1220;
+  --field: #0c1826;
+  --field-border: #2a4a6a;
+  --green: #54d69a;   --green-bright: #7ce0b3;
+  --red: #f07070;
+  --amber: #e6bd57;
+  --row-hover: #132437;
+  --shadow: rgba(0,0,0,0.5);
+}
+/* Faint dotted grid on cards + panels, like a drafting sheet. */
+:root[data-skin="blue"] .card,
+:root[data-skin="blue"] .tile,
+:root[data-skin="blue"] .metric {
+  background-image: radial-gradient(rgba(79,208,224,0.10) 0.8px, transparent 0.8px);
+  background-size: 14px 14px;
+}
+
+/* --- Porcelain: clean daylight — the light skin. Warm-white with teal. ----- */
+:root[data-skin="porc"] {
+  color-scheme: light;
+  --bg: #f1f1ee;
   --bg-raise: #ffffff;
   --panel: #ffffff;
-  --panel-2: #f3f5f8;
-  --border: #d6dbe3;
-  --border-strong: #c1c8d2;
-  --text: #1f2430;
-  --text-dim: #5b6472;
-  --text-faint: #6d7581;  /* was #8a93a0 (~3.0:1, below AA); ~4.6:1 on --bg */
-  --btn: #3c4b64;
-  --btn-hover: #4c6285;
-  --btn-border: #506080;
-  --btn-press: #23395d;
-  --accent: #4c56a8;
-  --accent-soft: #e9ebf6;
+  --panel-2: #f7f7f4;
+  --border: #e3e3dd;
+  --border-strong: #d3d3cc;
+  --text: #1a1c20;
+  --text-dim: #61656d;
+  --text-faint: #9aa0a6;  /* on --panel */
+  --btn: #2b736e;
+  --btn-hover: #34897f;
+  --btn-border: #276a65;
+  --btn-press: #235d59;
+  --accent: #2f7d78;
+  --accent-soft: rgba(47,125,120,0.12);
   --rail-bg: #ffffff;
   --field: #ffffff;
-  --field-border: #c7cdd6;
-  --amber: #e3a72f;
-  --amber-text: #1e1e1e;
-  --green: #2ea043;
-  --green-bright: #2fae4b;
-  --red: #d23b34;
-  --row-hover: #f3f5f8;
-  --shadow: rgba(20,30,50,0.12);
+  --field-border: #cfcfc8;
+  --green: #3f8f57;   --green-bright: #46a061;
+  --red: #c0453e;
+  --amber: #b6862a;
+  --row-hover: #f2f2ef;
+  --shadow: rgba(20,22,26,0.10);
   --error-text: #b3261e;
   /* Accent palette re-tuned for readable text on white (keep the soft -bg tints). */
   --teal: #0f7d70;
@@ -87,6 +262,13 @@
   --crimson: #bd322a;
   --graphite: #545f70;
 }
+/* Unchecked only — a checked box must fall through to the accent fill + tick
+   below (this override otherwise outranks :checked and hides the mark). */
+:root[data-skin="porc"] input[type="checkbox"]:not(:checked) { border-color: #1b1e25; background: #ffffff; }
+/* Lift cards + tiles off the gray page so they don't bleed together. */
+:root[data-skin="porc"] .tile { box-shadow: 0 1px 2px rgba(20,30,50,0.06), 0 1px 1px rgba(20,30,50,0.04); }
+:root[data-skin="porc"] .tile:hover { box-shadow: 0 3px 10px rgba(20,30,50,0.10); }
+:root[data-skin="porc"] .card { box-shadow: 0 1px 2px rgba(20,30,50,0.05); }
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
@@ -109,7 +291,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font);
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
 }
@@ -157,6 +339,39 @@ button { font-family: inherit; color: inherit; }
 }
 .iconbtn:hover { background: var(--panel); }
 
+/* Console skin picker — a compact select fronted by a palette glyph. */
+.skin-picker {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 8px 0 10px;
+  border: 1px solid var(--border-strong); border-radius: 999px;
+  background: transparent; color: var(--text-dim); cursor: pointer;
+}
+.skin-picker:hover { background: var(--panel); color: var(--text); }
+.skin-picker:focus-within { border-color: var(--accent); }
+.skin-picker svg { flex: 0 0 auto; color: var(--accent); }
+.skin-picker select {
+  appearance: none; -webkit-appearance: none; border: 0; outline: none;
+  background: transparent; color: inherit; cursor: pointer;
+  font: inherit; font-size: 12.5px; padding-right: 2px;
+}
+.skin-picker select option { color: #1a1c20; background: #fff; } /* readable native menu */
+/* Full-width variant for the rail footer — a labelled row that stacks cleanly
+   with the Sudo Password / Log Out buttons, with a chevron on the right. */
+.skin-picker.block {
+  display: flex; width: 100%; height: 32px; border-radius: 7px;
+  padding: 0 10px; gap: 8px; justify-content: flex-start;
+}
+.skin-picker.block .skin-picker-label {
+  font-size: 12.5px; color: inherit; flex: 0 0 auto;
+}
+.skin-picker.block select {
+  flex: 1 1 auto; min-width: 0; text-align: right; padding-right: 16px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 6px center, right 1px center;
+  background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+}
+
 /* ---------- Form controls ---------- */
 input, select, textarea {
   width: 100%; padding: 8px 10px;
@@ -193,11 +408,10 @@ input[type="checkbox"] {
   border: 1.5px solid var(--border-strong); border-radius: 3px;
   background: var(--bg-raise); cursor: pointer; position: relative; vertical-align: middle;
 }
-:root[data-theme="light"] input[type="checkbox"] { border-color: #1b1e25; background: #ffffff; }
 input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
 input[type="checkbox"]:checked::after {
   content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px;
-  border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg);
+  border: solid var(--on-accent); border-width: 0 2px 2px 0; transform: rotate(45deg);
 }
 input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 label.field { display: block; margin: 12px 0 0; }
@@ -318,10 +532,6 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
   padding: 18px 20px; transition: border-color 0.12s, background 0.12s;
 }
 .tile:hover { border-color: var(--btn-border); background: var(--panel); }
-/* Light mode: lift the tiles off the gray page so they don't bleed together. */
-:root[data-theme="light"] .tile { box-shadow: 0 1px 2px rgba(20,30,50,0.06), 0 1px 1px rgba(20,30,50,0.04); }
-:root[data-theme="light"] .tile:hover { box-shadow: 0 3px 10px rgba(20,30,50,0.10); }
-:root[data-theme="light"] .card { box-shadow: 0 1px 2px rgba(20,30,50,0.05); }
 .tile-ico {
   width: 46px; height: 46px; border-radius: 10px; display: flex; align-items: center;
   justify-content: center; font-size: 20px; margin-bottom: 12px;
@@ -395,9 +605,13 @@ tr:hover td { background: var(--row-hover); }
 /* The host name is the flexible part: it truncates with an ellipsis so the type
    tag and the "critical" marker to its right are never clipped in the narrow
    pane. */
-.host-row .host-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.host-row .meta { color: var(--text-faint); font-size: 12px; flex-shrink: 0; }
-.host-row .meta.crit { color: #e06c6c; font-weight: 600; margin-left: auto; }
+/* The hostname is the primary identifier, so it grows to fill the row and keeps
+   a floor width so it never collapses to "o…". The agent/seen meta is the part
+   that yields first (shrinks + ellipsizes); the short critical badge stays
+   pinned to the right and never shrinks away. */
+.host-row .host-name { flex: 1 1 auto; min-width: 4.5em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-row .meta { color: var(--text-faint); font-size: 12px; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-row .meta.crit { color: #e06c6c; font-weight: 600; margin-left: auto; flex-shrink: 0; }
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 14px; flex-wrap: wrap; }
 .tabs button { background: transparent; border: 1px solid transparent; border-bottom: none;
   color: var(--text-dim); padding: 7px 13px; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 13px; }
@@ -460,6 +674,17 @@ tr:hover td { background: var(--row-hover); }
   height: calc(100vh - 168px);
 }
 .tool-flex > .host-pane { width: 220px; flex-shrink: 0; }
+/* Draggable host pane: a grab strip on the pane's right edge. The inline width
+   from HostTree overrides the 220px default above; drag persists it. */
+.host-pane.resizable { position: relative; }
+.host-pane-resizer { position: absolute; top: 0; right: -3px; width: 7px; height: 100%;
+  cursor: col-resize; z-index: 3; }
+.host-pane-resizer:hover { background: var(--btn-border); }
+
+/* Settings → Controller: lay the Software updates and Controller IP cards side
+   by side (updates left, IP right), wrapping to stacked on narrow widths. */
+.settings-cols { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.settings-cols > .card { flex: 1 1 420px; margin-bottom: 0; }
 .tool-actions-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1; }
 .tool-actions-scroll { flex: 1; overflow-y: auto; padding-right: 4px; }
 .col-resizer {
@@ -662,7 +887,12 @@ tr:hover td { background: var(--row-hover); }
 .ug-mono { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 8px; display: grid;
   place-items: center; font-weight: 650; font-size: 12px; border: 1px solid transparent;
   background: var(--slate-bg); color: var(--text-dim); }
-.ug-mono.human { background: var(--accent-soft); color: var(--accent); border-color: rgba(140,149,207,0.3); }
+/* Root and system markers use FIXED logo-palette colors (royal blue / green) so
+   they read the same on every skin — "like the logo" — rather than following the
+   per-skin --accent (which is only royal blue on the Sysible brand skin). */
+.ug-mono.root { background: rgba(47,96,212,0.16); color: #2f60d4; border-color: rgba(47,96,212,0.35); }
+.ug-mono.sys { background: rgba(67,160,71,0.16); color: #43a047; border-color: rgba(67,160,71,0.35); }
+.ug-mono.human { background: var(--slate-bg); color: var(--slate); border-color: rgba(138,160,200,0.3); }
 .ug-mono.priv { background: var(--amber-bg); color: var(--amber); border-color: rgba(227,167,47,0.3); }
 .ug-mono.locked { background: var(--panel-2); color: var(--text-faint); }
 
@@ -677,7 +907,7 @@ tr:hover td { background: var(--row-hover); }
   background: var(--slate-bg); color: var(--text-dim); display: inline-flex; align-items: center; gap: 4px; }
 .ug-chip.sudo { background: var(--amber-bg); color: var(--amber); }
 .ug-chip.locked { background: var(--panel-2); color: var(--text-faint); }
-.ug-chip.sys { background: var(--slate-bg); color: var(--text-faint); }
+.ug-chip.sys { background: var(--green-bg); color: var(--green); }
 .ug-sess { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--green-bright); font-weight: 600; }
 .ug-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--green-bright); }
 

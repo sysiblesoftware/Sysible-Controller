@@ -9,7 +9,7 @@ import shlex
 _BOOT_TARGETS = {"rescue", "emergency", "multi-user", "graphical"}
 # Conservative kernel-cmdline allowlist (params like "quiet splash
 # console=ttyS0,115200 nomodeset" - no shell metacharacters).
-_CMDLINE_RE = re.compile(r"^[\w\s=,.:/+\-]*$")
+_CMDLINE_RE = re.compile(r"^[\w =,.:/+\-]*$")  # literal space only — \s would admit newline/CR
 
 
 def _grub_rebuild_fragment() -> str:
@@ -58,9 +58,18 @@ def cmd_set_grub_default(entry: str) -> str:
     # shell string — the success banner must NOT concatenate `entry`, or an entry
     # like  x'; <cmd>; echo '  would close the quote and run <cmd> as root. printf
     # with a %s arg passes the value as data, not shell syntax.
+    # Debian/Ubuntu ship GRUB_DEFAULT=0, so grub.cfg emits `set default="0"` and
+    # never consults grubenv — grub-set-default alone is inert there. On that branch,
+    # switch GRUB_DEFAULT to 'saved' and rebuild so the saved_entry is honored.
+    ensure_saved = (
+        "if grep -q '^GRUB_DEFAULT=' /etc/default/grub 2>/dev/null; then "
+        "sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT=saved/' /etc/default/grub; "
+        "else echo 'GRUB_DEFAULT=saved' >> /etc/default/grub; fi"
+    )
     return (
         "if command -v grub2-set-default >/dev/null 2>&1; then grub2-set-default " + q + "; "
-        "elif command -v grub-set-default >/dev/null 2>&1; then grub-set-default " + q + "; "
+        "elif command -v grub-set-default >/dev/null 2>&1; then "
+        + ensure_saved + " && " + _grub_rebuild_fragment() + " && grub-set-default " + q + "; "
         "else echo 'grub-set-default not found.' >&2; exit 1; fi && "
         "printf 'Default boot entry set to %s.\\n' " + q
     )
@@ -100,6 +109,11 @@ def cmd_set_kernel_cmdline(params: str) -> str:
         raise ValueError("Kernel parameters contain unexpected characters.")
     q = shlex.quote(params)
     return (
+        # Capture the params THIS tool previously set (before overwriting the line)
+        # so on grubby hosts we can REMOVE them before adding the new set — grubby
+        # only merges --args, so stale params would otherwise linger. _CMDLINE_RE
+        # blocks shell metacharacters, so quoting "$old" is safe.
+        "old=$(sed -n 's/^GRUB_CMDLINE_LINUX=\"\\(.*\\)\"$/\\1/p' /etc/default/grub | head -n1); "
         f"newline='GRUB_CMDLINE_LINUX=\"'{q}'\"'; "
         "if grep -q '^GRUB_CMDLINE_LINUX=' /etc/default/grub; then "
         "sed -i \"s|^GRUB_CMDLINE_LINUX=.*|$newline|\" /etc/default/grub; "
@@ -112,10 +126,11 @@ def cmd_set_kernel_cmdline(params: str) -> str:
         # kernels). Fall back to rebuilding grub.cfg only where grubby is absent
         # (Debian/Ubuntu/Arch/SUSE, which take the cmdline from grub.cfg).
         "if command -v grubby >/dev/null 2>&1; then "
+        "if [ -n \"$old\" ]; then grubby --update-kernel=ALL --remove-args=\"$old\" 2>&1; fi; "
         f"grubby --update-kernel=ALL --args={q} 2>&1 && "
-        "echo 'Kernel parameters applied to all installed boot entries via grubby "
-        "(and saved to /etc/default/grub for future kernels). grubby merges args into "
-        "each entry; effective next boot.'; "
+        "echo 'Kernel parameters set on all installed boot entries via grubby "
+        "(and saved to /etc/default/grub for future kernels); previously-set params "
+        "were replaced. Effective next boot.'; "
         "else " + _grub_rebuild_fragment() +
         " && echo 'Kernel parameters updated and grub.cfg rebuilt (effective next boot).'; fi"
     )
@@ -123,7 +138,7 @@ def cmd_set_kernel_cmdline(params: str) -> str:
 
 def cmd_regenerate_initramfs() -> str:
     return (
-        "if command -v dracut >/dev/null 2>&1; then dracut -f && echo 'initramfs regenerated (dracut).'; "
+        "if command -v dracut >/dev/null 2>&1; then dracut -f --regenerate-all && echo 'initramfs regenerated for all installed kernels (dracut).'; "
         "elif command -v update-initramfs >/dev/null 2>&1; then update-initramfs -u -k all && echo 'initramfs regenerated (update-initramfs).'; "
         "elif command -v mkinitcpio >/dev/null 2>&1; then mkinitcpio -P && echo 'initramfs regenerated (mkinitcpio).'; "
         "else echo 'No initramfs tool found (dracut/update-initramfs/mkinitcpio).' >&2; exit 1; fi"
@@ -140,10 +155,17 @@ def cmd_list_kernels() -> str:
         # filter out the non-kernel-image subpackages (devel/doc/source/etc.).
         "if command -v rpm >/dev/null 2>&1; then "
         "rpm -qa 'kernel*' 2>/dev/null "
-        "| grep -vE -- '-(devel|devel-base|doc|source|syms|macros|firmware|debug|debuginfo|debugsource|default-devel|preempt-devel)($|-)' "
+        # Allowlist the real bootable-image package names followed by a version, so
+        # kernel-headers/-tools/-modules/-devel and friends are excluded (and it's
+        # future-proof against new subpackages).
+        "| grep -E -- '^(kernel|kernel-core|kernel-default|kernel-preempt|kernel-pae|kernel-rt|kernel-rt-core|kernel-64k|kernel-64k-core)-[0-9]' "
         "| sort -V; "
         "elif command -v dpkg-query >/dev/null 2>&1; then dpkg-query -W -f='${Package} ${Version}\\n' 'linux-image-*' 2>/dev/null | grep -v -- '-dbg'; "
-        "else echo 'Neither rpm nor dpkg found.'; fi"
+        # Arch: kernels are ordinary packages (linux, linux-lts, linux-zen, linux-hardened).
+        "elif command -v pacman >/dev/null 2>&1; then "
+        "pacman -Q 2>/dev/null | grep -E '^(linux|linux-lts|linux-zen|linux-hardened|linux-rt|linux-rt-lts)[[:space:]]' "
+        "|| echo 'No standard linux kernel packages found.'; "
+        "else echo 'Neither rpm, dpkg, nor pacman found.'; fi"
     )
 
 
@@ -162,11 +184,17 @@ def cmd_remove_old_kernels(keep: str = "2") -> str:
         # kernel marked autoremovable, and zypper's purge-kernels obeys the host's
         # /etc/zypp/zypp.conf `multiversion.kernels` policy - neither takes `keep`.
         # Surface that so the operator isn't surprised by how many kernels remain.
-        f"echo 'Note: on apt the exact keep-count ({keep}) is governed by APT autoremove, not this field.' >&2; "
-        "DEBIAN_FRONTEND=noninteractive apt-get -y --purge autoremove 2>&1; "
+        f"echo 'Note: on apt this runs apt-get autoremove, which removes ALL packages APT considers no longer required (not only old kernels); the keep-count ({keep}) is not honored here.' >&2; "
+        "DEBIAN_FRONTEND=noninteractive apt-get -y autoremove 2>&1; "
         "elif command -v zypper >/dev/null 2>&1; then "
         f"echo 'Note: on zypper the keep-count ({keep}) is governed by multiversion.kernels in /etc/zypp/zypp.conf, not this field.' >&2; "
         "zypper --non-interactive purge-kernels 2>&1 || echo 'purge-kernels needs the zypper purge-kernels plugin.'; "
+        # Arch keeps exactly the installed kernel package(s) — there is no accumulation of
+        # old versions to prune (an upgrade replaces the package in place), so this is a
+        # no-op-by-design rather than a failure.
+        "elif command -v pacman >/dev/null 2>&1; then "
+        "echo 'Arch Linux does not retain old kernel versions (pacman replaces the kernel "
+        "package in place on upgrade), so there is nothing to prune.'; "
         "else echo 'No supported package manager found.' >&2; exit 1; fi; "
         "echo; echo 'Done. Current running kernel is always kept.'"
     )

@@ -31,6 +31,10 @@ def _validate_path(path: str, label: str = "Path") -> str:
     # file this value is written into (e.g. /etc/fstab). Matches the mount copy.
     if "\x00" in path or "\n" in path or "\r" in path:
         raise ValueError(f"{label} contains an invalid character.")
+    # A leading '-' would be parsed as an option by the coreutils commands these
+    # paths flow into (chmod/chown/rm/cp/mv/ln). Reject it, matching _api_storage.
+    if path.startswith("-"):
+        raise ValueError(f"{label} must not start with '-'.")
     return path
 
 
@@ -45,7 +49,11 @@ def _reject_dangerous_path(path: str, label: str = "Path") -> None:
     system directory - the kind of mistake (an extra `rm -rf` on the
     wrong path) this tool should make structurally hard to make, not
     just possible to make carefully."""
-    normalized = path.rstrip("/") or "/"
+    import re as _re
+    import posixpath as _pp
+    p = (path or "").strip()
+    p = _re.sub(r"/{2,}", "/", p)                 # //etc, ///etc -> /etc (normpath keeps a leading //)
+    normalized = _pp.normpath(p) if p else "/"    # /etc/. -> /etc, /etc/.. -> /, collapses . and ..
     if normalized in _DANGEROUS_PATHS:
         raise ValueError(
             f"{label} '{path}' is a top-level system directory - refusing to run "
@@ -367,14 +375,14 @@ def cmd_decompress_file(path: str, keep_original: bool = True) -> str:
     keep_flag = "-k " if keep_original else ""
     return (
         f'case "$(printf %s {q_path} | tr "[:upper:]" "[:lower:]")" in '
-        f"*.gz) command -v gunzip >/dev/null 2>&1 && gunzip {keep_flag}{q_path} 2>&1 "
-        "|| echo 'gunzip not installed on this host.' >&2;; "
-        f"*.bz2) command -v bunzip2 >/dev/null 2>&1 && bunzip2 {keep_flag}{q_path} 2>&1 "
-        "|| echo 'bunzip2 not installed on this host.' >&2;; "
-        f"*.xz) command -v unxz >/dev/null 2>&1 && unxz {keep_flag}{q_path} 2>&1 "
-        "|| echo 'unxz not installed on this host.' >&2;; "
-        f"*.zip) command -v unzip >/dev/null 2>&1 && unzip -o {q_path} 2>&1 "
-        "|| echo 'unzip not installed on this host.' >&2;; "
+        f"*.gz) if command -v gunzip >/dev/null 2>&1; then gunzip {keep_flag}{q_path} 2>&1; "
+        "else echo 'gunzip not installed on this host.' >&2; exit 1; fi;; "
+        f"*.bz2) if command -v bunzip2 >/dev/null 2>&1; then bunzip2 {keep_flag}{q_path} 2>&1; "
+        "else echo 'bunzip2 not installed on this host.' >&2; exit 1; fi;; "
+        f"*.xz) if command -v unxz >/dev/null 2>&1; then unxz {keep_flag}{q_path} 2>&1; "
+        "else echo 'unxz not installed on this host.' >&2; exit 1; fi;; "
+        f"*.zip) if command -v unzip >/dev/null 2>&1; then unzip -o {q_path} 2>&1; "
+        "else echo 'unzip not installed on this host.' >&2; exit 1; fi;; "
         '*) echo "Could not detect a compression type from the filename - expected .gz/.bz2/.xz/.zip." >&2; exit 1;; '
         "esac"
     )

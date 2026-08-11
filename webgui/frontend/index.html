@@ -3,8 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
     <title>Sysible Console</title>
+    <script>
+      // Apply the saved console skin before first paint so a light skin
+      // (Porcelain) doesn't flash the dark baseline on load.
+      try {
+        var ids = { base:1, amber:1, nord:1, phos:1, blue:1, porc:1 };
+        var s = localStorage.getItem("sysible_skin");
+        document.documentElement.setAttribute("data-skin", ids[s] ? s : "base");
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

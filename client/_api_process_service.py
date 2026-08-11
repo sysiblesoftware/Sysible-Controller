@@ -154,6 +154,10 @@ if kill -0 {pid} 2>/dev/null; then
     kill -KILL {pid} 2>/dev/null
     sleep 1
 fi
+if kill -0 {pid} 2>/dev/null; then
+    echo 'Could not stop PID {pid} (still running after SIGTERM+SIGKILL, e.g. uninterruptible D-state / I/O wait). Not relaunching to avoid a duplicate instance.' >&2
+    exit 1
+fi
 echo 'Old process stopped. Relaunching...'
 (cd "$cwd" 2>/dev/null || cd "$HOME"; nohup sh -c "$cmdline" >/dev/null 2>&1 &)
 sleep 1

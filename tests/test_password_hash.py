@@ -72,15 +72,17 @@ def test_fallback_matches_system_crypt(monkeypatch, pw):
 def test_cmd_set_password_no_longer_raises(monkeypatch):
     _force_no_crypt(monkeypatch)
     cmd = U.cmd_set_password("admin", "An%R^P@rCFfq8n6_")
-    assert cmd.startswith("usermod -p ")
-    assert "admin" in cmd
+    # The hash is applied via `chpasswd -e` over a heredoc (not `usermod -p` on
+    # argv) so the crypt hash is never exposed via ps/procfs during exec.
+    assert cmd.startswith("chpasswd -e ")
+    assert "admin:$6$" in cmd
 
 
 def test_cmd_create_user_with_password_builds(monkeypatch):
     _force_no_crypt(monkeypatch)
     cmd = U.cmd_create_user("admin", "An%R^P@rCFfq8n6_", "/bin/bash")
     assert "useradd -m" in cmd
-    assert "usermod -p " in cmd  # password change chained on, no exception
+    assert "chpasswd -e" in cmd  # password change chained on, no exception
 
 
 def test_official_spec_vector():

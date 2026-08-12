@@ -1,36 +1,40 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Sysible Controller — canonical mark. Rendered by branding/render-branding.py.
+  Sysible Controller — canonical mark. Rendered by branding/render-web.py.
 
-  Matches the Sysible Linux / SysTerm family EXACTLY (same hexagon body, near-black
-  screen, blue gradient edge, brand green #6ddb73). The DESIGN is preserved from the
-  original controller icon — the orchestration topology of a central hub wired to
-  three managed nodes — only re-housed in the family body and unified to brand green
-  so the three product icons read as one set. Edit here, re-run the generator.
+  The new family icon: a dark rounded-square tile with a thin brand-green ring
+  (#6ddb73) and the orchestration glyph — a central GREEN hub wired to six
+  satellite nodes (alternating white / secondary-blue) by thin links. No
+  hexagon. Clean, font-free inline SVG. Edit here, re-run the generator.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <defs>
-    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#79a0ff"/>
-      <stop offset="1" stop-color="#2f4d9e"/>
-    </linearGradient>
-    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#101828"/>
-      <stop offset="1" stop-color="#0a0f1c"/>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#161d29"/>
+      <stop offset="1" stop-color="#0a0d14"/>
     </linearGradient>
   </defs>
-  <!-- Body: identical to the SysTerm / Sysible Linux marks. -->
-  <path d="M64 9 L111 36.5 L111 91.5 L64 119 L17 91.5 L17 36.5 Z"
-        fill="url(#screen)" stroke="url(#edge)" stroke-width="5" stroke-linejoin="miter"/>
-  <!-- Symbol: hub + three managed nodes (the original controller topology).
-       Green links (structure) + BLUE nodes — the family accent scheme, matching
-       the blue centre node on the Sysible Linux mark. -->
-  <g id="symbol">
-    <path d="M38 64 H64 M64 64 L89 47 M64 64 L89 81" fill="none" stroke="#6ddb73"
-          stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
-    <circle cx="38" cy="64" r="5.5" fill="#79a0ff"/>
-    <circle cx="64" cy="64" r="6.5" fill="#79a0ff"/>
-    <circle cx="89" cy="47" r="5.5" fill="#79a0ff"/>
-    <circle cx="89" cy="81" r="5.5" fill="#79a0ff"/>
+  <!-- Dark rounded-square tile -->
+  <rect x="2" y="2" width="124" height="124" rx="28" ry="28" fill="url(#tile)"/>
+  <!-- Thin brand-green ring -->
+  <rect x="3.5" y="3.5" width="121" height="121" rx="26.5" ry="26.5"
+        fill="none" stroke="#6ddb73" stroke-width="2"/>
+  <!-- Hub-and-nodes topology: thin links from the central hub to six nodes. -->
+  <g stroke="#8ea0c4" stroke-width="2.6" stroke-opacity="0.55" stroke-linecap="round">
+    <line x1="64" y1="64" x2="97" y2="64"/>
+    <line x1="64" y1="64" x2="80.5" y2="92.6"/>
+    <line x1="64" y1="64" x2="47.5" y2="92.6"/>
+    <line x1="64" y1="64" x2="31" y2="64"/>
+    <line x1="64" y1="64" x2="47.5" y2="35.4"/>
+    <line x1="64" y1="64" x2="80.5" y2="35.4"/>
   </g>
+  <!-- Six satellite nodes: white / blue, alternating. -->
+  <circle cx="97" cy="64" r="6.5" fill="#eceff3"/>
+  <circle cx="80.5" cy="92.6" r="6.5" fill="#7aa2ff"/>
+  <circle cx="47.5" cy="92.6" r="6.5" fill="#eceff3"/>
+  <circle cx="31" cy="64" r="6.5" fill="#7aa2ff"/>
+  <circle cx="47.5" cy="35.4" r="6.5" fill="#eceff3"/>
+  <circle cx="80.5" cy="35.4" r="6.5" fill="#7aa2ff"/>
+  <!-- Central green hub -->
+  <circle cx="64" cy="64" r="10" fill="#6ddb73"/>
 </svg>

@@ -5,12 +5,22 @@
    separate light/dark toggle — "Porcelain" is the light skin.
    Every surface reads a CSS variable, so a skin is purely a token swap
    plus a few scoped signature rules. */
+/* Sora — the brand display/UI face (SIL OFL). Vendored at
+   public/fonts/Sora.ttf (variable font; the browser picks the needed weight). */
+@font-face {
+  font-family: "Sora";
+  src: url("/fonts/Sora.ttf") format("truetype");
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root,
 :root[data-skin="base"] {
   /* Neutral graphite: warm-gray surfaces, hairline borders, color held back to
      status dots and a restrained accent on the active nav item. */
   color-scheme: dark;
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font: "Sora", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --bg: #17191d;
   --bg-raise: #1e2127;
   --panel: #1e2127;
@@ -59,9 +69,10 @@
    A handful of scoped "signature" rules give each skin its one distinct move.
    ========================================================================== */
 
-/* --- Sysible: the brand skin — deep navy drawn from the wordmark, the royal
-       blue of "CONTROLLER" as the accent, and the logo's single green circuit
-       trace echoed on the active nav item and the "ok" status dots. ---------- */
+/* --- Sysible: the brand skin — deep navy drawn from the wordmark, brand green
+       (#6ddb73) as the single accent (rail stripe, active states, "ok" dots),
+       secondary blue held back to nodes/links, over a subtle topographic
+       contour ground. --------------------------------------------------------- */
 :root[data-skin="brand"] {
   --bg: #0b1526;
   --bg-raise: #101d33;
@@ -76,22 +87,32 @@
   --btn-hover: #243a63;
   --btn-border: #31497a;
   --btn-press: #15233f;
-  --accent: #3f6fe0;       /* royal blue — the "CONTROLLER" wordmark */
-  --accent-soft: rgba(63,111,224,0.15);
-  --on-accent: #ffffff;
+  --accent: #6ddb73;       /* brand green — the one accent */
+  --accent-soft: rgba(109,219,115,0.15);
+  --on-accent: #06210f;    /* dark ink drawn ON the green accent (ticks, etc.) */
   --rail-bg: #091120;
   --field: #0d1830;
   --field-border: #2d4570;
-  --green: #3ea832;        /* the green circuit trace in the mark */
-  --green-bright: #54c245;
+  --green: #6ddb73;        /* brand green */
+  --green-bright: #8be392;
   --red: #e5534b;
   --amber: #e3a72f;
   --row-hover: #15233f;
   --shadow: rgba(0,0,0,0.55);
 }
-/* Active nav item: royal-blue stripe capped by a green node — the circuit. */
+/* Active nav item: brand-green stripe. */
 :root[data-skin="brand"] .rail-item.active { box-shadow: inset 2px 0 0 var(--accent); }
 :root[data-skin="brand"] .dot.ok { box-shadow: 0 0 7px var(--green-bright); }
+/* Subtle topographic contour ground (survey-map style) behind the shell and the
+   login page — a fixed, non-repeating cover so there are no tiling seams. */
+:root[data-skin="brand"] body {
+  background-color: var(--bg);
+  background-image: url("/brand-topo.png");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
 
 /* --- Amber Control Room: industrial / SCADA, warm amber on toasted graphite,
        a signal stripe down the active nav item. ------------------------------ */
@@ -440,9 +461,12 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 
 /* ---------- Brand ---------- */
 .brand { display: flex; align-items: center; gap: 12px; }
-.brand-mark { width: 40px; height: 40px; border-radius: 8px; object-fit: contain;
-  background: var(--btn); display: flex; align-items: center;
-  justify-content: center; font-weight: 700; color: #fff; font-size: 18px; }
+/* The "S" tile — the app-icon language: dark rounded tile, thin brand-green
+   ring, Sora "S". Used as the login / password-change fallback mark. */
+.brand-mark { width: 40px; height: 40px; border-radius: 9px;
+  background: #0d1524; border: 2px solid #6ddb73;
+  display: flex; align-items: center; justify-content: center;
+  font-family: "Sora", var(--font); font-weight: 600; color: #eceff3; font-size: 18px; }
 .brand h1 { font-size: 22px; margin: 0; font-weight: 700; }
 .brand .sub { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
 /* Login card: the full logo lockup, centered, above the form. */

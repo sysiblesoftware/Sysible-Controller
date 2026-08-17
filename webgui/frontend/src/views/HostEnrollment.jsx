@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
+import { confirmDialog } from "../confirmDialog.js";
 
 // Host Enrollment — agent bundle (download + curl), enrolled hosts grouped by
 // environment with multi-select, environment assignment, sudo policy, AND the
@@ -99,7 +100,7 @@ export default function HostEnrollment() {
     finally { setPortalBusy(""); }
   }
   async function removeCreds() {
-    if (!window.confirm("Remove portal login access? Nobody can log in until new credentials are saved.")) return;
+    if (!(await confirmDialog("Remove portal login access? Nobody can log in until new credentials are saved."))) return;
     setPortalBusy("remove"); setErr(""); setMsg("");
     try { await api.portalRemoveCreds(cur); setMsg("Portal login access removed."); setCur(""); loadPortal(); }
     catch (e) { setErr(e.message); }
@@ -169,7 +170,7 @@ export default function HostEnrollment() {
       setErr(`Can't remove '${env}' — ${inUse} host(s) are still assigned to it. Reassign them (Set Environment) first.`);
       return;
     }
-    if (!window.confirm(`Remove the environment '${env}'? It has no hosts assigned.`)) return;
+    if (!(await confirmDialog(`Remove the environment '${env}'? It has no hosts assigned.`))) return;
     await run(async () => { await api.deleteEnvironment(env); setAssignEnv(""); },
       `Removed environment '${env}'.`);
   }
@@ -208,7 +209,7 @@ export default function HostEnrollment() {
 
   async function disenrollChecked() {
     if (checked.length === 0) { setErr("Check one or more hosts first."); return; }
-    if (!window.confirm(`Disenroll ${checked.length} host(s)? This removes them from the controller. Each agent keeps running on its host until you stop/uninstall it there (run disenroll_agent.sh on the host), and can re-enroll unless you Force Delete (which purges its enrollment token).\n\nNote: a graceful disenroll waits for each host's agent to tear itself down — for OFFLINE hosts use Force Delete instead, it's immediate.`)) return;
+    if (!(await confirmDialog(`Disenroll ${checked.length} host(s)? This removes them from the controller. Each agent keeps running on its host until you stop/uninstall it there (run disenroll_agent.sh on the host), and can re-enroll unless you Force Delete (which purges its enrollment token).\n\nNote: a graceful disenroll waits for each host's agent to tear itself down — for OFFLINE hosts use Force Delete instead, it's immediate.`))) return;
     const ids = [...checked];
     await run(async () => {
       const failures = await bulkOp(ids, (id) => api.removeHost(id));
@@ -219,14 +220,14 @@ export default function HostEnrollment() {
 
   async function forceDeleteChecked() {
     if (checked.length === 0) { setErr("Check one or more hosts first."); return; }
-    if (!window.confirm(
+    if (!(await confirmDialog(
       `Force-delete ${checked.length} host(s) from the console?\n\n` +
       "Use this for ZOMBIE agents — a broken build that keeps heartbeating but " +
       "can't cleanly disenroll. This drops the controller record immediately " +
       "WITHOUT waiting for the agent to tear itself down, purges its enrollment " +
       "token, and locks out its secret on the next heartbeat.\n\n" +
       "The agent process may still be running on the host — stop it there with " +
-      "disenroll_agent.sh (or kill its service) afterwards. Continue?")) return;
+      "disenroll_agent.sh (or kill its service) afterwards. Continue?"))) return;
     const ids = [...checked];
     await run(async () => {
       const failures = await bulkOp(ids, (id) => api.removeHost(id, true));
@@ -238,11 +239,11 @@ export default function HostEnrollment() {
 
   async function toggleEnrollPause() {
     const next = !enrollPaused;
-    if (next && !window.confirm(
+    if (next && !(await confirmDialog(
       "Pause ALL new agent enrollment?\n\n" +
       "No new host can enroll until you resume — this is the emergency brake for a " +
       "runaway that re-enrolls faster than you can delete it. Existing agents keep " +
-      "running normally. Remember to resume once the source host is fixed.")) return;
+      "running normally. Remember to resume once the source host is fixed."))) return;
     await run(async () => {
       const d = await api.setEnrollmentPause(next);
       setEnrollPaused(!!(d && d.paused));
@@ -252,12 +253,12 @@ export default function HostEnrollment() {
 
   async function revokeChecked() {
     if (checked.length === 0) { setErr("Check one or more hosts first."); return; }
-    if (!window.confirm(
+    if (!(await confirmDialog(
       `Revoke ${checked.length} host(s)?\n\n` +
       "Each agent is locked out immediately — it can't heartbeat, poll, or report — " +
       "but the inventory record is KEPT (unlike Force Delete). Use this to stop a " +
       "runaway/compromised fleet in one click without losing the records; Restore " +
-      "or Force-Delete them afterwards. Continue?")) return;
+      "or Force-Delete them afterwards. Continue?"))) return;
     const ids = [...checked];
     await run(async () => {
       const failures = await bulkOp(ids, (id) => api.revokeHost(id));
@@ -269,7 +270,7 @@ export default function HostEnrollment() {
   async function revokeHost(a, e) {
     if (e) { e.preventDefault(); e.stopPropagation(); }
     const name = a.hostname || a.host_id;
-    if (!window.confirm(`Revoke ${name}? Its agent is locked out — it can't heartbeat, poll, or report — until you re-enroll the host. Use this for a host you believe is compromised or tampered.`)) return;
+    if (!(await confirmDialog(`Revoke ${name}? Its agent is locked out — it can't heartbeat, poll, or report — until you re-enroll the host. Use this for a host you believe is compromised or tampered.`))) return;
     await run(async () => { await api.revokeHost(idOf(a)); }, `Revoked ${name}. Re-enroll the host to restore it.`,
       `Revoking ${name}…`);
     load();
@@ -285,19 +286,19 @@ export default function HostEnrollment() {
   async function restoreHost(a, e) {
     if (e) { e.preventDefault(); e.stopPropagation(); }
     const name = a.hostname || a.host_id;
-    if (!window.confirm(`Restore ${name}? Un-revoke it in place, keeping its existing agent secret so a still-installed agent resumes immediately — no re-enroll needed.`)) return;
+    if (!(await confirmDialog(`Restore ${name}? Un-revoke it in place, keeping its existing agent secret so a still-installed agent resumes immediately — no re-enroll needed.`))) return;
     await run(async () => { await api.restoreHost(idOf(a)); }, `Restored ${name}; its agent resumes on the next heartbeat.`, `Restoring ${name}…`);
   }
 
   async function reissueHost(a, e) {
     if (e) { e.preventDefault(); e.stopPropagation(); }
     const name = a.hostname || a.host_id;
-    if (!window.confirm(
+    if (!(await confirmDialog(
       `Reissue enrollment for ${name}?\n\n` +
       "Re-enrolling an existing host (after a reinstall that wiped its agent secret) " +
       "is refused with an ordinary token, so a leaked token can't hijack a host. This " +
       "mints a single-use token bound to THIS host only. Run the agent with it on the " +
-      "reinstalled machine to reclaim this same record. Continue?")) return;
+      "reinstalled machine to reclaim this same record. Continue?"))) return;
     await run(async () => {
       const r = await api.reissueToken(idOf(a));
       const tok = r && (r.token || (r.data && r.data.token));
@@ -689,7 +690,7 @@ export default function HostEnrollment() {
                     <td>{n}</td>
                     <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                       <a className="btn ghost sm" href={api.portalUploadUrl(n)}>Save</a>{" "}
-                      <button className="btn ghost sm danger" onClick={async () => { if (!window.confirm(`Delete the uploaded file "${n}"?`)) return; await api.portalUploadDelete(n); loadUploads(); }}>Delete</button>
+                      <button className="btn ghost sm danger" onClick={async () => { if (!(await confirmDialog(`Delete the uploaded file "${n}"?`))) return; await api.portalUploadDelete(n); loadUploads(); }}>Delete</button>
                     </td>
                   </tr>
                 ); })}
@@ -711,7 +712,7 @@ export default function HostEnrollment() {
                   <tr key={n || i}>
                     <td>{n}</td>
                     <td style={{ textAlign: "right" }}>
-                      <button className="btn ghost sm danger" onClick={async () => { if (!window.confirm(`Delete the staged file "${n}"?`)) return; await api.portalDownloadDelete(n); loadDownloads(); }}>Delete</button>
+                      <button className="btn ghost sm danger" onClick={async () => { if (!(await confirmDialog(`Delete the staged file "${n}"?`))) return; await api.portalDownloadDelete(n); loadDownloads(); }}>Delete</button>
                     </td>
                   </tr>
                 ); })}

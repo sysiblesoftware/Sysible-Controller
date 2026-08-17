@@ -123,6 +123,28 @@ def test_regenerate_endpoint_on_demand(controller, superuser_headers, tmp_certs,
     assert "192.168.1.90" in ips and "192.168.1.80" not in ips
 
 
+def test_regenerate_endpoint_covers_current_nic_when_saved_ip_is_stale(
+    controller, superuser_headers, tmp_certs, monkeypatch
+):
+    # The DHCP-lease-changed case the user hit: the saved config IP no longer
+    # matches the box's live NIC, so a cert built from the saved value alone
+    # omits the real address and "Regenerate" appears to do nothing. The route
+    # must union the saved address with the CURRENT NIC IPs so the reissued cert
+    # actually covers where the controller answers now.
+    import backend.app as app_module
+    monkeypatch.setattr(tls_manager, "restart_backend", lambda *a, **k: None)
+    monkeypatch.setattr(app_module, "detect_local_ips", lambda: ["192.168.1.250"])
+    cert, _, _ = tmp_certs
+    tls_manager.regenerate_self_signed(ips=["10.0.0.1"])
+    db.set_controller_config("", "192.168.1.90", "ip", 9000)   # stale saved lease
+    r = controller.post("/controller-config/tls/regenerate-self-signed", headers=superuser_headers)
+    assert r.status_code == 200 and r.json().get("restarting") is True
+    _, ips = _san(cert)
+    assert "192.168.1.90" in ips    # admin's saved address is preserved
+    assert "192.168.1.250" in ips   # ...and the current NIC IP is now covered
+    assert set(r.json().get("addresses", [])) >= {"192.168.1.90", "192.168.1.250"}
+
+
 def test_regenerate_endpoint_refuses_pki(controller, superuser_headers, tmp_certs, monkeypatch):
     monkeypatch.setattr(tls_manager, "restart_backend", lambda *a, **k: None)
     monkeypatch.setattr(tls_manager, "current_is_self_signed", lambda: False)

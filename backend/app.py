@@ -2303,7 +2303,16 @@ def regenerate_self_signed_route():
             detail="A custom (PKI) certificate is installed — regenerating a self-signed "
                    "cert would replace it. Import an updated PKI cert instead.",
         )
-    addresses = resolve_controller_addresses(get_controller_config())
+    # Cover BOTH the admin's saved address AND every current NIC IP. If the box's
+    # address changed (e.g. a new DHCP lease) the saved value is stale, and a cert
+    # whose SAN omits the live IP is exactly why agents hit a hostname mismatch —
+    # so clicking "Regenerate" appeared to "do nothing". Union (saved first) keeps
+    # any admin-set hostname/public IP while also covering where the box actually
+    # answers now, so the reissued cert matches the controller's real address.
+    addresses = list(resolve_controller_addresses(get_controller_config()))
+    for ip in detect_local_ips():
+        if ip not in addresses:
+            addresses.append(ip)
     if not addresses:
         raise HTTPException(
             status_code=400,

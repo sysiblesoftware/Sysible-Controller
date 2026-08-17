@@ -22,12 +22,16 @@ export default function UpdatesBadge({ onOpen }) {
   if (!avail) return null;
   const c = avail.controller || {};
   const a = avail.agents || {};
-  const ctrlBehind = !!(c.checked && c.available);
+  // restart_needed: code was pulled to disk but the running process never
+  // reloaded it — a staged update the operator must apply, so surface it like
+  // any other controller update (otherwise the box silently serves stale code).
+  const ctrlBehind = !!((c.checked && c.available) || c.restart_needed);
   const agentsBehind = (a.outdated_count || 0) > 0;
   if (!ctrlBehind && !agentsBehind) return null;
 
   const bits = [];
-  if (ctrlBehind) bits.push("controller update available");
+  if (c.restart_needed) bits.push("controller update pulled — restart to apply");
+  else if (ctrlBehind) bits.push("controller update available");
   if (agentsBehind) bits.push(`${a.outdated_count} agent${a.outdated_count === 1 ? "" : "s"} on an older build`);
 
   return (

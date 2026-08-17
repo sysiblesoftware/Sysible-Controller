@@ -1342,8 +1342,29 @@ def update_status_route():
                  "agent_version": a.get("agent_version")}
                 for a in agents if cur_ver and a.get("agent_version") and a.get("agent_version") != cur_ver]
     unknown = sum(1 for a in agents if not a.get("agent_version"))
+
+    controller = _controller_update_available()
+    # A "git up to date" verdict compares the on-disk checkout to its remote — it
+    # says NOTHING about whether the RUNNING backend process actually loaded that
+    # code. If a previous update pulled (or was pulled manually) but the service
+    # never restarted, the box serves stale code while this card would otherwise
+    # read "up to date", so on-demand actions (regenerate cert, mint bundle) run
+    # the OLD path and appear to "do nothing". Fold in build_info.restart_needed so
+    # the console flags the pending restart instead of falsely reporting current.
+    try:
+        from backend import build_info
+        _bi = build_info.info()
+        if _bi.get("restart_needed"):
+            controller["restart_needed"] = True
+            controller["running_commit"] = _bi.get("commit_short") or _bi.get("commit")
+            controller["message"] = ("Code on disk was updated but the controller backend "
+                                      "hasn't restarted to load it — restart sysible-backend "
+                                      "to apply the pulled update.")
+    except Exception:
+        pass
+
     return {
-        "controller": _controller_update_available(),
+        "controller": controller,
         "agents": {"current_version": cur_ver, "total": len(agents),
                    "outdated": outdated, "outdated_count": len(outdated),
                    "unknown_count": unknown},

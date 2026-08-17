@@ -867,7 +867,12 @@ function SoftwareUpdate() {
 function UpdatesAvailable({ avail, checking, onRecheck }) {
   const c = avail?.controller || {};
   const a = avail?.agents || {};
-  const ctrlBehind = c.checked && c.available;
+  // restart_needed: the checkout was updated on disk but the running backend
+  // never reloaded it, so the box serves stale code and on-demand actions run
+  // the OLD path (the "regenerate cert / mint bundle does nothing" trap). Treat
+  // it as an actionable update so the card never shows a bare "up to date".
+  const ctrlRestart = !!c.restart_needed;
+  const ctrlBehind = (c.checked && c.available) || ctrlRestart;
   const agentsBehind = (a.outdated_count || 0) > 0;
   const anything = ctrlBehind || agentsBehind;
   // Colour the strip: green when confirmed all-current, amber when something's
@@ -892,7 +897,11 @@ function UpdatesAvailable({ avail, checking, onRecheck }) {
       {avail != null && (
         <div style={{ fontSize: 12, marginTop: 6, display: "grid", gap: 3 }}>
           {/* Controller */}
-          {c.checked ? (
+          {ctrlRestart ? (
+            <span><span className="dot" style={{ background: "#e0a83a", marginRight: 6 }} />
+              A controller update was pulled but isn’t live yet — <strong>restart the backend to apply it</strong>
+              {c.running_commit ? <span className="faint"> (running {c.running_commit})</span> : null}</span>
+          ) : c.checked ? (
             c.available
               ? <span><span className="dot" style={{ background: "#e0a83a", marginRight: 6 }} />
                   A controller update is available{c.branch ? ` on ${c.branch}` : ""}

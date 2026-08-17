@@ -293,6 +293,7 @@ function ControllerCfg() {
   const [cfg, setCfg] = useState(null);
   const [ver, setVer] = useState(null);
   const [err, setErr] = useErr(); const [msg, setMsg] = useState(""); const [busy, setBusy] = useState(false);
+  const [armRegen, setArmRegen] = useState(false);
   useEffect(() => { api.controllerConfig().then(setCfg).catch((e) => setErr(e.message)); }, []);
   useEffect(() => { api.controllerVersion().then(setVer).catch(() => {}); }, []);
   if (!cfg) return <div className="empty"><span className="spin" /></div>;
@@ -356,10 +357,20 @@ function ControllerCfg() {
       <label className="field"><span>Port</span><input type="number" value={cfg.port || 9000} onChange={set("port")} /></label>
       <div className="row" style={{ marginTop: 14, gap: 8 }}>
         <button className="btn" disabled={busy} onClick={save}>{busy ? <span className="spin" /> : "Save"}</button>
-        <button className="btn ghost" disabled={busy} title="Rebuild the self-signed TLS certificate so its SAN matches the current IP, then restart the backend to serve it. Use after changing the address."
+        <button className={`btn ${armRegen ? "" : "ghost"}`} disabled={busy}
+          title="Rebuild the self-signed TLS certificate so its SAN matches the current IP, then restart the backend to serve it. Use after changing the address."
           onClick={async () => {
-            if (!window.confirm("Regenerate the self-signed TLS certificate for the current address and restart the controller backend? Agents must then trust the new certificate (redistribute trust.crt / re-download the agent bundle).")) return;
-            setErr(""); setMsg(""); setBusy(true);
+            // Two-click inline confirm — deliberately NOT window.confirm(): once a
+            // browser suppresses dialogs ('prevent this page from creating more
+            // dialogs'), confirm() silently returns false and the button appears
+            // to do NOTHING. An inline arm/confirm always gives visible feedback.
+            if (!armRegen) {
+              setErr("");
+              setMsg("Click “Confirm regenerate” to reissue the self-signed cert for the current address and restart the backend. Agents must then trust the new cert (re-download the agent bundle / redistribute trust.crt).");
+              setArmRegen(true);
+              return;
+            }
+            setArmRegen(false); setErr(""); setMsg(""); setBusy(true);
             try {
               const r = await api.regenerateSelfSignedCert();
               // Confirm concretely: echo the NEW fingerprint + the addresses the
@@ -374,9 +385,9 @@ function ControllerCfg() {
                 + (fp ? ` New fingerprint ${fp}….` : "")
                 + " The backend is restarting to serve it — then re-download the agent"
                 + " bundle / redistribute trust.crt so hosts trust and reach it.");
-            } catch (e) { setErr(e.message); }
+            } catch (e) { setErr(e.message || "Regeneration failed."); }
             finally { setBusy(false); }
-          }}>Regenerate self-signed cert</button>
+          }}>{busy ? <span className="spin" /> : (armRegen ? "Confirm regenerate" : "Regenerate self-signed cert")}</button>
         <button className="btn ghost" disabled={busy}
           title="Re-mint a fresh agent bundle for the CURRENT controller address/port with a new single-use enrollment token, and download it. Use after changing the controller IP or regenerating the cert."
           onClick={async () => {

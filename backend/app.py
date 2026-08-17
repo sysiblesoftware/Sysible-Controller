@@ -8,7 +8,7 @@ import secrets
 import threading
 import time
 
-from backend.agent_bundle import mint_agent_bundle, detect_local_ips, resolve_controller_addresses
+from backend.agent_bundle import mint_agent_bundle, detect_local_ips, resolve_controller_addresses, bundle_addresses
 from backend.auth import require_api_key, require_superuser, require_activity_viewer, acting_admin_name
 from backend.db import (
     create_enroll_token,
@@ -2178,7 +2178,7 @@ def download_agent_bundle_route():
     reachable from wherever this GUI happens to be."""
 
     config = get_controller_config()
-    addresses = resolve_controller_addresses(config)
+    addresses = bundle_addresses(config)
 
     if not addresses:
         detail = (

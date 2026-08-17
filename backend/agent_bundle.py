@@ -85,6 +85,31 @@ def resolve_controller_addresses(config: dict) -> list[str]:
     return detect_local_ips()
 
 
+def bundle_addresses(config: dict) -> list[str]:
+    """Addresses to bake into a freshly MINTED agent bundle.
+
+    Same as resolve_controller_addresses, but self-heals a dead DHCP lease: in
+    "ip" mode, if the saved PRIVATE (RFC1918) ip is no longer one of this
+    controller's live NIC IPs — the box's address changed — fall back to the
+    current NIC IPs so a regenerated bundle follows the box's real address instead
+    of baking a dead one. A public/NAT ip (never a local NIC, not RFC1918) is
+    preserved so a port-forwarded controller keeps working. This heal is applied
+    ONLY to bundles — never to resolve_controller_addresses itself, which the TLS
+    cert-change detection relies on to read the admin's SAVED address verbatim.
+    """
+    mode = config.get("address_mode")
+    ip = config.get("ip")
+    if mode != "all" and ip:
+        try:
+            import ipaddress
+            detected = detect_local_ips()
+            if detected and ip not in detected and ipaddress.ip_address(ip).is_private:
+                return detected
+        except Exception:
+            pass
+    return resolve_controller_addresses(config)
+
+
 _CERT_INSTALL_DIR = "/etc/sysible"
 _CERT_INSTALL_PATH = f"{_CERT_INSTALL_DIR}/controller.crt"
 

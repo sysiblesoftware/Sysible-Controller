@@ -24,7 +24,7 @@ from urllib.parse import quote
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 
-from backend.agent_bundle import mint_agent_bundle, resolve_controller_addresses
+from backend.agent_bundle import mint_agent_bundle, resolve_controller_addresses, bundle_addresses
 from backend.db import get_controller_config, get_portal_credentials, log_portal_event
 from backend import portal_auth, portal_files
 
@@ -428,7 +428,7 @@ async def download_bundle(request: Request, cli: int = 0):
         return RedirectResponse("/?error=expired", status_code=303)
 
     config = get_controller_config()
-    addresses = resolve_controller_addresses(config)
+    addresses = bundle_addresses(config)
 
     if not addresses:
         if cli:
@@ -454,7 +454,7 @@ def _build_bundle_response():
     zip Response or a plain-text error Response (409) if the controller
     has no configured address."""
     config = get_controller_config()
-    addresses = resolve_controller_addresses(config)
+    addresses = bundle_addresses(config)
     if not addresses:
         return Response(
             "The controller has no configured address, so an agent bundle "

@@ -1711,6 +1711,29 @@ def get_controller_config():
 
     conn.close()
 
+    # Current live NIC addresses — used to auto-heal a stale saved IP and to
+    # surface the box's real addresses to the UI.
+    try:
+        from backend.agent_bundle import detect_local_ips
+        detected_ips = detect_local_ips()
+    except Exception:
+        detected_ips = []
+
+    # Flag (do NOT rewrite) a stale DHCP-style address: if the saved IP is a
+    # PRIVATE (RFC1918) address that is no longer one of this controller's live NIC
+    # IPs — the classic "the box's DHCP lease changed" case — mark it stale so the
+    # enrollment UI can warn and offer a one-click update. We never silently
+    # override the saved IP: a controller is often reached at an address that isn't
+    # a local NIC (NAT/port-forward, bridge, VPN), and clobbering that would strand
+    # every agent. The admin stays in control; we just make the drift obvious.
+    ip_stale = False
+    if address_mode == "ip" and ip and detected_ips and ip not in detected_ips:
+        try:
+            import ipaddress
+            ip_stale = bool(ipaddress.ip_address(ip).is_private)
+        except ValueError:
+            ip_stale = False
+
     # The single value agent bundles actually get baked in with -
     # whichever of hostname/ip address_mode points at. "all" mode has
     # no single stored address - the real list is computed live from
@@ -1730,6 +1753,12 @@ def get_controller_config():
         "address_mode": address_mode,
         "port": port,
         "address": address or "",
+        # Current live NIC IPs, so the UI can show them and warn on a stale save.
+        "detected_ips": detected_ips,
+        # True when the saved private IP is no longer one of the box's NIC IPs
+        # (stale DHCP lease) — the UI shows a warning + one-click update. The saved
+        # IP itself is left untouched.
+        "ip_stale": ip_stale,
         # True only once an admin has actually saved this page (see
         # set_controller_config) - false for the auto-seeded default
         # above, even though "address" is non-empty in that case.

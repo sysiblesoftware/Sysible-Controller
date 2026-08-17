@@ -4,6 +4,7 @@ from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -1083,6 +1084,115 @@ def _take_become(task_id):
     with _PENDING_BECOME_LOCK:
         rec = _PENDING_BECOME.pop(task_id, None)
     return rec["password"] if rec else None
+
+
+_AGENT_ENV_FILE = "/opt/sysible-agent/sysible_agent.env"
+
+
+def _normalize_controller_url(raw) -> str:
+    """Validate + normalize a NEW controller address to `scheme://host:port`.
+
+    Accepts a bare host ("10.0.0.5"), host:port, or a full URL; defaults the scheme
+    to https and the port to 9000 when omitted (the agent-API default). Rejects
+    empty/garbage so a typo can't push a broken SYSIBLE_CONTROLLER to the fleet."""
+    from urllib.parse import urlparse
+    s = str(raw or "").strip()
+    if not s:
+        raise HTTPException(status_code=400, detail="new_url is required.")
+    if "://" not in s:
+        s = "https://" + s          # default scheme
+    parsed = urlparse(s)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="new_url must be http:// or https://.")
+    host = parsed.hostname
+    if not host:
+        raise HTTPException(status_code=400, detail="new_url must include a host (IP or hostname).")
+    # Host char whitelist (IPv4 / hostname). Keeps the value shell-safe for the
+    # re-point command below (no quoting surprises when it lands on the agent).
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", host):
+        raise HTTPException(status_code=400, detail="new_url host contains invalid characters.")
+    try:
+        port = parsed.port          # raises ValueError on a non-numeric port
+    except ValueError:
+        raise HTTPException(status_code=400, detail="new_url port must be a number.")
+    if port is None:
+        port = 9000                 # default agent-API port
+    if not (1 <= port <= 65535):
+        raise HTTPException(status_code=400, detail="new_url port is out of range.")
+    return f"{parsed.scheme}://{host}:{port}"
+
+
+def _repoint_command(new_url: str) -> str:
+    """Shell command run on each agent to re-point it at `new_url`.
+
+    Mirrors migrate_agent.sh's update_env: rewrite SYSIBLE_CONTROLLER in the installed
+    env file in place when the key is present, append it when absent, re-tighten the
+    mode, then restart the service so the agent reconnects to the new controller.
+    `new_url` is already normalized/whitelisted, so it's safe to embed."""
+    return (
+        f'set -e; ENV_FILE={_AGENT_ENV_FILE}; '
+        f'if grep -q "^SYSIBLE_CONTROLLER=" "$ENV_FILE"; then '
+        f'sed -i "s#^SYSIBLE_CONTROLLER=.*#SYSIBLE_CONTROLLER={new_url}#" "$ENV_FILE"; '
+        f'else echo "SYSIBLE_CONTROLLER={new_url}" >> "$ENV_FILE"; fi; '
+        f'chmod 600 "$ENV_FILE"; systemctl restart sysible-agent'
+    )
+
+
+@app.post("/controller/migrate-agents",
+          dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def migrate_agents_route(body: dict = Body(...), acting: str = Depends(acting_admin_name)):
+    """Same-identity migration: re-point selected agents at a NEW controller address.
+
+    For an IP change, DNS cutover, or failover to a restored/replica controller that
+    SHARES this controller's database, each selected agent only needs its
+    SYSIBLE_CONTROLLER address rewritten and the service restarted — exactly what
+    agent_bundle.py's migrate_agent.sh does. The agent keeps its host_id/agent_secret
+    and re-attaches to the same identity on the new box (no re-enroll).
+
+    Body: {"new_url": "<ip/host[:port]>", "host_ids": ["..."]}. `new_url` is validated
+    and normalized to scheme://host:port (default https / 9000).
+
+    Note: the re-point task's final step restarts the agent, which tears it down before
+    it can report the task result back — so a task with no returned result is EXPECTED
+    here, not a failure. The real signal of success is the host checking in again
+    against the new controller. Superuser-gated and audited like the other
+    controller-wide superuser actions."""
+    new_url = _normalize_controller_url((body or {}).get("new_url"))
+    host_ids = (body or {}).get("host_ids") or []
+    if not isinstance(host_ids, list) or not host_ids:
+        raise HTTPException(status_code=400, detail="host_ids must be a non-empty list.")
+
+    command = _repoint_command(new_url)
+    results = []
+    dispatched = 0
+    for raw_id in host_ids:
+        hid = str(raw_id)
+        agent = _find_agent(hid)
+        if not agent:
+            results.append({"host_id": hid, "hostname": None, "ok": False, "error": "Unknown host_id"})
+            continue
+        hostname = agent.get("hostname") or hid
+        try:
+            # Reuse the SAME low-level enqueue helper queue_agent_task() uses
+            # (queue_task). This is a controller-issued fleet operation — like SSH
+            # auto-enroll / user sync — so it enqueues directly rather than re-entering
+            # the HTTP dispatch endpoint. run_as=None => the agent runs it in its own
+            # (root) context, which it must, to edit /opt/sysible-agent and restart its
+            # own systemd service.
+            queue_task(hid, command, "command", run_as=None)
+            # Audit per host under the acting superuser: this is authorization-relevant
+            # (it changes which controller the host trusts and reports to).
+            log_activity(acting, hostname,
+                         f"Migrate agent → {new_url} (re-point SYSIBLE_CONTROLLER + restart)",
+                         command)
+            results.append({"host_id": hid, "hostname": hostname, "ok": True})
+            dispatched += 1
+        except Exception as e:  # pragma: no cover - defensive; one host can't sink the batch
+            results.append({"host_id": hid, "hostname": hostname, "ok": False, "error": str(e)})
+
+    log_admin_audit("agents_migrated", acting,
+                    f"re-pointed {dispatched}/{len(host_ids)} agent(s) to {new_url}")
+    return {"results": results, "dispatched": dispatched, "new_url": new_url}
 
 
 @app.post("/agents/{host_id}/tasks", dependencies=[Depends(require_api_key)])

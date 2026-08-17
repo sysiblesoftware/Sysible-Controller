@@ -450,6 +450,14 @@ def regenerate_self_signed_cert():
     return _request("POST", "/controller-config/tls/regenerate-self-signed", timeout=30)
 
 
+def migrate_agents(new_url: str, host_ids):
+    """Same-identity migration: re-point the given agents at a NEW controller address
+    (shared-database failover / IP change / DNS cutover). The controller enqueues a
+    re-point-and-restart task per host. Superuser-gated on the controller."""
+    return _request("POST", "/controller/migrate-agents",
+                    json={"new_url": new_url, "host_ids": list(host_ids or [])})
+
+
 def download_trust_certificate(save_path):
     data = _download_binary("/controller-config/tls/trust-bundle")
     Path(save_path).write_bytes(data)

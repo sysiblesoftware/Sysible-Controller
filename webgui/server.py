@@ -2667,6 +2667,20 @@ def regenerate_self_signed(request: Request, user: str = Depends(require_superus
     return _wrap(lambda: _as_admin(request, lambda: api.regenerate_self_signed_cert()))
 
 
+class MigrateAgentsBody(BaseModel):
+    new_url: str = ""
+    host_ids: list[str] = []
+
+
+@app.post("/api/migrate-agents")
+def migrate_agents_route(body: MigrateAgentsBody, request: Request,
+                         user: str = Depends(require_superuser_session)):
+    """Re-point selected agents at a NEW controller address (same-identity,
+    shared-database migration). Superuser-session gated like the other admin POSTs;
+    the acting admin's token is forwarded so the controller audits it."""
+    return _wrap(lambda: _as_admin(request, lambda: api.migrate_agents(body.new_url, body.host_ids)))
+
+
 @app.get("/api/environmental-policy")
 def get_env_policy(user: str = Depends(require_login)):
     return _wrap(lambda: api.get_environmental_policy())

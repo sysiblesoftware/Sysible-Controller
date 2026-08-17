@@ -177,6 +177,9 @@ export const api = {
   installLocalPackage: (file, targets) => { const fd = new FormData(); fd.append("file", file); fd.append("targets", JSON.stringify(targets)); return req("/api/packages/install-local", { method: "POST", body: fd }); },
   // Host Enrollment
   agents: () => req("/api/agents"),
+  // Same-identity migration: re-point selected agents at a NEW controller address
+  // (shared-DB failover / IP change). body: { new_url, host_ids }.
+  migrateAgents: (body) => req("/api/migrate-agents", { method: "POST", body }),
   revokeHost: (hostId) =>
     req(`/api/host/${encodeURIComponent(hostId)}/revoke`, { method: "POST" }),
   resumeHost: (hostId) =>

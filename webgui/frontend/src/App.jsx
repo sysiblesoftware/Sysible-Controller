@@ -10,6 +10,7 @@ import Connect from "./views/Connect.jsx";
 import LiveActivity from "./views/LiveActivity.jsx";
 import Settings from "./views/Settings.jsx";
 import HostEnrollment from "./views/HostEnrollment.jsx";
+import Migrate from "./views/Migrate.jsx";
 import HostDetail from "./views/HostDetail.jsx";
 import Updates from "./views/Updates.jsx";
 import Schedules from "./views/Schedules.jsx";
@@ -23,6 +24,7 @@ import StandaloneTerminal from "./components/StandaloneTerminal.jsx";
 
 const SECTIONS = {
   hosts: "Host Enrollment",
+  migrate: "Migrate Controller",
   topology: "Network Topology",
   perf: "Fleet Performance",
   updates: "Update Hosts",
@@ -55,6 +57,7 @@ const NAV = [
   { key: "perf", label: "Performance", icon: "chart", su: false, aud: true },
   // Onboard
   { key: "hosts", label: "Host Enrollment", icon: "server", su: true },
+  { key: "migrate", label: "Migrate", icon: "move", su: true },
   // Operate
   { key: "connect", label: "Connect", icon: "terminal", su: false },
   { key: "quickactions", label: "Quick System Actions", icon: "bolt", su: false },
@@ -75,6 +78,7 @@ const NAV = [
 
 const ICONS = {
   grid: <><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></>,
+  move: <><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></>,
   server: <><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><line x1="7" y1="7" x2="7.01" y2="7"/><line x1="7" y1="17" x2="7.01" y2="17"/></>,
   tools: <><path d="M3 21h4L17 11l-4-4L3 17v4z"/><path d="M14.5 5.5l4 4"/></>,
   terminal: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></>,
@@ -449,6 +453,7 @@ export default function App() {
             onBack={() => (history.length > 0 ? goBack() : go(null))}
             onOpen={(section, opts) => go(section, opts || null)} />}
           {isSuper && view === "hosts" && <HostEnrollment />}
+          {isSuper && view === "migrate" && <Migrate />}
           {isSuper && view === "settings" && <Settings initialTab={target?.tab} />}
           {!isAuditor && view === "quickactions" && <ToolRunner solo="Quick System Actions" />}
           {!isAuditor && view === "fleetquery" && <FleetQuery />}

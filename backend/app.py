@@ -2340,14 +2340,23 @@ def regenerate_self_signed_route():
             detail="Set the controller Hostname/IP first so the certificate can cover it.",
         )
     info = tls_manager.regenerate_self_signed(hostnames=addresses)
+    # Re-trust the controller's OWN agent in place: a rotated self-signed cert
+    # invalidates every pin, so without this the controller drops out of its own
+    # fleet the instant you regenerate ("regenerate killed the enrollment").
+    local_agent_retrusted = tls_manager.refresh_local_agent_trust()
     tls_manager.restart_backend()
+    msg = "Self-signed certificate regenerated for the current address. The backend is restarting to serve it."
+    if local_agent_retrusted:
+        msg += " This controller's own agent was re-trusted automatically."
+    msg += (" REMOTE hosts must get the new cert to reconnect — re-download / re-run the agent bundle "
+            "(or push the refreshed trust bundle) on each; a self-signed cert can't be rotated without "
+            "re-trusting pinned agents.")
     return {
         **info,
         "restarting": True,
         "addresses": addresses,
-        "message": ("Self-signed certificate regenerated for the current address. The "
-                    "backend is restarting to serve it — then redistribute the trust "
-                    "bundle / re-download the agent bundle so hosts trust and reach it."),
+        "local_agent_retrusted": local_agent_retrusted,
+        "message": msg,
     }
 
 

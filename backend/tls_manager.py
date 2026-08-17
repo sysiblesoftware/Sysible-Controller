@@ -440,3 +440,57 @@ def restart_backend(delay_seconds: float = 1.5):
             pass
 
     threading.Thread(target=_do_restart, daemon=True).start()
+
+
+# Where the on-host agent pins the controller's cert (see agent_bundle.py's
+# _CERT_INSTALL_PATH / run_agent.sh) and the local self-agent's service name.
+_AGENT_PINNED_CERT = "/etc/sysible/controller.crt"
+_AGENT_SERVICE = "sysible-agent"
+
+
+def refresh_local_agent_trust() -> bool:
+    """Re-trust the controller's OWN agent after its TLS cert changed.
+
+    A self-signed leaf can't be rotated without invalidating every pin (proven:
+    OpenSSL rejects any depth-0 self-signed cert that isn't byte-identical to the
+    pinned one), so the moment the controller reissues its cert, the local
+    self-agent's pinned copy at /etc/sysible/controller.crt goes stale and the
+    controller drops out of its own fleet — "regenerate killed the controller
+    enrollment". Since that agent lives on THIS box, we can fix it in place:
+    overwrite its pinned cert with the new leaf and bounce the agent so it
+    re-verifies over loopback and re-appears in the fleet.
+
+    Best-effort and local-only: REMOTE agents still need the redistributed trust
+    bundle / a fresh agent bundle — nothing on the controller can re-pin a cert on
+    a host it can no longer authenticate to. Returns True if a local agent was
+    found and its trust refreshed.
+    """
+    import shutil
+    import subprocess
+    # Only act if a local agent is actually installed.
+    agent_here = os.path.exists("/opt/sysible-agent/agent.py")
+    if not agent_here:
+        try:
+            agent_here = subprocess.run(
+                ["systemctl", "is-enabled", f"{_AGENT_SERVICE}.service"],
+                capture_output=True, text=True, timeout=5,
+            ).returncode == 0
+        except Exception:
+            agent_here = False
+    if not agent_here or not CERT_FILE.exists():
+        return False
+    try:
+        os.makedirs(os.path.dirname(_AGENT_PINNED_CERT), exist_ok=True)
+        shutil.copy2(str(CERT_FILE), _AGENT_PINNED_CERT)
+        os.chmod(_AGENT_PINNED_CERT, 0o644)
+    except Exception:
+        return False
+    # Bounce the local agent so it reloads the refreshed pin and reconnects. The
+    # backend is restarting in parallel; the agent retries until it's back, so a
+    # brief overlap is harmless. Detached so this isn't a child of either service.
+    try:
+        subprocess.Popen(["systemctl", "restart", f"{_AGENT_SERVICE}.service"],
+                         start_new_session=True)
+    except Exception:
+        pass
+    return True

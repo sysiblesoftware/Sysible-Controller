@@ -220,3 +220,29 @@ def test_pki_cert_is_not_clobbered(controller, superuser_headers, tmp_certs, mon
     body = r.json()
     assert body.get("cert_regenerated") is not True
     assert "PKI" in (body.get("cert_note") or "")
+
+
+def test_refresh_local_agent_trust_repins_and_bounces_local_agent(tmp_certs, monkeypatch):
+    # A rotated self-signed cert invalidates the local self-agent's pin, dropping
+    # the controller from its own fleet. refresh_local_agent_trust must repin the
+    # new leaf and bounce sysible-agent WHEN a local agent exists — and no-op (no
+    # write, no restart) when one doesn't.
+    import subprocess
+    cert, _, _ = tmp_certs
+    tls_manager.regenerate_self_signed(ips=["192.168.8.228"])
+    pin = cert.parent / "pin" / "controller.crt"
+    monkeypatch.setattr(tls_manager, "_AGENT_PINNED_CERT", str(pin))
+    restarts = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: restarts.append(a[0]) or type("P", (), {})())
+
+    # No local agent installed -> no-op.
+    monkeypatch.setattr(tls_manager.os.path, "exists", lambda p: False if p == "/opt/sysible-agent/agent.py" else True)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 1})())
+    assert tls_manager.refresh_local_agent_trust() is False
+    assert not pin.exists() and not restarts
+
+    # Local agent present -> repin + restart.
+    monkeypatch.setattr(tls_manager.os.path, "exists", lambda p: True)
+    assert tls_manager.refresh_local_agent_trust() is True
+    assert pin.exists() and pin.read_bytes() == tls_manager.CERT_FILE.read_bytes()
+    assert any("sysible-agent.service" in " ".join(c) for c in restarts)

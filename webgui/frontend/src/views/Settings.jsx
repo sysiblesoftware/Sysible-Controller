@@ -362,7 +362,18 @@ function ControllerCfg() {
             setErr(""); setMsg(""); setBusy(true);
             try {
               const r = await api.regenerateSelfSignedCert();
-              setMsg((r && r.message) || "Certificate regenerated; backend restarting.");
+              // Confirm concretely: echo the NEW fingerprint + the addresses the
+              // cert now covers, so it's obvious the regen actually happened (and
+              // to what) — not just a generic "done".
+              const fp = r && r.sha256_fingerprint
+                ? String(r.sha256_fingerprint).replace(/:/g, "").slice(0, 16).toUpperCase()
+                : "";
+              const addrs = r && Array.isArray(r.addresses) && r.addresses.length
+                ? ` Now covers ${r.addresses.join(", ")}.` : "";
+              setMsg(`✓ Self-signed certificate regenerated.${addrs}`
+                + (fp ? ` New fingerprint ${fp}….` : "")
+                + " The backend is restarting to serve it — then re-download the agent"
+                + " bundle / redistribute trust.crt so hosts trust and reach it.");
             } catch (e) { setErr(e.message); }
             finally { setBusy(false); }
           }}>Regenerate self-signed cert</button>

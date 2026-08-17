@@ -69,19 +69,28 @@ def vertical_lockup(W, H, bg):
     return canvas
 
 
-def horizontal_badge(W, H, fg):
-    """README badge: mark + 'SYSIBLE CONTROLLER', transparent."""
-    canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+def horizontal_badge(H, fg):
+    """README badge: mark + 'SYSIBLE CONTROLLER', transparent.
+
+    The canvas WIDTH is derived from the content (mark + gap + tracked wordmark +
+    side margins) instead of being fixed, so the wordmark always renders at full
+    size and never clips. The previous fixed-width version overflowed the 980px
+    canvas and cut 'CONTROLLER' down to 'CONTROLL' on GitHub.
+    """
     s = int(H * 0.80)
-    m = mark(s)
-    d = ImageDraw.Draw(canvas)
+    gap = int(H * 0.14)
+    margin = int(H * 0.10)
     f = ImageFont.truetype(FONT, int(H * 0.26))
     tracking = int(H * 0.03)
     txt = "SYSIBLE CONTROLLER"
-    tw = sum(d.textlength(c, font=f) for c in txt) + tracking * (len(txt) - 1)
-    gap = int(H * 0.14)
-    x0 = (W - (s + gap + tw)) / 2
-    canvas.alpha_composite(m, (int(x0), (H - s) // 2))
+    probe = ImageDraw.Draw(Image.new("RGBA", (4, 4)))
+    tw = sum(probe.textlength(c, font=f) for c in txt) + tracking * (len(txt) - 1)
+    W = int(s + gap + tw + 2 * margin)
+    canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    m = mark(s)
+    d = ImageDraw.Draw(canvas)
+    x0 = margin
+    canvas.alpha_composite(m, (x0, (H - s) // 2))
     asc, desc = f.getmetrics()
     _tracked(d, txt, f, x0 + s + gap + tw / 2, (H - (asc + desc)) // 2, fg, tracking)
     return canvas
@@ -109,8 +118,8 @@ def main():
     for rel in ("webgui/frontend/public/favicon.png",
                 "webgui/frontend/dist/favicon.png"):
         save(fav, rel)
-    save(horizontal_badge(980, 260, FG_DARK), ".github/sysible-logo-dark.png")
-    save(horizontal_badge(980, 260, INK), ".github/sysible-logo-light.png")
+    save(horizontal_badge(260, FG_DARK), ".github/sysible-logo-dark.png")
+    save(horizontal_badge(260, INK), ".github/sysible-logo-light.png")
 
 
 if __name__ == "__main__":

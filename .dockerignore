@@ -1,0 +1,35 @@
+# Keep the build context small and never bake local state / secrets into the
+# image. Runtime state lives on the /data volume, not in the image.
+.git
+.github
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+webgui/frontend/node_modules
+webgui/frontend/dist
+# Local runtime state / secrets (regenerated in the container on first run)
+certs/
+run/
+logs/
+portal_files/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+api_key.txt
+hosts.json
+agent_state.json
+agent_ssh_state.json
+remote_keys/
+mtls.env
+backend/sysible.db
+# Docs / editor cruft not needed at runtime
+*.md
+!README.md
+Sysible_Controller_Documentation.html
+Sysible_Controller_Quickstart.html
+.vscode
+.idea
+.DS_Store

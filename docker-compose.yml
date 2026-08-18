@@ -1,0 +1,37 @@
+# Sysible Controller — single-node deployment.
+#
+#   docker compose up -d --build      # build + start
+#   docker compose logs -f            # watch startup; the seeded admin password
+#                                     # is printed once on first run
+#
+# The web console is at  https://<host>:8800  (self-signed cert -> your browser
+# will warn once). Agents enroll against  https://<host>:9000.
+#
+# IMPORTANT: set SYSIBLE_CONTROLLER_HOSTNAMES to the DNS name(s)/IP(s) that
+# agents and browsers will actually use to reach this host, so the auto-generated
+# TLS cert covers them (agents pin this cert). You can add more later from the
+# console: Settings -> Regenerate certificate.
+
+services:
+  controller:
+    build: .
+    image: sysible-controller:latest
+    container_name: sysible-controller
+    restart: unless-stopped
+    ports:
+      - "8800:8800"   # web console (BFF)
+      - "9000:9000"   # controller API — agents + CLI
+    environment:
+      # Cover the address(es) agents/browsers use to reach this host in the TLS
+      # cert. Comma-separated DNS names and/or IPs. Example:
+      # SYSIBLE_CONTROLLER_HOSTNAMES: "controller.example.com,10.0.0.5"
+      SYSIBLE_CONTROLLER_HOSTNAMES: "${SYSIBLE_CONTROLLER_HOSTNAMES:-}"
+      # Optionally set the first superuser's password (else one is generated and
+      # printed to the logs once on first run):
+      # SYSIBLE_ADMIN_USERNAME: "admin"
+      # SYSIBLE_ADMIN_PASSWORD: "change-me-please"
+    volumes:
+      - sysible-data:/data   # DB, certs, API key, cookie secret, portal files
+
+volumes:
+  sysible-data:

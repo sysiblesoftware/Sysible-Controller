@@ -30,7 +30,7 @@ ol li,ul li{margin:4px 0;}
 .shot img{max-width:100%;border:1px solid var(--hair);border-radius:8px;box-shadow:0 2px 14px rgba(0,0,0,.10);}
 .shot figcaption{color:var(--dim);font-size:13px;margin-top:6px;}
 footer{max-width:900px;margin:0 auto 40px;text-align:center;color:var(--dim);font-size:12px;padding:10px;}
-</style></head><body><div class="cover"><h1>Sysible Controller</h1><div class="sub">Administrator &amp; User Guide</div><div class="meta">Version 3.0.0 · 2026-07-02 · Web console edition</div></div><div class="page"><h2>Contents</h2><div class="toc"><a href="#overview">1. Overview</a><a href="#requirements">2. Requirements</a><a href="#install">3. Installation</a><a href="#first-login">4. First login &amp; accounts</a><a href="#roles">5. Roles &amp; identity</a><a href="#sudo">6. Sudo modes</a><a href="#dashboard">7. Dashboard</a><a href="#updates">8. Update Hosts (patching)</a><a href="#schedules">9. Scheduled jobs</a><a href="#alerts">10. Alerting</a><a href="#performance">11. Performance</a><a href="#enroll">12. Host enrollment</a><a href="#tools">13. System Administration Tools</a><a href="#qsa">14. Quick System Actions</a><a href="#connect">15. Sysible Connect</a><a href="#activity">16. Activity &amp; logs</a><a href="#settings">17. Settings</a><a href="#portal">18. Webserver Portal</a><a href="#cli">19. CLI reference</a><a href="#security">20. Security model</a></div></div><div class="page">
+</style></head><body><div class="cover"><h1>Sysible Controller</h1><div class="sub">Administrator &amp; User Guide</div><div class="meta">Version 3.0.0 · 2026-07-02 · Web console edition</div></div><div class="page"><h2>Contents</h2><div class="toc"><a href="#overview">1. Overview</a><a href="#requirements">2. Requirements</a><a href="#install">3. Installation</a><a href="#first-login">4. First login &amp; accounts</a><a href="#roles">5. Roles &amp; identity</a><a href="#sudo">6. Sudo modes</a><a href="#dashboard">7. Dashboard</a><a href="#updates">8. Update Hosts (patching)</a><a href="#schedules">9. Scheduled jobs</a><a href="#alerts">10. Alerting</a><a href="#performance">11. Performance</a><a href="#enroll">12. Host enrollment</a><a href="#tools">13. System Administration Tools</a><a href="#qsa">14. Quick System Actions</a><a href="#connect">15. Sysible Connect</a><a href="#activity">16. Activity &amp; logs</a><a href="#settings">17. Settings</a><a href="#portal">18. Webserver Portal</a><a href="#cli">19. CLI reference</a><a href="#security">20. Security model</a><a href="#containers">21. Running in a container</a></div></div><div class="page">
 <h2 id="overview">1. Overview</h2>
 <p><b>Sysible Controller</b> is a self-hosted, point-and-click way to manage a fleet of Linux hosts.
 It is two pieces: a <b>FastAPI backend</b> (the <code>sysible-backend</code> service, HTTPS on port 9000,
@@ -205,5 +205,19 @@ and manage its credentials and sessions from Settings.</p>
 <li><b>Run-as identity</b> from the signed login token (never the browser), so each host's sudo policy and audit trail stay meaningful.</li>
 <li><b>HTTPS everywhere</b>, TOFU SSH host-key pinning, and secrets (sudo/SMTP passwords) encrypted at rest.</li>
 <li><b>Session cookie</b> — signed, http-only, SameSite=Strict; the controller API key never reaches the browser.</li>
+</ul>
+<h2 id="containers">21. Running in a container</h2>
+<p>Instead of the native systemd install, the controller can run as a single <b>Docker</b> image that carries both services &mdash; the backend API and the web console &mdash; managed by <code>supervisord</code>, with all state on a persistent <code>/data</code> volume. The repository ships a <code>Dockerfile</code>, a <code>docker-compose.yml</code>, and a full reference in <code>DOCKER.md</code>.</p>
+<pre><code>export SYSIBLE_CONTROLLER_HOSTNAMES="controller.example.com,10.0.0.5"
+docker compose up -d --build
+docker compose logs -f      # first run prints the seeded admin password once</code></pre>
+<p>Then open <code>https://&lt;host&gt;:8800</code> and sign in as <code>admin</code> with the password from the logs (you are required to change it). Agents enroll against <code>https://&lt;host&gt;:9000</code>.</p>
+<ul>
+<li><b>One image, two services</b> &mdash; <code>supervisord</code> runs the backend (:9000) and the web console (:8800); no Node is needed at run time (the front end is built into the image).</li>
+<li><b>Persistent <code>/data</code> volume</b> &mdash; SQLite database, TLS certificates (the pinned cert is generated once and never rotated on restart), API key, cookie secret, and portal files, so rebuilding or upgrading the image never loses enrollments. Back it up as a unit.</li>
+<li><b>Set your own first password</b> with <code>SYSIBLE_ADMIN_PASSWORD</code> (and <code>SYSIBLE_ADMIN_USERNAME</code>) instead of the generated one.</li>
+<li><b>Cover the reachable address</b> in the auto-generated TLS certificate with <code>SYSIBLE_CONTROLLER_HOSTNAMES</code> (comma-separated DNS names / IPs) &mdash; agents pin this cert. Add more later from <b>Settings &rarr; Regenerate certificate</b>, which restarts the backend via <code>supervisorctl</code> (no systemd needed).</li>
+<li><b>Upgrades</b> are &ldquo;pull the new image and <code>docker compose up -d</code>&rdquo;, not the console's in-place <i>Update controller</i> button.</li>
+<li><b>Enterprise / PostgreSQL</b> &mdash; point the backend at your database with <code>SYSIBLE_DB_URL</code> and it will not use the on-volume SQLite file.</li>
 </ul>
 </div><footer>Sysible Controller v3.0.0 — generated 2026-07-02 by tools/generate_docs.py</footer></body></html>

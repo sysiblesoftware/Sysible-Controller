@@ -5,12 +5,22 @@
    separate light/dark toggle — "Porcelain" is the light skin.
    Every surface reads a CSS variable, so a skin is purely a token swap
    plus a few scoped signature rules. */
+/* Sora — the brand display/UI face (SIL OFL). Vendored at
+   public/fonts/Sora.ttf (variable font; the browser picks the needed weight). */
+@font-face {
+  font-family: "Sora";
+  src: url("/fonts/Sora.ttf") format("truetype");
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root,
 :root[data-skin="base"] {
   /* Neutral graphite: warm-gray surfaces, hairline borders, color held back to
      status dots and a restrained accent on the active nav item. */
   color-scheme: dark;
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font: "Sora", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --bg: #17191d;
   --bg-raise: #1e2127;
   --panel: #1e2127;
@@ -59,46 +69,52 @@
    A handful of scoped "signature" rules give each skin its one distinct move.
    ========================================================================== */
 
-/* --- Sysible: the brand skin — the hexagon-prompt family palette. A near-black
-       engineering ground with the mark's green→blue as accent and status, tying
-       the console to the logo, honeycomb wallpapers, and the boot & lock screens.
-       The active nav item carries the logo's green→blue trace; "ok" dots glow in
-       brand green. ----------------------------------------------------------- */
+=======
+/* --- Sysible: the brand skin — deep navy drawn from the wordmark, brand green
+       (#6ddb73) as the single accent (rail stripe, active states, "ok" dots),
+       secondary blue held back to nodes/links, over a subtle topographic
+       contour ground. --------------------------------------------------------- */
 :root[data-skin="brand"] {
-  --bg: #0d1117;
-  --bg-raise: #12161f;
-  --panel: #12161f;
-  --panel-2: #161b26;
-  --border: #232b3a;
-  --border-strong: #33405a;
-  --text: #e9f0f7;
-  --text-dim: #9aa7bd;
-  --text-faint: #7d8ca3;   /* ~4.8:1 on --bg */
-  --btn: #1a2233;
-  --btn-hover: #24304a;
-  --btn-border: #33405a;
-  --btn-press: #141b28;
-  --accent: #5580ee;       /* brand blue */
-  --accent-soft: rgba(85,128,238,0.15);
-  --on-accent: #ffffff;
-  --rail-bg: #0a0d13;
-  --field: #12161f;
-  --field-border: #33405a;
-  --green: #43a047;        /* brand green (base) */
-  --green-bright: #63c869; /* brand green (bright) — ok dots / online */
+  --bg: #0b1526;
+  --bg-raise: #101d33;
+  --panel: #101d33;
+  --panel-2: #0d1830;
+  --border: #213456;
+  --border-strong: #2d4570;
+  --text: #e7edf7;
+  --text-dim: #a0b1d0;
+  --text-faint: #7387ad;   /* ~4.7:1 on --bg */
+  --btn: #1a2c4d;
+  --btn-hover: #243a63;
+  --btn-border: #31497a;
+  --btn-press: #15233f;
+  --accent: #6ddb73;       /* brand green — the one accent */
+  --accent-soft: rgba(109,219,115,0.15);
+  --on-accent: #06210f;    /* dark ink drawn ON the green accent (ticks, etc.) */
+  --rail-bg: #091120;
+  --field: #0d1830;
+  --field-border: #2d4570;
+  --green: #6ddb73;        /* brand green */
+  --green-bright: #8be392;
   --red: #e5534b;
   --amber: #e0a83b;
   --row-hover: #161b26;
   --shadow: rgba(0,0,0,0.55);
 }
-/* Active nav item: the logo's green→blue trace down the left edge. */
-:root[data-skin="brand"] .rail-item.active { position: relative; border-left-color: transparent; }
-:root[data-skin="brand"] .rail-item.active::before {
-  content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px;
-  border-radius: 0 3px 3px 0;
-  background: linear-gradient(180deg, var(--green-bright), var(--accent));
-}
+=======
+/* Active nav item: brand-green stripe. */
+:root[data-skin="brand"] .rail-item.active { box-shadow: inset 2px 0 0 var(--accent); }
 :root[data-skin="brand"] .dot.ok { box-shadow: 0 0 7px var(--green-bright); }
+/* Subtle topographic contour ground (survey-map style) behind the shell and the
+   login page — a fixed, non-repeating cover so there are no tiling seams. */
+:root[data-skin="brand"] body {
+  background-color: var(--bg);
+  background-image: url("/brand-topo.png");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
@@ -270,9 +286,12 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 
 /* ---------- Brand ---------- */
 .brand { display: flex; align-items: center; gap: 12px; }
-.brand-mark { width: 40px; height: 40px; border-radius: 8px; object-fit: contain;
-  background: var(--btn); display: flex; align-items: center;
-  justify-content: center; font-weight: 700; color: #fff; font-size: 18px; }
+/* The "S" tile — the app-icon language: dark rounded tile, thin brand-green
+   ring, Sora "S". Used as the login / password-change fallback mark. */
+.brand-mark { width: 40px; height: 40px; border-radius: 9px;
+  background: #0d1524; border: 2px solid #6ddb73;
+  display: flex; align-items: center; justify-content: center;
+  font-family: "Sora", var(--font); font-weight: 600; color: #eceff3; font-size: 18px; }
 .brand h1 { font-size: 22px; margin: 0; font-weight: 700; }
 .brand .sub { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
 /* Login card: the full logo lockup, centered, above the form. */

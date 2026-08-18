@@ -166,6 +166,7 @@ For the full trust model, controls, and deployment guidance (firewalling the con
 - Python 3, provisioned automatically by the installer along with the rest of the system package list.
 - **For the web console:** Node.js 18+ to build the front end — the installer installs it from your distro (`apt`/`dnf`/`zypper`); it's **build-time only**, so once `webgui/frontend/dist/` exists no Node is needed at run time. Plus any modern browser on a machine that can reach the controller. No desktop environment is needed on the controller itself. (On a distro with no suitable Node package, install Node 18+ from [NodeSource](https://github.com/nodesource/distributions), then `sudo sysible_controller webgui restart` to build.)
 - Managed hosts need either outbound network access for the Sysible agent, or SSH access for the SSH-managed path. The host agent itself only depends on the `requests` library.
+- **Or skip all of the above and run it in Docker** — the only requirement is a working Docker Engine + Compose on the controller host. See [Run as a container](#run-as-a-container-docker) / [`DOCKER.md`](DOCKER.md).
 
 ## Installation
 
@@ -207,6 +208,44 @@ This pulls your recorded source checkout (`git pull --ff-only`), re-syncs it int
 
 The order matters: *Update controller* first (so the controller holds the new agent), then *Update agents*. You only need *Update agents* when the agent itself changed (e.g. to start reporting the richer performance metrics); re-running it otherwise is harmless.
 
+## Run as a container (Docker)
+
+Prefer containers to the native systemd install? The repo ships a **Dockerfile**
+and **`docker compose`** setup that runs the whole controller — the backend API
+and the web console — as one image, with all state on a persistent volume. Full
+details are in **[`DOCKER.md`](DOCKER.md)**; the short version:
+
+```bash
+# Cover the DNS name(s)/IP(s) agents & browsers use to reach this host in the
+# auto-generated TLS cert (agents pin it):
+export SYSIBLE_CONTROLLER_HOSTNAMES="controller.example.com,10.0.0.5"
+
+docker compose up -d --build
+docker compose logs -f          # first run prints the seeded admin password ONCE
+```
+
+Then open **`https://<host>:8800`** and sign in as `admin` with the password
+from the logs (you'll be required to change it). Agents enroll against
+**`https://<host>:9000`**.
+
+- **One image, two services.** `supervisord` runs the backend (`:9000`) and the
+  web console (`:8800`); no Node is needed at run time (the front end is built
+  into the image).
+- **Persistent `/data` volume.** Holds the SQLite database, TLS certs (the
+  pinned cert is generated once and never rotated on restart), the API key, the
+  cookie secret, and portal files — so rebuilding or upgrading the image never
+  loses enrollments. Back it up as a unit (see `DOCKER.md`).
+- **Set your own first password** with `SYSIBLE_ADMIN_PASSWORD` (and
+  `SYSIBLE_ADMIN_USERNAME`) instead of using the generated one.
+- **Regenerate/rotate the cert** later from **Settings → Regenerate
+  certificate** — in a container that restarts the backend via `supervisorctl`,
+  no systemd needed.
+- **Upgrades** are "pull the new image and `docker compose up -d`", not the
+  console's in-place *Update controller* button (that native git-redeploy flow
+  doesn't apply to the immutable image).
+- **Enterprise/Postgres:** point the backend at your database with
+  `SYSIBLE_DB_URL` and it won't use the on-volume SQLite file.
+
 ## First launch — your administrator account
 
 The installer **seeds a default superuser** named `admin` on a fresh install (only when no administrator exists yet) with a randomly generated one-time password. That password is printed **once, in red, at the end of the install output** — copy it then. Log in to the web console at `https://<controller>:8800/` as `admin` with that password. Because it's a temporary password, the console **requires you to set a new one before it lets you in** — you'll land on a "set a new password" screen at that first login. If administrators already existed at install time, no default is seeded; create or reset a login with `sudo sysible_controller reset-admin` (see CLI reference), which prints a fresh temporary password the same way (and likewise forces a change at next login).
@@ -237,7 +276,7 @@ sysible_controller {start|stop|restart|update|status|logs|webgui|reset-admin|des
 
 ## Documentation
 
-This **README** and [`SECURITY.md`](SECURITY.md) are the maintained, canonical docs — start here. A bundled HTML reference, [`Sysible_Controller_Documentation.html`](Sysible_Controller_Documentation.html) (with a condensed [`Sysible_Controller_Quickstart.html`](Sysible_Controller_Quickstart.html)), ships alongside them for offline reading; console-specific configuration (environment variables, reverse-proxy/TLS, architecture) lives in [`webgui/README.md`](webgui/README.md). Release notes are in [`CHANGELOG.md`](CHANGELOG.md); the API test-suite and how to run it are documented in [`tests/README.md`](tests/README.md) (`pip install -r requirements.txt -r requirements-dev.txt && pytest`).
+This **README** and [`SECURITY.md`](SECURITY.md) are the maintained, canonical docs — start here. A bundled HTML reference, [`Sysible_Controller_Documentation.html`](Sysible_Controller_Documentation.html) (with a condensed [`Sysible_Controller_Quickstart.html`](Sysible_Controller_Quickstart.html)), ships alongside them for offline reading; console-specific configuration (environment variables, reverse-proxy/TLS, architecture) lives in [`webgui/README.md`](webgui/README.md). Running the controller in Docker is covered in [`DOCKER.md`](DOCKER.md). Release notes are in [`CHANGELOG.md`](CHANGELOG.md); the API test-suite and how to run it are documented in [`tests/README.md`](tests/README.md) (`pip install -r requirements.txt -r requirements-dev.txt && pytest`).
 
 ## Project structure
 

@@ -88,6 +88,7 @@ def _page(body: str, message: str = "", wide: bool = False) -> str:
   {favicon_tag}
   <style>
     :root {{
+=======
       --bg: #1E1E1E;
       --card: #262626;
       --card-border: #3A3A3A;
@@ -95,16 +96,17 @@ def _page(body: str, message: str = "", wide: bool = False) -> str:
       --input-border: #505050;
       --text: #EAEAEA;
       --text-dim: #9aa5b1;
-      --accent: #3C4B64;
-      --accent-border: #506080;
-      --accent-hover: #4C6285;
-      --accent-pressed: #23395D;
+      --accent: #6ddb73;
+      --accent-border: #57c65d;
+      --accent-hover: #82e388;
+      --accent-pressed: #55c25b;
+      --on-accent: #06210f;
       --error: #ff5c5c;
-      --link: #6fa8ff;
+      --link: #7aa2ff;
     }}
     * {{ box-sizing: border-box; }}
     body {{
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-family: "Sora", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       background: var(--bg); color: var(--text); margin: 0; min-height: 100vh;
       display: flex; flex-direction: column; align-items: center;
       padding: 36px 16px 48px;
@@ -134,7 +136,7 @@ def _page(body: str, message: str = "", wide: bool = False) -> str:
     input[type=file] {{ padding: 8px 0; border: none; background: none; }}
     button, .btn {{
       display: inline-block; width: 100%; padding: 11px; text-align: center;
-      background: var(--accent); color: #fff; border: 1px solid var(--accent-border);
+      background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent-border);
       border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500;
       text-decoration: none; transition: background 0.15s ease; font-family: inherit;
     }}

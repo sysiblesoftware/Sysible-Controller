@@ -9,6 +9,8 @@
 
 **IT Infrastructure Management Software for Linux fleets — one console, agent or SSH, no DSL to learn.**
 
+> 🐳 **Running it in a container?** Jump to **[Run as a container](#run-as-a-container-docker)** — one image, `docker compose up -d`, state on a persistent volume. Full reference in **[DOCKER.md](DOCKER.md)**.
+
 Sysible Controller is a self-hosted infrastructure management console for Linux system administrators and engineers. One controller, installed on a single Linux machine, gives you a single point of control over an entire fleet of Linux hosts — user and group administration, health diagnostics, service control, scheduled jobs, package and repository management, networking, storage and filesystem management, firewall and security hardening, and a live remote terminal — whether each host runs Sysible's lightweight agent or is reached directly over SSH.
 
 ![The Sysible Controller System Administration panel — eighteen fleet-wide tools, one click each](docs/screenshots/screenshot_system_administration.png)

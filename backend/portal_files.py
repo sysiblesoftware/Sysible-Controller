@@ -16,10 +16,13 @@ Filesystem-only by design (no DB table) - this is just a drop box, not
 inventory the admin needs to query/filter on.
 """
 
+import os
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-STORAGE_ROOT = PROJECT_ROOT / "portal_files"
+# SYSIBLE_PORTAL_FILES_DIR relocates portal file storage (host<->controller file
+# transfers) onto a persistent volume for containers; defaults to the in-repo dir.
+STORAGE_ROOT = Path(os.getenv("SYSIBLE_PORTAL_FILES_DIR", str(PROJECT_ROOT / "portal_files")))
 UPLOADS_DIR = STORAGE_ROOT / "uploads"      # host -> controller
 DOWNLOADS_DIR = STORAGE_ROOT / "downloads"  # controller -> host
 

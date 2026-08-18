@@ -409,6 +409,23 @@ def restart_backend(delay_seconds: float = 1.5):
 
     def _do_restart():
         time.sleep(delay_seconds)
+        # Containers have no systemd. When we run under supervisord (the Docker
+        # image), bounce the backend via supervisorctl instead — it restarts the
+        # program from PID 1's scope, the same "survives our own teardown"
+        # property the systemd-run timer gives on a native host. Detected by the
+        # SYSIBLE_CONTAINER marker the entrypoint exports (falls back to
+        # /.dockerenv). If supervisorctl isn't reachable we fall through to the
+        # systemd path below, so a non-supervised container still degrades safely.
+        if os.getenv("SYSIBLE_CONTAINER") == "1" or os.path.exists("/.dockerenv"):
+            try:
+                rc = subprocess.call(
+                    ["supervisorctl", "restart", "backend"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                if rc == 0:
+                    return
+            except (FileNotFoundError, OSError):
+                pass
         # Transient timer, detached from this service's cgroup, so the
         # restart survives sysible-backend being killed. --collect reaps
         # the unit once it's done; --on-active gives a beat for the

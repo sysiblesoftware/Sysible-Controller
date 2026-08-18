@@ -24,7 +24,10 @@ def _token_at_rest(token):
 # DATABASE LOCATION
 # =========================================================
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "sysible.db"
+# SYSIBLE_DB_PATH relocates the SQLite database off the code tree — needed for
+# containers (mount it on a persistent volume, e.g. /data/sysible.db) so the DB
+# survives image rebuilds. Defaults to the in-repo path for a native install.
+DB_PATH = Path(os.getenv("SYSIBLE_DB_PATH", str(BASE_DIR / "sysible.db")))
 
 # How many activity-log rows to retain (0 = never trim; let a SIEM own
 # retention). Default ~months of history rather than the old 5000-row cap that

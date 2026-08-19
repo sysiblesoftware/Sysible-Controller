@@ -69,7 +69,6 @@
    A handful of scoped "signature" rules give each skin its one distinct move.
    ========================================================================== */
 
-=======
 /* --- Sysible: the brand skin — deep navy drawn from the wordmark, brand green
        (#6ddb73) as the single accent (rail stripe, active states, "ok" dots),
        secondary blue held back to nodes/links, over a subtle topographic
@@ -101,7 +100,6 @@
   --row-hover: #161b26;
   --shadow: rgba(0,0,0,0.55);
 }
-=======
 /* Active nav item: brand-green stripe. */
 :root[data-skin="brand"] .rail-item.active { box-shadow: inset 3px 0 0 var(--accent); }
 :root[data-skin="brand"] .dot.ok { box-shadow: 0 0 7px var(--green-bright); }

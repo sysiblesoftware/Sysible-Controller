@@ -381,37 +381,45 @@ _login_attempts_lock = threading.Lock()  # guards _login_attempts across worker 
 # token out of the cookie), and because the key is persisted on disk this
 # survives a controller restart — unlike an in-memory store, which would log
 # everyone out of superuser actions on every restart.
-def _token_cipher():
+def _encrypt_token(token: str):
+    """Encrypt the controller admin token for storage in the session cookie, using
+    the sudo store's PRIMARY key (master-derived when a vault key is resolvable,
+    else the persisted 0600 run/webgui_sudo.key). Returns None if unavailable.
+
+    NOTE: this used to call sudo_store._get_key(), which no longer exists (the
+    store was refactored to _primary_key()/_read_keys()). The AttributeError was
+    swallowed, so the token was NEVER encrypted — token_enc stayed unset and every
+    superuser-gated route (update-status, health-warnings, activity …) 401'd,
+    which the console surfaced as "log in, flash, bounce back to login"."""
+    if not token:
+        return None
     try:
         from cryptography.fernet import Fernet
         from webgui import sudo_store
-        key = sudo_store._get_key()
-        return Fernet(key) if key else None
-    except Exception:
-        return None
-
-
-def _encrypt_token(token: str):
-    c = _token_cipher()
-    if not c or not token:
-        return None
-    try:
-        return c.encrypt(token.encode()).decode()
+        key = sudo_store._primary_key()
+        return Fernet(key).encrypt(token.encode()).decode() if key else None
     except Exception:
         return None
 
 
 def _token_from_session(session):
+    """Decrypt the admin token from the session, trying every custody key (derived,
+    then the legacy file key) so a token written under one key still decrypts after
+    the store migrates to a master key."""
     enc = (session or {}).get("token_enc")
     if not enc:
         return None
-    c = _token_cipher()
-    if not c:
-        return None
     try:
-        return c.decrypt(enc.encode()).decode()
+        from cryptography.fernet import Fernet
+        from webgui import sudo_store
+        for key in sudo_store._read_keys():
+            try:
+                return Fernet(key).decrypt(enc.encode()).decode()
+            except Exception:
+                continue
     except Exception:
         return None
+    return None
 
 
 def _session_token(request: "Request"):

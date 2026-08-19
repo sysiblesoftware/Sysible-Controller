@@ -90,10 +90,45 @@ app = FastAPI(title="Sysible Web GUI", docs_url=None, redoc_url=None, openapi_ur
 
 # Signed http-only session cookie. Set SYSIBLE_WEBGUI_SECRET in the
 # environment for a stable secret across restarts; a random per-process
-# secret (the fallback) logs everyone out whenever the service restarts.
-# (webgui_manager persists one to run/webgui.secret so the deployed
-# service keeps sessions valid across restarts.)
-_SECRET = os.getenv("SYSIBLE_WEBGUI_SECRET") or secrets.token_hex(32)
+# secret (the last-resort fallback) logs everyone out whenever the service
+# restarts — and if it differs between the process that SET a login cookie and
+# the one that READS the next request, every login "flashes then bounces back
+# to the login page" (the cookie can't be verified).
+#
+# Resolution order, most-stable first:
+#   1. $SYSIBLE_WEBGUI_SECRET (webgui_manager sets this for native installs).
+#   2. The persisted secret file — run/webgui.secret — which BOTH the native
+#      webgui_manager and the container entrypoint write. Reading it directly
+#      means sessions stay valid even if the env var didn't propagate to this
+#      process (e.g. through supervisord in the container image).
+#   3. A random per-process secret, with a loud warning (sessions won't survive
+#      a restart / a second worker).
+def _resolve_session_secret():
+    env = os.getenv("SYSIBLE_WEBGUI_SECRET")
+    if env:
+        return env
+    run_dir = os.getenv("SYSIBLE_RUN_DIR") or os.getenv("SYSIBLE_DATA_DIR")
+    candidates = []
+    if run_dir:
+        candidates.append(os.path.join(run_dir, "webgui.secret"))
+        candidates.append(os.path.join(run_dir, "run", "webgui.secret"))
+    for path in candidates:
+        try:
+            with open(path) as fh:
+                val = fh.read().strip()
+            if val:
+                return val
+        except OSError:
+            continue
+    _log.warning(
+        "SYSIBLE_WEBGUI_SECRET is not set and no persisted webgui.secret was found; "
+        "using a random per-process session secret. Sessions will NOT survive a "
+        "restart, and logins may bounce back to the login page. Set "
+        "SYSIBLE_WEBGUI_SECRET (or ensure run/webgui.secret is readable)."
+    )
+    return secrets.token_hex(32)
+
+_SECRET = _resolve_session_secret()
 
 # Sessions expire so an unattended browser doesn't stay logged in forever.
 # Default 12h; override with SYSIBLE_WEBGUI_SESSION_MAX_AGE (seconds).

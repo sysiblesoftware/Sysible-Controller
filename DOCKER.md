@@ -89,6 +89,63 @@ docker run --rm -v sysible-data:/data -v "$PWD":/backup alpine \
   tar czf /backup/sysible-data.tgz -C /data .
 ```
 
+## Command-line control (inside the container)
+
+A native install puts the `sysible_controller` CLI on the host PATH. The
+container image ships the **same** CLI, made container-aware — it drives
+supervisord + the `/data` volume instead of systemd + `/opt/sysible`. Run it
+with `docker exec`:
+
+```bash
+docker exec -it sysible-controller sysible_controller status         # both services
+docker exec -it sysible-controller sysible_controller logs           # follow backend logs
+docker exec -it sysible-controller sysible_controller restart        # restart both services
+docker exec -it sysible-controller sysible_controller reset-admin     # reset the admin password
+docker exec -it sysible-controller sysible_controller rotate-api-key
+```
+
+Container *lifecycle* (start / stop / upgrade / destroy) is managed from the host
+with `docker compose` / `docker`, not from inside — e.g. `docker compose restart`,
+`docker compose up -d` to upgrade the image, `docker compose down` to stop.
+
+## Recovering the admin password
+
+The admin credential lives in the DB on the `/data` volume. If you changed the
+password and it is "not recognized", first confirm the DB actually persisted — if
+the container was recreated **without** the named volume, the DB was reset and a
+fresh one-time password was printed to the logs:
+
+```bash
+docker volume ls | grep sysible-data                              # the named volume must exist
+docker logs sysible-controller | grep -A4 -i "seeded initial"     # the one-time initial password
+```
+
+Always start it with `docker compose up -d` (which mounts `sysible-data:/data`) —
+never a bare `docker run` without `-v sysible-data:/data`, or state will not
+survive a restart.
+
+To set a known password (it forces a change at next login):
+
+```bash
+docker exec -it sysible-controller sysible_controller reset-admin admin 'YourNewPass#123'
+```
+
+On an image built **before** this CLI became container-aware, drive the backend
+directly instead (same effect — the DB is at `/data/sysible.db`):
+
+```bash
+docker exec -i sysible-controller python3 - <<'PYEOF'
+from backend import portal_auth
+from backend.db import get_administrator, update_administrator_password, add_administrator
+salt, h = portal_auth.hash_password("YourNewPass#123")
+if get_administrator("admin"):
+    update_administrator_password("admin", h, salt, must_change_password=0)
+else:
+    add_administrator("admin", h, salt, must_change_password=0, created_by="exec", role="superuser")
+print("admin password set")
+PYEOF
+```
+
 ## Notes / limitations
 
 - **Self-update** (the console's "pull & restart to apply update" flow) is a

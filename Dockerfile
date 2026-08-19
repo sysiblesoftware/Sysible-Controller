@@ -33,7 +33,7 @@ FROM python:3.12-slim AS runtime
 #   tini       — reap zombies / forward signals as PID 1's child of supervisord
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-         openssl supervisor ca-certificates tini curl \
+         openssl supervisor ca-certificates tini curl bash \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -50,6 +50,14 @@ RUN pip install --no-cache-dir -r deps/controller-requirements.txt -r deps/webgu
 
 # Application code.
 COPY . /app
+# Expose the control CLI on PATH so `docker exec <ctr> sysible_controller <cmd>`
+# works. The script is container-aware (SYSIBLE_CONTAINER=1, set below): it drives
+# supervisord + the /data volume instead of systemd + /opt/sysible. Gives back the
+# command-line control (reset-admin, rotate-api-key, status, logs, restart) that a
+# native install has via /usr/local/bin/sysible_controller.
+RUN chmod +x /app/sysible_controller \
+ && ln -sf /app/sysible_controller /usr/local/bin/sysible_controller \
+ && ln -sf /app/sysible_controller /usr/local/bin/sysible-controller
 # Built front end from stage 1 (dist/ is .dockerignore'd from the context).
 COPY --from=frontend /src/webgui/frontend/dist /app/webgui/frontend/dist
 

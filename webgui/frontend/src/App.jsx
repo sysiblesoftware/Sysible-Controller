@@ -104,13 +104,10 @@ function NavIcon({ name }) {
 // Selectable console skins. Each is a complete look defined as a token block in
 // styles.css ([data-skin="…"]); "base" is the original Slate palette. There is no
 // separate light/dark toggle — "Porcelain" is the light skin.
+// The console ships a single look: Sysible (the brand palette). Other skins were
+// removed; the picker is gone and the app always renders data-skin="brand".
 const SKINS = [
-  { id: "base",  name: "Slate" },
-  { id: "amber", name: "Amber Control Room" },
-  { id: "nord",  name: "Nord Frost" },
-  { id: "phos",  name: "Phosphor" },
-  { id: "blue",  name: "Blueprint" },
-  { id: "porc",  name: "Porcelain (light)" },
+  { id: "brand", name: "Sysible" },
 ];
 const SKIN_IDS = new Set(SKINS.map((s) => s.id));
 function applySkin(s) { document.documentElement.setAttribute("data-skin", s); }
@@ -205,7 +202,7 @@ export default function App() {
   const [sudoOpen, setSudoOpen] = useState(false);
   const [skin, setSkin] = useState(() => {
     const s = localStorage.getItem("sysible_skin");
-    return s && SKIN_IDS.has(s) ? s : "base";
+    return s && SKIN_IDS.has(s) ? s : "brand";
   });
 
   // Transient toast notifications (host enrolled, etc.). App owns the auto-
@@ -419,7 +416,6 @@ export default function App() {
           </div>
           <div className="rail-actions">
             <button className="btn ghost sm" onClick={() => setSudoOpen(true)}>Sudo Password</button>
-            <SkinPicker skin={skin} onChange={chooseSkin} />
           </div>
           <button className="btn ghost sm rail-logout" onClick={onLogout}>Log Out</button>
         </div>

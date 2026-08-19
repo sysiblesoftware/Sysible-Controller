@@ -5,22 +5,12 @@
    separate light/dark toggle — "Porcelain" is the light skin.
    Every surface reads a CSS variable, so a skin is purely a token swap
    plus a few scoped signature rules. */
-/* Sora — the brand display/UI face (SIL OFL). Vendored at
-   public/fonts/Sora.ttf (variable font; the browser picks the needed weight). */
-@font-face {
-  font-family: "Sora";
-  src: url("/fonts/Sora.ttf") format("truetype");
-  font-weight: 100 800;
-  font-style: normal;
-  font-display: swap;
-}
-
 :root,
 :root[data-skin="base"] {
   /* Neutral graphite: warm-gray surfaces, hairline borders, color held back to
      status dots and a restrained accent on the active nav item. */
   color-scheme: dark;
-  --font: "Sora", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --bg: #17191d;
   --bg-raise: #1e2127;
   --panel: #1e2127;
@@ -36,7 +26,6 @@
   --btn-press: #313748;
   --accent: #8c95cf;
   --accent-soft: rgba(140,149,207,0.13);
-  --on-accent: #fff;  /* text/tick drawn ON an accent-filled surface (checkbox tick, etc.) */
   --rail-bg: #131519;
   --field: #1b1e23;
   --field-border: #3a3f49;
@@ -69,49 +58,176 @@
    A handful of scoped "signature" rules give each skin its one distinct move.
    ========================================================================== */
 
-/* --- Sysible: the brand skin — deep navy drawn from the wordmark, brand green
-       (#6ddb73) as the single accent (rail stripe, active states, "ok" dots),
-       secondary blue held back to nodes/links, over a subtle topographic
-       contour ground. --------------------------------------------------------- */
-:root[data-skin="brand"] {
-  --bg: #0b1526;
-  --bg-raise: #101d33;
-  --panel: #101d33;
-  --panel-2: #0d1830;
-  --border: #213456;
-  --border-strong: #2d4570;
-  --text: #e7edf7;
-  --text-dim: #a0b1d0;
-  --text-faint: #7387ad;   /* ~4.7:1 on --bg */
-  --btn: #1a2c4d;
-  --btn-hover: #243a63;
-  --btn-border: #31497a;
-  --btn-press: #15233f;
-  --accent: #6ddb73;       /* brand green — the one accent */
-  --accent-soft: rgba(109,219,115,0.15);
-  --on-accent: #06210f;    /* dark ink drawn ON the green accent (ticks, etc.) */
-  --rail-bg: #091120;
-  --field: #0d1830;
-  --field-border: #2d4570;
-  --green: #6ddb73;        /* brand green */
-  --green-bright: #8be392;
-  --red: #e5534b;
-  --amber: #e0a83b;
-  --row-hover: #161b26;
-  --shadow: rgba(0,0,0,0.55);
+/* --- Amber Control Room: industrial / SCADA, warm amber on toasted graphite,
+       a signal stripe down the active nav item. ------------------------------ */
+:root[data-skin="amber"] {
+  --bg: #131210;
+  --bg-raise: #1b1915;
+  --panel: #1b1915;
+  --panel-2: #161410;
+  --border: #332d22;
+  --border-strong: #453d2e;
+  --text: #efe8da;
+  --text-dim: #b3a88f;
+  --text-faint: #7c715a;
+  --btn: #2c2820;
+  --btn-hover: #3a352a;
+  --btn-border: #4a4436;
+  --btn-press: #231f18;
+  --accent: #ff9e2c;
+  --accent-soft: rgba(255,158,44,0.14);
+  --rail-bg: #100f0c;
+  --field: #151310;
+  --field-border: #453d2e;
+  --green: #8ec06a;   --green-bright: #a2d07e;
+  --red: #f2564b;
+  --row-hover: #201d16;
+  --shadow: rgba(0,0,0,0.6);
 }
-/* Active nav item: brand-green stripe. */
-:root[data-skin="brand"] .dot.ok { box-shadow: 0 0 7px var(--green-bright); }
-/* Subtle topographic contour ground (survey-map style) behind the shell and the
-   login page — a fixed, non-repeating cover so there are no tiling seams. */
-:root[data-skin="brand"] body {
-  background-color: var(--bg);
-  background-image: url("/brand-topo.png");
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-attachment: fixed;
+:root[data-skin="amber"] .rail-item.active { box-shadow: inset 2px 0 0 var(--accent); }
+
+/* --- Nord Frost: calm arctic, frost-cyan on muted polar navy. --------------- */
+:root[data-skin="nord"] {
+  --bg: #2e3440;
+  --bg-raise: #3b4252;
+  --panel: #3b4252;
+  --panel-2: #353b48;
+  --border: #434c5e;
+  --border-strong: #4c566a;
+  --text: #eceff4;
+  --text-dim: #b6bfcf;
+  --text-faint: #7b869d;
+  --btn: #434c5e;
+  --btn-hover: #4c566a;
+  --btn-border: #586173;
+  --btn-press: #3b4353;
+  --accent: #88c0d0;
+  --accent-soft: rgba(136,192,208,0.16);
+  --rail-bg: #2b303b;
+  --field: #2b303b;
+  --field-border: #4c566a;
+  --green: #a3be8c;   --green-bright: #b5cc9f;
+  --red: #bf616a;
+  --amber: #ebcb8b;
+  --row-hover: #3b4252;
+  --shadow: rgba(0,0,0,0.4);
 }
+
+/* --- Phosphor: green-screen terminal — mono type, scanlines, gentle glow. --- */
+:root[data-skin="phos"] {
+  --font: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --bg: #050d09;
+  --bg-raise: #0a170f;
+  --panel: #0a170f;
+  --panel-2: #081310;
+  --border: #14351f;
+  --border-strong: #1d4a2c;
+  --text: #a8f0bf;
+  --text-dim: #5faf78;
+  --text-faint: #357a4c;
+  --btn: #0e2416;
+  --btn-hover: #14331f;
+  --btn-border: #1d4a2c;
+  --btn-press: #0a1c11;
+  --accent: #37ff86;
+  --accent-soft: rgba(55,255,134,0.13);
+  --rail-bg: #040a07;
+  --field: #07130c;
+  --field-border: #1d4a2c;
+  --green: #37ff86;   --green-bright: #6bffa6;
+  --red: #ff5f5f;
+  --amber: #ffd24a;
+  --row-hover: #0c1f14;
+  --shadow: rgba(0,0,0,0.6);
+}
+/* Scanline overlay on the main content, glow on the brand + status dots. */
+:root[data-skin="phos"] .main {
+  background-image: repeating-linear-gradient(to bottom, transparent 0 3px, rgba(0,0,0,0.16) 3px 4px);
+}
+:root[data-skin="phos"] .brand h1,
+:root[data-skin="phos"] .rail-item.active { text-shadow: 0 0 8px rgba(55,255,134,0.55); }
+:root[data-skin="phos"] .dot.ok { box-shadow: 0 0 7px var(--green-bright); }
+
+/* --- Blueprint: engineering drawing — cyan lines on a dotted-grid ground. --- */
+:root[data-skin="blue"] {
+  --bg: #0b1420;
+  --bg-raise: #0f1c2b;
+  --panel: #0f1c2b;
+  --panel-2: #0c1826;
+  --border: #203953;
+  --border-strong: #2a4a6a;
+  --text: #d7e6f5;
+  --text-dim: #8faaca;
+  --text-faint: #4e6f92;
+  --btn: #183048;
+  --btn-hover: #204058;
+  --btn-border: #2a4a6a;
+  --btn-press: #12283c;
+  --accent: #4fd0e0;
+  --accent-soft: rgba(79,208,224,0.13);
+  --rail-bg: #0a1220;
+  --field: #0c1826;
+  --field-border: #2a4a6a;
+  --green: #54d69a;   --green-bright: #7ce0b3;
+  --red: #f07070;
+  --amber: #e6bd57;
+  --row-hover: #132437;
+  --shadow: rgba(0,0,0,0.5);
+}
+/* Faint dotted grid on cards + panels, like a drafting sheet. */
+:root[data-skin="blue"] .card,
+:root[data-skin="blue"] .tile,
+:root[data-skin="blue"] .metric {
+  background-image: radial-gradient(rgba(79,208,224,0.10) 0.8px, transparent 0.8px);
+  background-size: 14px 14px;
+}
+
+/* --- Porcelain: clean daylight — the light skin. Warm-white with teal. ----- */
+:root[data-skin="porc"] {
+  color-scheme: light;
+  --bg: #f1f1ee;
+  --bg-raise: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #f7f7f4;
+  --border: #e3e3dd;
+  --border-strong: #d3d3cc;
+  --text: #1a1c20;
+  --text-dim: #61656d;
+  --text-faint: #9aa0a6;  /* on --panel */
+  --btn: #2b736e;
+  --btn-hover: #34897f;
+  --btn-border: #276a65;
+  --btn-press: #235d59;
+  --accent: #2f7d78;
+  --accent-soft: rgba(47,125,120,0.12);
+  --rail-bg: #ffffff;
+  --field: #ffffff;
+  --field-border: #cfcfc8;
+  --green: #3f8f57;   --green-bright: #46a061;
+  --red: #c0453e;
+  --amber: #b6862a;
+  --row-hover: #f2f2ef;
+  --shadow: rgba(20,22,26,0.10);
+  --error-text: #b3261e;
+  /* Accent palette re-tuned for readable text on white (keep the soft -bg tints). */
+  --teal: #0f7d70;
+  --slate: #43567a;
+  --purple: #7341bf;
+  --coral: #bf4c2c;
+  --ambert: #a9750f;
+  --sky: #1a6fb0;
+  --green: #1c8a49;
+  --rose: #bd3b73;
+  --indigo: #404fc6;
+  --copper: #95591f;
+  --crimson: #bd322a;
+  --graphite: #545f70;
+}
+:root[data-skin="porc"] input[type="checkbox"] { border-color: #1b1e25; background: #ffffff; }
+/* Lift cards + tiles off the gray page so they don't bleed together. */
+:root[data-skin="porc"] .tile { box-shadow: 0 1px 2px rgba(20,30,50,0.06), 0 1px 1px rgba(20,30,50,0.04); }
+:root[data-skin="porc"] .tile:hover { box-shadow: 0 3px 10px rgba(20,30,50,0.10); }
+:root[data-skin="porc"] .card { box-shadow: 0 1px 2px rgba(20,30,50,0.05); }
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
@@ -132,7 +248,17 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   border-color: var(--accent);
 }
 body {
-  background: var(--bg);
+  /* Subtle topographic contour ground (matches Sysible CE). The overlay PNG is
+     transparent white contour lines, so it sits over EACH skin's own --bg and
+     never overrides the palette (graphite/amber/nord/blue/porcelain all keep
+     their colour, just gaining the faint survey-map texture). Fixed cover, no
+     tiling seams. */
+  background-color: var(--bg);
+  background-image: url("/brand-topo-overlay.png");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
   color: var(--text);
   font-family: var(--font);
   font-size: 14px;
@@ -182,39 +308,6 @@ button { font-family: inherit; color: inherit; }
 }
 .iconbtn:hover { background: var(--panel); }
 
-/* Console skin picker — a compact select fronted by a palette glyph. */
-.skin-picker {
-  display: inline-flex; align-items: center; gap: 6px;
-  height: 30px; padding: 0 8px 0 10px;
-  border: 1px solid var(--border-strong); border-radius: 999px;
-  background: transparent; color: var(--text-dim); cursor: pointer;
-}
-.skin-picker:hover { background: var(--panel); color: var(--text); }
-.skin-picker:focus-within { border-color: var(--accent); }
-.skin-picker svg { flex: 0 0 auto; color: var(--accent); }
-.skin-picker select {
-  appearance: none; -webkit-appearance: none; border: 0; outline: none;
-  background: transparent; color: inherit; cursor: pointer;
-  font: inherit; font-size: 12.5px; padding-right: 2px;
-}
-.skin-picker select option { color: #1a1c20; background: #fff; } /* readable native menu */
-/* Full-width variant for the rail footer — a labelled row that stacks cleanly
-   with the Sudo Password / Log Out buttons, with a chevron on the right. */
-.skin-picker.block {
-  display: flex; width: 100%; height: 32px; border-radius: 7px;
-  padding: 0 10px; gap: 8px; justify-content: flex-start;
-}
-.skin-picker.block .skin-picker-label {
-  font-size: 12.5px; color: inherit; flex: 0 0 auto;
-}
-.skin-picker.block select {
-  flex: 1 1 auto; min-width: 0; text-align: right; padding-right: 16px;
-  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
-                    linear-gradient(135deg, currentColor 50%, transparent 50%);
-  background-position: right 6px center, right 1px center;
-  background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
-}
-
 /* ---------- Form controls ---------- */
 input, select, textarea {
   width: 100%; padding: 8px 10px;
@@ -254,7 +347,7 @@ input[type="checkbox"] {
 input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
 input[type="checkbox"]:checked::after {
   content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px;
-  border: solid var(--on-accent); border-width: 0 2px 2px 0; transform: rotate(45deg);
+  border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg);
 }
 input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 label.field { display: block; margin: 12px 0 0; }
@@ -283,12 +376,9 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 
 /* ---------- Brand ---------- */
 .brand { display: flex; align-items: center; gap: 12px; }
-/* The "S" tile — the app-icon language: dark rounded tile, thin brand-green
-   ring, Sora "S". Used as the login / password-change fallback mark. */
-.brand-mark { width: 40px; height: 40px; border-radius: 9px;
-  background: #0d1524; border: 2px solid #6ddb73;
-  display: flex; align-items: center; justify-content: center;
-  font-family: "Sora", var(--font); font-weight: 600; color: #eceff3; font-size: 18px; }
+.brand-mark { width: 40px; height: 40px; border-radius: 8px; object-fit: contain;
+  background: var(--btn); display: flex; align-items: center;
+  justify-content: center; font-weight: 700; color: #fff; font-size: 18px; }
 .brand h1 { font-size: 22px; margin: 0; font-weight: 700; }
 .brand .sub { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
 /* Login card: the full logo lockup, centered, above the form. */
@@ -382,6 +472,12 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
   width: 46px; height: 46px; border-radius: 10px; display: flex; align-items: center;
   justify-content: center; font-size: 20px; margin-bottom: 12px;
 }
+/* Smaller version of the tinted tile icon, used as an inline badge on plugin cards
+   (reuses the .ico-* tint classes). */
+.plugin-ico {
+  width: 34px; height: 34px; border-radius: 8px; display: inline-flex; align-items: center;
+  justify-content: center; flex-shrink: 0;
+}
 .tile h3 { margin: 0 0 4px; font-size: 17px; font-weight: 700; }
 .tile p { margin: 0; color: var(--text-dim); font-size: 13px; }
 .ico-teal { color: var(--teal); background: var(--teal-bg); }
@@ -451,13 +547,9 @@ tr:hover td { background: var(--row-hover); }
 /* The host name is the flexible part: it truncates with an ellipsis so the type
    tag and the "critical" marker to its right are never clipped in the narrow
    pane. */
-/* The hostname is the primary identifier, so it grows to fill the row and keeps
-   a floor width so it never collapses to "o…". The agent/seen meta is the part
-   that yields first (shrinks + ellipsizes); the short critical badge stays
-   pinned to the right and never shrinks away. */
-.host-row .host-name { flex: 1 1 auto; min-width: 4.5em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.host-row .meta { color: var(--text-faint); font-size: 12px; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.host-row .meta.crit { color: #e06c6c; font-weight: 600; margin-left: auto; flex-shrink: 0; }
+.host-row .host-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-row .meta { color: var(--text-faint); font-size: 12px; flex-shrink: 0; }
+.host-row .meta.crit { color: #e06c6c; font-weight: 600; margin-left: auto; }
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 14px; flex-wrap: wrap; }
 .tabs button { background: transparent; border: 1px solid transparent; border-bottom: none;
   color: var(--text-dim); padding: 7px 13px; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 13px; }
@@ -520,17 +612,6 @@ tr:hover td { background: var(--row-hover); }
   height: calc(100vh - 168px);
 }
 .tool-flex > .host-pane { width: 220px; flex-shrink: 0; }
-/* Draggable host pane: a grab strip on the pane's right edge. The inline width
-   from HostTree overrides the 220px default above; drag persists it. */
-.host-pane.resizable { position: relative; }
-.host-pane-resizer { position: absolute; top: 0; right: -3px; width: 7px; height: 100%;
-  cursor: col-resize; z-index: 3; }
-.host-pane-resizer:hover { background: var(--btn-border); }
-
-/* Settings → Controller: lay the Software updates and Controller IP cards side
-   by side (updates left, IP right), wrapping to stacked on narrow widths. */
-.settings-cols { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
-.settings-cols > .card { flex: 1 1 420px; margin-bottom: 0; }
 .tool-actions-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1; }
 .tool-actions-scroll { flex: 1; overflow-y: auto; padding-right: 4px; }
 .col-resizer {
@@ -544,8 +625,8 @@ tr:hover td { background: var(--row-hover); }
 }
 /* Light mode: host lists and command-return panels get a white card surface so
    they don't sit washed out on the gray page. */
-:root[data-theme="light"] .host-pane,
-:root[data-theme="light"] .tool-results-col {
+:root[data-skin="porc"] .host-pane,
+:root[data-skin="porc"] .tool-results-col {
   background: var(--bg-raise); border: 1px solid var(--border);
   border-radius: 8px; padding: 12px;
   box-shadow: 0 1px 2px rgba(20,30,50,0.05);
@@ -577,7 +658,7 @@ tr:hover td { background: var(--row-hover); }
 }
 /* Light mode: fill the group boxes so they read as cards on the gray page
    instead of looking washed out. */
-:root[data-theme="light"] .tool-group-box {
+:root[data-skin="porc"] .tool-group-box {
   background: var(--bg-raise); box-shadow: 0 1px 2px rgba(20,30,50,0.05);
 }
 .tool-group-box > legend {
@@ -733,12 +814,7 @@ tr:hover td { background: var(--row-hover); }
 .ug-mono { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 8px; display: grid;
   place-items: center; font-weight: 650; font-size: 12px; border: 1px solid transparent;
   background: var(--slate-bg); color: var(--text-dim); }
-/* Root and system markers use FIXED logo-palette colors (royal blue / green) so
-   they read the same on every skin — "like the logo" — rather than following the
-   per-skin --accent (which is only royal blue on the Sysible brand skin). */
-.ug-mono.root { background: rgba(47,96,212,0.16); color: #2f60d4; border-color: rgba(47,96,212,0.35); }
-.ug-mono.sys { background: rgba(67,160,71,0.16); color: #43a047; border-color: rgba(67,160,71,0.35); }
-.ug-mono.human { background: var(--slate-bg); color: var(--slate); border-color: rgba(138,160,200,0.3); }
+.ug-mono.human { background: var(--accent-soft); color: var(--accent); border-color: rgba(140,149,207,0.3); }
 .ug-mono.priv { background: var(--amber-bg); color: var(--amber); border-color: rgba(227,167,47,0.3); }
 .ug-mono.locked { background: var(--panel-2); color: var(--text-faint); }
 
@@ -753,7 +829,7 @@ tr:hover td { background: var(--row-hover); }
   background: var(--slate-bg); color: var(--text-dim); display: inline-flex; align-items: center; gap: 4px; }
 .ug-chip.sudo { background: var(--amber-bg); color: var(--amber); }
 .ug-chip.locked { background: var(--panel-2); color: var(--text-faint); }
-.ug-chip.sys { background: var(--green-bg); color: var(--green); }
+.ug-chip.sys { background: var(--slate-bg); color: var(--text-faint); }
 .ug-sess { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--green-bright); font-weight: 600; }
 .ug-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--green-bright); }
 
@@ -780,3 +856,178 @@ tr:hover td { background: var(--row-hover); }
 
 .ug-foot { padding: 8px 0 0; font-size: 11px; color: var(--text-faint);
   border-top: 1px solid var(--border); margin-top: 4px; }
+
+/* Relay-host accountability panel (Settings → Plugins) */
+.relay-os { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px;
+  border-radius: 999px; background: var(--slate-bg); color: var(--slate);
+  border: 1px solid var(--border); letter-spacing: .02em; }
+.relay-os.win { background: var(--accent-soft); color: var(--accent);
+  border-color: var(--accent-line); }
+.relay-os.nix { background: rgba(70,177,100,.13); color: var(--green-bright);
+  border-color: rgba(70,177,100,.30); }
+.relay-bad { color: var(--red); font-weight: 600; }
+
+/* Plugin config form — readable label → hint → input blocks (Settings → Plugins) */
+.pf-field { margin-bottom: 18px; }
+.pf-field:last-child { margin-bottom: 8px; }
+.pf-head { display: flex; flex-direction: column; gap: 3px; margin-bottom: 6px; }
+.pf-label { font-weight: 600; font-size: 13px; color: var(--text); letter-spacing: .01em; }
+.pf-help { display: block; font-size: 12px; line-height: 1.45; color: var(--text-dim);
+  max-width: 62ch; }
+.pf-field > input, .pf-field > select { margin-top: 0; }
+.pf-field .checkrow { margin-bottom: 2px; }
+
+/* ── Sysible D3lorean — config history browser ─────────────────────────── */
+.d3l { display: flex; flex-direction: column; gap: 0; }
+.d3l .pad { padding: 12px; }
+.d3l .tiny { font-size: 11px; }
+.d3l .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.d3l .ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.d3l .add { color: var(--green-bright, #6ab04c); }
+.d3l .del { color: var(--red, #eb4d4b); }
+.d3l .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px;
+  background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--border); }
+.d3l .empty-hint { color: var(--text-dim); background: var(--panel);
+  border: 1px dashed var(--border-strong); border-radius: 10px; line-height: 1.5; }
+
+.d3l-hostbar { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.d3l-hostmeta { display: flex; gap: 6px; align-items: center; padding-bottom: 6px; flex-wrap: wrap; }
+
+.d3l-grid { display: grid;
+  grid-template-columns: minmax(200px, 0.85fr) minmax(200px, 1fr) minmax(220px, 1.1fr) minmax(300px, 1.8fr);
+  gap: 12px; margin-top: 12px; align-items: start; }
+@media (max-width: 1300px) { .d3l-grid { grid-template-columns: minmax(180px, 0.9fr) 1fr 1fr; } }
+@media (max-width: 900px) { .d3l-grid { grid-template-columns: 1fr; } }
+
+/* Single-select host rail — clickable rows grouped by environment. */
+.d3l-hosts .host-tree { padding: 6px; overflow-y: auto; }
+.d3l-hostrow { display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 5px 8px; margin: 1px 0; background: none; border: none; border-radius: 6px;
+  color: var(--text); font-size: 13px; text-align: left; cursor: pointer; }
+.d3l-hostrow:hover { background: var(--hover, rgba(127, 127, 127, 0.12)); }
+.d3l-hostrow.active { background: var(--accent-soft, rgba(96, 140, 240, 0.22)); }
+.d3l-hostrow .host-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.d3l-hostrow .meta { color: var(--text-faint); font-size: 11px; flex-shrink: 0; }
+
+/* Browse / Compare mode tabs */
+.d3l-modetabs { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 6px; overflow: hidden; }
+.d3l-modetab { padding: 5px 12px; font-size: 12.5px; background: transparent; color: var(--text-dim);
+  border: none; cursor: pointer; }
+.d3l-modetab:hover { background: var(--row-hover); color: var(--text); }
+.d3l-modetab.active { background: var(--btn); color: #fff; }
+
+/* Compare workspace: baseline rail + wide compare panel */
+.d3l-cmpwrap { display: grid; grid-template-columns: minmax(200px, 0.8fr) minmax(320px, 2.6fr);
+  gap: 12px; margin-top: 12px; align-items: start; }
+@media (max-width: 900px) { .d3l-cmpwrap { grid-template-columns: 1fr; } }
+.d3l-compare { max-height: calc(100vh - 230px); min-height: 360px; }
+
+.d3l-cmptable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.d3l-cmptable th, .d3l-cmptable td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+.d3l-cmptable th { color: var(--text-dim); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+.d3l-cmprow { cursor: pointer; }
+.d3l-cmprow:hover { background: var(--row-hover); }
+.d3l-cmprow.open { background: var(--accent-soft); }
+.d3l-cmpdetail > td { background: var(--bg); padding: 8px; }
+
+.d3l-cmpbadge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.d3l-cmpbadge.s-same    { background: var(--green-bg); color: var(--green); }
+.d3l-cmpbadge.s-differs { background: var(--amber-bg); color: var(--ambert); }
+.d3l-cmpbadge.s-missing { background: var(--crimson-bg); color: var(--crimson); }
+.d3l-cmpbadge.s-extra   { background: var(--sky-bg); color: var(--sky); }
+.d3l-cmpbadge.s-absent  { background: var(--slate-bg); color: var(--slate); }
+
+.d3l-filecmp { display: flex; flex-direction: column; gap: 10px; }
+.d3l-filecmp-host { border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--panel); }
+.d3l-filecmp-head { margin-bottom: 6px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* Back Up Now — live progress */
+.d3l-progress { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.d3l-progress-bar { height: 100%; background: var(--green); transition: width 0.4s ease; }
+.d3l-joblist { margin-top: 8px; display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow-y: auto; }
+.d3l-jobrow { display: flex; align-items: center; gap: 8px; padding: 3px 4px; font-size: 12.5px; }
+.d3l-jobrow .host-name { flex: 0 0 auto; min-width: 120px; }
+.d3l-jobdot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; background: var(--text-faint); }
+.d3l-jobdot.run { background: var(--amber); animation: d3l-pulse 1s ease-in-out infinite; }
+.d3l-jobdot.ok  { background: var(--green); }
+.d3l-jobdot.bad { background: var(--red); }
+@keyframes d3l-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.d3l-col { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  display: flex; flex-direction: column; min-height: 320px; max-height: calc(100vh - 230px); overflow: hidden; }
+.d3l-colhead { display: flex; justify-content: space-between; align-items: baseline;
+  padding: 10px 12px; font-weight: 600; font-size: 13px; border-bottom: 1px solid var(--border);
+  color: var(--text); gap: 8px; }
+.d3l-colhead .faint, .d3l .faint { color: var(--text-faint); }
+
+.d3l-search { margin: 8px 10px 4px; padding: 6px 8px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg-raise); color: var(--text); }
+.d3l-list { overflow-y: auto; padding: 4px 6px 8px; display: flex; flex-direction: column; gap: 2px; }
+.d3l-fileitem { display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 8px; background: transparent; border: 1px solid transparent;
+  color: var(--text); cursor: pointer; text-align: left; font-size: 12px; width: 100%; }
+.d3l-fileitem:hover { background: var(--panel-2); }
+.d3l-fileitem.active { background: var(--accent-soft); border-color: var(--accent-line); }
+.d3l-fmeta { display: inline-flex; gap: 6px; align-items: center; flex: none; }
+
+.d3l-hint { padding: 6px 12px; font-size: 11px; color: var(--text-dim); }
+.d3l-hint b { color: var(--text); }
+.d3l-timeline { overflow-y: auto; padding: 4px 8px 8px; display: flex; flex-direction: column; }
+.d3l-ver { display: grid; grid-template-columns: 16px 1fr auto; gap: 6px; align-items: stretch;
+  position: relative; }
+.d3l-verdot { grid-column: 1; width: 9px; height: 9px; border-radius: 50%; background: var(--border-strong);
+  margin: 14px auto 0; box-shadow: 0 0 0 3px var(--panel); z-index: 1; }
+.d3l-ver::before { content: ""; position: absolute; left: 7.5px; top: 0; bottom: 0; width: 1px;
+  background: var(--border); }
+.d3l-ver:first-child::before { top: 14px; }
+.d3l-ver:last-child::before { bottom: calc(100% - 20px); }
+.d3l-verbody { grid-column: 2; text-align: left; background: transparent; border: 1px solid transparent;
+  border-radius: 8px; padding: 8px 10px; margin: 4px 0; cursor: pointer; color: var(--text); }
+.d3l-verbody:hover { background: var(--panel-2); }
+.d3l-ver.a .d3l-verbody { border-color: var(--accent); }
+.d3l-ver.b .d3l-verbody { border-color: var(--green-bright, #6ab04c); }
+.d3l-verrow { display: flex; gap: 8px; align-items: center; }
+.d3l-vertime { font-weight: 600; font-size: 12.5px; }
+.d3l-verpick { grid-column: 3; display: flex; flex-direction: column; gap: 4px; justify-content: center;
+  padding: 4px 0; }
+.d3l-abtn { width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg-raise); color: var(--text-dim); font-weight: 700; font-size: 11px; cursor: pointer; }
+.d3l-abtn.on { color: #fff; border-color: transparent; }
+.d3l-ver.a .d3l-abtn.on, .d3l-abtn.on:first-child { background: var(--accent); }
+.d3l-verpick .d3l-abtn.on:last-child { background: var(--green-bright, #6ab04c); }
+.d3l-diffbar { display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 8px 12px; border-top: 1px solid var(--border); }
+
+.d3l-inspect { max-height: calc(100vh - 230px); }
+.d3l-inner { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow: hidden; }
+.d3l-ihead { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;
+  padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.d3l-ititle { font-weight: 600; font-size: 13.5px; max-width: 40ch; }
+.d3l-arrow, .d3l-sbs-head .d3l-arrow { color: var(--text-faint); }
+.d3l-iactions { display: flex; gap: 6px; padding: 8px 12px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border); }
+.d3l-content, .d3l-unified { margin: 0; padding: 10px 12px; overflow: auto; font-size: 12px;
+  line-height: 1.5; flex: 1; min-height: 200px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre; }
+.d3l-unified .add { background: color-mix(in srgb, var(--green-bright, #6ab04c) 14%, transparent); }
+.d3l-unified .del { background: color-mix(in srgb, var(--red, #eb4d4b) 14%, transparent); }
+.d3l-unified .hunk { color: var(--accent); }
+
+.d3l-sbs { overflow: auto; flex: 1; min-height: 200px; }
+.d3l-sbs-head { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; position: sticky; top: 0;
+  background: var(--panel-2); font-size: 11px; font-weight: 600; color: var(--text-dim); z-index: 1; }
+.d3l-sbs-head span { padding: 6px 12px; }
+.d3l-sbs-body { display: flex; flex-direction: column; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; }
+.d3l-hunk { padding: 3px 12px; color: var(--accent); background: var(--panel-2); font-size: 11px; }
+.d3l-sbs-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; }
+.d3l-cell { display: grid; grid-template-columns: 44px 1fr; min-width: 0; }
+.d3l-cell.add { background: color-mix(in srgb, var(--green-bright, #6ab04c) 14%, transparent); }
+.d3l-cell.del { background: color-mix(in srgb, var(--red, #eb4d4b) 14%, transparent); }
+.d3l-cell.empty { background: var(--bg); }
+.d3l-gutter { color: var(--text-faint); text-align: right; padding: 1px 8px 1px 4px; user-select: none;
+  border-right: 1px solid var(--border); }
+.d3l-code { padding: 1px 8px; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+
+.badge.ok { background: var(--green-bg, rgba(106,176,76,.16)); color: var(--green-bright, #6ab04c); }
+.badge.warn { background: rgba(235,77,75,.16); color: var(--red, #eb4d4b); }

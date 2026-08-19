@@ -15,6 +15,29 @@ SERVICE="sysible-backend"
 PORT=9000
 CERT_FILE="$BASE/certs/server.crt"
 
+# --- Container mode -------------------------------------------------------
+# The container image lays things out differently from a native /opt/sysible
+# install: code lives at /app, persistent state (DB, TLS cert, API key) on the
+# /data volume, and the two services run under supervisord instead of systemd.
+# SYSIBLE_CONTAINER=1 is set in the image; detect it and rebind the paths and
+# service controls so `docker exec <container> sysible_controller <cmd>` works
+# (reset-admin, rotate-api-key, revoke-enroll-tokens, status, logs, start/stop/
+# restart). Host-only commands (update, self-enroll, destroy) are run from the
+# host with docker/compose, not from inside the container.
+IN_CONTAINER=0
+APP_DIR="$BASE"
+PYBIN="$VENV/bin/python"
+if [[ "${SYSIBLE_CONTAINER:-0}" == "1" ]]; then
+  IN_CONTAINER=1
+  APP_DIR="/app"
+  BASE="${SYSIBLE_DATA_DIR:-/data}"
+  VENV=""
+  PYBIN="python3"
+  RUN_DIR="${SYSIBLE_RUN_DIR:-$BASE/run}"
+  CERT_FILE="${SYSIBLE_CERT_DIR:-$BASE/certs}/server.crt"
+  PORT="${SYSIBLE_BACKEND_PORT:-9000}"
+fi
+
 # Best-effort fallback only - install_sysible.sh already creates this run
 # directory; this mkdir mostly matters for an install predating that.
 mkdir -p "$RUN_DIR" 2>/dev/null
@@ -83,6 +106,11 @@ _wait_for_backend() {
 }
 
 cmd_start() {
+  if [[ "$IN_CONTAINER" == "1" ]]; then
+    echo "Starting services under supervisord..."
+    supervisorctl start backend webgui
+    return $?
+  fi
   _require_root start
 
   if [[ ! -f "$CERT_FILE" ]]; then
@@ -409,6 +437,11 @@ cmd_disenroll() {
 }
 
 cmd_stop() {
+  if [[ "$IN_CONTAINER" == "1" ]]; then
+    echo "Stopping services under supervisord..."
+    supervisorctl stop backend webgui
+    return $?
+  fi
   _require_root stop
 
   _stop_webgui
@@ -443,6 +476,11 @@ cmd_stop() {
 }
 
 cmd_restart() {
+  if [[ "$IN_CONTAINER" == "1" ]]; then
+    echo "Restarting services under supervisord..."
+    supervisorctl restart backend webgui
+    return $?
+  fi
   _require_root restart
 
   # Remember whether the web console was up, so a full restart brings it back
@@ -808,9 +846,13 @@ cmd_update() {
 }
 
 cmd_status() {
+  if [[ "$IN_CONTAINER" == "1" ]]; then
+    supervisorctl status
+    return 0
+  fi
   systemctl status "$SERVICE" --no-pager
   echo ""
-  "$VENV/bin/python" - "$BASE" 2>/dev/null <<'PY' || true
+  "$PYBIN" - "$APP_DIR" 2>/dev/null <<'PY' || true
 import sys
 sys.path.insert(0, sys.argv[1])
 from backend import webgui_manager as m
@@ -823,6 +865,10 @@ PY
 }
 
 cmd_logs() {
+  if [[ "$IN_CONTAINER" == "1" ]]; then
+    echo "(both services also stream to 'docker logs <container>')"
+    exec supervisorctl tail -f backend
+  fi
   journalctl -u "$SERVICE" -f
 }
 
@@ -873,7 +919,7 @@ cmd_reset_admin() {
   local user="${2:-admin}"
   local pass="$3"
   local out
-  out="$("$VENV/bin/python" - "$BASE" "$user" "$pass" <<'PY' 2>/dev/null
+  out="$("$PYBIN" - "$APP_DIR" "$user" "$pass" <<'PY' 2>/dev/null
 import sys
 sys.path.insert(0, sys.argv[1])
 from backend.db import add_administrator, update_administrator_password, list_administrators, get_admin_password_policy
@@ -1008,7 +1054,7 @@ cmd_rotate_api_key() {
     exit 1
   fi
   local newkey
-  newkey="$("$VENV/bin/python" -c 'import secrets; print(secrets.token_hex(32))' 2>/dev/null)"
+  newkey="$("$PYBIN" -c 'import secrets; print(secrets.token_hex(32))' 2>/dev/null)"
   if [[ -z "$newkey" ]]; then
     echo "ERROR: could not generate a new key." >&2
     exit 1
@@ -1042,7 +1088,7 @@ cmd_revoke_enroll_tokens() {
   # so a legitimate host's within-window re-enroll still works.
   _require_root "revoke-enroll-tokens"
   local n
-  n="$("$VENV/bin/python" - "$BASE" <<'PY' 2>/dev/null
+  n="$("$PYBIN" - "$APP_DIR" <<'PY' 2>/dev/null
 import sys
 sys.path.insert(0, sys.argv[1])
 from backend.db import purge_unconsumed_enroll_tokens
@@ -1104,6 +1150,29 @@ cmd_import() {
   SYSIBLE_DATA_DIR="$BASE" SYSIBLE_CERT_DIR="$BASE/certs" SYSIBLE_RUN_DIR="$RUN_DIR" \
     "$VENV/bin/python" "$BASE/tools/restore.py" "$archive" $force $inspect
 }
+
+# Host-only commands: inside a container these would manage things the container
+# does not own (host services, the git checkout, the /opt layout). Redirect to the
+# docker/compose equivalent instead of failing with a cryptic /bin/python error.
+if [[ "$IN_CONTAINER" == "1" ]]; then
+  case "$1" in
+    update)
+      echo "In a container, upgrade by pulling the new image — not from git:" >&2
+      echo "  docker compose pull && docker compose up -d   (or: docker compose up -d --build)" >&2
+      exit 1 ;;
+    self-enroll|disenroll)
+      echo "'$1' manages a host agent and does not apply inside the container." >&2
+      exit 1 ;;
+    export|import)
+      echo "Back up / restore the /data volume from the HOST instead (see DOCKER.md 'Backups'):" >&2
+      echo "  docker run --rm -v sysible-data:/data -v \"\$PWD\":/backup alpine tar czf /backup/sysible-data.tgz -C /data ." >&2
+      exit 1 ;;
+    destroy)
+      echo "To remove the container and its data from the host:" >&2
+      echo "  docker compose down && docker volume rm sysible-data" >&2
+      exit 1 ;;
+  esac
+fi
 
 case "$1" in
   start)   cmd_start ;;

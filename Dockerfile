@@ -33,17 +33,31 @@ FROM python:3.12-slim AS runtime
 #   tini       — reap zombies / forward signals as PID 1's child of supervisord
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-         openssl supervisor ca-certificates tini curl \
+         openssl supervisor ca-certificates tini curl bash \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Python deps (backend + web console). Copied alone first for layer caching.
-COPY requirements.txt webgui/requirements.txt ./deps/
-RUN pip install --no-cache-dir -r deps/requirements.txt -r deps/webgui/requirements.txt
+# NOTE: copy each requirements file to an EXPLICIT distinct destination. A
+# multi-source `COPY a b ./deps/` flattens to BASENAMES, so both of these landed
+# as deps/requirements.txt (the second silently overwriting the first) and
+# deps/webgui/requirements.txt never existed — the pip step then failed with
+# "Could not open requirements file: deps/webgui/requirements.txt".
+COPY requirements.txt        ./deps/controller-requirements.txt
+COPY webgui/requirements.txt ./deps/webgui-requirements.txt
+RUN pip install --no-cache-dir -r deps/controller-requirements.txt -r deps/webgui-requirements.txt
 
 # Application code.
 COPY . /app
+# Expose the control CLI on PATH so `docker exec <ctr> sysible_controller <cmd>`
+# works. The script is container-aware (SYSIBLE_CONTAINER=1, set below): it drives
+# supervisord + the /data volume instead of systemd + /opt/sysible. Gives back the
+# command-line control (reset-admin, rotate-api-key, status, logs, restart) that a
+# native install has via /usr/local/bin/sysible_controller.
+RUN chmod +x /app/sysible_controller \
+ && ln -sf /app/sysible_controller /usr/local/bin/sysible_controller \
+ && ln -sf /app/sysible_controller /usr/local/bin/sysible-controller
 # Built front end from stage 1 (dist/ is .dockerignore'd from the context).
 COPY --from=frontend /src/webgui/frontend/dist /app/webgui/frontend/dist
 

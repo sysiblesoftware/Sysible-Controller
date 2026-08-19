@@ -155,8 +155,9 @@ _TRUST_PROXY = os.getenv("SYSIBLE_WEBGUI_TRUSTED_PROXY", "0") == "1"
 # the app or a reverse proxy, so the session cookie MUST carry the Secure attribute — an
 # insecure default let it ride a plain-HTTP request where a network sniffer could lift it.
 # A deliberate plain-HTTP dev/lab run opts OUT with SYSIBLE_WEBGUI_ALLOW_INSECURE_COOKIE=1
-# (which also makes login work over http://). same_site="strict" is the primary CSRF
-# control; csrf_origin_guard below is a defense-in-depth backstop.
+# (which also makes login work over http://). same_site="lax" is the primary CSRF
+# control (Strict broke legitimate same-origin logins — see the middleware below);
+# csrf_origin_guard below is a defense-in-depth backstop.
 _ALLOW_INSECURE_COOKIE = os.getenv("SYSIBLE_WEBGUI_ALLOW_INSECURE_COOKIE", "0") == "1"
 _HTTPS_ONLY = (not _ALLOW_INSECURE_COOKIE) or os.getenv("SYSIBLE_WEBGUI_HTTPS_ONLY", "0") == "1" or _TRUST_PROXY
 if _ALLOW_INSECURE_COOKIE and not (os.getenv("SYSIBLE_WEBGUI_HTTPS_ONLY", "0") == "1" or _TRUST_PROXY):
@@ -217,7 +218,14 @@ app.add_middleware(
     secret_key=_SECRET,
     session_cookie="sysible_web",
     https_only=_HTTPS_ONLY,
-    same_site="strict",
+    # "lax" (the browser default), not "strict": Strict withholds the cookie on
+    # some legitimate same-origin flows (e.g. a top-level navigation into the
+    # console from a link/bookmark, or via a proxy/hostname the browser scopes
+    # differently) — which shows up as "log in, the console flashes, then it
+    # bounces back to the login screen" because the follow-up /api/me arrives
+    # without the session cookie. Lax still sends the cookie on same-origin
+    # requests and is standard CSRF-safe; csrf_origin_guard is the backstop.
+    same_site="lax",
     max_age=_SESSION_MAX_AGE,
 )
 # Registered LAST so it wraps OUTERMOST (Starlette applies add_middleware in reverse),

@@ -89,7 +89,7 @@
   --btn-border: #31497a;
   --btn-press: #15233f;
   --accent: #6ddb73;       /* brand green — the one accent */
-  --accent-soft: rgba(109,219,115,0.15);
+  --accent-soft: rgba(109,219,115,0.22);
   --on-accent: #06210f;    /* dark ink drawn ON the green accent (ticks, etc.) */
   --rail-bg: #091120;
   --field: #0d1830;
@@ -103,7 +103,7 @@
 }
 =======
 /* Active nav item: brand-green stripe. */
-:root[data-skin="brand"] .rail-item.active { box-shadow: inset 2px 0 0 var(--accent); }
+:root[data-skin="brand"] .rail-item.active { box-shadow: inset 3px 0 0 var(--accent); }
 :root[data-skin="brand"] .dot.ok { box-shadow: 0 0 7px var(--green-bright); }
 /* Subtle topographic contour ground (survey-map style) behind the shell and the
    login page — a fixed, non-repeating cover so there are no tiling seams. */
@@ -326,7 +326,7 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 .rail-item .rail-ext { margin-left: auto; font-size: 12px; opacity: 0.55; }
 .rail-item:hover { background: var(--row-hover); color: var(--text); }
 .rail-item.active {
-  background: var(--accent-soft); color: var(--text);
+  background: var(--accent-soft); color: var(--accent); font-weight: 600;
   border-left-color: var(--accent); border-radius: 0 8px 8px 0;
 }
 .rail-item.active svg { color: var(--accent); opacity: 1; }

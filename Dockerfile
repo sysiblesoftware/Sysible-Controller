@@ -39,8 +39,14 @@ RUN apt-get update \
 WORKDIR /app
 
 # Python deps (backend + web console). Copied alone first for layer caching.
-COPY requirements.txt webgui/requirements.txt ./deps/
-RUN pip install --no-cache-dir -r deps/requirements.txt -r deps/webgui/requirements.txt
+# NOTE: copy each requirements file to an EXPLICIT distinct destination. A
+# multi-source `COPY a b ./deps/` flattens to BASENAMES, so both of these landed
+# as deps/requirements.txt (the second silently overwriting the first) and
+# deps/webgui/requirements.txt never existed — the pip step then failed with
+# "Could not open requirements file: deps/webgui/requirements.txt".
+COPY requirements.txt        ./deps/controller-requirements.txt
+COPY webgui/requirements.txt ./deps/webgui-requirements.txt
+RUN pip install --no-cache-dir -r deps/controller-requirements.txt -r deps/webgui-requirements.txt
 
 # Application code.
 COPY . /app

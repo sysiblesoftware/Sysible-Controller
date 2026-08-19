@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# sysible_controller — host-side wrapper for the CONTAINERIZED Sysible Controller.
+#
+# Gives you the SAME `sysible_controller <command>` experience as a native
+# install, by forwarding the command to the control CLI running INSIDE the
+# container. So instead of:
+#
+#     docker exec -it sysible-controller sysible_controller reset-admin
+#
+# you just run, from the host:
+#
+#     sysible_controller reset-admin
+#
+# Install it once on the host (Docker host), as root:
+#
+#     sudo cp docker/sysible-controller /usr/local/bin/sysible_controller
+#     sudo chmod +x /usr/local/bin/sysible_controller
+#
+# Then: sysible_controller status | logs | restart | reset-admin | rotate-api-key | ...
+#
+# The container image must be built from a version that ships the container-aware
+# CLI (`docker exec <ctr> sysible_controller ...` works). If your running image
+# predates that, rebuild it (docker compose up -d --build) and try again.
+#
+# Override the container name with SYSIBLE_CONTAINER_NAME if you renamed it.
+set -euo pipefail
+
+NAME="${SYSIBLE_CONTAINER_NAME:-sysible-controller}"
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "sysible_controller: docker is not installed / not on PATH." >&2
+  exit 1
+fi
+
+_running() { docker ps --format '{{.Names}}' | grep -qx -- "$1"; }
+
+# Resolve the target container: the configured name if it's up, else auto-detect a
+# single running container from the sysible-controller image.
+if ! _running "$NAME"; then
+  mapfile -t _found < <(docker ps --filter 'ancestor=sysible-controller:latest' --format '{{.Names}}')
+  if [ "${#_found[@]}" -eq 1 ]; then
+    NAME="${_found[0]}"
+  elif [ "${#_found[@]}" -gt 1 ]; then
+    echo "sysible_controller: multiple controller containers are running:" >&2
+    printf '  %s\n' "${_found[@]}" >&2
+    echo "Pick one with: SYSIBLE_CONTAINER_NAME=<name> sysible_controller $*" >&2
+    exit 1
+  else
+    echo "sysible_controller: no running Sysible Controller container found (looked for '$NAME')." >&2
+    echo "Start it first:  docker compose up -d      (or set SYSIBLE_CONTAINER_NAME=<name>)" >&2
+    exit 1
+  fi
+fi
+
+# Interactive TTY when we're on a terminal; a plain pipe otherwise (so it works in
+# scripts and heredocs too).
+if [ -t 0 ] && [ -t 1 ]; then
+  TTY_ARGS=(-it)
+else
+  TTY_ARGS=(-i)
+fi
+
+# Friendlier error than a bare "executable not found" when the image predates the
+# in-container CLI.
+if ! docker exec "$NAME" sh -c 'command -v sysible_controller >/dev/null 2>&1'; then
+  echo "sysible_controller: the '$NAME' image doesn't include the in-container CLI yet." >&2
+  echo "Rebuild it from a current version:  docker compose up -d --build" >&2
+  exit 1
+fi
+
+exec docker exec "${TTY_ARGS[@]}" "$NAME" sysible_controller "$@"

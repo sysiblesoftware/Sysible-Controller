@@ -89,19 +89,35 @@ docker run --rm -v sysible-data:/data -v "$PWD":/backup alpine \
   tar czf /backup/sysible-data.tgz -C /data .
 ```
 
-## Command-line control (inside the container)
+## Command-line control
 
-A native install puts the `sysible_controller` CLI on the host PATH. The
-container image ships the **same** CLI, made container-aware — it drives
-supervisord + the `/data` volume instead of systemd + `/opt/sysible`. Run it
-with `docker exec`:
+You get the **same `sysible_controller <command>` experience as a native
+install**. Install the host wrapper once (it forwards each command into the
+running container), then use it exactly like the native CLI:
 
 ```bash
-docker exec -it sysible-controller sysible_controller status         # both services
-docker exec -it sysible-controller sysible_controller logs           # follow backend logs
-docker exec -it sysible-controller sysible_controller restart        # restart both services
-docker exec -it sysible-controller sysible_controller reset-admin     # reset the admin password
-docker exec -it sysible-controller sysible_controller rotate-api-key
+# one-time install on the Docker host:
+sudo cp docker/sysible-controller /usr/local/bin/sysible_controller
+sudo chmod +x /usr/local/bin/sysible_controller
+
+# then, from the host — no `docker exec` needed:
+sysible_controller status          # both services
+sysible_controller logs            # follow backend logs
+sysible_controller restart         # restart both services
+sysible_controller reset-admin     # reset the admin password (prints it once)
+sysible_controller rotate-api-key
+```
+
+The wrapper finds the controller container automatically (override the name with
+`SYSIBLE_CONTAINER_NAME` if you renamed it). It needs an image that includes the
+container-aware CLI — if you're on an older image, rebuild with
+`docker compose up -d --build` first.
+
+Prefer not to install the wrapper? The same commands work spelled out in full:
+
+```bash
+docker exec -it sysible-controller sysible_controller status
+docker exec -it sysible-controller sysible_controller reset-admin
 ```
 
 Container *lifecycle* (start / stop / upgrade / destroy) is managed from the host

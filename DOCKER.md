@@ -101,3 +101,48 @@ docker run --rm -v sysible-data:/data -v "$PWD":/backup alpine \
 - Enterprise (Postgres) backends: point the backend at your database with
   `SYSIBLE_DB_URL` and the DB won't use the on-volume SQLite file. (This image
   defaults to the SQLite/Community path.)
+
+## Troubleshooting: build fails with a DNS error on auth.docker.io
+
+```
+failed to fetch anonymous token: Get "https://auth.docker.io/token?...":
+dial tcp: lookup auth.docker.io on 172.16.254.2:53: no such host
+```
+
+This is **BuildKit**, not the Dockerfile. BuildKit reads `/etc/resolv.conf`
+directly, so on a host whose DNS is a NAT/internal resolver (VMware's
+`172.16.254.x`, a corporate server) it can fail even though the host itself
+resolves fine — `getent hosts auth.docker.io` and `docker pull` both work.
+
+**Quickest fix** — pull the two base images once, then build without BuildKit
+(the legacy builder uses local images and never contacts the registry):
+
+```bash
+docker pull node:20-slim && docker pull python:3.12-slim
+DOCKER_BUILDKIT=0 docker build -t sysible-controller:latest .
+docker compose up -d          # note: no --build; it uses the image just built
+```
+
+**Or give BuildKit working DNS** by running its builder on the host network:
+
+```bash
+docker buildx rm sysible 2>/dev/null || true   # required if it already exists
+docker buildx create --use --name sysible --driver docker-container --driver-opt network=host
+docker buildx inspect --bootstrap
+docker compose up -d --build
+```
+
+(`buildx create` fails with *"existing instance for … but no append mode"* if a
+builder of that name is already present — remove it first, as above.)
+
+**Fully offline / air-gapped:** load the base images from a machine that can
+reach Docker Hub, then build as normal:
+
+```bash
+# on a connected machine
+docker pull node:20-slim && docker pull python:3.12-slim
+docker save node:20-slim python:3.12-slim -o ~/base-images.tar
+# on the controller host (write somewhere you own — /opt may be root-only)
+docker load -i ~/base-images.tar
+DOCKER_BUILDKIT=0 docker build -t sysible-controller:latest .
+```

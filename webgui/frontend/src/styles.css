@@ -248,21 +248,38 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
   border-color: var(--accent);
 }
 body {
-  /* Subtle topographic contour ground (matches Sysible CE). The overlay PNG is
-     transparent white contour lines, so it sits over EACH skin's own --bg and
-     never overrides the palette (graphite/amber/nord/blue/porcelain all keep
-     their colour, just gaining the faint survey-map texture). Fixed cover, no
-     tiling seams. */
   background-color: var(--bg);
-  background-image: url("/brand-topo-overlay.png");
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-attachment: fixed;
   color: var(--text);
   font-family: var(--font);
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
+}
+/* Brand-green topographic ground. The overlay PNG ships as plain white contour
+   lines; we recolour it to Sysible green with a CSS mask (so the LINES become
+   green, not a flat white wash) and lay a soft green glow behind everything so
+   there's always brand colour under the console. Fixed cover, no tiling seams.
+   Both the topo lines and the glow sit BEHIND the app (negative z-index), so the
+   opaque rail/cards keep their palette — only the gutters show the ground. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  background-color: var(--topo-line, rgba(63, 174, 90, 0.55));
+  -webkit-mask: url("/brand-topo-overlay.png") center / cover no-repeat;
+          mask: url("/brand-topo-overlay.png") center / cover no-repeat;
+  opacity: 0.55;
+}
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(85% 60% at 12% -8%, rgba(63, 174, 90, 0.14), transparent 55%),
+    radial-gradient(80% 70% at 100% 112%, rgba(45, 138, 118, 0.10), transparent 55%);
 }
 a { color: var(--slate); text-decoration: none; }
 button { font-family: inherit; color: inherit; }
@@ -413,10 +430,25 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 .rail-item .rail-ext { margin-left: auto; font-size: 12px; opacity: 0.55; }
 .rail-item:hover { background: var(--row-hover); color: var(--text); }
 .rail-item.active {
-  background: var(--accent-soft); color: var(--text);
+  background: linear-gradient(100deg, var(--accent-soft) 0%, transparent 92%);
+  color: var(--text);
   border-left-color: var(--accent); border-radius: 0 8px 8px 0;
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 .rail-item.active svg { color: var(--accent); opacity: 1; }
+/* Default Slate skin: the selected item is a deliberate deep-blue gradient
+   (royal blue at the accent edge easing into a soft periwinkle wash) with a
+   bright left stripe + glow — "colour, not a flat fill". CE and EE both default
+   to this skin, so their selected item reads identically. */
+:root[data-skin="base"] .rail-item.active {
+  background: linear-gradient(100deg,
+    rgba(48, 98, 214, 0.42) 0%,
+    rgba(96, 132, 224, 0.22) 48%,
+    rgba(120, 140, 210, 0.05) 100%);
+  border-left-color: #5b8bff;
+  box-shadow: inset 2px 0 0 #5b8bff, 0 6px 16px -8px rgba(48, 98, 214, 0.55);
+}
+:root[data-skin="base"] .rail-item.active svg { color: #8fb0ff; }
 .rail-footer { margin-top: 18px; display: flex; flex-direction: column; gap: 10px;
   padding-top: 14px; border-top: 1px solid var(--border); }
 .rail-edition { color: var(--text-dim); font-size: 12px; text-align: center;

@@ -324,7 +324,10 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 .rail-item .rail-ext { margin-left: auto; font-size: 12px; opacity: 0.55; }
 .rail-item:hover { background: var(--row-hover); color: var(--text); }
 .rail-item.active {
-  background: var(--accent-soft); color: var(--accent);
+  /* Deliberate brand green -> Sysible blue gradient on the selected item (green at
+     the left accent edge, easing into azure). White label reads across both. */
+  background: linear-gradient(90deg, rgba(109,219,115,0.34) 0%, rgba(74,155,232,0.36) 100%);
+  color: var(--text);
   border-left-color: var(--accent); border-radius: 0 8px 8px 0;
 }
 .rail-item.active svg { color: var(--accent); opacity: 1; }

@@ -1393,13 +1393,18 @@ def _is_container():
 
 
 def _container_update_hint():
-    """The message the console shows for updating a CONTAINERIZED controller — it
-    updates by pulling a newer image, never in place (no git checkout, no systemd).
-    The SQLite data volume is preserved across the recreate."""
-    return ("This controller runs from a container image, so it updates by pulling a "
-            "newer image — not in place. On the Docker host, from the compose directory:\n"
-            "  docker compose pull\n"
-            "  docker compose up -d\n"
+    """The message the console shows for updating a CONTAINERIZED controller. It
+    can't self-update from inside the browser (no Docker socket, no git creds by
+    design), so the update runs on the DOCKER HOST. The reference stack BUILDS the
+    image from source, so the correct update is a REBUILD — `docker compose pull`
+    does nothing when there's no registry image. The /data volume is preserved."""
+    return ("A containerized controller updates on the DOCKER HOST, not from the browser.\n"
+            "The reference stack builds the image from source, so update = rebuild:\n"
+            "  sysible_controller update      # one command: git pull + rebuild + recreate\n"
+            "or manually from the repo checkout:\n"
+            "  git pull --ff-only\n"
+            "  docker compose up -d --build\n"
+            "(Deploying a pre-built registry image instead? Use `docker compose pull && up -d`.)\n"
             "Your data (the /data volume) is preserved across the recreate.")
 
 
@@ -1421,8 +1426,8 @@ def _controller_update_available():
         except Exception:
             ver = None
         return {"checked": False, "container": True, "current": ver,
-                "reason": "Running from a container image — update by pulling a newer "
-                          "image (docker compose pull && up -d), not in place."}
+                "reason": "Running from a container image — update on the Docker host "
+                          "(`sysible_controller update`, i.e. rebuild + recreate), not in place."}
     base = _os.getenv("SYSIBLE_HOME", "/opt/sysible")
     try:
         src = open(_os.path.join(base, ".install_src")).read().strip()

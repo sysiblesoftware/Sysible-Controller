@@ -52,6 +52,42 @@ if ! _running "$NAME"; then
   fi
 fi
 
+# -----------------------------------------------------------------------------
+# LIFECYCLE verbs run on the HOST via docker compose — NOT inside the container
+# (a container can't recreate itself). `update` is the important one: the
+# reference stack BUILDS the image from source, so the correct update is a
+# rebuild, NOT `docker compose pull` (there's no registry image to pull). We read
+# the compose project dir + file from the running container's own labels, so this
+# works no matter where the wrapper was installed.
+# -----------------------------------------------------------------------------
+case "${1:-}" in
+  update|up|down|restart|stop|start|logs|pull)
+    _wd="$(docker inspect "$NAME" --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' 2>/dev/null || true)"
+    _cfg="$(docker inspect "$NAME" --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' 2>/dev/null || true)"
+    if [ -n "$_wd" ] && [ -d "$_wd" ]; then cd "$_wd"; fi
+    COMPOSE=(docker compose)
+    [ -n "$_cfg" ] && COMPOSE=(docker compose -f "$_cfg")
+    verb="$1"; shift || true
+    case "$verb" in
+      update)
+        echo "== Updating Sysible Controller (host-side) =="
+        if [ -d .git ]; then
+          echo "== git pull --ff-only =="
+          git pull --ff-only || echo "(git pull failed — rebuilding from the current source)"
+        fi
+        echo "== docker compose up -d --build =="
+        exec "${COMPOSE[@]}" up -d --build "$@"
+        ;;
+      up|start) exec "${COMPOSE[@]}" up -d "$@" ;;
+      restart)  exec "${COMPOSE[@]}" restart "$@" ;;
+      stop)     exec "${COMPOSE[@]}" stop "$@" ;;
+      down)     exec "${COMPOSE[@]}" down "$@" ;;      # add -v yourself to wipe data
+      logs)     exec "${COMPOSE[@]}" logs "$@" ;;
+      pull)     exec "${COMPOSE[@]}" pull "$@" ;;      # only for a registry-image deploy
+    esac
+    ;;
+esac
+
 # Interactive TTY when we're on a terminal; a plain pipe otherwise (so it works in
 # scripts and heredocs too).
 if [ -t 0 ] && [ -t 1 ]; then

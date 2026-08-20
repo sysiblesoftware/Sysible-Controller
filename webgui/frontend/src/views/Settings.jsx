@@ -18,10 +18,13 @@ export default function Settings({ initialTab }) {
       {tab === "me" && <MyAccount />}
       {tab === "policy" && <PasswordPolicy />}
       {tab === "controller" && (
-        <div className="settings-cols">
-          <SoftwareUpdate />
-          <ControllerCfg />
-        </div>
+        <>
+          <div className="settings-cols">
+            <SoftwareUpdate />
+            <ControllerCfg />
+          </div>
+          <DangerZone />
+        </>
       )}
       {tab === "enrollacl" && <EnrollAllowlist />}
       {tab === "tls" && <Tls />}
@@ -435,6 +438,51 @@ function ProgressBar({ value = 0, max = 1, indeterminate = false, color }) {
            style={{ width: indeterminate ? "40%" : pct + "%", height: "100%",
                     background: color || "var(--accent)",
                     transition: indeterminate ? "none" : "width .4s ease" }} />
+    </div>
+  );
+}
+
+// Danger zone — decommission this controller when it's done. Neutralizes it (wipes
+// the whole fleet inventory, enrollment tokens and address config) and returns the
+// exact teardown command. The whole Settings page is superuser-only; the route is
+// superuser-gated too. Requires typing the confirmation phrase.
+function DangerZone() {
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [err, setErr] = useState("");
+  async function decom() {
+    setErr(""); setResult(null); setBusy(true);
+    try {
+      setResult(await api.decommissionController(confirm.trim()));
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div className="tool-group-box" style={{ borderColor: "var(--red, #e05656)", marginTop: 16 }}>
+      <h3 style={{ marginTop: 0, color: "var(--red, #e05656)" }}>Danger zone — Decommission controller</h3>
+      <p className="faint" style={{ marginTop: 0 }}>
+        Use this when you're finished with this controller (e.g. after migrating every host
+        off it). It wipes the entire fleet inventory, all enrollment tokens and the address
+        config so it manages no hosts and issues no more bundles — then shows the command to
+        tear the deployment down. You stay signed in. <b>This cannot be undone.</b>
+      </p>
+      {!result ? (
+        <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span className="faint">Type <code>DECOMMISSION</code> to confirm:</span>
+          <input value={confirm} onChange={(e) => setConfirm(e.target.value)}
+                 placeholder="DECOMMISSION" style={{ minWidth: 180 }} />
+          <button className="btn danger" disabled={busy || confirm.trim() !== "DECOMMISSION"} onClick={decom}>
+            {busy ? <span className="spin" /> : "Decommission controller"}
+          </button>
+        </div>
+      ) : (
+        <div className="ok-text" style={{ whiteSpace: "pre-wrap" }}>
+          {result.message}
+          {result.teardown && <div className="cmd-preview" style={{ marginTop: 8 }}>{result.teardown}</div>}
+        </div>
+      )}
+      {err && <div className="error-box" style={{ marginTop: 8 }} role="alert">{err}</div>}
     </div>
   );
 }

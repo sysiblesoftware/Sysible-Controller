@@ -132,6 +132,7 @@ export const api = {
   setControllerConfig: (cfg) =>
     req("/api/controller-config", { method: "POST", body: cfg }),
   controllerRestart: () => req("/api/controller-restart", { method: "POST" }),
+  decommissionController: (confirm) => req("/api/controller/decommission", { method: "POST", body: { confirm } }),
   controllerUpdate: () => req("/api/controller-update", { method: "POST" }),
   rebuildWebgui: () => req("/api/webgui-rebuild", { method: "POST" }),
   controllerUpdateStatus: () => req("/api/controller-update-status"),

@@ -2631,6 +2631,18 @@ def controller_restart(request: Request, user: str = Depends(require_superuser_s
     return _wrap(lambda: _as_admin(request, lambda: api.controller_restart()))
 
 
+class DecommissionBody(BaseModel):
+    confirm: str = ""
+
+
+@app.post("/api/controller/decommission")
+def controller_decommission_route(body: DecommissionBody, request: Request,
+                                  user: str = Depends(require_superuser_session)):
+    """Neutralize this controller and return the teardown command. Superuser-session
+    gated; requires the confirmation phrase."""
+    return _wrap(lambda: _as_admin(request, lambda: api.decommission_controller(body.confirm)))
+
+
 @app.post("/api/controller-update")
 def controller_update(request: Request, user: str = Depends(require_superuser_session)):
     """Trigger an in-place controller self-update (git pull + redeploy + restart).

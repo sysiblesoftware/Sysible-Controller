@@ -977,6 +977,30 @@ def delete_agent(host_id):
         conn.commit()
 
 
+def decommission_wipe():
+    """Neutralize this controller: drop the entire fleet inventory, all enrollment
+    tokens, the advertised-address config and any per-host state, so it manages no
+    hosts and mints no more bundles. Administrators are deliberately KEPT (the
+    operator stays signed in to finish teardown). Returns the number of hosts that
+    were removed. Each table is cleared independently so a schema that lacks one
+    doesn't abort the wipe."""
+    with contextlib.closing(_connect()) as conn:
+        cur = conn.cursor()
+        try:
+            n = cur.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
+        except Exception:
+            n = 0
+        for tbl in ("agents", "agent_tasks", "agent_results", "metric_samples",
+                    "enroll_tokens", "agent_integrity", "agent_ssh_state",
+                    "pending_become", "controller_config"):
+            try:
+                cur.execute(f"DELETE FROM {tbl}")
+            except Exception:
+                pass
+        conn.commit()
+    return n
+
+
 # =========================================================
 # METRIC SAMPLES (fleet performance time-series)
 # =========================================================

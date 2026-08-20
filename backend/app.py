@@ -2479,6 +2479,15 @@ def regenerate_self_signed_route():
     for ip in detect_local_ips():
         if ip not in addresses:
             addresses.append(ip)
+    # Keep the INTERNAL service hostnames (SYSIBLE_TLS_HOSTS) in the SANs too, so a
+    # reissued cert still covers the names the BFF/agents connect by — in a container
+    # the console reaches the controller as https://controller:9000, and dropping
+    # 'controller'/'localhost' from the cert breaks every call after a regen. No-op
+    # when the var is unset (a normal host install).
+    for h in (os.getenv("SYSIBLE_TLS_HOSTS") or "").split(","):
+        h = h.strip()
+        if h and h not in addresses:
+            addresses.append(h)
     if not addresses:
         raise HTTPException(
             status_code=400,
@@ -2519,6 +2528,38 @@ def controller_restart_route():
     from backend import tls_manager
     tls_manager.restart_backend()
     return {"restarting": True, "service": "sysible-backend"}
+
+
+@app.post("/controller/decommission",
+          dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def controller_decommission_route(body: dict = Body(...), acting: str = Depends(acting_admin_name)):
+    """Decommission this controller: NEUTRALIZE it (drop the whole fleet inventory,
+    all enrollment tokens, the advertised-address config and per-host state) so it
+    manages no hosts and mints no more bundles — then return the exact command to
+    tear the deployment down. Administrators are kept, so the operator stays signed
+    in. Superuser-gated; requires typing the confirmation phrase. Irreversible."""
+    from backend.db import decommission_wipe
+    if str((body or {}).get("confirm") or "").strip() != "DECOMMISSION":
+        raise HTTPException(status_code=400, detail="Type DECOMMISSION to confirm.")
+    removed = decommission_wipe()
+    log_admin_audit("controller_decommissioned", acting,
+                    f"controller neutralized — {removed} host(s) removed, tokens + address config wiped")
+    if _is_container():
+        teardown = "docker compose down -v"
+        note = ("Run it on the Docker host. `-v` also removes the data volume, "
+                "permanently deleting this controller.")
+    else:
+        teardown = "sudo sysible_controller destroy"
+        note = ("Run it on the controller host to remove /opt/sysible, the systemd "
+                "units and the database.")
+    return {
+        "status": "decommissioned",
+        "hosts_removed": removed,
+        "container": _is_container(),
+        "teardown": teardown,
+        "message": "This controller has been neutralized — it no longer manages any hosts "
+                   "or issues bundles. Finish teardown on the host:\n  " + teardown + "\n\n" + note,
+    }
 
 
 @app.post("/controller/update", dependencies=[Depends(require_api_key), Depends(require_superuser)])

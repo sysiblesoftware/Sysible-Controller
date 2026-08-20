@@ -128,6 +128,36 @@ elif _CLIENT_CERT:
           "not presenting a client certificate.")
 
 
+def _apply_client_cert(s):
+    if _CLIENT_CERT and os.path.exists(_CLIENT_CERT):
+        s.cert = (_CLIENT_CERT, _CLIENT_KEY) if (_CLIENT_KEY and os.path.exists(_CLIENT_KEY)) else _CLIENT_CERT
+    return s
+
+
+def _rebuild_session():
+    """Recreate the requests Session so urllib3 drops its cached TLS contexts.
+
+    urllib3 keys a pool's SSLContext on the ca_certs PATH and loads the file ONCE;
+    when the controller reissues its self-signed cert the file at SYSIBLE_CA_CERT
+    changes CONTENT but the path is the same, so pooled connections keep trusting
+    the OLD cert and every verify fails with 'self-signed certificate'. The BFF
+    process outlives a controller cert-regen+restart, so rebuild to force a fresh
+    read of the current CA file."""
+    global _SESSION
+    _SESSION = _apply_client_cert(requests.Session())
+    return _SESSION
+
+
+def _request_with_tls_refresh(fn):
+    """Call fn(); if it fails TLS verification (controller reissued its cert), drop
+    the cached TLS context and retry ONCE against the now-current CA file."""
+    try:
+        return fn()
+    except requests.exceptions.SSLError:
+        _rebuild_session()
+        return fn()
+
+
 def ping():
     try:
         r = _SESSION.get(f"{BASE_URL}/", timeout=2, verify=_VERIFY)
@@ -137,10 +167,11 @@ def ping():
 
 
 def _request(method, path, **kwargs):
-    r = _SESSION.request(
+    timeout = kwargs.pop("timeout", 15)
+    r = _request_with_tls_refresh(lambda: _SESSION.request(
         method, f"{BASE_URL}{path}", headers=_headers(),
-        timeout=kwargs.pop("timeout", 15), verify=_VERIFY, **kwargs,
-    )
+        timeout=timeout, verify=_VERIFY, **kwargs,
+    ))
     if not r.ok:
         detail = None
         try:
@@ -154,7 +185,8 @@ def _request(method, path, **kwargs):
 
 
 def _download_binary(path):
-    r = _SESSION.get(f"{BASE_URL}{path}", headers=_headers(), timeout=30, verify=_VERIFY)
+    r = _request_with_tls_refresh(
+        lambda: _SESSION.get(f"{BASE_URL}{path}", headers=_headers(), timeout=30, verify=_VERIFY))
     if not r.ok:
         detail = None
         try:
@@ -364,6 +396,12 @@ def controller_update():
     on the controller host. The controller launches it as a detached transient
     unit and returns immediately; the backend and web console then restart."""
     return _request("POST", "/controller/update", timeout=30)
+
+
+def decommission_controller(confirm: str):
+    """Neutralize this controller (wipe fleet/tokens/config) and return the teardown
+    command. `confirm` must be the phrase 'DECOMMISSION'."""
+    return _request("POST", "/controller/decommission", json={"confirm": confirm}, timeout=30)
 
 
 def rebuild_webgui():

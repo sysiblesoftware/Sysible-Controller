@@ -1174,6 +1174,46 @@ if [[ "$IN_CONTAINER" == "1" ]]; then
   esac
 fi
 
+cmd_self_enroll_bundle() {
+  # Mint an agent bundle for enrolling the DOCKER HOST (the machine running this
+  # container) as a managed host, and stream the .zip to stdout. Unlike the HTTP
+  # /self-enroll-bundle route (loopback, for a co-located host install), this mints
+  # against the ADVERTISED address (SYSIBLE_CONTROLLER_ADDR, or $1) — the LAN
+  # address the host reaches the published port at and which the cert covers. The
+  # containerized host wrapper (`sysible_controller self-enroll`) consumes this,
+  # unpacks it on the host, and runs run_agent.sh there. Mint only — no root.
+  SYS_ADDR="${1:-${SYSIBLE_CONTROLLER_ADDR:-}}" SYS_PORT="${PORT:-9000}" "$PYBIN" - <<'PY'
+import os, sys
+raw = (os.environ.get("SYS_ADDR") or "").strip().split(",")[0].strip()
+if not raw:
+    sys.stderr.write(
+        "self-enroll-bundle: no controller address. Set SYSIBLE_CONTROLLER_ADDR to the\n"
+        "  host/LAN address agents reach this controller at, or pass it as an argument.\n")
+    sys.exit(1)
+# Normalise to a bare host: drop scheme, /path, and a trailing :port (mint takes
+# the port separately). Multiple colons => a bare IPv6 literal, left intact.
+for pfx in ("https://", "http://"):
+    if raw.startswith(pfx):
+        raw = raw[len(pfx):]
+addr = raw.split("/", 1)[0]
+if addr.count(":") == 1:
+    head, _, tail = addr.partition(":")
+    if tail.isdigit():
+        addr = head
+try:
+    port = int(os.environ.get("SYS_PORT") or 9000)
+except ValueError:
+    port = 9000
+from backend.agent_bundle import mint_agent_bundle
+try:
+    _fn, zip_bytes = mint_agent_bundle([addr], port)
+except Exception as e:
+    sys.stderr.write("self-enroll-bundle: could not mint bundle: %s\n" % e)
+    sys.exit(1)
+sys.stdout.buffer.write(zip_bytes)
+PY
+}
+
 case "$1" in
   start)   cmd_start ;;
   stop)    cmd_stop ;;
@@ -1186,6 +1226,7 @@ case "$1" in
   rotate-api-key) cmd_rotate_api_key ;;
   revoke-enroll-tokens) cmd_revoke_enroll_tokens ;;
   self-enroll) cmd_self_enroll ;;
+  self-enroll-bundle) shift; cmd_self_enroll_bundle "$@" ;;   # host wrapper uses this
   disenroll) cmd_disenroll "$@" ;;
   export) shift; cmd_export "$@" ;;
   import) shift; cmd_import "$@" ;;

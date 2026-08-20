@@ -104,4 +104,66 @@ if ! docker exec "$NAME" sh -c 'command -v sysible_controller >/dev/null 2>&1'; 
   exit 1
 fi
 
+# -----------------------------------------------------------------------------
+# self-enroll — enrol the DOCKER HOST (this machine) as a managed host. The
+# controller runs in a container and cannot manage the host from inside it (no
+# systemd; 127.0.0.1 there is the container, not the box). So we mint a bundle
+# INSIDE the container against the advertised LAN address, then install the agent
+# HERE on the host, where it has systemd and real authority over the machine.
+# Optional explicit address:  sysible_controller self-enroll <host-LAN-IP|DNS>
+# -----------------------------------------------------------------------------
+if [ "${1:-}" = "self-enroll" ]; then
+  shift || true
+  ADDR="${1:-}"
+  if [ "$(id -u)" != 0 ]; then
+    echo "sysible_controller self-enroll: must run as root — it installs the agent and a" >&2
+    echo "systemd unit on this host.  sudo sysible_controller self-enroll" >&2
+    exit 1
+  fi
+  if ! command -v unzip >/dev/null 2>&1; then
+    echo "sysible_controller self-enroll: 'unzip' is required on the host — install it, then retry." >&2
+    exit 1
+  fi
+  if [ -z "$ADDR" ]; then
+    ADDR="$(docker exec "$NAME" printenv SYSIBLE_CONTROLLER_ADDR 2>/dev/null | head -1 | tr -d '\r' || true)"
+  fi
+  if [ -z "$ADDR" ]; then
+    echo "sysible_controller self-enroll: no reachable controller address to enrol against." >&2
+    echo "SYSIBLE_CONTROLLER_ADDR isn't set on the container, so it only knows its internal" >&2
+    echo "docker-bridge IP — which a host agent can't rely on. Fix either way:" >&2
+    echo "  • set SYSIBLE_CONTROLLER_ADDR=<host LAN IP or DNS>, then recreate the controller" >&2
+    echo "  • or pass one now:  sudo sysible_controller self-enroll <host-LAN-IP>" >&2
+    exit 1
+  fi
+  if [ -f /opt/sysible-agent/agent.py ] && systemctl is-enabled sysible-agent >/dev/null 2>&1; then
+    echo "This host already runs the Sysible agent (/opt/sysible-agent) — nothing to do." >&2
+    echo "To re-enrol: sudo systemctl disable --now sysible-agent && sudo rm -rf /opt/sysible-agent, then re-run." >&2
+    exit 0
+  fi
+
+  echo "Enrolling this Docker host as a managed host, reporting to ${ADDR} ..."
+  tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+  if ! docker exec "$NAME" sysible_controller self-enroll-bundle "$ADDR" > "$tmp/bundle.zip"; then
+    echo "sysible_controller self-enroll: could not mint the agent bundle in the container." >&2
+    echo "Check the controller is up (sysible_controller status); an older image may also lack" >&2
+    echo "this command — rebuild it:  docker compose up -d --build" >&2
+    exit 1
+  fi
+  if [ ! -s "$tmp/bundle.zip" ]; then
+    echo "sysible_controller self-enroll: the minted bundle was empty (host cap reached, or mint failed)." >&2
+    exit 1
+  fi
+  if ! ( cd "$tmp" && unzip -qo bundle.zip ) || [ ! -f "$tmp/run_agent.sh" ]; then
+    echo "sysible_controller self-enroll: could not unpack the agent bundle (missing run_agent.sh)." >&2
+    exit 1
+  fi
+  chmod +x "$tmp/run_agent.sh"
+  if ! ( cd "$tmp" && ./run_agent.sh ); then
+    echo "sysible_controller self-enroll: agent install failed." >&2
+    exit 1
+  fi
+  echo "Host self-enrolled — it will appear in the fleet shortly (Host Enrollment → Hosts)."
+  exit 0
+fi
+
 exec docker exec "${TTY_ARGS[@]}" "$NAME" sysible_controller "$@"

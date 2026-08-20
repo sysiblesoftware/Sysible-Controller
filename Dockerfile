@@ -63,7 +63,9 @@ COPY --from=frontend /src/webgui/frontend/dist /app/webgui/frontend/dist
 
 # Container runtime wiring.
 COPY docker/entrypoint.sh /usr/local/bin/sysible-entrypoint
-COPY docker/supervisord.conf /etc/supervisor/conf.d/sysible.conf
+# Full supervisord config (non-root: socket/pid/log live on the writable /data
+# volume, not root-owned /var/run + /var/log — see the file's header).
+COPY docker/supervisord.conf /etc/supervisor/supervisord.conf
 RUN chmod +x /usr/local/bin/sysible-entrypoint
 
 # --- environment: point every persistent path at the /data volume ----------
@@ -80,6 +82,19 @@ ENV PYTHONUNBUFFERED=1 \
     SYSIBLE_CA_CERT=/data/certs/server.crt \
     SYSIBLE_WEBGUI_PORT=8800 \
     SYSIBLE_BACKEND_PORT=9000
+
+# --- non-root runtime (defense-in-depth) -----------------------------------
+# The BFF on :8800 is internet-facing and hosts the unauthenticated /api/login;
+# an RCE there must NOT land as root over the crown-jewel secrets on /data (the
+# Fernet master key, admin API key, TLS private key, controller SSH key). Create
+# a system user, PRE-own /data so the named volume inherits its ownership on first
+# creation, and strip setuid bits (CIS). supervisord's socket/pid/log live on
+# /data/run (see docker/supervisord.conf), and the app's ports are unprivileged.
+RUN useradd --system --uid 10001 --home-dir /data --shell /usr/sbin/nologin sysible \
+ && mkdir -p /data \
+ && chown -R sysible:sysible /data /app \
+ && find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
+USER 10001
 
 VOLUME ["/data"]
 EXPOSE 9000 8800

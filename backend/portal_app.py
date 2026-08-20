@@ -88,7 +88,6 @@ def _page(body: str, message: str = "", wide: bool = False) -> str:
   {favicon_tag}
   <style>
     :root {{
-=======
       --bg: #1E1E1E;
       --card: #262626;
       --card-border: #3A3A3A;

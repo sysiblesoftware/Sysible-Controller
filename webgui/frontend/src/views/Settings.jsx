@@ -353,8 +353,12 @@ function ControllerCfg() {
           <div className="row"><input style={{ flex: 1 }} value={cfg.ip || ""} placeholder="192.168.8.5"
             onChange={set("ip")} />
             <button className="btn ghost sm" type="button" onClick={async () => {
+              setErr(""); setMsg("");
               try { const d = await api.localIps(); const ip = (d.ips || [])[0];
-                if (ip) setCfg((c) => ({ ...c, ip })); } catch (e) { setErr(e.message); } }}>Detect Local IPs</button></div>
+                if (ip) setCfg((c) => ({ ...c, ip }));
+                if (d.note) setMsg(d.note);
+                else if (!ip) setErr("No local IP addresses detected."); }
+              catch (e) { setErr(e.message); } }}>Detect Local IPs</button></div>
         </label>
       )}
       <label className="field"><span>Port</span><input type="number" value={cfg.port || 9000} onChange={set("port")} /></label>

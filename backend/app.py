@@ -2330,9 +2330,29 @@ def get_local_ips_route():
     """Every non-loopback IPv4 address found on this controller right
     now - powers the IP picker/"All Detected IPs" option in Controller
     Configuration so the admin never has to run `ip addr`/`ifconfig` by
-    hand."""
+    hand.
 
-    return {"ips": detect_local_ips()}
+    In a CONTAINER this can only see the internal docker-bridge IP (172.x) — the
+    Docker host's LAN IP is NAT'd away and invisible from inside. So there we prefer
+    the operator-set SYSIBLE_CONTROLLER_ADDR and the currently-saved IP, and return
+    a note telling the admin to enter the host IP by hand."""
+    ips = detect_local_ips()
+    if _is_container():
+        preferred = []
+        adv = (os.getenv("SYSIBLE_CONTROLLER_ADDR") or "").strip()
+        saved = (get_controller_config().get("ip") or "").strip()
+        for cand in (adv, saved):
+            if cand and cand not in preferred:
+                preferred.append(cand)
+        merged = preferred + [i for i in ips if i not in preferred]
+        return {
+            "ips": merged,
+            "container": True,
+            "note": "This controller runs in a container, so it can't auto-detect the Docker "
+                    "host's LAN IP — only its internal bridge address. Enter the host's "
+                    "reachable IP here (or set SYSIBLE_CONTROLLER_ADDR in the compose env).",
+        }
+    return {"ips": ips}
 
 
 @app.get("/controller-config/agent-bundle", dependencies=[Depends(require_api_key), Depends(require_superuser)])

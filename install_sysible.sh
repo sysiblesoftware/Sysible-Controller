@@ -460,25 +460,29 @@ DEFAULT_ADMIN_PASS=""
 # The password is generated inside that call (with a DB-free fallback) and returned on
 # stdout line 2, so it never touches argv (/proc/<pid>/cmdline is world-readable).
 SEEDED_ADMIN="dberror"
+# First-run admin is created in the BROWSER: on an empty database the console
+# shows a "create your administrator" screen (/admin/setup), so the operator
+# picks their own username + password. We ONLY pre-seed here for UNATTENDED
+# installs, when SYSIBLE_ADMIN_PASSWORD is set; otherwise skip seeding and let the
+# browser setup wizard own first-run. The password is read from the environment
+# (never argv — /proc/<pid>/cmdline is world-readable).
+if [[ -z "${SYSIBLE_ADMIN_PASSWORD:-}" ]]; then
+  SEEDED_ADMIN="wizard"
+else
 for _try in $(seq 1 15); do
   _seed_out="$($VENV/bin/python - "$DEFAULT_ADMIN_USER" <<'PY'
-import sys, secrets, string
+import os, sys
 try:
     from backend.db import count_administrators, add_administrator
     from backend import portal_auth
     if count_administrators() != 0:
         print("exists"); sys.exit(0)
-    try:
-        from backend.policy import generate_compliant_password
-        from backend.db import get_admin_password_policy
-        pw = generate_compliant_password(get_admin_password_policy())
-    except Exception:
-        pw = "".join(secrets.choice(string.ascii_letters + string.digits)
-                     for _ in range(20)) + "!aA1"
+    pw = os.environ.get("SYSIBLE_ADMIN_PASSWORD") or ""
     salt, h = portal_auth.hash_password(pw)
-    add_administrator(sys.argv[1], h, salt, must_change_password=1,
+    # Operator-chosen password => no forced change (they picked it deliberately).
+    add_administrator(sys.argv[1], h, salt, must_change_password=0,
                       created_by="installer", role="superuser")
-    print("created"); print(pw)
+    print("created")
 except Exception as e:
     sys.stderr.write("admin seed: %s\n" % e)
     print("dberror")
@@ -487,7 +491,6 @@ PY
   _seed_status="$(printf '%s\n' "$_seed_out" | sed -n 1p)"
   if [[ "$_seed_status" == "created" ]]; then
     SEEDED_ADMIN="created"
-    DEFAULT_ADMIN_PASS="$(printf '%s\n' "$_seed_out" | sed -n 2p)"
     break
   elif [[ "$_seed_status" == "exists" ]]; then
     SEEDED_ADMIN="exists"
@@ -495,6 +498,7 @@ PY
   fi
   sleep 2   # datastore not reachable yet — wait and retry
 done
+fi
 
 # =========================================================
 # INSTALL THE WEB CONSOLE AS ITS OWN SYSTEMD SERVICE
@@ -658,13 +662,15 @@ echo "   Controller backend : sudo sysible_controller start"
 echo "   Web console        : sudo sysible_controller webgui start   ->  https://<this-host>:8800/"
 echo "==================================================================="
 if [[ "$SEEDED_ADMIN" == "created" ]]; then
-  R='\033[1;91m'; Z='\033[0m'   # bold bright red / reset
   echo ""
-  echo -e "${R} WEB CONSOLE LOGIN (default admin created for this fresh install):${Z}"
-  echo -e "${R}     username:  $DEFAULT_ADMIN_USER${Z}"
-  echo -e "${R}     password:  $DEFAULT_ADMIN_PASS${Z}"
-  echo -e "${R} Change it after first login (Settings -> My Account). This is shown${Z}"
-  echo -e "${R} only once - copy it now.${Z}"
+  echo " WEB CONSOLE LOGIN: administrator '$DEFAULT_ADMIN_USER' was pre-seeded from"
+  echo " SYSIBLE_ADMIN_PASSWORD. Sign in at https://<this-host>:8800/ and change it"
+  echo " in Settings -> My Account."
+  echo ""
+elif [[ "$SEEDED_ADMIN" == "wizard" ]]; then
+  echo ""
+  echo " WEB CONSOLE FIRST-RUN: open https://<this-host>:8800/ — the console will"
+  echo " prompt you to create your administrator account (you choose the password)."
   echo ""
 elif [[ "$SEEDED_ADMIN" == "exists" ]]; then
   echo ""

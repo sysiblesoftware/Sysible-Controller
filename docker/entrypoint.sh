@@ -69,33 +69,29 @@ fi
 # TLS is on, so the session cookie must be marked Secure.
 export SYSIBLE_WEBGUI_HTTPS_ONLY=1
 
-# 5) Initialise the DB and seed the first superuser if none exists. The password
-#    is taken from SYSIBLE_ADMIN_PASSWORD if provided, otherwise generated and
-#    printed ONCE here (never passed on argv). must_change_password forces a
-#    reset at first login. Mirrors install_sysible.sh's seed logic.
+# 5) Initialise the DB. First-run admin is created in the BROWSER: on an empty
+#    database the console shows a "create your administrator" screen
+#    (/admin/setup), so the operator picks their own username + password — no
+#    temp password anywhere. We ONLY pre-seed here for UNATTENDED installs, when
+#    SYSIBLE_ADMIN_PASSWORD is set; otherwise nothing is seeded and the browser
+#    setup wizard owns first-run.
 ADMIN_USER="${SYSIBLE_ADMIN_USERNAME:-admin}"
 seed_out="$(python3 - "$ADMIN_USER" "${SYSIBLE_ADMIN_PASSWORD:-}" <<'PY'
-import sys, secrets, string
-user = sys.argv[1]
-supplied = sys.argv[2] if len(sys.argv) > 2 else ""
+import sys
 try:
     from backend.db import count_administrators, add_administrator  # imports run init_db()
     from backend import portal_auth
+    user = sys.argv[1]
+    supplied = sys.argv[2] if len(sys.argv) > 2 else ""
+    if not supplied:
+        print("wizard"); sys.exit(0)   # DB is initialised; browser setup owns first-run
     if count_administrators() != 0:
         print("exists"); sys.exit(0)
-    pw = supplied
-    if not pw:
-        try:
-            from backend.policy import generate_compliant_password
-            from backend.db import get_admin_password_policy
-            pw = generate_compliant_password(get_admin_password_policy())
-        except Exception:
-            pw = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20)) + "!aA1"
-    salt, h = portal_auth.hash_password(pw)
-    # If the operator supplied the password, don't force a change; otherwise do.
-    add_administrator(user, h, salt, must_change_password=(0 if supplied else 1),
+    salt, h = portal_auth.hash_password(supplied)
+    # Operator-chosen password => no forced change (they picked it deliberately).
+    add_administrator(user, h, salt, must_change_password=0,
                       created_by="container-entrypoint", role="superuser")
-    print("created"); print(pw)
+    print("created")
 except Exception as e:
     sys.stderr.write("admin seed error: %s\n" % e)
     print("dberror")
@@ -103,20 +99,10 @@ PY
 )"
 status="$(printf '%s\n' "$seed_out" | sed -n 1p)"
 case "$status" in
-  created)
-    pw="$(printf '%s\n' "$seed_out" | sed -n 2p)"
-    if [[ -n "${SYSIBLE_ADMIN_PASSWORD:-}" ]]; then
-      log "seeded superuser '$ADMIN_USER' (password from SYSIBLE_ADMIN_PASSWORD)."
-    else
-      log "============================================================"
-      log " Seeded initial superuser — CHANGE THIS PASSWORD AT LOGIN:"
-      log "     username: $ADMIN_USER"
-      log "     password: $pw"
-      log " (shown once; set SYSIBLE_ADMIN_PASSWORD to choose your own)"
-      log "============================================================"
-    fi ;;
+  created) log "pre-seeded superuser '$ADMIN_USER' from SYSIBLE_ADMIN_PASSWORD (browser setup skipped)." ;;
+  wizard)  log "no admin seeded — open the console to create your administrator (first-run setup)." ;;
   exists)  log "administrators already exist — not seeding." ;;
-  *)       log "WARNING: could not seed the initial admin (see error above); the console may have no login yet." ;;
+  *)       log "WARNING: DB init/seed issue (see error above); check the controller logs." ;;
 esac
 
 log "bootstrap complete — starting services (backend :${SYSIBLE_BACKEND_PORT:-9000}, web console :${SYSIBLE_WEBGUI_PORT:-8800})."

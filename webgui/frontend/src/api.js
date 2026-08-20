@@ -86,6 +86,10 @@ async function req(path, { method = "GET", body, headers, raw = false, timeout }
 export const api = {
   login: (username, password) =>
     req("/api/login", { method: "POST", body: { username, password } }),
+  // First-run: is there no administrator yet? and create the first one.
+  setupRequired: () => req("/api/admin/setup-required"),
+  setup: (username, password) =>
+    req("/api/admin/setup", { method: "POST", body: { username, password } }),
   logout: () => req("/api/logout", { method: "POST" }),
   me: () => req("/api/me"),
   edition: () => req("/api/edition"),

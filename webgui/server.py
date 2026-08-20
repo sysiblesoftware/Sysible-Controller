@@ -366,6 +366,12 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class SetupRequest(BaseModel):
+    # First-run only: the admin picks their own username + password in the browser.
+    username: str
+    password: str
+
+
 # In-memory login throttle: slows password guessing against an exposed
 # console without a datastore. Per client IP, allow a burst then lock out
 # for a cooldown. Successful login clears the counter. State is per-process;
@@ -597,6 +603,56 @@ def login(body: LoginRequest, request: Request):
         "sudo_connect": request.session["sudo_connect"],
         "must_change_password": bool(result.get("must_change_password")),
     }
+
+
+@app.get("/api/admin/setup-required")
+def admin_setup_required_route():
+    """PUBLIC (pre-login): true on a fresh controller that has no administrator
+    yet, so the console shows a 'create your administrator' screen instead of a
+    login form. No session — there is no account to authenticate as. Fails SAFE:
+    if the controller can't be reached we report NOT required (show login), so a
+    create-admin form is never offered on a controller that actually has admins."""
+    try:
+        return {"setup_required": bool(api.admin_setup_required())}
+    except Exception as e:
+        _log.warning("setup-required: controller round-trip failed: %s", e)
+        return {"setup_required": False}
+
+
+@app.post("/api/admin/setup")
+def admin_setup_route(body: SetupRequest, request: Request):
+    """PUBLIC (pre-login): create the FIRST administrator and log them straight in.
+    The controller returns 409 once any admin exists, so this can't add accounts
+    later. On success we establish the session exactly like /api/login."""
+    import requests
+    username = body.username.strip()
+    if not username or not body.password:
+        raise HTTPException(status_code=400, detail="Username and password are required.")
+    try:
+        result = api.admin_setup(username, body.password)
+    except requests.exceptions.HTTPError as e:
+        resp = getattr(e, "response", None)
+        code = resp.status_code if resp is not None else 400
+        detail = None
+        try:
+            detail = resp.json().get("detail")
+        except Exception:
+            pass
+        raise HTTPException(status_code=code, detail=detail or "Could not create the administrator.")
+    except Exception as e:
+        _log.warning("setup: controller round-trip failed: %s", e)
+        raise HTTPException(
+            status_code=502,
+            detail="Could not reach the controller to create the administrator.")
+    # Log the new admin straight in — mirror /api/login's session establishment.
+    request.session.clear()
+    request.session["user"] = username
+    request.session["role"] = result.get("role") or "superuser"
+    request.session["sudo_connect"] = bool(result.get("sudo_connect"))
+    if result.get("token"):
+        request.session["token_enc"] = _encrypt_token(result["token"])
+    request.session["must_change_password"] = False  # they just chose it
+    return {"username": username, "role": request.session["role"], "status": "created"}
 
 
 @app.get("/api/health")

@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import { api, setUnauthorizedHandler } from "./api.js";
 import Login from "./views/Login.jsx";
+import Setup from "./views/Setup.jsx";
 import ForcePasswordChange from "./views/ForcePasswordChange.jsx";
 import Toasts from "./components/Toasts.jsx";
 import Dashboard from "./views/Dashboard.jsx";
@@ -191,6 +192,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [role, setRole] = useState("");
   const [checking, setChecking] = useState(true);
+  const [setupRequired, setSetupRequired] = useState(false);
   const [mustChange, setMustChange] = useState(false);
   // Bumped on every nav click so a stateful view (e.g. the tools grid) can reset
   // its own sub-page when its nav item is clicked again — see ToolRunner.
@@ -249,7 +251,15 @@ export default function App() {
   useEffect(() => {
     api.me()
       .then((d) => { setUser(d.username); setRole(d.role || ""); setMustChange(!!d.must_change_password); })
-      .catch(() => setUser(null))
+      .catch(async () => {
+        setUser(null);
+        // Not signed in — on a brand-new controller with no admin yet, show the
+        // first-run create-administrator screen instead of an unusable login form.
+        try {
+          const s = await api.setupRequired();
+          setSetupRequired(!!(s && s.setup_required));
+        } catch { /* fail safe → login */ }
+      })
       .finally(() => setChecking(false));
   }, []);
 
@@ -319,6 +329,10 @@ export default function App() {
   }, [role, view, go]);
 
   if (checking) return <div className="login-wrap"><span className="spin" /></div>;
+  // Fresh controller, no admin yet → first-run create-administrator screen.
+  if (!user && setupRequired) {
+    return <Setup onDone={(username, r) => { setSetupRequired(false); onLoggedIn(username, r, false); }} />;
+  }
   if (!user) return <Login onLoggedIn={onLoggedIn} />;
   // A temporary password must be rotated before anything else is reachable.
   if (mustChange) {

@@ -41,14 +41,44 @@ TRUST_FILE = Path(os.getenv("SYSIBLE_TRUST_FILE", str(PROJECT_ROOT / "certs" / "
 BUNDLE_FILENAME = "sysible-agent-bundle.zip"
 
 
+def _is_container() -> bool:
+    """True when the controller runs from the Docker image. The image sets
+    SYSIBLE_CONTAINER=1; /.dockerenv is the fallback."""
+    v = (os.getenv("SYSIBLE_CONTAINER") or "").strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    try:
+        return os.path.exists("/.dockerenv")
+    except Exception:
+        return False
+
+
+def _advertised_addr() -> str:
+    """The address the operator told this controller agents actually reach it at
+    (SYSIBLE_CONTROLLER_ADDR). Essential in a container, whose own NICs only carry
+    docker-bridge IPs (172.x) the fleet can't route to."""
+    return (os.getenv("SYSIBLE_CONTROLLER_ADDR") or "").strip()
+
+
 def detect_local_ips() -> list[str]:
     """Enumerate this controller's own non-loopback IPv4 addresses across
     every network interface (psutil.net_if_addrs() - already a backend
     dependency, so this adds no new one). Powers both the "pick one IP"
     dropdown in Controller Configuration (GET /controller-config/local-ips)
     and the "all" address_mode below, which skips picking entirely and
-    just hands agent bundles every address found here."""
+    just hands agent bundles every address found here.
+
+    Container-aware: a container's own NICs are docker-bridge addresses (172.x)
+    that no managed host can reach, so the REACHABLE address is whatever the
+    operator set as SYSIBLE_CONTROLLER_ADDR. Surface that first, and in a
+    container return ONLY it (when set) — otherwise "Detect Local IPs", the "all"
+    mode, and the first-run default would all advertise an unreachable 172.x."""
     ips: list[str] = []
+    adv = _advertised_addr()
+    if adv:
+        ips.append(adv)
+    if _is_container() and adv:
+        return ips
     try:
         for addrs in psutil.net_if_addrs().values():
             for addr in addrs:
@@ -100,6 +130,12 @@ def bundle_addresses(config: dict) -> list[str]:
     mode = config.get("address_mode")
     ip = config.get("ip")
     if mode != "all" and ip:
+        # In a container, NEVER self-heal to a detected NIC IP — the container's
+        # NIC is a docker-bridge address the fleet can't reach, so the "not a live
+        # NIC IP → fall back to detected" rule would wrongly replace a good
+        # 192.168.x address with an unreachable 172.x. Trust the saved address.
+        if _is_container():
+            return resolve_controller_addresses(config)
         try:
             import ipaddress
             detected = detect_local_ips()

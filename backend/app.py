@@ -1380,6 +1380,29 @@ def _current_agent_version():
         return None
 
 
+def _is_container():
+    """True when the controller runs from the Docker image rather than a host
+    install. The image sets SYSIBLE_CONTAINER=1; /.dockerenv is the fallback."""
+    v = (os.getenv("SYSIBLE_CONTAINER") or "").strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    try:
+        return os.path.exists("/.dockerenv")
+    except Exception:
+        return False
+
+
+def _container_update_hint():
+    """The message the console shows for updating a CONTAINERIZED controller — it
+    updates by pulling a newer image, never in place (no git checkout, no systemd).
+    The SQLite data volume is preserved across the recreate."""
+    return ("This controller runs from a container image, so it updates by pulling a "
+            "newer image — not in place. On the Docker host, from the compose directory:\n"
+            "  docker compose pull\n"
+            "  docker compose up -d\n"
+            "Your data (the /data volume) is preserved across the recreate.")
+
+
 def _controller_update_available():
     """Best-effort: is the deployed controller behind its git remote? Reads the
     install checkout path from <base>/.install_src (written at install time),
@@ -1388,6 +1411,18 @@ def _controller_update_available():
     private-repo auth, etc.)."""
     import os as _os
     import subprocess as _sp
+    # A containerized controller has no git checkout to compare — it's updated by
+    # pulling a new image. Report that plainly instead of a scary git error.
+    if _is_container():
+        ver = None
+        try:
+            from version import VERSION as _V
+            ver = _V
+        except Exception:
+            ver = None
+        return {"checked": False, "container": True, "current": ver,
+                "reason": "Running from a container image — update by pulling a newer "
+                          "image (docker compose pull && up -d), not in place."}
     base = _os.getenv("SYSIBLE_HOME", "/opt/sysible")
     try:
         src = open(_os.path.join(base, ".install_src")).read().strip()
@@ -2501,6 +2536,17 @@ def controller_update_route(acting: str = Depends(acting_admin_name)):
     import os
     import shutil
     import subprocess
+
+    # Containerized controller: there's no git checkout or systemd to self-update.
+    # Return the image-pull guidance (not a 500) so the console shows the operator
+    # exactly how to update instead of "systemd-run unavailable".
+    if _is_container():
+        try:
+            log_admin_audit("controller_update_started", acting,
+                            "update requested on a containerized controller — image-pull guidance returned")
+        except Exception:
+            pass
+        return {"status": "container", "message": _container_update_hint()}
 
     cli = shutil.which("sysible_controller") or "/usr/local/bin/sysible_controller"
     if not os.path.exists(cli):

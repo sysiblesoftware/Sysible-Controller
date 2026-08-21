@@ -1156,9 +1156,23 @@ cmd_import() {
 # docker/compose equivalent instead of failing with a cryptic /bin/python error.
 if [[ "$IN_CONTAINER" == "1" ]]; then
   case "$1" in
-    update)
-      echo "In a container, upgrade by pulling the new image — not from git:" >&2
-      echo "  docker compose pull && docker compose up -d   (or: docker compose up -d --build)" >&2
+    start|stop|restart|update|destroy)
+      echo "'$1' controls the CONTAINER and must run on the HOST, not inside it." >&2
+      echo >&2
+      echo "Use the host-side manager (works by container name — no repo needed):" >&2
+      echo "  sysible_ctl $1        # after: sudo ./deploy/sysible_ctl install" >&2
+      echo >&2
+      echo "Or with plain docker on the host:" >&2
+      case "$1" in
+        update)
+          echo "  # pull the newest image and recreate, via the compose file it was started from:" >&2
+          echo "  cfg=\$(docker inspect -f '{{ index .Config.Labels \"com.docker.compose.project.config_files\"}}' sysible-controller)" >&2
+          echo "  docker compose -f \"\$cfg\" pull && docker compose -f \"\$cfg\" up -d" >&2 ;;
+        destroy)
+          echo "  docker rm -f sysible-controller        # add: docker volume rm sysible-data  to delete data" >&2 ;;
+        *)
+          echo "  docker $1 sysible-controller" >&2 ;;
+      esac
       exit 1 ;;
     self-enroll|disenroll)
       echo "'$1' manages a host agent and does not apply inside the container." >&2
@@ -1166,10 +1180,6 @@ if [[ "$IN_CONTAINER" == "1" ]]; then
     export|import)
       echo "Back up / restore the /data volume from the HOST instead (see DOCKER.md 'Backups'):" >&2
       echo "  docker run --rm -v sysible-data:/data -v \"\$PWD\":/backup alpine tar czf /backup/sysible-data.tgz -C /data ." >&2
-      exit 1 ;;
-    destroy)
-      echo "To remove the container and its data from the host:" >&2
-      echo "  docker compose down && docker volume rm sysible-data" >&2
       exit 1 ;;
   esac
 fi

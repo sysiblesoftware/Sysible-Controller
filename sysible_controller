@@ -1156,9 +1156,23 @@ cmd_import() {
 # docker/compose equivalent instead of failing with a cryptic /bin/python error.
 if [[ "$IN_CONTAINER" == "1" ]]; then
   case "$1" in
-    update)
-      echo "In a container, upgrade by pulling the new image — not from git:" >&2
-      echo "  docker compose pull && docker compose up -d   (or: docker compose up -d --build)" >&2
+    start|stop|restart|update|destroy)
+      echo "'$1' controls the CONTAINER and must run on the HOST, not inside it." >&2
+      echo >&2
+      echo "Use the host-side manager (works by container name — no repo needed):" >&2
+      echo "  sysible_ctl $1        # after: sudo ./deploy/sysible_ctl install" >&2
+      echo >&2
+      echo "Or with plain docker on the host:" >&2
+      case "$1" in
+        update)
+          echo "  # pull the newest image and recreate, via the compose file it was started from:" >&2
+          echo "  cfg=\$(docker inspect -f '{{ index .Config.Labels \"com.docker.compose.project.config_files\"}}' sysible-controller)" >&2
+          echo "  docker compose -f \"\$cfg\" pull && docker compose -f \"\$cfg\" up -d" >&2 ;;
+        destroy)
+          echo "  docker rm -f sysible-controller        # add: docker volume rm sysible-data  to delete data" >&2 ;;
+        *)
+          echo "  docker $1 sysible-controller" >&2 ;;
+      esac
       exit 1 ;;
     self-enroll|disenroll)
       echo "'$1' manages a host agent and does not apply inside the container." >&2
@@ -1167,12 +1181,48 @@ if [[ "$IN_CONTAINER" == "1" ]]; then
       echo "Back up / restore the /data volume from the HOST instead (see DOCKER.md 'Backups'):" >&2
       echo "  docker run --rm -v sysible-data:/data -v \"\$PWD\":/backup alpine tar czf /backup/sysible-data.tgz -C /data ." >&2
       exit 1 ;;
-    destroy)
-      echo "To remove the container and its data from the host:" >&2
-      echo "  docker compose down && docker volume rm sysible-data" >&2
-      exit 1 ;;
   esac
 fi
+
+cmd_self_enroll_bundle() {
+  # Mint an agent bundle for enrolling the DOCKER HOST (the machine running this
+  # container) as a managed host, and stream the .zip to stdout. Unlike the HTTP
+  # /self-enroll-bundle route (loopback, for a co-located host install), this mints
+  # against the ADVERTISED address (SYSIBLE_CONTROLLER_ADDR, or $1) — the LAN
+  # address the host reaches the published port at and which the cert covers. The
+  # containerized host wrapper (`sysible_controller self-enroll`) consumes this,
+  # unpacks it on the host, and runs run_agent.sh there. Mint only — no root.
+  SYS_ADDR="${1:-${SYSIBLE_CONTROLLER_ADDR:-}}" SYS_PORT="${PORT:-9000}" "$PYBIN" - <<'PY'
+import os, sys
+raw = (os.environ.get("SYS_ADDR") or "").strip().split(",")[0].strip()
+if not raw:
+    sys.stderr.write(
+        "self-enroll-bundle: no controller address. Set SYSIBLE_CONTROLLER_ADDR to the\n"
+        "  host/LAN address agents reach this controller at, or pass it as an argument.\n")
+    sys.exit(1)
+# Normalise to a bare host: drop scheme, /path, and a trailing :port (mint takes
+# the port separately). Multiple colons => a bare IPv6 literal, left intact.
+for pfx in ("https://", "http://"):
+    if raw.startswith(pfx):
+        raw = raw[len(pfx):]
+addr = raw.split("/", 1)[0]
+if addr.count(":") == 1:
+    head, _, tail = addr.partition(":")
+    if tail.isdigit():
+        addr = head
+try:
+    port = int(os.environ.get("SYS_PORT") or 9000)
+except ValueError:
+    port = 9000
+from backend.agent_bundle import mint_agent_bundle
+try:
+    _fn, zip_bytes = mint_agent_bundle([addr], port)
+except Exception as e:
+    sys.stderr.write("self-enroll-bundle: could not mint bundle: %s\n" % e)
+    sys.exit(1)
+sys.stdout.buffer.write(zip_bytes)
+PY
+}
 
 case "$1" in
   start)   cmd_start ;;
@@ -1186,6 +1236,7 @@ case "$1" in
   rotate-api-key) cmd_rotate_api_key ;;
   revoke-enroll-tokens) cmd_revoke_enroll_tokens ;;
   self-enroll) cmd_self_enroll ;;
+  self-enroll-bundle) shift; cmd_self_enroll_bundle "$@" ;;   # host wrapper uses this
   disenroll) cmd_disenroll "$@" ;;
   export) shift; cmd_export "$@" ;;
   import) shift; cmd_import "$@" ;;

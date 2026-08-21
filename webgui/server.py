@@ -2112,11 +2112,7 @@ _DOC_FILES = {
 }
 
 
-@app.get("/api/docs/download")
-def download_docs(which: str = "full", user: str = Depends(require_login)):
-    """Download the bundled offline HTML documentation (full manual by default,
-    or the quickstart with ?which=quickstart). Self-contained, so it opens with
-    no network access."""
+def _doc_response(which: str, inline: bool):
     entry = _DOC_FILES.get(which)
     if not entry:
         raise HTTPException(status_code=404, detail="Unknown documentation file.")
@@ -2124,7 +2120,25 @@ def download_docs(which: str = "full", user: str = Depends(require_login)):
     path = _REPO_ROOT / disk_name
     if not path.exists():
         raise HTTPException(status_code=404, detail="Documentation file is not bundled with this install.")
-    return FileResponse(str(path), media_type="text/html", filename=filename)
+    # inline → renders as a webpage in the browser tab; attachment → saves a copy.
+    return FileResponse(str(path), media_type="text/html", filename=filename,
+                        content_disposition_type="inline" if inline else "attachment")
+
+
+@app.get("/api/docs/view")
+def view_docs(which: str = "full", user: str = Depends(require_login)):
+    """Render the bundled offline HTML documentation as a webpage (full manual by
+    default, or the quickstart with ?which=quickstart). Self-contained, so it opens
+    with no network access. The left-rail 'Documentation' item opens this in a new
+    tab; /api/docs/download serves the same file as a saveable copy."""
+    return _doc_response(which, inline=True)
+
+
+@app.get("/api/docs/download")
+def download_docs(which: str = "full", user: str = Depends(require_login)):
+    """Save the bundled offline HTML documentation as a file (for reading offline
+    later). See /api/docs/view to read it in the browser."""
+    return _doc_response(which, inline=False)
 
 
 # ----------------------------------------------------------------------

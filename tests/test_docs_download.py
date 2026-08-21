@@ -57,3 +57,25 @@ def test_docs_download_rejects_unknown_selector(bff):
         assert r.status_code == 404
     finally:
         srv.app.dependency_overrides.clear()
+
+
+def test_docs_view_renders_inline_as_webpage(bff):
+    """The rail 'Documentation' item opens /api/docs/view, which serves the manual
+    with an INLINE disposition so the browser renders it as a webpage (not a save)."""
+    import webgui.server as srv
+    _login_override(srv)
+    try:
+        r = bff.get("/api/docs/view")
+        assert r.status_code == 200, r.text
+        assert "text/html" in r.headers.get("content-type", "")
+        cd = r.headers.get("content-disposition", "").lower()
+        assert "inline" in cd and "attachment" not in cd
+        assert len(r.content) > 1000
+    finally:
+        srv.app.dependency_overrides.clear()
+
+
+def test_docs_view_requires_login(bff):
+    import webgui.server as srv
+    srv.app.dependency_overrides.pop(srv.require_login, None)
+    assert bff.get("/api/docs/view").status_code != 200

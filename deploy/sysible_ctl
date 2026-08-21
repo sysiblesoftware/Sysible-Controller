@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# Sysible Controller — HOST-side container manager.
+#
+# The `sysible_controller` CLI baked INTO the image manages the app inside the
+# container (status, reset-admin, …). This script is its host-side companion:
+# it drives the CONTAINER itself (start/stop/restart/update/logs/destroy) with
+# plain `docker`, by container NAME — so it works even when you don't have the
+# repo checked out. `update` pulls a newer image and recreates the container,
+# reusing the exact compose file the container was started from (discovered from
+# the container's own labels — no path guessing).
+#
+# Install it once (`sudo ./deploy/sysible_ctl install`) and run `sysible_ctl`
+# from anywhere.
+set -euo pipefail
+
+CONTAINER="${SYSIBLE_CONTAINER_NAME:-sysible-controller}"
+IMAGE="${SYSIBLE_IMAGE:-sysible-controller:latest}"
+CONSOLE_PORT="${SYSIBLE_CONSOLE_PORT:-8800}"
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+if [[ -t 1 ]]; then
+  BOLD=$'\033[1m'; RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; CYAN=$'\033[36m'; RESET=$'\033[0m'
+else
+  BOLD=''; RED=''; GREEN=''; YELLOW=''; CYAN=''; RESET=''
+fi
+_hdr()  { printf '%s\n' "${BOLD}${CYAN}==> $*${RESET}"; }
+_ok()   { printf '%s\n' "${GREEN}$*${RESET}"; }
+_warn() { printf '%s\n' "${YELLOW}$*${RESET}" >&2; }
+_err()  { printf '%s\n' "${RED}ERROR: $*${RESET}" >&2; }
+_die()  { _err "$@"; exit 1; }
+
+_need_docker() {
+  command -v docker >/dev/null 2>&1 || _die "docker is not installed or not on PATH."
+}
+_exists() { docker inspect "$CONTAINER" >/dev/null 2>&1; }
+
+DC=()
+_detect_compose() {
+  if docker compose version >/dev/null 2>&1; then DC=(docker compose)
+  elif command -v docker-compose >/dev/null 2>&1; then DC=(docker-compose)
+  else return 1; fi
+}
+
+# Discover the compose file + working dir the running container was created from,
+# via the standard compose v2 labels. Sets _CFG and _WD; returns 1 if the
+# container wasn't started by compose (a plain `docker run`).
+_CFG=''; _WD=''
+_compose_from_labels() {
+  _exists || return 1
+  _CFG="$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.config_files"}}' "$CONTAINER" 2>/dev/null || true)"
+  _WD="$(docker inspect  -f '{{ index .Config.Labels "com.docker.compose.project.working_dir"}}'  "$CONTAINER" 2>/dev/null || true)"
+  [[ -n "$_CFG" ]]
+}
+
+# Run a compose subcommand against the discovered file, from its working dir.
+_compose() {
+  _detect_compose || _die "neither 'docker compose' nor 'docker-compose' is available."
+  ( cd "${_WD:-.}" 2>/dev/null || true; "${DC[@]}" -f "$_CFG" "$@" )
+}
+
+cmd_start()   { _need_docker; _hdr "Starting $CONTAINER";   docker start "$CONTAINER"   >/dev/null && _ok "started"; }
+cmd_stop()    { _need_docker; _hdr "Stopping $CONTAINER";   docker stop  "$CONTAINER"   >/dev/null && _ok "stopped (data volume preserved)"; }
+cmd_restart() { _need_docker; _hdr "Restarting $CONTAINER"; docker restart "$CONTAINER" >/dev/null && _ok "restarted"; }
+cmd_logs()    { _need_docker; docker logs -f --tail=200 "$CONTAINER" "$@"; }
+
+cmd_status() {
+  _need_docker
+  _hdr "Container"
+  docker ps -a --filter "name=^/${CONTAINER}$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+  _hdr "Console health"
+  local url
+  for url in "https://localhost:${CONSOLE_PORT}/api/health" "http://localhost:${CONSOLE_PORT}/api/health"; do
+    if curl -fsk --max-time 5 "$url" >/dev/null 2>&1; then _ok "  health: OK  ($url)"; return 0; fi
+  done
+  _warn "  health: '' (no response on ${CONSOLE_PORT})"
+}
+
+cmd_update() {
+  _need_docker
+  _exists || _die "no container named '$CONTAINER'. Start it first, or set SYSIBLE_CONTAINER_NAME."
+  if _compose_from_labels; then
+    _hdr "Updating via compose ($_CFG)"
+    _compose pull
+    _compose up -d
+    _ok "Updated. Data volume preserved."
+  else
+    # Plain `docker run` container: we can pull a newer image but can't safely
+    # reconstruct the original run flags, so recreate is left to the operator.
+    _hdr "Pulling newer image: $IMAGE"
+    docker pull "$IMAGE"
+    _warn "This container was not started by docker compose, so it can't be recreated"
+    _warn "automatically. Re-run your 'docker run …' (or 'docker compose up -d') to"
+    _warn "pick up the pulled image. The named data volume is untouched."
+  fi
+}
+
+cmd_destroy() {
+  _need_docker
+  local with_volumes=0
+  [[ "${1:-}" == "--volumes" || "${1:-}" == "-v" ]] && with_volumes=1
+  _warn "This removes the $CONTAINER container${with_volumes:+ AND its data volume}."
+  read -r -p "Type 'yes' to continue: " ans; [[ "$ans" == "yes" ]] || { echo "Aborted."; return 1; }
+  if _compose_from_labels; then
+    if [[ $with_volumes -eq 1 ]]; then _compose down -v; else _compose down; fi
+  else
+    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+    _warn "Removed the container. If you passed -v, remove the data volume yourself: docker volume rm <name>"
+  fi
+  _ok "done"
+}
+
+# Pass a command through to the app CLI inside the container.
+cmd_exec() {
+  _need_docker
+  [[ $# -gt 0 ]] || _die "usage: $(basename "$0") exec <sysible_controller args>   (e.g. exec status)"
+  docker exec -it "$CONTAINER" sysible_controller "$@"
+}
+
+cmd_install() {
+  local name="sysible_ctl" bindir dest
+  if [[ -w /usr/local/bin || "$(id -u)" -eq 0 ]]; then bindir=/usr/local/bin
+  else bindir="$HOME/.local/bin"; mkdir -p "$bindir"; fi
+  dest="$bindir/$name"
+  chmod +x "$SELF"; ln -sf "$SELF" "$dest"
+  _ok "Linked $dest -> $SELF"
+  case ":$PATH:" in
+    *":$bindir:"*) _ok "Ready — run: ${BOLD}$name update${RESET}" ;;
+    *) _warn "$bindir is not on PATH. Add it: echo 'export PATH=\"$bindir:\$PATH\"' >> ~/.bashrc && source ~/.bashrc" ;;
+  esac
+  [[ "$bindir" == "$HOME/.local/bin" ]] && _warn "User-only install. For system-wide: sudo $0 install"
+  return 0
+}
+
+cmd_uninstall() {
+  local removed=0 d
+  for d in /usr/local/bin/sysible_ctl "$HOME/.local/bin/sysible_ctl"; do
+    [[ -L "$d" || -f "$d" ]] && rm -f "$d" && { _ok "Removed $d"; removed=1; }
+  done
+  [[ $removed -eq 1 ]] || _warn "No installed 'sysible_ctl' found."
+  return 0
+}
+
+usage() {
+  cat <<EOF
+${BOLD}sysible_ctl${RESET} — manage the Sysible Controller container from the host
+
+${BOLD}Usage:${RESET} $(basename "$0") <command> [args]
+
+${BOLD}Commands:${RESET}
+  ${CYAN}install${RESET}    Put this on PATH as 'sysible_ctl' (sudo = system-wide, else ~/.local/bin).
+  ${CYAN}uninstall${RESET}  Remove the 'sysible_ctl' symlink.
+  ${CYAN}start${RESET}      Start the container.
+  ${CYAN}stop${RESET}       Stop the container (data volume kept).
+  ${CYAN}restart${RESET}    Restart the container.
+  ${CYAN}update${RESET}     Pull the newest image and recreate in place (via the compose file the
+               container was started from). Preserves the data volume.
+  ${CYAN}status${RESET}     Show container status + probe the console health endpoint.
+  ${CYAN}logs${RESET}       Follow container logs (last 200 lines; extra args passed through).
+  ${CYAN}destroy${RESET}    Remove the container (add -v/--volumes to also delete its data).
+  ${CYAN}exec${RESET} …     Run the in-container app CLI, e.g. '$(basename "$0") exec status'.
+  ${CYAN}help${RESET}       Show this help.
+
+Container name: ${BOLD}${CONTAINER}${RESET} (override with SYSIBLE_CONTAINER_NAME).
+Image for 'update' on plain-docker runs: ${BOLD}${IMAGE}${RESET} (override with SYSIBLE_IMAGE).
+EOF
+}
+
+main() {
+  local cmd="${1:-help}"; [[ $# -gt 0 ]] && shift || true
+  case "$cmd" in
+    install)   cmd_install ;;
+    uninstall) cmd_uninstall ;;
+    start)     cmd_start ;;
+    stop)      cmd_stop ;;
+    restart)   cmd_restart ;;
+    update)    cmd_update ;;
+    status)    cmd_status ;;
+    logs)      cmd_logs "$@" ;;
+    destroy)   cmd_destroy "$@" ;;
+    exec)      cmd_exec "$@" ;;
+    help|-h|--help) usage ;;
+    *) _err "unknown command: $cmd"; echo >&2; usage >&2; exit 1 ;;
+  esac
+}
+
+main "$@"

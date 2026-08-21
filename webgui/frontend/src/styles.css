@@ -131,10 +131,10 @@ body {
    the background always carries brand colour. Fixed cover, no tiling seams. */
 body::before {
   content: ""; position: fixed; inset: 0; z-index: -2; pointer-events: none;
-  background-color: rgba(70, 177, 100, 0.55);
+  background-color: rgba(99, 205, 122, 0.78);   /* brighter brand green for the contour lines */
   -webkit-mask: url("/brand-topo-overlay.png") center / cover no-repeat;
           mask: url("/brand-topo-overlay.png") center / cover no-repeat;
-  opacity: 0.5;
+  opacity: 0.62;
 }
 body::after {
   content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;

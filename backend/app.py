@@ -3084,6 +3084,66 @@ def admin_login(body: AdminLoginRequest, request: Request):
     }
 
 
+@app.post("/auth/api-key")
+def issue_api_key_for_superuser(body: AdminLoginRequest, request: Request):
+    """Exchange a superuser's console credentials for the backend API key.
+
+    This is the ONE backend route that hands out the admin API key without
+    already holding it — it's how a sibling tool (e.g. the Sysible Linux
+    Engineering Platform) connects without an operator having to fish the key
+    out of /opt/sysible/api_key.txt by hand. It is therefore gated exactly as
+    hard as a superuser console login and no softer:
+
+      * same per-username lockout as /admin/login (brute-force bound),
+      * constant-time decoy verify for unknown usernames (no enumeration oracle),
+      * the key is returned ONLY to an account whose role is 'superuser'. A
+        correctly-authenticated sysadmin/auditor is refused (403) — extracting
+        the master key is a superuser-only act.
+
+    Deliberately NOT behind require_api_key: needing the key to obtain the key
+    is the exact friction this removes. The throttle + role gate + audit trail
+    are the compensating controls."""
+    username = body.username.strip()
+    throttle_key = username or "(empty)"
+
+    locked = _admin_login_locked_for(throttle_key)
+    if locked:
+        log_admin_audit("api_key_issue_throttled", username, f"locked {locked}s")
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed attempts. Try again in about {max(1, locked // 60)} minute(s).",
+        )
+
+    admin = get_administrator(username)
+    if admin is not None:
+        valid = portal_auth.verify_password(
+            body.password, admin["password_salt"], admin["password_hash"])
+    else:
+        portal_auth.verify_password(body.password, _DECOY_SALT, _DECOY_HASH)
+        valid = False
+
+    if not valid:
+        _admin_login_record_failure(throttle_key)
+        log_admin_audit("api_key_issue_failed", username, "Invalid username or password")
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    role = admin.get("role") or "superuser"
+    if role != "superuser":
+        # Password was correct, so this is not a brute-force signal — don't count
+        # it toward the lockout; just refuse on insufficient role.
+        log_admin_audit("api_key_issue_denied", username, f"role={role}")
+        raise HTTPException(
+            status_code=403,
+            detail="Connecting an external tool requires a superuser account.",
+        )
+
+    _admin_login_clear(throttle_key)
+    log_admin_audit("api_key_issued", username, "backend API key issued to a connecting tool")
+
+    from backend.auth import get_or_create_api_key
+    return {"status": "ok", "api_key": get_or_create_api_key()}
+
+
 @app.get("/admin/whoami", dependencies=[Depends(require_api_key)])
 def admin_whoami(request: Request):
     """Resolve the caller's admin token to its LIVE identity/role, or 401 if the

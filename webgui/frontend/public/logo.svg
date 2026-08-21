@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Sysible Linux Engineering Platform (SLEP) — canonical mark.
+  Sysible Controller — canonical mark.
 
-  Sibling to the Sysible Controller mark: the same family tile — a dark
-  rounded-square with a thin brand-green ring (#6ddb73). Controller's glyph is a
-  hub wired to six nodes (orchestration); SLEP's glyph is the platform's job —
-  AUTHOR and RUN automation: brand-blue code brackets (< >) framing a brand-green
-  run/play triangle. Clean, font-free inline SVG.
+  Sibling to the Sysible Linux Engineering Platform (SLEP) mark: the same family
+  tile — a dark rounded-square with a thin brand-green ring (#6ddb73). SLEP's
+  glyph is code brackets framing a run/play triangle (AUTHOR + RUN); the
+  Controller's glyph is a central hub wired to six nodes — the Controller
+  orchestrating a fleet of agents. Clean, font-free inline SVG.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <defs>
@@ -20,11 +20,24 @@
   <!-- Thin brand-green ring (family signature) -->
   <rect x="3.5" y="3.5" width="121" height="121" rx="26.5" ry="26.5"
         fill="none" stroke="#6ddb73" stroke-width="2"/>
-  <!-- Code brackets — the "engineering / author" half, in brand blue. -->
-  <g fill="none" stroke="#7aa2ff" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="50,44 33,64 50,84"/>
-    <polyline points="78,44 95,64 78,84"/>
+  <!-- Spokes from the hub out to each node -->
+  <g stroke="#4c9e5a" stroke-width="3" stroke-linecap="round">
+    <line x1="64" y1="64" x2="64" y2="28"/>
+    <line x1="64" y1="64" x2="95.2" y2="46"/>
+    <line x1="64" y1="64" x2="95.2" y2="82"/>
+    <line x1="64" y1="64" x2="64" y2="100"/>
+    <line x1="64" y1="64" x2="32.8" y2="82"/>
+    <line x1="64" y1="64" x2="32.8" y2="46"/>
   </g>
-  <!-- Run/play triangle — the "execute" half, in brand green. -->
-  <path d="M56 50 L56 78 L75 64 Z" fill="#6ddb73"/>
+  <!-- Satellite nodes (brand blue) -->
+  <g fill="#7aa2ff">
+    <circle cx="64" cy="28" r="7"/>
+    <circle cx="95.2" cy="46" r="7"/>
+    <circle cx="95.2" cy="82" r="7"/>
+    <circle cx="64" cy="100" r="7"/>
+    <circle cx="32.8" cy="82" r="7"/>
+    <circle cx="32.8" cy="46" r="7"/>
+  </g>
+  <!-- Central hub (brand green) -->
+  <circle cx="64" cy="64" r="12.5" fill="#6ddb73"/>
 </svg>

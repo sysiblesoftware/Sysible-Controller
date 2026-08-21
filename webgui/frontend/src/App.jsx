@@ -72,10 +72,10 @@ const NAV = [
   // Oversee
   { key: "live", label: "Activity & Logs", icon: "activity", su: true, aud: true },
   { key: "settings", label: "Settings", icon: "cog", su: true },
-  // Reference — download the bundled, self-contained offline manual. `download`
-  // makes this a file link (not a view switch); available to every role.
+  // Reference — open the bundled, self-contained manual as a webpage in a new
+  // tab (not a view switch, not a download); available to every role.
   { key: "docs", label: "Documentation", icon: "book", su: false, aud: true,
-    download: "/api/docs/download" },
+    external: "/api/docs/view" },
 ];
 
 const ICONS = {
@@ -144,7 +144,7 @@ function SkinIcon() {
 // (null → ?view=dashboard), Sysible Connect (opens its own window), and the
 // docs download link.
 const VIEW_KEYS = new Set(
-  NAV.filter((n) => n.key && n.key !== "connect" && !n.download).map((n) => n.key),
+  NAV.filter((n) => n.key && n.key !== "connect" && !n.download && !n.external).map((n) => n.key),
 );
 const NAV_BY_KEY = Object.fromEntries(NAV.filter((n) => n.key).map((n) => [n.key, n]));
 // In-app DRILL-IN views: reached by clicking into something (e.g. a host from a
@@ -392,7 +392,14 @@ export default function App() {
 
         <div className="rail-nav">
           {nav.map((n) => (
-            n.download ? (
+            n.external ? (
+              <a key={n.key ?? "dash"} className="rail-item" href={n.external}
+                 target="_blank" rel="noopener"
+                 title="Open the documentation in a new tab">
+                <NavIcon name={n.icon} /><span>{n.label}</span>
+                <span className="rail-ext" aria-hidden="true">↗</span>
+              </a>
+            ) : n.download ? (
               <a key={n.key ?? "dash"} className="rail-item" href={n.download} download
                  title="Download the offline documentation">
                 <NavIcon name={n.icon} /><span>{n.label}</span>

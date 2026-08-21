@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { api } from "../api.js";
+import Logo from "../Logo.jsx";
 
 // First-run create-administrator screen. Shown (before the Login form) only when
 // the controller reports setup_required — i.e. a fresh database with no admin yet.
@@ -9,20 +10,8 @@ import { api } from "../api.js";
 function Brand() {
   return (
     <div className="brand brand-login">
-      <img
-        className="brand-logo"
-        src="/sysible_logo.png"
-        alt="Sysible Controller"
-        onError={(e) => {
-          e.currentTarget.style.display = "none";
-          const fb = e.currentTarget.nextElementSibling;
-          if (fb) fb.style.display = "flex";
-        }}
-      />
-      <div className="brand-fallback" style={{ display: "none" }}>
-        <div className="brand-mark">S</div>
-        <h1>Sysible Controller</h1>
-      </div>
+      <Logo size={40} />
+      <h1>Sysible Controller</h1>
     </div>
   );
 }

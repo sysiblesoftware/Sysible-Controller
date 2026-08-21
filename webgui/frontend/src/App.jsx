@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import { api, setUnauthorizedHandler } from "./api.js";
+import Logo from "./Logo.jsx";
 import Login from "./views/Login.jsx";
 import Setup from "./views/Setup.jsx";
 import ForcePasswordChange from "./views/ForcePasswordChange.jsx";
@@ -352,8 +353,7 @@ export default function App() {
         <main className="main">
           <div className="main-top">
             <div className="row" style={{ alignItems: "center", gap: 10, minWidth: 0 }}>
-              <img className="rail-mark" src="/sysible_logo.png" alt="" style={{ width: 22, height: 22 }}
-                   onError={(e) => { e.target.style.display = "none"; }} />
+              <Logo size={22} />
               <h2 style={{ margin: 0 }}>Sysible Connect</h2>
             </div>
             <div className="row" style={{ alignItems: "center", gap: 12 }}>
@@ -386,9 +386,7 @@ export default function App() {
       <Toasts items={toasts} onDismiss={dismissToast} />
       <nav className="rail">
         <div className="rail-brand" onClick={() => go(null)}>
-          <img className="rail-mark" src="/sysible_logo.png" alt=""
-               onError={(e) => { e.target.style.display = "none"; e.target.nextSibling.style.display = "flex"; }} />
-          <span className="rail-mark-fallback" style={{ display: "none" }}>S</span>
+          <Logo size={30} />
           <span className="rail-name">Sysible Controller</span>
         </div>
 

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Sysible Linux Engineering Platform (SLEP) — canonical mark.
+
+  Sibling to the Sysible Controller mark: the same family tile — a dark
+  rounded-square with a thin brand-green ring (#6ddb73). Controller's glyph is a
+  hub wired to six nodes (orchestration); SLEP's glyph is the platform's job —
+  AUTHOR and RUN automation: brand-blue code brackets (< >) framing a brand-green
+  run/play triangle. Clean, font-free inline SVG.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#161d29"/>
+      <stop offset="1" stop-color="#0a0d14"/>
+    </linearGradient>
+  </defs>
+  <!-- Dark rounded-square tile (family signature) -->
+  <rect x="2" y="2" width="124" height="124" rx="28" ry="28" fill="url(#tile)"/>
+  <!-- Thin brand-green ring (family signature) -->
+  <rect x="3.5" y="3.5" width="121" height="121" rx="26.5" ry="26.5"
+        fill="none" stroke="#6ddb73" stroke-width="2"/>
+  <!-- Code brackets — the "engineering / author" half, in brand blue. -->
+  <g fill="none" stroke="#7aa2ff" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="50,44 33,64 50,84"/>
+    <polyline points="78,44 95,64 78,84"/>
+  </g>
+  <!-- Run/play triangle — the "execute" half, in brand green. -->
+  <path d="M56 50 L56 78 L75 64 Z" fill="#6ddb73"/>
+</svg>

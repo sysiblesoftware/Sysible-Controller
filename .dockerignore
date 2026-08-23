@@ -28,8 +28,8 @@ backend/sysible.db
 # Docs / editor cruft not needed at runtime
 *.md
 !README.md
-Sysible_Controller_Documentation.html
-Sysible_Controller_Quickstart.html
+# The self-contained HTML manual + quickstart ARE served by the console
+# (/api/docs/*), so they must ship in the image — do not ignore them.
 .vscode
 .idea
 .DS_Store

@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import { api, setUnauthorizedHandler } from "./api.js";
+import Logo from "./Logo.jsx";
 import Login from "./views/Login.jsx";
 import Setup from "./views/Setup.jsx";
 import ForcePasswordChange from "./views/ForcePasswordChange.jsx";
@@ -71,10 +72,10 @@ const NAV = [
   // Oversee
   { key: "live", label: "Activity & Logs", icon: "activity", su: true, aud: true },
   { key: "settings", label: "Settings", icon: "cog", su: true },
-  // Reference — download the bundled, self-contained offline manual. `download`
-  // makes this a file link (not a view switch); available to every role.
+  // Reference — open the bundled, self-contained manual as a webpage in a new
+  // tab (not a view switch, not a download); available to every role.
   { key: "docs", label: "Documentation", icon: "book", su: false, aud: true,
-    download: "/api/docs/download" },
+    external: "/api/docs/view" },
 ];
 
 const ICONS = {
@@ -143,7 +144,7 @@ function SkinIcon() {
 // (null → ?view=dashboard), Sysible Connect (opens its own window), and the
 // docs download link.
 const VIEW_KEYS = new Set(
-  NAV.filter((n) => n.key && n.key !== "connect" && !n.download).map((n) => n.key),
+  NAV.filter((n) => n.key && n.key !== "connect" && !n.download && !n.external).map((n) => n.key),
 );
 const NAV_BY_KEY = Object.fromEntries(NAV.filter((n) => n.key).map((n) => [n.key, n]));
 // In-app DRILL-IN views: reached by clicking into something (e.g. a host from a
@@ -352,8 +353,7 @@ export default function App() {
         <main className="main">
           <div className="main-top">
             <div className="row" style={{ alignItems: "center", gap: 10, minWidth: 0 }}>
-              <img className="rail-mark" src="/sysible_logo.png" alt="" style={{ width: 22, height: 22 }}
-                   onError={(e) => { e.target.style.display = "none"; }} />
+              <Logo size={22} />
               <h2 style={{ margin: 0 }}>Sysible Connect</h2>
             </div>
             <div className="row" style={{ alignItems: "center", gap: 12 }}>
@@ -386,15 +386,20 @@ export default function App() {
       <Toasts items={toasts} onDismiss={dismissToast} />
       <nav className="rail">
         <div className="rail-brand" onClick={() => go(null)}>
-          <img className="rail-mark" src="/sysible_logo.png" alt=""
-               onError={(e) => { e.target.style.display = "none"; e.target.nextSibling.style.display = "flex"; }} />
-          <span className="rail-mark-fallback" style={{ display: "none" }}>S</span>
+          <Logo size={30} />
           <span className="rail-name">Sysible Controller</span>
         </div>
 
         <div className="rail-nav">
           {nav.map((n) => (
-            n.download ? (
+            n.external ? (
+              <a key={n.key ?? "dash"} className="rail-item" href={n.external}
+                 target="_blank" rel="noopener"
+                 title="Open the documentation in a new tab">
+                <NavIcon name={n.icon} /><span>{n.label}</span>
+                <span className="rail-ext" aria-hidden="true">↗</span>
+              </a>
+            ) : n.download ? (
               <a key={n.key ?? "dash"} className="rail-item" href={n.download} download
                  title="Download the offline documentation">
                 <NavIcon name={n.icon} /><span>{n.label}</span>

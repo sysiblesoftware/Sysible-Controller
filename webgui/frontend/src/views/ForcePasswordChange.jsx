@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { api } from "../api.js";
+import Logo from "../Logo.jsx";
 
 // Shown when the account is flagged must_change_password (a fresh admin, or one
 // reset by a superuser / `sysible_controller reset-admin`). It BLOCKS the app —
@@ -33,7 +34,7 @@ export default function ForcePasswordChange({ username, onDone, onLogout }) {
     <div className="login-wrap">
       <form className="login-card" onSubmit={submit}>
         <div className="brand">
-          <div className="brand-mark">S</div>
+          <Logo size={40} />
           <h1>Set a new password</h1>
         </div>
         <p className="muted" style={{ marginTop: 4 }}>

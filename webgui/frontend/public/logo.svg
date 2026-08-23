@@ -1,43 +1,31 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  Sysible Controller — canonical mark.
-
-  Sibling to the Sysible Linux Engineering Platform (SLEP) mark: the same family
-  tile — a dark rounded-square with a thin brand-green ring (#6ddb73). SLEP's
-  glyph is code brackets framing a run/play triangle (AUTHOR + RUN); the
-  Controller's glyph is a central hub wired to six nodes — the Controller
-  orchestrating a fleet of agents. Clean, font-free inline SVG.
--->
+<!-- Sysible Controller mark — the canonical spoked topology from the website:
+     a dark rounded tile + brand-green ring, a central GREEN hub wired out to six
+     satellite nodes (alternating white / brand-blue) by thin grey connectors.
+     No hexagon. Mirrors src/Logo.jsx. -->
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <defs>
-    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+    <linearGradient id="tg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#161d29"/>
-      <stop offset="1" stop-color="#0a0d14"/>
+      <stop offset="1" stop-color="#0a0d13"/>
     </linearGradient>
   </defs>
-  <!-- Dark rounded-square tile (family signature) -->
-  <rect x="2" y="2" width="124" height="124" rx="28" ry="28" fill="url(#tile)"/>
-  <!-- Thin brand-green ring (family signature) -->
-  <rect x="3.5" y="3.5" width="121" height="121" rx="26.5" ry="26.5"
-        fill="none" stroke="#6ddb73" stroke-width="2"/>
-  <!-- Spokes from the hub out to each node -->
-  <g stroke="#4c9e5a" stroke-width="3" stroke-linecap="round">
-    <line x1="64" y1="64" x2="64" y2="28"/>
-    <line x1="64" y1="64" x2="95.2" y2="46"/>
-    <line x1="64" y1="64" x2="95.2" y2="82"/>
-    <line x1="64" y1="64" x2="64" y2="100"/>
-    <line x1="64" y1="64" x2="32.8" y2="82"/>
-    <line x1="64" y1="64" x2="32.8" y2="46"/>
+  <rect x="6" y="6" width="116" height="116" rx="28" ry="28" fill="url(#tg)"/>
+  <rect x="8.5" y="8.5" width="111" height="111" rx="25.5" ry="25.5"
+        fill="none" stroke="#6ddb73" stroke-width="4"/>
+  <g stroke="#8aa0c8" stroke-width="2.7" stroke-linecap="round" opacity="0.85">
+    <line x1="64" y1="64" x2="100" y2="64"/>
+    <line x1="64" y1="64" x2="82" y2="95.18"/>
+    <line x1="64" y1="64" x2="46" y2="95.18"/>
+    <line x1="64" y1="64" x2="28" y2="64"/>
+    <line x1="64" y1="64" x2="46" y2="32.82"/>
+    <line x1="64" y1="64" x2="82" y2="32.82"/>
   </g>
-  <!-- Satellite nodes (brand blue) -->
-  <g fill="#7aa2ff">
-    <circle cx="64" cy="28" r="7"/>
-    <circle cx="95.2" cy="46" r="7"/>
-    <circle cx="95.2" cy="82" r="7"/>
-    <circle cx="64" cy="100" r="7"/>
-    <circle cx="32.8" cy="82" r="7"/>
-    <circle cx="32.8" cy="46" r="7"/>
-  </g>
-  <!-- Central hub (brand green) -->
-  <circle cx="64" cy="64" r="12.5" fill="#6ddb73"/>
+  <circle cx="100" cy="64" r="6.6" fill="#eceff3"/>
+  <circle cx="82" cy="95.18" r="6.6" fill="#7aa2ff"/>
+  <circle cx="46" cy="95.18" r="6.6" fill="#eceff3"/>
+  <circle cx="28" cy="64" r="6.6" fill="#7aa2ff"/>
+  <circle cx="46" cy="32.82" r="6.6" fill="#eceff3"/>
+  <circle cx="82" cy="32.82" r="6.6" fill="#7aa2ff"/>
+  <circle cx="64" cy="64" r="11" fill="#6ddb73"/>
 </svg>

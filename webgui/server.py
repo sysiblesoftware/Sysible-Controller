@@ -39,7 +39,6 @@ Serve the built SPA (frontend/dist) from the same service, or put both
 behind a TLS-terminating reverse proxy. See README.md.
 """
 import asyncio
-import json
 import os
 import re
 import secrets
@@ -914,6 +913,16 @@ except ValueError:
 _HEALTH_LOCK = threading.Lock()
 
 
+def _tokenless_entry(e):
+    """Copy of a host entry with the password-sudo flag cleared (and on its
+    nested agent_entry), so a read-only, tokenless probe never fail-fasts on a
+    password-sudo host (the controller has no operator become-password here)."""
+    pe = {**e, "requires_sudo_password": False}
+    if e.get("agent_entry"):
+        pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+    return pe
+
+
 def _health_verdict(disk, failed, sysd, oom):
     """OK/WARNING/CRITICAL from the raw signals — the SAME thresholds the on-host
     cmd_metrics_snapshot() shell applies, so a heartbeat-derived reading grades
@@ -961,7 +970,6 @@ def fleet_health(refresh: int = 0, user: str = Depends(require_login)):
     without probing (so the sweep can't hang on them); read-only, dispatched
     without an admin token so it isn't attributed/logged as an operator action.
     Cached for a few seconds (shared across concurrent loads) unless ?refresh=1."""
-    import concurrent.futures
     import time as _t
 
     _HEALTH_CACHE["access"] = _t.time()   # mark active use (drives background priming)
@@ -1064,9 +1072,7 @@ def _fleet_health_sweep(force_live=False):
         # Clear the password-sudo flag on a copy of the entry so run_on_entry
         # doesn't fail-fast on password-sudo hosts (the controller, where this
         # runs, has no operator become-password to supply).
-        pe = {**e, "requires_sudo_password": False}
-        if e.get("agent_entry"):
-            pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+        pe = _tokenless_entry(e)
         # Short poll cap: a health probe must never hold a worker for the full
         # 60s action timeout. A host that's heartbeating but not answering tasks
         # within ~8s is reported as an unreachable/timed-out probe, so the sweep
@@ -1277,9 +1283,7 @@ def _probe_posture(e, cmd, last_seen, now):
     if e.get("integrity_quarantined"):
         return {**base, "online": True, "ok": False, "error": "integrity-quarantined",
                 "posture": None, "flags": {}, "limited": False}
-    pe = {**e, "requires_sudo_password": False}
-    if e.get("agent_entry"):
-        pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+    pe = _tokenless_entry(e)
     r = _dispatch_one(pe, cmd, "command", None, None, None,  # no token: read-only, unlogged
                       poll_timeout=float(os.getenv("SYSIBLE_POSTURE_PROBE_TIMEOUT", "30")),
                       exec_timeout=float(os.getenv("SYSIBLE_RECON_EXEC_TIMEOUT", "60")))
@@ -1489,9 +1493,7 @@ def _probe_updates(e, cmd, last_seen, now, poll_timeout=60):
     if e.get("integrity_quarantined"):
         return {**base, "online": True, "error": "integrity-quarantined", "mgr": None,
                 "total": None, "security": None, "reboot": None}
-    pe = {**e, "requires_sudo_password": False}
-    if e.get("agent_entry"):
-        pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+    pe = _tokenless_entry(e)
     r = _dispatch_one(pe, cmd, "command", None, None, None, needs_sudo=False,
                       poll_timeout=poll_timeout)
     u = _parse_updates((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
@@ -1947,9 +1949,7 @@ def _alerts_gather_hosts():
         if aid is not None and not online:
             base["online"] = False
             return base
-        pe = {**e, "requires_sudo_password": False}
-        if e.get("agent_entry"):
-            pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+        pe = _tokenless_entry(e)
         r = _dispatch_one(pe, cmd, "command", None, None, None, needs_sudo=False)
         m = _parse_sysmetrics((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
         if m:
@@ -2474,13 +2474,10 @@ def set_env_sudo_default(body: EnvSudoDefaultRequest, request: Request,
 
 # ----------------------------------------------------------------------
 # Superuser-token helper: set the admin token (captured at login) on the
-# shared client.api for the duration of one controller call. Serialized so
-# concurrent requests can't clobber the process-global token.
+# shared client.api for the duration of one controller call. The token is
+# applied thread-locally (see _with_token), so concurrent requests don't
+# clobber each other.
 # ----------------------------------------------------------------------
-import threading as _threading  # noqa: E402
-_ADMIN_TOKEN_LOCK = _threading.Lock()
-
-
 def _as_admin(request: Request, fn):
     return _with_token(_session_token(request), fn)
 

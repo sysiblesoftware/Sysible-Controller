@@ -542,7 +542,7 @@ export default function Dashboard({ role, edition, onOpen }) {
     const online = inv.filter((a) => a.last_seen && (now - a.last_seen) <= STALE).length;
     const offline = total - online;
     const envs = new Set(inv.map((a) => a.environment || "Unassigned")).size;
-    return { total, online, offline, envs, judgeable: total };
+    return { total, online, offline, envs };
   }, [inventory]);
 
   // Emergency state for the dashboard: either the controller isn't answering the
@@ -550,7 +550,7 @@ export default function Dashboard({ role, edition, onOpen }) {
   // raised AFTER a sweep has been attempted, so the first paint doesn't flash red
   // while health is still gathering.
   const healthDown = !!fleetErr;
-  const noCheckins = m.judgeable > 0 && m.online === 0;
+  const noCheckins = m.total > 0 && m.online === 0;
   const emergency = healthAttempted && (healthDown || noCheckins);
 
   // Host lists behind the top-strip counts, so each count can drop down the

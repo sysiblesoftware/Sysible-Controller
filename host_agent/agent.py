@@ -707,48 +707,11 @@ _DISK_SKIP_PREFIXES = ("/proc", "/sys", "/run", "/dev", "/snap", "/media",
                        "/run/media", "/cdrom")
 
 
-def _worst_disk_pct():
-    """Highest used% across real, writable local filesystems (df-style:
-    used / (used + available)). Returns an int 0-100, or None if nothing
-    scoreable was found."""
-    worst = None
-    try:
-        with open("/proc/mounts") as f:
-            mounts = f.readlines()
-    except OSError:
-        return None
-    seen = set()
-    for line in mounts:
-        parts = line.split()
-        if len(parts) < 3:
-            continue
-        mnt, fstype = parts[1], parts[2]
-        if fstype in _DISK_SKIP_FSTYPES:
-            continue
-        if any(mnt == p or mnt.startswith(p + "/") for p in _DISK_SKIP_PREFIXES):
-            continue
-        if mnt in seen:
-            continue
-        seen.add(mnt)
-        try:
-            st = os.statvfs(mnt)
-        except OSError:
-            continue
-        used = st.f_blocks - st.f_bfree
-        avail = st.f_bavail
-        denom = used + avail
-        if denom <= 0:
-            continue
-        pct = int(round(used * 100.0 / denom))
-        if worst is None or pct > worst:
-            worst = pct
-    return worst
-
-
 def _disk_detail():
     """(worst_used_pct, [{mount, pct, used_gb, total_gb}, ...]) across real,
-    writable local filesystems. Mirrors _worst_disk_pct's filtering but also
-    returns the per-mount breakdown for the snapshot."""
+    writable local filesystems (df-style: used / (used + available)); worst is
+    an int 0-100 or None. Also returns the per-mount breakdown for the
+    snapshot."""
     worst = None
     mounts = []
     try:
@@ -895,7 +858,7 @@ def _read_diskio():
     return (rb, wb) if found else (None, None)
 
 
-def _read_top_procs(prev_pids, total_delta, ncores):
+def _read_top_procs(prev_pids, total_delta):
     """Scan /proc once: return (top_cpu, top_mem, proc_count, threads_total,
     new_pids). top_* are lists of {pid, name, cpu, mem_mb, mem_pct}. CPU% is the
     process's jiffies delta over the aggregate CPU jiffies delta (0-100 of the
@@ -1172,7 +1135,7 @@ def _collect_metrics():
 
     # Top processes + counts (single /proc scan; CPU% needs prev per-pid jiffies).
     top_cpu, top_mem, proc_count, threads, new_pids = _read_top_procs(
-        prev.get("pids") or {}, total_delta, cores)
+        prev.get("pids") or {}, total_delta)
 
     # Stash this reading for next time's deltas.
     _prev_sample = {
@@ -1233,12 +1196,6 @@ def _collect_metrics():
         "threads": threads,
     }
     return {"metrics": metrics, "snapshot": snapshot}
-
-
-def _sample_metrics():
-    """Back-compat shim: the scalar metrics dict only (older call sites)."""
-    c = _collect_metrics()
-    return c["metrics"] if c else None
 
 
 # Latest performance sample, produced by the dedicated metrics thread

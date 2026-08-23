@@ -1987,6 +1987,15 @@ def remove_agent(host_id: str, purge_token: int = 0):
     }
 
 
+def _actor_from_token(x_admin_token):
+    """Resolve an admin-token header to a username for audit attribution, or
+    None if absent/unknown (callers fall back to "superuser")."""
+    if not x_admin_token:
+        return None
+    admin = resolve_admin_token(x_admin_token)
+    return admin["username"] if admin else None
+
+
 @app.post("/agents/{host_id}/revoke", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def revoke_agent_route(host_id: str,
                        x_admin_token: str = Header(default=None, alias="X-Sysible-Admin-Token")):
@@ -2002,11 +2011,7 @@ def revoke_agent_route(host_id: str,
     from backend import agent_integrity
     agent_integrity.rebaseline(host_id)
 
-    actor = None
-    if x_admin_token:
-        from backend.db import resolve_admin_token
-        admin = resolve_admin_token(x_admin_token)
-        actor = admin["username"] if admin else None
+    actor = _actor_from_token(x_admin_token)
     log_admin_audit("agent_secret_revoked", actor or "superuser", f"host {host_id}")
 
     return {"status": "revoked", "host_id": host_id}
@@ -2026,11 +2031,7 @@ def resume_agent_route(host_id: str,
     from backend import agent_integrity
     agent_integrity.rebaseline(host_id)
 
-    actor = None
-    if x_admin_token:
-        from backend.db import resolve_admin_token
-        admin = resolve_admin_token(x_admin_token)
-        actor = admin["username"] if admin else None
+    actor = _actor_from_token(x_admin_token)
     log_admin_audit("agent_integrity_resumed", actor or "superuser", f"host {host_id}")
 
     return {"status": "resumed", "host_id": host_id}
@@ -2051,11 +2052,7 @@ def restore_agent_route(host_id: str,
     if not unrevoke_agent(host_id):
         raise HTTPException(status_code=404, detail="Unknown host_id")
 
-    actor = None
-    if x_admin_token:
-        from backend.db import resolve_admin_token
-        admin = resolve_admin_token(x_admin_token)
-        actor = admin["username"] if admin else None
+    actor = _actor_from_token(x_admin_token)
     log_admin_audit("agent_secret_restored", actor or "superuser", f"host {host_id}")
 
     return {"status": "restored", "host_id": host_id}

@@ -15,10 +15,7 @@ regeneration, ruleset/account changes).
 import shlex
 
 
-from client._pkgmgr import (
-    pkgmgr_detect_fragment as _pkgmgr_detect_fragment,
-    pkgmgr_dispatch as _pkgmgr_dispatch,
-)
+from client._pkgmgr import pkgmgr_dispatch as _pkgmgr_dispatch
 from client._validators import validate_int_range as _validate_int_range
 from client._validators import validate_nonempty_line as _validate_nonempty_line
 

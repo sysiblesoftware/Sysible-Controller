@@ -3068,7 +3068,8 @@ def admin_login(body: AdminLoginRequest, request: Request):
     # Issue an identity token bound to this admin. The client sends it back
     # on subsequent requests so dispatch can tag tasks with an unforgeable
     # initiating username (see queue_agent_task). 12-hour lifetime.
-    role = admin.get("role") or "superuser"
+    # An absent/blank role defaults to least-privilege (auditor), never superuser.
+    role = admin.get("role") or "auditor"
     token = secrets.token_hex(32)
     create_admin_token(token, username, role, time.time() + 12 * 60 * 60)
 
@@ -3127,7 +3128,10 @@ def issue_api_key_for_superuser(body: AdminLoginRequest, request: Request):
         log_admin_audit("api_key_issue_failed", username, "Invalid username or password")
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    role = admin.get("role") or "superuser"
+    # Default an absent/blank role to least-privilege (auditor), never superuser —
+    # a null role must not be handed the master API key. (Real admins carry an
+    # explicit role via the column default; this only guards a data anomaly.)
+    role = admin.get("role") or "auditor"
     if role != "superuser":
         # Password was correct, so this is not a brute-force signal — don't count
         # it toward the lockout; just refuse on insufficient role.

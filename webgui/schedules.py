@@ -70,18 +70,28 @@ def _parse_hhmm(at):
 
 
 def _schedule_tz(job=None):
-    """The IANA timezone a job's HH:MM is expressed in. Priority: the job's own stored
-    `tz` (captured from the operator's browser when the schedule was created), then a
-    controller-wide SYSIBLE_SCHEDULE_TZ / TZ env, then UTC. This is the fix for '02:00
+    """The IANA timezone a job's HH:MM is expressed in, or None. Priority: the job's own
+    stored `tz` (captured from the operator's browser when the schedule was created), then
+    a controller-wide SYSIBLE_SCHEDULE_TZ / TZ env, then UTC. This is the fix for '02:00
     fires at 22:00': previously the HH:MM was interpreted in the server process's tz
     (the container runs UTC) while the browser rendered the result in the viewer's tz —
-    a silent offset. Anchoring to an explicit zone makes 02:00 mean 02:00 there."""
-    from zoneinfo import ZoneInfo
-    name = (job or {}).get("tz") or os.getenv("SYSIBLE_SCHEDULE_TZ") or os.getenv("TZ") or "UTC"
+    a silent offset. Anchoring to an explicit zone makes 02:00 mean 02:00 there.
+
+    NEVER raises: if zoneinfo has no tz database available (a slim container with neither
+    the system zoneinfo files nor the `tzdata` package), returns None so compute_next_run
+    falls back to naive local time — the pre-fix behaviour — instead of crashing the
+    scheduler. (Install `tzdata` so named zones actually work.)"""
     try:
-        return ZoneInfo(name)
-    except Exception:  # noqa: BLE001 — bad/unknown zone -> safe default
-        return ZoneInfo("UTC")
+        from zoneinfo import ZoneInfo
+    except Exception:  # noqa: BLE001 — zoneinfo itself unavailable
+        return None
+    name = (job or {}).get("tz") or os.getenv("SYSIBLE_SCHEDULE_TZ") or os.getenv("TZ") or "UTC"
+    for candidate in (name, "UTC"):
+        try:
+            return ZoneInfo(candidate)
+        except Exception:  # noqa: BLE001 — unknown zone or no tz database
+            continue
+    return None
 
 
 def compute_next_run(job, from_ts=None):

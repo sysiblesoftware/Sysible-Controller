@@ -16,6 +16,8 @@ paramiko==5.0.0
 python-multipart==0.0.32   # multipart/form-data (file upload endpoints)
 itsdangerous==2.2.0        # Starlette SessionMiddleware (web console login cookie)
 cryptography==49.0.0
+tzdata==2026.3             # IANA tz database for zoneinfo — schedule times fire in the
+                           # operator's timezone even on a slim container with no system tzdb
 
 # Agent
 requests==2.34.2

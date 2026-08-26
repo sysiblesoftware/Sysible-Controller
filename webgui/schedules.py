@@ -69,9 +69,24 @@ def _parse_hhmm(at):
     return 2, 0
 
 
+def _schedule_tz(job=None):
+    """The IANA timezone a job's HH:MM is expressed in. Priority: the job's own stored
+    `tz` (captured from the operator's browser when the schedule was created), then a
+    controller-wide SYSIBLE_SCHEDULE_TZ / TZ env, then UTC. This is the fix for '02:00
+    fires at 22:00': previously the HH:MM was interpreted in the server process's tz
+    (the container runs UTC) while the browser rendered the result in the viewer's tz —
+    a silent offset. Anchoring to an explicit zone makes 02:00 mean 02:00 there."""
+    from zoneinfo import ZoneInfo
+    name = (job or {}).get("tz") or os.getenv("SYSIBLE_SCHEDULE_TZ") or os.getenv("TZ") or "UTC"
+    try:
+        return ZoneInfo(name)
+    except Exception:  # noqa: BLE001 — bad/unknown zone -> safe default
+        return ZoneInfo("UTC")
+
+
 def compute_next_run(job, from_ts=None):
     """Next epoch this job should fire, strictly after `from_ts` (now)."""
-    now = datetime.datetime.fromtimestamp(from_ts if from_ts is not None else _now())
+    now = datetime.datetime.fromtimestamp(from_ts if from_ts is not None else _now(), _schedule_tz(job))
     cadence = job.get("cadence", "daily")
     h, m = _parse_hhmm(job.get("at"))
     if cadence == "hourly":
@@ -116,7 +131,7 @@ def get_job(job_id):
     return next((j for j in _load() if j.get("id") == job_id), None)
 
 
-def create_job(name, action, targets, cadence, at, weekday, created_by, arg=""):
+def create_job(name, action, targets, cadence, at, weekday, created_by, arg="", tz=""):
     validate(action, cadence, arg)
     job = {
         "id": uuid.uuid4().hex[:12],
@@ -127,6 +142,9 @@ def create_job(name, action, targets, cadence, at, weekday, created_by, arg=""):
         "cadence": cadence,
         "at": at or "02:00",
         "weekday": int(weekday or 0),
+        # The IANA zone the operator's "at" time is in (from their browser), so 02:00
+        # means 02:00 for them regardless of the server's/container's timezone.
+        "tz": (tz or "").strip(),
         "enabled": True,
         "created_by": created_by,
         "created_ts": _now(),
@@ -147,7 +165,7 @@ def update_job(job_id, **fields):
         jobs = _load()
         for j in jobs:
             if j.get("id") == job_id:
-                for k in ("name", "action", "arg", "targets", "cadence", "at", "weekday", "enabled"):
+                for k in ("name", "action", "arg", "targets", "cadence", "at", "weekday", "enabled", "tz"):
                     if k in fields and fields[k] is not None:
                         j[k] = fields[k]
                 validate(j["action"], j["cadence"], j.get("arg", ""))

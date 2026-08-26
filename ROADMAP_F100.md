@@ -158,6 +158,17 @@ signal.
 
 ---
 
+## Future direction (post-F100, not scoped here)
+
+- **SLOP — unified management console.** When the product line consolidates into
+  the **Sysible Linux Operations Platform (SLOP)**, provide a single management
+  console for **accounts/identity across all associated applications** —
+  Controller *and* SLEP (and anything else in the suite). One place to manage
+  users, roles, orgs/tenancy, and access, shared by every app rather than each
+  app owning its own account store. *(Note only — no action required now.)*
+
+---
+
 ## Progress log
 
 _(newest first — each autonomous run appends one line: date · task · result · commit)_

@@ -596,6 +596,31 @@ def list_hosts():
     return load_hosts()
 
 
+@router.get("/agent-bundle")
+def download_agent_bundle():
+    """Mint a fresh one-time AGENT enrollment bundle (zip) for a trusted machine peer
+    to install on a host it owns — e.g. SLEP enrolling the VMs it just built. This is
+    the agent (pull) enrollment path: the target runs run_agent.sh from the zip and
+    self-enrolls over its own outbound channel, so nothing here reaches into the host
+    and no human superuser console token is needed (unlike POST /hosts, which is the
+    Sysible-Connect SSH-transport path). Authenticated by the machine API key — the
+    whole /remote router requires X-API-Key. Each call bakes a NEW single-use token,
+    so a caller fetches one bundle PER host it enrolls."""
+    from backend.db import get_controller_config
+    from backend.agent_bundle import mint_agent_bundle, bundle_addresses
+    config = get_controller_config()
+    addresses = bundle_addresses(config)
+    if not addresses:
+        raise HTTPException(
+            status_code=409,
+            detail="The controller has no configured address, so an agent bundle "
+                   "can't be built. Set one in Controller Configuration first.")
+    filename, zip_bytes = mint_agent_bundle(addresses, config["port"])
+    return Response(
+        content=zip_bytes, media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
 @router.delete("/hosts/{name}", dependencies=[Depends(require_superuser)])
 def delete_host(name: str):
     with _HOSTS_LOCK:

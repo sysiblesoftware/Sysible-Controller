@@ -2,12 +2,13 @@ import React, { useState } from "react";
 import { api } from "../api.js";
 import Logo from "../Logo.jsx";
 
-// The Sysible Controller mark (crisp inline SVG) paired with the wordmark.
+// The Sysible Controller mark (crisp inline SVG) paired with the wordmark —
+// compact lockup (logo beside a two-line name), matching the SLEP sign-in.
 function Brand() {
   return (
     <div className="brand brand-login">
       <Logo size={40} />
-      <h1>Sysible Controller</h1>
+      <div className="brand-name">Sysible<br />Controller</div>
     </div>
   );
 }

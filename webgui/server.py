@@ -39,7 +39,6 @@ Serve the built SPA (frontend/dist) from the same service, or put both
 behind a TLS-terminating reverse proxy. See README.md.
 """
 import asyncio
-import json
 import os
 import re
 import secrets
@@ -914,6 +913,16 @@ except ValueError:
 _HEALTH_LOCK = threading.Lock()
 
 
+def _tokenless_entry(e):
+    """Copy of a host entry with the password-sudo flag cleared (and on its
+    nested agent_entry), so a read-only, tokenless probe never fail-fasts on a
+    password-sudo host (the controller has no operator become-password here)."""
+    pe = {**e, "requires_sudo_password": False}
+    if e.get("agent_entry"):
+        pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+    return pe
+
+
 def _health_verdict(disk, failed, sysd, oom):
     """OK/WARNING/CRITICAL from the raw signals — the SAME thresholds the on-host
     cmd_metrics_snapshot() shell applies, so a heartbeat-derived reading grades
@@ -961,7 +970,6 @@ def fleet_health(refresh: int = 0, user: str = Depends(require_login)):
     without probing (so the sweep can't hang on them); read-only, dispatched
     without an admin token so it isn't attributed/logged as an operator action.
     Cached for a few seconds (shared across concurrent loads) unless ?refresh=1."""
-    import concurrent.futures
     import time as _t
 
     _HEALTH_CACHE["access"] = _t.time()   # mark active use (drives background priming)
@@ -1064,9 +1072,7 @@ def _fleet_health_sweep(force_live=False):
         # Clear the password-sudo flag on a copy of the entry so run_on_entry
         # doesn't fail-fast on password-sudo hosts (the controller, where this
         # runs, has no operator become-password to supply).
-        pe = {**e, "requires_sudo_password": False}
-        if e.get("agent_entry"):
-            pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+        pe = _tokenless_entry(e)
         # Short poll cap: a health probe must never hold a worker for the full
         # 60s action timeout. A host that's heartbeating but not answering tasks
         # within ~8s is reported as an unreachable/timed-out probe, so the sweep
@@ -1277,9 +1283,7 @@ def _probe_posture(e, cmd, last_seen, now):
     if e.get("integrity_quarantined"):
         return {**base, "online": True, "ok": False, "error": "integrity-quarantined",
                 "posture": None, "flags": {}, "limited": False}
-    pe = {**e, "requires_sudo_password": False}
-    if e.get("agent_entry"):
-        pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+    pe = _tokenless_entry(e)
     r = _dispatch_one(pe, cmd, "command", None, None, None,  # no token: read-only, unlogged
                       poll_timeout=float(os.getenv("SYSIBLE_POSTURE_PROBE_TIMEOUT", "30")),
                       exec_timeout=float(os.getenv("SYSIBLE_RECON_EXEC_TIMEOUT", "60")))
@@ -1489,9 +1493,7 @@ def _probe_updates(e, cmd, last_seen, now, poll_timeout=60):
     if e.get("integrity_quarantined"):
         return {**base, "online": True, "error": "integrity-quarantined", "mgr": None,
                 "total": None, "security": None, "reboot": None}
-    pe = {**e, "requires_sudo_password": False}
-    if e.get("agent_entry"):
-        pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+    pe = _tokenless_entry(e)
     r = _dispatch_one(pe, cmd, "command", None, None, None, needs_sudo=False,
                       poll_timeout=poll_timeout)
     u = _parse_updates((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
@@ -1562,9 +1564,36 @@ def _run_scheduled_job(job):
     except Exception as e:
         return "error", f"controller unreachable: {e}"
     tgt = set(job.get("targets") or [])
-    entries = [e for e in all_entries if (not tgt or e.get("id") in tgt)]
+    # Match a stored target TOLERANTLY. A host's `id` is not stable — list_merged_hosts
+    # mints it as the opaque agent host_id, the hostname/label, or the ssh name depending
+    # on whether the box currently has an agent, an SSH twin, or both. So a target saved
+    # at creation silently stopped matching whenever that pairing changed or the agent was
+    # re-enrolled (the 'no matching target hosts' error). Match against every identity a
+    # target could have been stored as: id, label, host_id, name, and the merged entry's
+    # underlying agent/ssh ids.
+    def _entry_ids(e):
+        ids = {e.get("id"), e.get("label"), e.get("host_id"), e.get("name")}
+        for sub in ("agent_entry", "ssh_entry"):
+            se = e.get(sub) or {}
+            ids |= {se.get("id"), se.get("host_id"), se.get("name"), se.get("label")}
+        ids.discard(None)
+        return ids
+    entries = [e for e in all_entries if (not tgt or (_entry_ids(e) & tgt))]
     if not entries:
-        return "error", "no matching target hosts"
+        return "error", ("no matching target hosts — the saved targets ("
+                         + ", ".join(sorted(tgt)) + ") don't match any current host. A host may "
+                         "have been re-enrolled or had its agent/SSH pairing change; edit the "
+                         "schedule and reselect its targets.")
+    # If SOME targets resolved but others didn't, run the ones that did and flag the rest
+    # rather than silently succeeding-to-nothing.
+    _unresolved = ""
+    if tgt:
+        matched = set()
+        for e in entries:
+            matched |= (_entry_ids(e) & tgt)
+        missing = tgt - matched
+        if missing:
+            _unresolved = " (unresolved targets skipped: " + ", ".join(sorted(missing)) + ")"
 
     # Scans just refresh the shared caches; no per-host action result. MERGE the probed
     # hosts into the existing cache by id under the cache lock — a targeted (or
@@ -1586,7 +1615,7 @@ def _run_scheduled_job(job):
             _UPDATES_CACHE["hosts"] = list(merged.values())
             if is_full:
                 _UPDATES_CACHE["ts"] = now
-        return "ok", f"rescanned {len(entries)} host(s)"
+        return "ok", f"rescanned {len(entries)} host(s)" + _unresolved
     if action == "posture_scan":
         last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
         now = _t.time(); cmd = _posture_command()
@@ -1598,7 +1627,7 @@ def _run_scheduled_job(job):
             _POSTURE_CACHE["hosts"] = list(merged.values())
             if is_full:
                 _POSTURE_CACHE["ts"] = now
-        return "ok", f"rescanned {len(entries)} host(s)"
+        return "ok", f"rescanned {len(entries)} host(s)" + _unresolved
 
     arg = (job.get("arg") or "").strip()
     if action == "security_updates":
@@ -1639,7 +1668,7 @@ def _run_scheduled_job(job):
         if r.get("ok") or r.get("code") == 0 or (action == "reboot" and not r.get("error")):
             ok += 1
     status = "ok" if ok == len(entries) else "error"
-    return status, f"{ok}/{len(entries)} host(s) succeeded"
+    return status, f"{ok}/{len(entries)} host(s) succeeded" + _unresolved
 
 
 _SCHED_STARTED = False
@@ -1690,6 +1719,7 @@ class ScheduleRequest(BaseModel):
     at: str = "02:00"
     weekday: int = 0
     enabled: bool = True
+    tz: str = ""   # IANA zone the `at` time is in (the operator's browser tz)
 
 
 # Free-form scheduled actions run an operator-supplied command / service name as
@@ -1719,7 +1749,7 @@ def schedules_create(body: ScheduleRequest, request: Request, user: str = Depend
     _guard_freeform_schedule(request, body.action)
     try:
         job = schedules.create_job(body.name, body.action, body.targets, body.cadence,
-                                   body.at, body.weekday, user, arg=body.arg)
+                                   body.at, body.weekday, user, arg=body.arg, tz=body.tz)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return job
@@ -1733,7 +1763,7 @@ def schedules_update(job_id: str, body: ScheduleRequest, request: Request, user:
     try:
         job = schedules.update_job(job_id, name=body.name, action=body.action, arg=body.arg,
                                    targets=body.targets, cadence=body.cadence, at=body.at,
-                                   weekday=body.weekday, enabled=body.enabled)
+                                   weekday=body.weekday, enabled=body.enabled, tz=body.tz)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not job:
@@ -1947,9 +1977,7 @@ def _alerts_gather_hosts():
         if aid is not None and not online:
             base["online"] = False
             return base
-        pe = {**e, "requires_sudo_password": False}
-        if e.get("agent_entry"):
-            pe["agent_entry"] = {**e["agent_entry"], "requires_sudo_password": False}
+        pe = _tokenless_entry(e)
         r = _dispatch_one(pe, cmd, "command", None, None, None, needs_sudo=False)
         m = _parse_sysmetrics((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
         if m:
@@ -2488,13 +2516,10 @@ def set_env_sudo_default(body: EnvSudoDefaultRequest, request: Request,
 
 # ----------------------------------------------------------------------
 # Superuser-token helper: set the admin token (captured at login) on the
-# shared client.api for the duration of one controller call. Serialized so
-# concurrent requests can't clobber the process-global token.
+# shared client.api for the duration of one controller call. The token is
+# applied thread-locally (see _with_token), so concurrent requests don't
+# clobber each other.
 # ----------------------------------------------------------------------
-import threading as _threading  # noqa: E402
-_ADMIN_TOKEN_LOCK = _threading.Lock()
-
-
 def _as_admin(request: Request, fn):
     return _with_token(_session_token(request), fn)
 

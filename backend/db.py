@@ -4,7 +4,6 @@ import hmac
 import ipaddress
 import json
 import os
-import socket
 import sqlite3
 import threading
 import time
@@ -3149,15 +3148,6 @@ def list_results(host_id, limit=50, kind=None, task_id=None):
     conn.close()
 
     return rows
-
-
-# =========================================================
-# DATABASE CONNECTION
-# =========================================================
-def get_db():
-    conn = _connect()
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 # =========================================================

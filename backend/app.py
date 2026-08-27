@@ -1987,6 +1987,15 @@ def remove_agent(host_id: str, purge_token: int = 0):
     }
 
 
+def _actor_from_token(x_admin_token):
+    """Resolve an admin-token header to a username for audit attribution, or
+    None if absent/unknown (callers fall back to "superuser")."""
+    if not x_admin_token:
+        return None
+    admin = resolve_admin_token(x_admin_token)
+    return admin["username"] if admin else None
+
+
 @app.post("/agents/{host_id}/revoke", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def revoke_agent_route(host_id: str,
                        x_admin_token: str = Header(default=None, alias="X-Sysible-Admin-Token")):
@@ -2002,11 +2011,7 @@ def revoke_agent_route(host_id: str,
     from backend import agent_integrity
     agent_integrity.rebaseline(host_id)
 
-    actor = None
-    if x_admin_token:
-        from backend.db import resolve_admin_token
-        admin = resolve_admin_token(x_admin_token)
-        actor = admin["username"] if admin else None
+    actor = _actor_from_token(x_admin_token)
     log_admin_audit("agent_secret_revoked", actor or "superuser", f"host {host_id}")
 
     return {"status": "revoked", "host_id": host_id}
@@ -2026,11 +2031,7 @@ def resume_agent_route(host_id: str,
     from backend import agent_integrity
     agent_integrity.rebaseline(host_id)
 
-    actor = None
-    if x_admin_token:
-        from backend.db import resolve_admin_token
-        admin = resolve_admin_token(x_admin_token)
-        actor = admin["username"] if admin else None
+    actor = _actor_from_token(x_admin_token)
     log_admin_audit("agent_integrity_resumed", actor or "superuser", f"host {host_id}")
 
     return {"status": "resumed", "host_id": host_id}
@@ -2051,11 +2052,7 @@ def restore_agent_route(host_id: str,
     if not unrevoke_agent(host_id):
         raise HTTPException(status_code=404, detail="Unknown host_id")
 
-    actor = None
-    if x_admin_token:
-        from backend.db import resolve_admin_token
-        admin = resolve_admin_token(x_admin_token)
-        actor = admin["username"] if admin else None
+    actor = _actor_from_token(x_admin_token)
     log_admin_audit("agent_secret_restored", actor or "superuser", f"host {host_id}")
 
     return {"status": "restored", "host_id": host_id}
@@ -3068,7 +3065,8 @@ def admin_login(body: AdminLoginRequest, request: Request):
     # Issue an identity token bound to this admin. The client sends it back
     # on subsequent requests so dispatch can tag tasks with an unforgeable
     # initiating username (see queue_agent_task). 12-hour lifetime.
-    role = admin.get("role") or "superuser"
+    # An absent/blank role defaults to least-privilege (auditor), never superuser.
+    role = admin.get("role") or "auditor"
     token = secrets.token_hex(32)
     create_admin_token(token, username, role, time.time() + 12 * 60 * 60)
 
@@ -3127,7 +3125,10 @@ def issue_api_key_for_superuser(body: AdminLoginRequest, request: Request):
         log_admin_audit("api_key_issue_failed", username, "Invalid username or password")
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    role = admin.get("role") or "superuser"
+    # Default an absent/blank role to least-privilege (auditor), never superuser —
+    # a null role must not be handed the master API key. (Real admins carry an
+    # explicit role via the column default; this only guards a data anomaly.)
+    role = admin.get("role") or "auditor"
     if role != "superuser":
         # Password was correct, so this is not a brute-force signal — don't count
         # it toward the lockout; just refuse on insufficient role.

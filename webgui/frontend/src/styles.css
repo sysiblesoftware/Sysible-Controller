@@ -292,8 +292,9 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
   justify-content: center; font-weight: 700; color: #fff; font-size: 18px; }
 .brand h1 { font-size: 22px; margin: 0; font-weight: 700; }
 .brand .sub { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
-/* Login card: the full logo lockup, centered, above the form. */
-.brand-login { flex-direction: column; align-items: center; gap: 0; }
+/* Login card: compact lockup — logo beside a two-line name (matches SLEP). */
+.brand-login { flex-direction: row; align-items: center; gap: 12px; }
+.brand-name { font-size: 17px; line-height: 1.15; font-weight: 700; }
 .brand-logo { display: block; width: 100%; max-width: 220px; height: auto;
   border-radius: 10px; margin: 2px auto 2px; }
 .brand-fallback { display: flex; align-items: center; gap: 12px; }

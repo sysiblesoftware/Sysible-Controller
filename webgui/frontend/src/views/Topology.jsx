@@ -165,9 +165,29 @@ export default function Topology({ onOpen }) {
 
   const center = useMemo(() => all.find((m) => m.isController) || null, [all]);
 
-  // Group the (non-controller) hosts by the active lens.
+  // VM → hypervisor parentage, computed GLOBALLY (across every environment /
+  // network group): a host whose label is in some hypervisor's reported vm_names
+  // is a guest of that hypervisor — no matter what environment tag either carries.
+  // This is what lets a VM hang off the machine it actually runs on even when the
+  // hypervisor sits in a different group (e.g. hypervisor tagged "Sysible Labs"
+  // but some of its guests tagged "Dev" — both still read as sourced from it).
+  const parentOf = useMemo(() => {
+    const byLabel = new Map(all.map((m) => [m.label, m]));
+    const p = new Map();   // vm label -> hypervisor label
+    for (const h of all) {
+      if (h.hypervisor && Array.isArray(h.vmNames)) {
+        for (const nm of h.vmNames) if (nm !== h.label && byLabel.has(nm)) p.set(nm, h.label);
+      }
+    }
+    return p;
+  }, [all]);
+
+  // Group the (non-controller) hosts by the active lens. Guests are excluded here
+  // — they don't form their own group entry; they hang under their hypervisor
+  // (below), so an environment made up entirely of one hypervisor's VMs no longer
+  // draws a separate hub whose members duplicate what's under the hypervisor.
   const groups = useMemo(() => {
-    const others = all.filter((m) => !m.isController);
+    const others = all.filter((m) => !m.isController && !parentOf.has(m.label));
     const g = {};
     for (const m of others) {
       let key, label;
@@ -183,7 +203,7 @@ export default function Topology({ onOpen }) {
     list.forEach((grp) => { grp.hosts.sort((a, b) => a.label.localeCompare(b.label)); grp.worst = worst(grp.hosts); });
     list.sort((a, b) => b.hosts.length - a.hosts.length || a.label.localeCompare(b.label));
     return list;
-  }, [all, lens]);
+  }, [all, lens, parentOf]);
 
   // Base radial layout: group hubs around the controller + host grids outward
   // from each hub. Edges are rebuilt in `laid` from the FINAL positions so
@@ -192,6 +212,11 @@ export default function Topology({ onOpen }) {
     const G = groups.length || 1;
     const Rhub = 200;
     const hubs = [], nodes = [];
+    // Phase 1 — place each group's hub and its TOP hosts (hypervisors + non-VM
+    // hosts; guests are excluded from groups). Record each top host's placement
+    // and its group's radial basis so we can fan guests outward from it later,
+    // even for guests that live in another group.
+    const placedTop = new Map();   // label -> {rad, tan, dist, colOff, hubKey}
     groups.forEach((grp, i) => {
       const th = -Math.PI / 2 + (2 * Math.PI) * (i + 0.5) / G;
       const rad = { x: Math.cos(th), y: Math.sin(th) }, tan = { x: -Math.sin(th), y: Math.cos(th) };
@@ -199,51 +224,43 @@ export default function Topology({ onOpen }) {
       const isCollapsed = !!collapsed[grp.key];
       hubs.push({ ...grp, x: hx, y: hy, th, collapsed: isCollapsed });
       if (isCollapsed) return;
-      // Nest guests under their host: a VM whose label appears in a same-group
-      // hypervisor's vmNames is pulled OUT of the flat grid and hung beneath that
-      // hypervisor as a subtree. Everything else (hypervisors + non-VM hosts) is
-      // a "top" host on the hub grid.
-      const here = new Map(grp.hosts.map((h) => [h.label, h]));
-      const parentOf = new Map();          // vm label -> hypervisor host
-      grp.hosts.forEach((h) => {
-        if (h.hypervisor && Array.isArray(h.vmNames)) {
-          h.vmNames.forEach((nm) => { if (nm !== h.label && here.has(nm)) parentOf.set(nm, h); });
-        }
-      });
-      const childrenOf = new Map();        // hypervisor label -> [vm hosts]
-      grp.hosts.forEach((h) => {
-        const par = parentOf.get(h.label);
-        if (par) { if (!childrenOf.has(par.label)) childrenOf.set(par.label, []); childrenOf.get(par.label).push(h); }
-      });
-      const topHosts = grp.hosts.filter((h) => !parentOf.has(h.label));
-
+      const topHosts = grp.hosts;   // guests already excluded from group formation
       const cols = Math.max(1, Math.min(6, Math.ceil(Math.sqrt(topHosts.length))));
       const sp = 42;
-      const placed = new Map();            // label -> {dist, colOff}
       topHosts.forEach((hostn, k) => {
         const r = Math.floor(k / cols), c = k % cols;
         const colOff = (c - (cols - 1) / 2) * sp;
         const dist = Rhub + 60 + r * sp;                       // extend outward, row by row
         nodes.push({ ...hostn, x: cx + rad.x * dist + tan.x * colOff, y: cy + rad.y * dist + tan.y * colOff, hub: grp.key });
-        placed.set(hostn.label, { dist, colOff });
+        placedTop.set(hostn.label, { rad, tan, dist, colOff, hubKey: grp.key });
       });
-      // Hang each hypervisor's guests as a fan BEYOND it (further from the
-      // controller), centred on the hypervisor's column.
-      childrenOf.forEach((vms, hypLabel) => {
-        const p = placed.get(hypLabel);
-        if (!p) return;
-        const vcols = Math.max(1, Math.min(5, Math.ceil(Math.sqrt(vms.length))));
-        const vsp = 40;
-        vms.forEach((vm, k) => {
-          const r = Math.floor(k / vcols), c = k % vcols;
-          const colOff = p.colOff + (c - (vcols - 1) / 2) * vsp;
-          const dist = p.dist + 74 + r * vsp;
-          nodes.push({ ...vm, x: cx + rad.x * dist + tan.x * colOff, y: cy + rad.y * dist + tan.y * colOff, hub: grp.key, vmParentLabel: hypLabel });
-        });
+    });
+    // Phase 2 — hang every hypervisor's guests as a fan BEYOND it, using that
+    // hypervisor's own placement/direction. Guests from ANY environment attach to
+    // the machine they run on; a guest whose hypervisor wasn't placed (unknown, or
+    // in a collapsed group) is hidden along with it.
+    const childrenByHyp = new Map();       // hypervisor label -> [guest hosts]
+    all.forEach((m) => {
+      if (m.isController || !parentOf.has(m.label)) return;
+      const hyp = parentOf.get(m.label);
+      if (!childrenByHyp.has(hyp)) childrenByHyp.set(hyp, []);
+      childrenByHyp.get(hyp).push(m);
+    });
+    childrenByHyp.forEach((vms, hypLabel) => {
+      const p = placedTop.get(hypLabel);
+      if (!p) return;
+      vms.sort((a, b) => a.label.localeCompare(b.label));
+      const vcols = Math.max(1, Math.min(5, Math.ceil(Math.sqrt(vms.length))));
+      const vsp = 40;
+      vms.forEach((vm, k) => {
+        const r = Math.floor(k / vcols), c = k % vcols;
+        const colOff = p.colOff + (c - (vcols - 1) / 2) * vsp;
+        const dist = p.dist + 74 + r * vsp;
+        nodes.push({ ...vm, x: cx + p.rad.x * dist + p.tan.x * colOff, y: cy + p.rad.y * dist + p.tan.y * colOff, hub: p.hubKey, vmParentLabel: hypLabel });
       });
     });
     return { hubs, nodes };
-  }, [groups, collapsed]);
+  }, [groups, collapsed, all, parentOf]);
 
   // Apply any manual position overrides, then rebuild edges from the final
   // positions so a dragged node's connectors follow it.

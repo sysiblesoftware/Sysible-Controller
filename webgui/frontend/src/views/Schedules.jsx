@@ -38,7 +38,10 @@ export default function Schedules() {
   }
 
   const hostName = useMemo(() => Object.fromEntries(hosts.map((h) => [h.id, h.label])), [hosts]);
-  const fmt = (ts) => ts ? new Date(ts * 1000).toLocaleString() : "—";
+  // Format in the SCHEDULE's timezone (the one its HH:MM was set in), not the viewer's
+  // browser tz — otherwise a job set for 02:00 in one place reads as a different hour
+  // for an operator elsewhere (the bug behind '02:00 shows as 22:00').
+  const fmt = (ts, tz) => ts ? new Date(ts * 1000).toLocaleString(undefined, tz ? { timeZone: tz } : undefined) : "—";
   const cadenceText = (j) => j.cadence === "hourly" ? `hourly at :${j.at.split(":")[1]}`
     : j.cadence === "weekly" ? `${WEEKDAYS[j.weekday] || "Mon"} ${j.at}` : `daily ${j.at}`;
   const targetsText = (j) => !j.targets || j.targets.length === 0 ? "all hosts"
@@ -80,12 +83,12 @@ export default function Schedules() {
                   <td style={{ padding: "7px 10px" }}>{cadenceText(j)}</td>
                   <td style={{ padding: "7px 10px", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                       title={targetsText(j)}>{targetsText(j)}</td>
-                  <td style={{ padding: "7px 10px" }} className="faint">{j.enabled ? fmt(j.next_run) : "paused"}</td>
+                  <td style={{ padding: "7px 10px" }} className="faint">{j.enabled ? fmt(j.next_run, j.tz) : "paused"}</td>
                   <td style={{ padding: "7px 10px", cursor: canExpand ? "pointer" : "default" }}
                       onClick={() => canExpand && setExpanded(open ? null : j.id)}
                       title={canExpand ? "Show run history" : ""}>
                     {j.last_run ? <span style={{ color: j.last_status === "ok" ? "#4ec07a" : "#e06c6c" }}
-                                        title={j.last_detail}>{j.last_status} · {fmt(j.last_run)}
+                                        title={j.last_detail}>{j.last_status} · {fmt(j.last_run, j.tz)}
                                     {canExpand && <span className="faint" style={{ marginLeft: 4 }}>{open ? "▾" : `▸ ${hist.length}`}</span>}</span>
                                : <span className="faint">never</span>}
                   </td>
@@ -102,7 +105,7 @@ export default function Schedules() {
                       <div style={{ fontSize: 12, display: "grid", gap: 3, paddingTop: 6 }}>
                         {[...hist].reverse().map((h, i) => (
                           <div key={i} className="row" style={{ gap: 10, alignItems: "baseline" }}>
-                            <span className="faint" style={{ minWidth: 150 }}>{fmt(h.ts)}</span>
+                            <span className="faint" style={{ minWidth: 150 }}>{fmt(h.ts, j.tz)}</span>
                             <span style={{ color: h.status === "ok" ? "#4ec07a" : "#e06c6c", fontWeight: 600, minWidth: 44 }}>{h.status}</span>
                             <span className="faint">{h.detail}</span>
                           </div>
@@ -121,7 +124,8 @@ export default function Schedules() {
 
       <p className="faint" style={{ fontSize: 12, marginTop: 12 }}>
         Scheduled jobs run unattended on the controller and dispatch as root on agent hosts
-        (no operator sudo password needed). Times are the controller's local time.
+        (no operator sudo password needed). Times are shown and fired in the timezone the
+        schedule was created in.
       </p>
     </div>
   );
@@ -141,7 +145,8 @@ function NewSchedule({ meta, hosts, onDone, onErr }) {
     setSaving(true); onErr("");
     try {
       await api.scheduleCreate({ name: f.name, action: f.action, arg: f.arg, targets, cadence: f.cadence,
-        at: f.at, weekday: Number(f.weekday), enabled: true });
+        at: f.at, weekday: Number(f.weekday), enabled: true,
+        tz: Intl.DateTimeFormat().resolvedOptions().timeZone });
       onDone();
     } catch (e) { onErr(e.message); } finally { setSaving(false); }
   }

@@ -17,8 +17,6 @@ function fmtSeen(v) {
 }
 const fmtTime = fmtSeen;
 
-const NEW_ENV = "+ New environment…";
-
 export default function HostEnrollment() {
   const [agents, setAgents] = useState([]);
   const [envs, setEnvs] = useState([]);
@@ -139,9 +137,9 @@ export default function HostEnrollment() {
 
 
   async function newEnvironment() {
-    // Create an environment on its own — no hosts need be checked. (Set
-    // Environment still creates-and-assigns via the "+ New environment…" option,
-    // but that requires selecting hosts; this button is the standalone create.)
+    // The single create entry point: make an environment on its own — no hosts need
+    // be checked. Once it exists, pick it in the dropdown and Set Environment to
+    // assign checked hosts to it.
     const name = (window.prompt("New environment name:") || "").trim();
     if (!name) return;
     await run(async () => { await api.createEnvironment(name); setAssignEnv(name); },
@@ -150,19 +148,14 @@ export default function HostEnrollment() {
 
   async function assignEnvironment() {
     if (checked.length === 0) { setErr("Check one or more hosts first."); return; }
-    let env = assignEnv;
-    if (env === NEW_ENV) {
-      env = (window.prompt("New environment name:") || "").trim();
-      if (!env) return;
-      try { await api.createEnvironment(env); } catch (e) { setErr(e.message); return; }
-    }
+    const env = assignEnv;
     await run(async () => { for (const id of checked) await api.setHostEnvironment(id, env); },
       `Assigned ${checked.length} host(s) to ${env || "(unassigned)"}.`);
   }
 
   async function removeEnvironment() {
     const env = assignEnv;
-    if (!env || env === NEW_ENV) { setErr("Pick an environment from the dropdown to remove."); return; }
+    if (!env) { setErr("Pick an environment from the dropdown to remove."); return; }
     // Don't orphan hosts: an environment with hosts still in it must be emptied
     // first (reassign them with Set Environment).
     const inUse = agents.filter((a) => (a.environment || "") === env).length;
@@ -470,11 +463,10 @@ export default function HostEnrollment() {
               <select value={assignEnv} onChange={(e) => setAssignEnv(e.target.value)} style={{ maxWidth: 220 }}>
                 <option value="">(unassigned)</option>
                 {envs.map((e) => <option key={e} value={e}>{e}</option>)}
-                <option value={NEW_ENV}>{NEW_ENV}</option>
               </select>
               <button className="btn sm" onClick={assignEnvironment}>Set Environment</button>
               <button className="btn ghost sm" onClick={removeEnvironment}
-                      disabled={!assignEnv || assignEnv === NEW_ENV}
+                      disabled={!assignEnv}
                       title="Delete the selected environment (must have no hosts assigned)">Remove environment</button>
               <span className="faint">Set Environment applies to {checked.length} checked host(s).</span>
             </div>

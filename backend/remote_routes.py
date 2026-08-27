@@ -1617,7 +1617,26 @@ def _resolve_remote_upload_path(sftp, remote_path: str, filename: str) -> str:
     return remote_path
 
 
-@router.post("/hosts/{name}/files/upload", dependencies=[Depends(require_superuser)])
+def require_remote_file_access(request: Request):
+    """Authorize file transfer over the /remote API. Default: a superuser admin token
+    (the standing rule). F1 opt-in: when the operator sets SYSIBLE_REMOTE_FILE_API=1 on
+    the controller, the machine API key alone is accepted (the /remote router already
+    verified X-API-Key) — so a trusted machine peer like Sysible Connect can transfer
+    files with its scoped key instead of a human superuser token. Off by default → no
+    behaviour change."""
+    tok = request.headers.get("X-Sysible-Admin-Token")
+    if tok:
+        require_superuser(x_admin_token=tok)   # raises unless a valid superuser
+        return
+    if os.getenv("SYSIBLE_REMOTE_FILE_API", "").lower() in ("1", "true", "yes"):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="File transfer requires a superuser session, or the machine-key file API "
+               "to be enabled on the controller (set SYSIBLE_REMOTE_FILE_API=1).")
+
+
+@router.post("/hosts/{name}/files/upload", dependencies=[Depends(require_remote_file_access)])
 async def upload_file(
     name: str,
     request: Request,
@@ -1654,7 +1673,7 @@ async def upload_file(
     return {"host": name, "uploaded": True, "remote_path": full_path, "size": len(data)}
 
 
-@router.get("/hosts/{name}/files/download", dependencies=[Depends(require_superuser)])
+@router.get("/hosts/{name}/files/download", dependencies=[Depends(require_remote_file_access)])
 def download_file(name: str, path: str, request: Request):
     """Download one file from an SSH-enrolled host over SFTP. Returns
     the raw bytes with a Content-Disposition header, same convention

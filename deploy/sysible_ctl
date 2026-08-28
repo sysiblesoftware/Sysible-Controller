@@ -1,23 +1,66 @@
 #!/usr/bin/env bash
-# Sysible Controller — HOST-side container manager.
+# sysible_ctl — one CLI to manage every Sysible product container.
 #
-# The `sysible_controller` CLI baked INTO the image manages the app inside the
-# container (status, reset-admin, …). This script is its host-side companion:
-# it drives the CONTAINER itself (start/stop/restart/update/logs/destroy) with
-# plain `docker`, by container NAME — so it works even when you don't have the
-# repo checked out. `update` pulls a newer image and recreates the container,
-# reusing the exact compose file the container was started from (discovered from
-# the container's own labels — no path guessing).
+# Products: controller (Sysible Controller), slep (Sysible Linux Engineering
+# Platform), connect (Sysible Connect). Each runs as a docker-compose service
+# from its own checkout; this tool drives them all with a single, consistent set
+# of commands so you don't have to remember per-product invocations or cd around.
 #
-# Install it once (`sudo ./deploy/sysible_ctl install`) and run `sysible_ctl`
-# from anywhere.
+#   sysible_ctl controller update      # update just the Controller
+#   sysible_ctl slep logs              # follow SLEP's logs
+#   sysible_ctl update all             # update every installed product
+#   sysible_ctl status                 # overview of all products
+#
+# HOW IT FINDS EACH PRODUCT: from the running container's compose labels
+# (config file + working dir), so it works no matter where each repo lives — no
+# path guessing. If a product's container isn't running, point the tool at its
+# checkout with SYSIBLE_<PRODUCT>_DIR (e.g. SYSIBLE_SLEP_DIR=/opt/sysible-slep).
+#
+# 'update' rebuilds the image FROM SOURCE (git pull the checkout, then
+# 'compose up -d --build') and NEVER touches the named data volume, so the DB,
+# certs, keys and files survive every update.
+#
+# Install once:  sudo ./deploy/sysible_ctl install   → then run `sysible_ctl …`
 set -euo pipefail
 
-CONTAINER="${SYSIBLE_CONTAINER_NAME:-sysible-controller}"
-IMAGE="${SYSIBLE_IMAGE:-sysible-controller:latest}"
-CONSOLE_PORT="${SYSIBLE_CONSOLE_PORT:-8800}"
-SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# --- product registry ------------------------------------------------------
+# Every known product id. Add one here + a case in each _p_* accessor to extend.
+PRODUCTS="controller slep connect"
 
+_p_container() { case "$1" in
+  controller) echo "${SYSIBLE_CONTROLLER_CONTAINER:-sysible-controller}" ;;
+  slep)       echo "${SYSIBLE_SLEP_CONTAINER:-sysible-slep}" ;;
+  connect)    echo "${SYSIBLE_CONNECT_CONTAINER:-sysible-connect}" ;;
+esac; }
+_p_pretty() { case "$1" in
+  controller) echo "Sysible Controller" ;;
+  slep)       echo "Sysible LEP" ;;
+  connect)    echo "Sysible Connect" ;;
+esac; }
+_p_port() { case "$1" in
+  controller) echo 8800 ;;
+  slep)       echo 8810 ;;
+  connect)    echo 8700 ;;
+esac; }
+_p_volume() { case "$1" in
+  controller) echo sysible-data ;;
+  slep)       echo slep-data ;;
+  connect)    echo connect-data ;;
+esac; }
+_p_health_path() { case "$1" in
+  controller|slep) echo /api/health ;;
+  connect)         echo /healthz ;;
+esac; }
+# Optional explicit checkout dir (used when the container isn't running).
+_p_dir_override() { case "$1" in
+  controller) echo "${SYSIBLE_CONTROLLER_DIR:-}" ;;
+  slep)       echo "${SYSIBLE_SLEP_DIR:-}" ;;
+  connect)    echo "${SYSIBLE_CONNECT_DIR:-}" ;;
+esac; }
+
+_is_product() { case " $PRODUCTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+# --- colours (only on a TTY) -----------------------------------------------
 if [[ -t 1 ]]; then
   BOLD=$'\033[1m'; RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; CYAN=$'\033[36m'; RESET=$'\033[0m'
 else
@@ -29,185 +72,229 @@ _warn() { printf '%s\n' "${YELLOW}$*${RESET}" >&2; }
 _err()  { printf '%s\n' "${RED}ERROR: $*${RESET}" >&2; }
 _die()  { _err "$@"; exit 1; }
 
-_need_docker() {
-  command -v docker >/dev/null 2>&1 || _die "docker is not installed or not on PATH."
-}
-_exists() { docker inspect "$CONTAINER" >/dev/null 2>&1; }
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
+_need_docker() { command -v docker >/dev/null 2>&1 || _die "docker is not installed or not on PATH. Install Docker Engine: https://docs.docker.com/engine/install/"; }
+
+# --- compose plumbing ------------------------------------------------------
 DC=()
 _detect_compose() {
   if docker compose version >/dev/null 2>&1; then DC=(docker compose)
   elif command -v docker-compose >/dev/null 2>&1; then DC=(docker-compose)
-  else return 1; fi
+  else _die "neither 'docker compose' (v2 plugin) nor 'docker-compose' is available. Install the Compose plugin: https://docs.docker.com/compose/install/"; fi
 }
 
-# Discover the compose file + working dir the running container was created from,
-# via the standard compose v2 labels. Sets _CFG and _WD; returns 1 if the
-# container wasn't started by compose (a plain `docker run`).
-_CFG=''; _WD=''
-_compose_from_labels() {
-  _exists || return 1
-  _CFG="$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.config_files"}}' "$CONTAINER" 2>/dev/null || true)"
-  _WD="$(docker inspect  -f '{{ index .Config.Labels "com.docker.compose.project.working_dir"}}'  "$CONTAINER" 2>/dev/null || true)"
-  [[ -n "$_CFG" ]]
+# Discover the compose file + working dir for product $1. Prefers the running
+# container's compose labels; falls back to SYSIBLE_<P>_DIR/docker-compose.yml.
+# Sets globals CONTAINER, CFG, WD. Returns 1 if the product can't be driven.
+CONTAINER=''; CFG=''; WD=''
+_discover() {
+  local p="$1"; CONTAINER="$(_p_container "$p")"; CFG=''; WD=''
+  if docker inspect "$CONTAINER" >/dev/null 2>&1; then
+    CFG="$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.config_files"}}' "$CONTAINER" 2>/dev/null || true)"
+    WD="$(docker inspect  -f '{{ index .Config.Labels "com.docker.compose.project.working_dir"}}'  "$CONTAINER" 2>/dev/null || true)"
+  fi
+  if [[ -z "$CFG" ]]; then
+    local d; d="$(_p_dir_override "$p")"
+    for c in "$d/docker-compose.yml" "$d/deploy/docker-compose.yml"; do
+      [[ -n "$d" && -f "$c" ]] && { WD="$(dirname "$c")"; CFG="$c"; break; }
+    done
+  fi
+  [[ -n "$CFG" ]]
 }
 
 # Run a compose subcommand against the discovered file, from its working dir.
-_compose() {
-  _detect_compose || _die "neither 'docker compose' nor 'docker-compose' is available."
-  ( cd "${_WD:-.}" 2>/dev/null || true; "${DC[@]}" -f "$_CFG" "$@" )
-}
+_compose() { _detect_compose; ( cd "${WD:-.}" 2>/dev/null || true; "${DC[@]}" -f "$CFG" "$@" ); }
 
-cmd_start()   { _need_docker; _hdr "Starting $CONTAINER";   docker start "$CONTAINER"   >/dev/null && _ok "started"; }
-cmd_stop()    { _need_docker; _hdr "Stopping $CONTAINER";   docker stop  "$CONTAINER"   >/dev/null && _ok "stopped (data volume preserved)"; }
-cmd_restart() { _need_docker; _hdr "Restarting $CONTAINER"; docker restart "$CONTAINER" >/dev/null && _ok "restarted"; }
-cmd_logs()    { _need_docker; docker logs -f --tail=200 "$CONTAINER" "$@"; }
-
-# Probe the console health endpoint (HTTPS first — self-signed, hence -k — then
-# plain HTTP). Prints a line; returns non-zero if nothing answered.
-_health() {
-  local url
-  for url in "https://localhost:${CONSOLE_PORT}/api/health" "http://localhost:${CONSOLE_PORT}/api/health"; do
-    if curl -fsk --max-time 5 "$url" >/dev/null 2>&1; then _ok "  health: OK  ($url)"; return 0; fi
-  done
-  _warn "  health: '' (no response on ${CONSOLE_PORT} — the console may still be starting)"
+# Walk up from $1 to find the enclosing git checkout root, or fail.
+_git_root() {
+  local d="$1"
+  while [[ -n "$d" && "$d" != "/" ]]; do [[ -d "$d/.git" ]] && { echo "$d"; return 0; }; d="$(dirname "$d")"; done
   return 1
 }
 
-cmd_status() {
-  _need_docker
-  _hdr "Container"
-  docker ps -a --filter "name=^/${CONTAINER}$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
-  _hdr "Console health"
-  _health || true
+# Does this product have something to act on (a container, or a configured dir)?
+_present() {
+  docker inspect "$(_p_container "$1")" >/dev/null 2>&1 && return 0
+  [[ -n "$(_p_dir_override "$1")" ]]
 }
 
-cmd_update() {
-  _need_docker
-  _exists || _die "no container named '$CONTAINER'. Start it first, or set SYSIBLE_CONTAINER_NAME."
-  if _compose_from_labels; then
-    # This deployment builds the image FROM SOURCE (compose 'build: .'), so an
-    # update is: refresh the code, then rebuild + recreate in place. (The old
-    # 'compose pull' fetched a registry image that a source build never produces,
-    # so the code never actually changed.)
-    #
-    # 1) Refresh the source if the compose working dir is a git checkout; a
-    #    tarball install has no .git, so skip cleanly and just rebuild what's there.
-    if [[ -n "$_WD" && -d "$_WD/.git" ]] && command -v git >/dev/null 2>&1; then
-      _hdr "Pulling latest code (git) in $_WD"
-      git -C "$_WD" pull --ff-only || _warn "git pull failed — rebuilding the code already present."
-    else
-      _warn "Compose dir '${_WD:-?}' is not a git checkout — rebuilding the code already"
-      _warn "present. (Clone the repo and start from it if you want 'update' to git-pull too.)"
-    fi
-    # 2) Rebuild the image and recreate the container in place. '--build' rebuilds
-    #    from source; the named sysible-data volume is NEVER touched (we never
-    #    'down -v'), so the DB, certs, API key, cookie secret and portal files
-    #    survive the update.
-    _hdr "Rebuilding + restarting via compose ($_CFG)"
-    _compose up -d --build
-    _hdr "New state"
-    _compose ps 2>/dev/null || docker ps -a --filter "name=^/${CONTAINER}$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
-    _health || true
-    _ok "Updated. Data volume 'sysible-data' preserved."
+# Health probe for product $1 (HTTPS first — self-signed, hence -k — then HTTP).
+_health() {
+  local p="$1" port path url
+  port="$(_p_port "$p")"; path="$(_p_health_path "$p")"
+  for url in "https://localhost:${port}${path}" "http://localhost:${port}${path}"; do
+    if curl -fsk --max-time 5 "$url" >/dev/null 2>&1; then _ok "  health: OK  ($url)"; return 0; fi
+  done
+  _warn "  health: '' (no response on ${port} — may still be starting)"
+  return 1
+}
+
+# =========================================================
+# Per-product operations
+# =========================================================
+p_update() {
+  local p="$1"
+  _discover "$p" || { _warn "$(_p_pretty "$p"): not found — no container '$(_p_container "$p")' and no SYSIBLE_${p^^}_DIR set. Skipping."; return 1; }
+  _hdr "Updating $(_p_pretty "$p")"
+  local gr
+  if gr="$(_git_root "$WD")" && command -v git >/dev/null 2>&1; then
+    _hdr "Pulling latest code (git) in $gr"
+    git -C "$gr" pull --ff-only || _warn "git pull failed — rebuilding the code already present."
   else
-    # Plain `docker run` container: can't reconstruct the original run flags.
-    _hdr "Pulling newer image: $IMAGE"
-    docker pull "$IMAGE" || _warn "no registry image to pull (source-built?). Recreate from your compose/run command with --build."
-    _warn "This container was not started by docker compose, so it can't be recreated"
-    _warn "automatically. Re-run 'docker compose up -d --build' from the checkout to"
-    _warn "pick up the change. The named data volume is untouched."
+    _warn "compose dir '$WD' is not a git checkout — rebuilding the code already present."
   fi
+  _hdr "Rebuilding + recreating via compose ($CFG)"
+  _compose up -d --build
+  _hdr "New state"
+  _compose ps 2>/dev/null || docker ps -a --filter "name=^/${CONTAINER}$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+  _health "$p" || true
+  _ok "$(_p_pretty "$p") updated. Volume '$(_p_volume "$p")' preserved."
 }
 
-cmd_destroy() {
-  _need_docker
-  local with_volumes=0
-  [[ "${1:-}" == "--volumes" || "${1:-}" == "-v" ]] && with_volumes=1
-  _warn "This removes the $CONTAINER container${with_volumes:+ AND its data volume}."
-  read -r -p "Type 'yes' to continue: " ans; [[ "$ans" == "yes" ]] || { echo "Aborted."; return 1; }
-  if _compose_from_labels; then
-    if [[ $with_volumes -eq 1 ]]; then _compose down -v; else _compose down; fi
+p_status() {
+  local p="$1"
+  _hdr "$(_p_pretty "$p")  [$( _p_container "$p")]"
+  docker ps -a --filter "name=^/$(_p_container "$p")$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null | tail -n +1
+  _health "$p" || true
+}
+
+p_logs()    { docker logs -f --tail="${2:-200}" "$(_p_container "$1")"; }
+p_restart() { _hdr "Restarting $(_p_pretty "$1")"; docker restart "$(_p_container "$1")" >/dev/null && _ok "restarted"; }
+p_start()   { _hdr "Starting $(_p_pretty "$1")";   docker start   "$(_p_container "$1")" >/dev/null && _ok "started"; }
+p_stop()    { _hdr "Stopping $(_p_pretty "$1")";   docker stop    "$(_p_container "$1")" >/dev/null && _ok "stopped (data volume preserved)"; }
+
+p_backup() {
+  local p="$1" vol stamp file
+  vol="$(_p_volume "$p")"; stamp="$(date +%Y%m%d-%H%M%S)"; file="${p}-backup-${stamp}.tgz"
+  _hdr "Backing up volume '$vol' -> $PWD/$file"
+  docker run --rm -v "${vol}:/data:ro" -v "$PWD:/backup" alpine tar czf "/backup/${file}" -C /data .
+  _ok "Backup written: $PWD/$file"
+}
+
+p_destroy() {
+  local p="$1" with_vol="${2:-0}"
+  if _discover "$p"; then
+    if [[ "$with_vol" == "1" ]]; then _compose down -v; else _compose down; fi
   else
-    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-    _warn "Removed the container. If you passed -v, remove the data volume yourself: docker volume rm <name>"
+    docker rm -f "$(_p_container "$p")" >/dev/null 2>&1 || true
   fi
-  _ok "done"
+  _ok "$(_p_pretty "$p") removed.$([[ "$with_vol" == "1" ]] && echo ' Data volume DELETED.' || echo " Volume '$(_p_volume "$p")' kept.")"
 }
 
-# Pass a command through to the app CLI inside the container.
-cmd_exec() {
-  _need_docker
-  [[ $# -gt 0 ]] || _die "usage: $(basename "$0") exec <sysible_controller args>   (e.g. exec status)"
-  docker exec -it "$CONTAINER" sysible_controller "$@"
+# Run a command across every present product.
+p_all() {
+  local cmd="$1"; shift || true
+  local any=0 p
+  for p in $PRODUCTS; do
+    if _present "$p"; then any=1; "p_$cmd" "$p" "$@" || true; echo; fi
+  done
+  [[ $any -eq 1 ]] || _warn "No Sysible product containers found. Start one, or set SYSIBLE_<PRODUCT>_DIR."
 }
 
+# =========================================================
+# install / help
+# =========================================================
 cmd_install() {
   local name="sysible_ctl" bindir dest
-  if [[ -w /usr/local/bin || "$(id -u)" -eq 0 ]]; then bindir=/usr/local/bin
-  else bindir="$HOME/.local/bin"; mkdir -p "$bindir"; fi
-  dest="$bindir/$name"
-  chmod +x "$SELF"; ln -sf "$SELF" "$dest"
+  if [[ -w /usr/local/bin || "$(id -u)" -eq 0 ]]; then bindir=/usr/local/bin; else bindir="$HOME/.local/bin"; mkdir -p "$bindir"; fi
+  dest="$bindir/$name"; chmod +x "$SELF"; ln -sf "$SELF" "$dest"
   _ok "Linked $dest -> $SELF"
-  case ":$PATH:" in
-    *":$bindir:"*) _ok "Ready — run: ${BOLD}$name update${RESET}" ;;
-    *) _warn "$bindir is not on PATH. Add it: echo 'export PATH=\"$bindir:\$PATH\"' >> ~/.bashrc && source ~/.bashrc" ;;
+  case ":$PATH:" in *":$bindir:"*) _ok "Ready — run: ${BOLD}$name status${RESET}" ;;
+    *) _warn "$bindir is not on your PATH. Add it:  echo 'export PATH=\"$bindir:\$PATH\"' >> ~/.bashrc && source ~/.bashrc" ;;
   esac
-  [[ "$bindir" == "$HOME/.local/bin" ]] && _warn "User-only install. For system-wide: sudo $0 install"
-  return 0
 }
-
 cmd_uninstall() {
   local removed=0 d
   for d in /usr/local/bin/sysible_ctl "$HOME/.local/bin/sysible_ctl"; do
     [[ -L "$d" || -f "$d" ]] && rm -f "$d" && { _ok "Removed $d"; removed=1; }
   done
   [[ $removed -eq 1 ]] || _warn "No installed 'sysible_ctl' found."
-  return 0
 }
+
+KNOWN_CMDS="update status logs restart start stop backup destroy"
 
 usage() {
   cat <<EOF
-${BOLD}sysible_ctl${RESET} — manage the Sysible Controller container from the host
+${BOLD}sysible_ctl${RESET} — manage every Sysible product container from one CLI
 
-${BOLD}Usage:${RESET} $(basename "$0") <command> [args]
+${BOLD}Usage:${RESET}
+  $(basename "$0") ${CYAN}<product>${RESET} <command> [args]     e.g. sysible_ctl controller update
+  $(basename "$0") <command> ${CYAN}all${RESET}                 e.g. sysible_ctl update all
+  $(basename "$0") status                          overview of every product
+
+${BOLD}Products:${RESET} ${CYAN}controller${RESET}  ${CYAN}slep${RESET}  ${CYAN}connect${RESET}
 
 ${BOLD}Commands:${RESET}
-  ${CYAN}install${RESET}    Put this on PATH as 'sysible_ctl' (sudo = system-wide, else ~/.local/bin).
-  ${CYAN}uninstall${RESET}  Remove the 'sysible_ctl' symlink.
-  ${CYAN}start${RESET}      Start the container.
-  ${CYAN}stop${RESET}       Stop the container (data volume kept).
-  ${CYAN}restart${RESET}    Restart the container.
-  ${CYAN}update${RESET}     Refresh the code (git pull if the compose dir is a checkout), rebuild
-               the image from source, and recreate the container in place — via the
-               compose file the container was started from. Preserves the data volume.
-  ${CYAN}status${RESET}     Show container status + probe the console health endpoint.
-  ${CYAN}logs${RESET}       Follow container logs (last 200 lines; extra args passed through).
-  ${CYAN}destroy${RESET}    Remove the container (add -v/--volumes to also delete its data).
-  ${CYAN}exec${RESET} …     Run the in-container app CLI, e.g. '$(basename "$0") exec status'.
-  ${CYAN}help${RESET}       Show this help.
+  ${CYAN}update${RESET}   Refresh code (git pull the checkout) + rebuild from source + recreate
+             in place. Preserves the product's data volume.
+  ${CYAN}status${RESET}   Container state + console health probe.
+  ${CYAN}logs${RESET}     Follow logs (last 200 lines; pass a number for a different tail).
+  ${CYAN}restart${RESET} / ${CYAN}start${RESET} / ${CYAN}stop${RESET}   Lifecycle (stop keeps the data volume).
+  ${CYAN}backup${RESET}   Tarball the product's data volume into the current directory.
+  ${CYAN}destroy${RESET}  Remove the container (add ${BOLD}-v${RESET} to also delete its data volume).
 
-Container name: ${BOLD}${CONTAINER}${RESET} (override with SYSIBLE_CONTAINER_NAME).
-Image for 'update' on plain-docker runs: ${BOLD}${IMAGE}${RESET} (override with SYSIBLE_IMAGE).
+${BOLD}Meta:${RESET}
+  ${CYAN}install${RESET} / ${CYAN}uninstall${RESET}   Put this CLI on your PATH as 'sysible_ctl'.
+  ${CYAN}help${RESET}
+
+${BOLD}Finding products:${RESET} discovered from each running container's compose labels. If a
+container isn't running, point at its checkout with SYSIBLE_<PRODUCT>_DIR, e.g.
+  SYSIBLE_SLEP_DIR=/opt/sysible-slep sysible_ctl slep update
+
+First time: ${BOLD}sudo ./deploy/sysible_ctl install${RESET}
 EOF
 }
 
+# =========================================================
+# Dispatch
+# =========================================================
+_run_cmd() {  # _run_cmd <cmd> <product> [args…]  — validates cmd, handles -v for destroy
+  local cmd="$1" p="$2"; shift 2 || true
+  case " $KNOWN_CMDS " in *" $cmd "*) ;; *) _die "unknown command: $cmd (try: $(basename "$0") help)" ;; esac
+  _need_docker
+  if [[ "$cmd" == "destroy" ]]; then
+    local wv=0; case "${1:-}" in -v|--volumes) wv=1 ;; esac
+    p_destroy "$p" "$wv"; return
+  fi
+  "p_$cmd" "$p" "$@"
+}
+
 main() {
-  local cmd="${1:-help}"; [[ $# -gt 0 ]] && shift || true
-  case "$cmd" in
-    install)   cmd_install ;;
-    uninstall) cmd_uninstall ;;
-    start)     cmd_start ;;
-    stop)      cmd_stop ;;
-    restart)   cmd_restart ;;
-    update)    cmd_update ;;
-    status)    cmd_status ;;
-    logs)      cmd_logs "$@" ;;
-    destroy)   cmd_destroy "$@" ;;
-    exec)      cmd_exec "$@" ;;
-    help|-h|--help) usage ;;
-    *) _err "unknown command: $cmd"; echo >&2; usage >&2; exit 1 ;;
+  local a1="${1:-help}" a2="${2:-}"
+  case "$a1" in
+    help|-h|--help) usage; return 0 ;;
+    install)        cmd_install; return 0 ;;
+    uninstall)      cmd_uninstall; return 0 ;;
   esac
+
+  # Form:  sysible_ctl <product> <cmd> [args]
+  if _is_product "$a1"; then
+    [[ -n "$a2" ]] || { p_status "$a1"; return 0; }
+    shift 2 || true
+    _run_cmd "$a2" "$a1" "$@"
+    return 0
+  fi
+
+  # Form:  sysible_ctl all <cmd>   or   sysible_ctl <cmd> all
+  _need_docker
+  if [[ "$a1" == "all" ]]; then
+    local cmd="${a2:-status}"
+    case " $KNOWN_CMDS " in *" $cmd "*) ;; *) _die "unknown command: $cmd" ;; esac
+    p_all "$cmd"; return 0
+  fi
+  if [[ "$a2" == "all" ]]; then
+    case " $KNOWN_CMDS " in *" $a1 "*) ;; *) _die "unknown command: $a1" ;; esac
+    p_all "$a1"; return 0
+  fi
+
+  # Bare read-only command with no target → apply to all (friendly default).
+  if [[ "$a1" == "status" ]]; then p_all status; return 0; fi
+
+  _err "unknown or ambiguous: '$a1${a2:+ $a2}'"
+  echo >&2
+  usage >&2
+  exit 1
 }
 
 main "$@"

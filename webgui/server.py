@@ -738,6 +738,36 @@ def me(request: Request):
     }
 
 
+@app.get("/api/auth/verify")
+def auth_verify(request: Request, response: Response):
+    """SSO auth-probe for the SLOP gateway's forward_auth (Controller as IdP).
+
+    Answers one question about THIS browser's Controller session: is it signed in?
+      * 200 + response headers X-Sysible-User / X-Sysible-Role when a valid admin
+        session cookie is present — the gateway copies those headers onto the
+        request it forwards upstream, so a fronted app can trust the identity;
+      * 401 otherwise, so the gateway redirects the browser to the login.
+
+    It is a pure probe: it takes no action and (deliberately) does NOT do the
+    per-request revocation re-check — that would be a controller round-trip on
+    every proxied asset/API call, and forward_auth can't persist the session's
+    TTL cache. In the current phase each fronted app still runs its own
+    require_login (which DOES revalidate), so a demoted/removed admin is still
+    caught there; when apps move to trusting this header outright (SSO phase 3),
+    add a token-keyed revocation cache here. Safe GET, so the CSRF guard lets it
+    through; Cache-Control:no-store keeps any proxy from caching the decision.
+    See Sysible-Linux-Operations-Platform/docs/SSO.md.
+    """
+    user = request.session.get("user")
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    role = request.session.get("role") or "auditor"
+    response.headers["X-Sysible-User"] = user
+    response.headers["X-Sysible-Role"] = role
+    response.headers["Cache-Control"] = "no-store"
+    return {"user": user, "role": role}
+
+
 class PathCriticalRequest(BaseModel):
     paths: list[str] = []
 

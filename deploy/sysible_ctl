@@ -63,34 +63,60 @@ cmd_stop()    { _need_docker; _hdr "Stopping $CONTAINER";   docker stop  "$CONTA
 cmd_restart() { _need_docker; _hdr "Restarting $CONTAINER"; docker restart "$CONTAINER" >/dev/null && _ok "restarted"; }
 cmd_logs()    { _need_docker; docker logs -f --tail=200 "$CONTAINER" "$@"; }
 
+# Probe the console health endpoint (HTTPS first — self-signed, hence -k — then
+# plain HTTP). Prints a line; returns non-zero if nothing answered.
+_health() {
+  local url
+  for url in "https://localhost:${CONSOLE_PORT}/api/health" "http://localhost:${CONSOLE_PORT}/api/health"; do
+    if curl -fsk --max-time 5 "$url" >/dev/null 2>&1; then _ok "  health: OK  ($url)"; return 0; fi
+  done
+  _warn "  health: '' (no response on ${CONSOLE_PORT} — the console may still be starting)"
+  return 1
+}
+
 cmd_status() {
   _need_docker
   _hdr "Container"
   docker ps -a --filter "name=^/${CONTAINER}$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
   _hdr "Console health"
-  local url
-  for url in "https://localhost:${CONSOLE_PORT}/api/health" "http://localhost:${CONSOLE_PORT}/api/health"; do
-    if curl -fsk --max-time 5 "$url" >/dev/null 2>&1; then _ok "  health: OK  ($url)"; return 0; fi
-  done
-  _warn "  health: '' (no response on ${CONSOLE_PORT})"
+  _health || true
 }
 
 cmd_update() {
   _need_docker
   _exists || _die "no container named '$CONTAINER'. Start it first, or set SYSIBLE_CONTAINER_NAME."
   if _compose_from_labels; then
-    _hdr "Updating via compose ($_CFG)"
-    _compose pull
-    _compose up -d
-    _ok "Updated. Data volume preserved."
+    # This deployment builds the image FROM SOURCE (compose 'build: .'), so an
+    # update is: refresh the code, then rebuild + recreate in place. (The old
+    # 'compose pull' fetched a registry image that a source build never produces,
+    # so the code never actually changed.)
+    #
+    # 1) Refresh the source if the compose working dir is a git checkout; a
+    #    tarball install has no .git, so skip cleanly and just rebuild what's there.
+    if [[ -n "$_WD" && -d "$_WD/.git" ]] && command -v git >/dev/null 2>&1; then
+      _hdr "Pulling latest code (git) in $_WD"
+      git -C "$_WD" pull --ff-only || _warn "git pull failed — rebuilding the code already present."
+    else
+      _warn "Compose dir '${_WD:-?}' is not a git checkout — rebuilding the code already"
+      _warn "present. (Clone the repo and start from it if you want 'update' to git-pull too.)"
+    fi
+    # 2) Rebuild the image and recreate the container in place. '--build' rebuilds
+    #    from source; the named sysible-data volume is NEVER touched (we never
+    #    'down -v'), so the DB, certs, API key, cookie secret and portal files
+    #    survive the update.
+    _hdr "Rebuilding + restarting via compose ($_CFG)"
+    _compose up -d --build
+    _hdr "New state"
+    _compose ps 2>/dev/null || docker ps -a --filter "name=^/${CONTAINER}$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+    _health || true
+    _ok "Updated. Data volume 'sysible-data' preserved."
   else
-    # Plain `docker run` container: we can pull a newer image but can't safely
-    # reconstruct the original run flags, so recreate is left to the operator.
+    # Plain `docker run` container: can't reconstruct the original run flags.
     _hdr "Pulling newer image: $IMAGE"
-    docker pull "$IMAGE"
+    docker pull "$IMAGE" || _warn "no registry image to pull (source-built?). Recreate from your compose/run command with --build."
     _warn "This container was not started by docker compose, so it can't be recreated"
-    _warn "automatically. Re-run your 'docker run …' (or 'docker compose up -d') to"
-    _warn "pick up the pulled image. The named data volume is untouched."
+    _warn "automatically. Re-run 'docker compose up -d --build' from the checkout to"
+    _warn "pick up the change. The named data volume is untouched."
   fi
 }
 
@@ -152,8 +178,9 @@ ${BOLD}Commands:${RESET}
   ${CYAN}start${RESET}      Start the container.
   ${CYAN}stop${RESET}       Stop the container (data volume kept).
   ${CYAN}restart${RESET}    Restart the container.
-  ${CYAN}update${RESET}     Pull the newest image and recreate in place (via the compose file the
-               container was started from). Preserves the data volume.
+  ${CYAN}update${RESET}     Refresh the code (git pull if the compose dir is a checkout), rebuild
+               the image from source, and recreate the container in place — via the
+               compose file the container was started from. Preserves the data volume.
   ${CYAN}status${RESET}     Show container status + probe the console health endpoint.
   ${CYAN}logs${RESET}       Follow container logs (last 200 lines; extra args passed through).
   ${CYAN}destroy${RESET}    Remove the container (add -v/--volumes to also delete its data).

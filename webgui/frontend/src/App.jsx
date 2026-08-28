@@ -207,6 +207,12 @@ export default function App() {
     const s = localStorage.getItem("sysible_skin");
     return s && SKIN_IDS.has(s) ? s : "brand";
   });
+  // Light / dark theme (persisted). Dark is the default brand look; "light" sets
+  // data-theme on <html>, which the styles.css light block reads to flip surfaces.
+  const [theme, setTheme] = useState(() => {
+    const t = localStorage.getItem("sysible_theme");
+    return t === "light" || t === "dark" ? t : "dark";
+  });
 
   // Transient toast notifications (host enrolled, etc.). App owns the auto-
   // dismiss timers; a monotonic ref counter keeps ids unique.
@@ -220,6 +226,12 @@ export default function App() {
   const dismissToast = useCallback((id) => setToasts((t) => t.filter((x) => x.id !== id)), []);
 
   useEffect(() => { applySkin(skin); }, [skin]);
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "light") root.setAttribute("data-theme", "light");
+    else root.removeAttribute("data-theme");
+    try { localStorage.setItem("sysible_theme", theme); } catch { /* private mode */ }
+  }, [theme]);
 
   // Notify when a host enrolls: poll the agent inventory and toast any host_id
   // that appears after the first (baseline) fetch. Runs while signed in.
@@ -435,6 +447,9 @@ export default function App() {
           </div>
           <div className="rail-actions">
             <button className="btn ghost sm" onClick={() => setSudoOpen(true)}>Sudo Password</button>
+            <button className="btn ghost sm" title="Toggle light / dark"
+              onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}>
+              {theme === "light" ? "☾ Dark" : "☀ Light"}</button>
           </div>
           <button className="btn ghost sm rail-logout" onClick={onLogout}>Log Out</button>
         </div>

@@ -91,6 +91,46 @@
   --row-hover: #161b26;
   --shadow: rgba(0,0,0,0.55);
 }
+/* Light theme — a bright ground carrying the same brand accents, toggled from the
+   rail (☀ / ☾) and persisted (sysible_theme). It overrides the brand skin's tokens;
+   because every surface reads a CSS variable, the whole console flips with this one
+   block. Placed after the brand block so, at equal specificity, it wins when
+   data-theme="light" is also set on <html>. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #eef1f6;
+  --bg-raise: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #f3f5f9;
+  --border: #dbe1ea;
+  --border-strong: #c4cddb;
+  --text: #1b2431;
+  --text-dim: #5b6675;
+  --text-faint: #74808f;   /* ~4.6:1 on --bg */
+  --btn: #eef2f8;
+  --btn-hover: #e4eaf3;
+  --btn-border: #cfd8e4;
+  --btn-press: #dde4ee;
+  --accent: #3b6fe0;       /* brand blue, a touch deeper for contrast on white */
+  --accent-soft: rgba(59,111,224,0.12);
+  --on-accent: #ffffff;
+  --rail-bg: #e9edf3;
+  --field: #ffffff;
+  --field-border: #cfd8e4;
+  --green: #2f8a37;        /* deeper greens so status text/dots read on white */
+  --green-bright: #2f9e4a;
+  --red: #d23a30;
+  --amber: #b9791a;
+  --row-hover: #eef2f8;
+  --shadow: rgba(20,30,50,0.14);
+}
+/* Topographic ground: the green contour is loud on a light page, so drop it right
+   down in light mode (mirrors the dark look's subtle texture, not decoration). */
+:root[data-theme="light"] body::before {
+  background-color: rgba(60, 120, 90, 0.55);
+  opacity: 0.10;
+}
+:root[data-theme="light"] body::after { opacity: 0.5; }
 /* Active nav item: the logo's green→blue trace down the left edge. */
 :root[data-skin="brand"] .rail-item.active { position: relative; border-left-color: transparent; }
 :root[data-skin="brand"] .rail-item.active::before {

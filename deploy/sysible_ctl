@@ -2,7 +2,8 @@
 # sysible_ctl — one CLI to manage every Sysible product container.
 #
 # Products: controller (Sysible Controller), slep (Sysible Linux Engineering
-# Platform), connect (Sysible Connect). Each runs as a docker-compose service
+# Platform), connect (Sysible Connect), slop (the SLOP gateway/portal — the single
+# front door in front of the other three). Each runs as a docker-compose service
 # from its own checkout; this tool drives them all with a single, consistent set
 # of commands so you don't have to remember per-product invocations or cd around.
 #
@@ -25,7 +26,7 @@ set -euo pipefail
 
 # --- product registry ------------------------------------------------------
 # Every known product id. Add one here + a case in each _p_* accessor to extend.
-PRODUCTS="controller controller-ee slep connect"
+PRODUCTS="controller controller-ee slep connect slop"
 
 # For discovery we need ONE container of the product's compose stack. EE's compose
 # sets no container_name, so it takes compose's default project names — the project
@@ -36,17 +37,20 @@ _p_container() { case "$1" in
   controller-ee) echo "${SYSIBLE_CONTROLLER_EE_CONTAINER:-docker-controller-1}" ;;
   slep)          echo "${SYSIBLE_SLEP_CONTAINER:-sysible-slep}" ;;
   connect)       echo "${SYSIBLE_CONNECT_CONTAINER:-sysible-connect}" ;;
+  slop)          echo "${SYSIBLE_SLOP_CONTAINER:-sysible-slop-gateway}" ;;
 esac; }
 _p_pretty() { case "$1" in
   controller)    echo "Sysible Controller" ;;
   controller-ee) echo "Sysible Controller EE" ;;
   slep)          echo "Sysible LEP" ;;
   connect)       echo "Sysible Connect" ;;
+  slop)          echo "Sysible SLOP gateway" ;;
 esac; }
 _p_port() { case "$1" in
   controller|controller-ee) echo 8800 ;;
   slep)                     echo 8810 ;;
   connect)                  echo 8700 ;;
+  slop)                     echo 443 ;;
 esac; }
 # Space-separated volume list (EE keeps its state across several named volumes).
 _p_volume() { case "$1" in
@@ -54,10 +58,12 @@ _p_volume() { case "$1" in
   controller-ee) echo "pgdata controller-certs controller-secrets controller-run controller-data webgui-run" ;;
   slep)          echo slep-data ;;
   connect)       echo connect-data ;;
+  slop)          echo "slop-caddy-data slop-caddy-config" ;;
 esac; }
 _p_health_path() { case "$1" in
   controller|controller-ee|slep) echo /api/health ;;
   connect)                       echo /healthz ;;
+  slop)                          echo / ;;   # the portal apex (Caddy serves the landing page)
 esac; }
 # True when the product is a multi-service compose stack (drive it via compose,
 # not single docker-by-container commands).
@@ -68,6 +74,7 @@ _p_dir_override() { case "$1" in
   controller-ee) echo "${SYSIBLE_CONTROLLER_EE_DIR:-}" ;;
   slep)          echo "${SYSIBLE_SLEP_DIR:-}" ;;
   connect)       echo "${SYSIBLE_CONNECT_DIR:-}" ;;
+  slop)          echo "${SYSIBLE_SLOP_DIR:-}" ;;
 esac; }
 
 # Normalise product aliases → canonical id.
@@ -311,7 +318,7 @@ ${BOLD}Usage:${RESET}
   $(basename "$0") <command> ${CYAN}all${RESET}                 e.g. sysible_ctl update all
   $(basename "$0") status                          overview of every product
 
-${BOLD}Products:${RESET} ${CYAN}controller${RESET}  ${CYAN}controller-ee${RESET} (alias ${CYAN}ee${RESET})  ${CYAN}slep${RESET}  ${CYAN}connect${RESET}
+${BOLD}Products:${RESET} ${CYAN}controller${RESET}  ${CYAN}controller-ee${RESET} (alias ${CYAN}ee${RESET})  ${CYAN}slep${RESET}  ${CYAN}connect${RESET}  ${CYAN}slop${RESET}
 
 ${BOLD}Commands:${RESET}
   ${CYAN}up${RESET}       First-run bring-up (or re-roll) from a checkout: build from source and
@@ -339,6 +346,13 @@ whose containers take compose's default names. For first-run 'up', point at the
 checkout: SYSIBLE_CONTROLLER_EE_DIR=/opt/sysible-controller-ee sysible_ctl ee up.
 Override the discovery container with SYSIBLE_CONTROLLER_EE_CONTAINER if your
 compose project name isn't the default.
+
+${BOLD}SLOP gateway (slop):${RESET} the front door (Caddy) that fronts the other three apps —
+it does NOT manage them; bring the apps up first, then the door. For first-run
+'up', point at the SLOP checkout:
+  SYSIBLE_SLOP_DIR=/opt/sysible-linux-operations-platform sysible_ctl slop up
+Set SLOP_DOMAIN + upstreams in that checkout's .env (copy .env.example) first if
+the defaults (slop.lan, apps on this host) don't fit. Serves https://\$SLOP_DOMAIN/.
 
 First time: ${BOLD}sudo ./deploy/sysible_ctl install${RESET}
 EOF

@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 
 // Shared per-host results renderer used by every multi-host result panel
-// (ToolPage, ResultsPane, UserGroupPage, Connect). Turns a list of per-host
+// (ToolPage, ResultsPane, UserGroupPage). Turns a list of per-host
 // results into a scannable summary + collapsible rows so a fleet-wide action
 // across 25+ hosts isn't a wall of text:
 //   - a summary bar: "N hosts · X ok · Y need attention", an "Only problems"

@@ -41,8 +41,8 @@ export default function ToolPage({ tool, hosts, onRefreshHosts, prefill }) {
   // Tool actions run through the host's Sysible agent, so only agent-managed
   // hosts are valid targets here. Pure-SSH connection records (no agent) are
   // filtered out of the picker — they were never actionable from a tool page and
-  // only cluttered the tree. (We're phasing SSH connections out; manage those
-  // from Sysible Connect.)
+  // only cluttered the tree. (SSH-only hosts are managed from the standalone
+  // Sysible Connect app.)
   const agentHosts = useMemo(() => (hosts || []).filter((h) => h.has_agent), [hosts]);
   const hiddenSsh = (hosts || []).length - agentHosts.length;
 
@@ -219,7 +219,7 @@ export default function ToolPage({ tool, hosts, onRefreshHosts, prefill }) {
     <div className="tool-flex">
       <HostTree hosts={agentHosts} value={targets} onChange={setTargets} onRefresh={onRefreshHosts}
                 footer={"Check one or more hosts, then run an action." +
-                  (hiddenSsh > 0 ? ` (${hiddenSsh} SSH-only host${hiddenSsh === 1 ? "" : "s"} hidden — manage from Sysible Connect.)` : "")} />
+                  (hiddenSsh > 0 ? ` (${hiddenSsh} SSH-only host${hiddenSsh === 1 ? "" : "s"} hidden — manage from the Sysible Connect app.)` : "")} />
 
       <div className="tool-actions-col">
         {tabs.order.length > 1 && (

@@ -97,7 +97,7 @@ const TerminalSession = forwardRef(function TerminalSession({ hostId, label, act
       else if (m.t === "error") {
         onStatus && onStatus("error:" + (m.d || ""));
         term.writeln("\r\n\x1b[31m" + (m.d || "terminal error") + "\x1b[0m");
-        dim("The host's own agent runs this shell locally and streams it back over its check-in channel — no inbound SSH to the host is used. Check that the host is online and its agent is checking in (Sysible Connect → ping), then reopen the terminal.");
+        dim("The host's own agent runs this shell locally and streams it back over its check-in channel — no inbound SSH to the host is used. Check that the host is online and its agent is checking in, then reopen the terminal.");
       }
     };
     ws.onerror = () => onStatus && onStatus("error:websocket");

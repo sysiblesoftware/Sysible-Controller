@@ -3,10 +3,10 @@ import { api, noteRawStatus } from "../api.js";
 
 // Upload a file to / download a file from one host. Works for both agent-managed
 // hosts (transfer rides through the agent) and pure-SSH hosts (SFTP) — the BFF
-// picks the transport per host. Shared by the Connect page's Selected Host panel
-// and by each pop-out terminal window, so a terminal is a first-class shell with
-// its own file transfer. Errors show inline in this panel (and, if provided, are
-// also bubbled up via onErr for the page-level error banner).
+// picks the transport per host. Used by each pop-out terminal window, so a
+// terminal is a first-class shell with its own file transfer. Errors show inline
+// in this panel (and, if provided, are also bubbled up via onErr for the
+// page-level error banner).
 export default function FileTransfer({ host, onErr }) {
   const [remotePath, setRemotePath] = useState("");
   const [file, setFile] = useState(null);

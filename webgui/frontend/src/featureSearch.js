@@ -1,13 +1,11 @@
 // Task search index — maps plain-language tasks to a destination. Each entry:
-// a section to open (hosts/settings/connect/portal/sysadmin/live) and, for
+// a section to open (hosts/settings/portal/sysadmin/live) and, for
 // System Administration, the tool name (and optional User & Group tab).
 export const REGISTRY = [
   { title: "Host Enrollment", section: "hosts",
     keywords: ["enroll host", "add host", "new host", "download agent", "agent bundle", "managed hosts", "fleet", "host enrollment", "curl", "enrollment token", "disenroll"] },
   { title: "Sysible Controller Settings", section: "settings",
     keywords: ["settings", "administrators", "add administrator", "admin password policy", "audit log", "controller address", "controller port", "change my password", "controller settings", "version", "license"] },
-  { title: "Sysible Connect", section: "connect",
-    keywords: ["ssh", "ssh terminal", "remote terminal", "console", "connect to host", "environment tag", "sysible connect", "upload to host", "download from host", "file transfer", "terminal", "run command", "run script", "run a script", "ad hoc", "ad-hoc", "fleet command", "run on all hosts", "shell command", "reboot all", "power off", "restart agent", "check in", "ping"] },
   { title: "Webserver Portal (login, port & files)", section: "hosts",
     keywords: ["portal", "webserver portal", "reset portal password", "portal credentials", "portal port", "login history", "portal sessions", "host operator login", "staged files", "uploaded files"] },
   // User & Group Administration tabs

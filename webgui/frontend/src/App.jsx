@@ -8,7 +8,6 @@ import Toasts from "./components/Toasts.jsx";
 import Dashboard from "./views/Dashboard.jsx";
 import Performance from "./views/Performance.jsx";
 import ToolRunner from "./views/ToolRunner.jsx";
-import Connect from "./views/Connect.jsx";
 import LiveActivity from "./views/LiveActivity.jsx";
 import Settings from "./views/Settings.jsx";
 import HostEnrollment from "./views/HostEnrollment.jsx";
@@ -35,7 +34,6 @@ const SECTIONS = {
   quickactions: "Quick System Actions",
   sysadmin: "System Administration",
   fleetquery: "Fleet Query",
-  connect: "Sysible Connect",
   live: "Live Activity & Logs",
   settings: "Settings",
 };
@@ -48,7 +46,7 @@ const SECTIONS = {
 // mixed list:
 //   1. Observe   — Dashboard, Topology, Performance (see the fleet's state)
 //   2. Onboard   — Host Enrollment (bring hosts under management first)
-//   3. Operate   — Connect, Quick System Actions, System Administration Tools,
+//   3. Operate   — Quick System Actions, System Administration Tools,
 //                  Fleet Query (act on hosts, quick actions before deep tools)
 //   4. Maintain  — Update Hosts, Schedules, Alerts (keep it healthy over time)
 //   5. Oversee   — Activity & Logs, Settings (audit + configure)
@@ -61,7 +59,6 @@ const NAV = [
   { key: "hosts", label: "Host Enrollment", icon: "server", su: true },
   { key: "migrate", label: "Migrate", icon: "move", su: true },
   // Operate
-  { key: "connect", label: "Connect", icon: "terminal", su: false },
   { key: "quickactions", label: "Quick System Actions", icon: "bolt", su: false },
   { key: "sysadmin", label: "System Administration Tools", icon: "tools", su: false },
   { key: "fleetquery", label: "Fleet Query", icon: "search", su: false },
@@ -141,10 +138,9 @@ function SkinIcon() {
 // --- URL-addressable views ------------------------------------------------
 // Nav items are real links (?view=<key>) so they can be opened in a new tab,
 // bookmarked, and shared — not just JS buttons. Excludes the dashboard
-// (null → ?view=dashboard), Sysible Connect (opens its own window), and the
-// docs download link.
+// (null → ?view=dashboard) and the docs external/download link.
 const VIEW_KEYS = new Set(
-  NAV.filter((n) => n.key && n.key !== "connect" && !n.download && !n.external).map((n) => n.key),
+  NAV.filter((n) => n.key && !n.download && !n.external).map((n) => n.key),
 );
 const NAV_BY_KEY = Object.fromEntries(NAV.filter((n) => n.key).map((n) => [n.key, n]));
 // In-app DRILL-IN views: reached by clicking into something (e.g. a host from a
@@ -306,10 +302,6 @@ export default function App() {
   // there (e.g. Performance → a tool → Back to Performance) without walking the
   // menus again. Used by both the sidebar and in-app "Fix in…"/drill links.
   const go = useCallback((v, t = null) => {
-    // Sysible Connect always opens in its own browser tab (a named window, so
-    // re-triggering focuses the existing one) — never inline. Centralised here
-    // so every entry point (nav, feature search, drill-ins) behaves the same.
-    if (v === "connect") { window.open("/?view=connect", "sysible_connect"); return; }
     if (v === view && JSON.stringify(t) === JSON.stringify(target)) return;
     setHistory((h) => [...h, { view, target }]);
     setView(v); setTarget(t);
@@ -356,28 +348,6 @@ export default function App() {
   if (qs.get("term")) {
     return <StandaloneTerminal hostId={qs.get("term")} label={qs.get("label") || ""} />;
   }
-  // Sysible Connect runs in its own browser tab (opened from the nav), as a
-  // focused window with just its own header — no left rail. Host terminals
-  // opened from here pop out into their own windows (see Connect.openTerm).
-  if (qs.get("view") === "connect") {
-    return (
-      <div className="shell connect-standalone">
-        <main className="main">
-          <div className="main-top">
-            <div className="row" style={{ alignItems: "center", gap: 10, minWidth: 0 }}>
-              <Logo size={22} />
-              <h2 style={{ margin: 0 }}>Sysible Connect</h2>
-            </div>
-            <div className="row" style={{ alignItems: "center", gap: 12 }}>
-              <button className="btn ghost sm" onClick={() => setSudoOpen(true)}>Sudo Password</button>
-            </div>
-          </div>
-          <div className="main-scroll"><Connect /></div>
-        </main>
-        {sudoOpen && <SudoModal onClose={() => setSudoOpen(false)} />}
-      </div>
-    );
-  }
 
   const isSuper = role === "superuser";
   const isAuditor = role === "auditor";
@@ -420,7 +390,6 @@ export default function App() {
             ) : (
               <a key={n.key ?? "dash"} href={hrefForView(n.key)}
                  className={"rail-item" + (view === n.key ? " active" : "")}
-                 title={n.key === "connect" ? "Opens in a new tab" : undefined}
                  onClick={(e) => {
                    // Let the browser handle modifier-clicks (⌘/Ctrl/Shift/Alt) so
                    // "open in new tab/window" works; otherwise navigate in-app.
@@ -430,7 +399,6 @@ export default function App() {
                    go(n.key, null);
                  }}>
                 <NavIcon name={n.icon} /><span>{n.label}</span>
-                {n.key === "connect" && <span className="rail-ext" aria-hidden="true">↗</span>}
               </a>
             )
           ))}

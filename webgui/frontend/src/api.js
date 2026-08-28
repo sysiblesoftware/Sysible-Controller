@@ -214,10 +214,9 @@ export const api = {
     req("/api/sudo", { method: "POST", body: { password, scope } }),
   clearSudo: (scope) =>
     req("/api/sudo", { method: "DELETE", body: { scope } }),
-  // Sysible Connect
+  // Run an action (script/reboot/power-off/restart-agent) across managed hosts.
   fleet: (action, targets, command, sudoPassword = "") =>
     req("/api/fleet", { method: "POST", body: { action, targets, command, sudo_password: sudoPassword } }),
-  checkin: (targets = []) => req("/api/checkin", { method: "POST", body: { targets } }),
   // Per-host operator metadata (tags / owner / notes / criticality).
   hostMeta: () => req("/api/host-meta"),
   setHostMeta: (name, meta) =>
@@ -248,14 +247,6 @@ export const api = {
   resetUnit: (hostId, unit, sudoPassword = "") =>
     req(`/api/host/${encodeURIComponent(hostId)}/restart-unit`,
         { method: "POST", body: { unit, sudo_password: sudoPassword, mode: "reset-failed" } }),
-  controllerKey: () => req("/api/controller-key"),
-  enrollSsh: (payload) => req("/api/enroll-ssh", { method: "POST", body: payload }),
-  // Forget a standalone SSH host record (superuser-only). For a pure-SSH host
-  // there's no agent to disenroll — this drops the SSH connection record (and its
-  // pinned host key) that `removeHost` (the agent path) never touches.
-  deleteSshHost: (name) =>
-    req(`/api/ssh-host/${encodeURIComponent(name)}`, { method: "DELETE" }),
-  deleteAllSshHosts: () => req(`/api/ssh-hosts`, { method: "DELETE" }),
   setHostEnvironment: (hostId, environment) =>
     req(`/api/host/${encodeURIComponent(hostId)}/environment`, { method: "POST", body: { environment } }),
   createEnvironment: (name) => req("/api/environments", { method: "POST", body: { name } }),

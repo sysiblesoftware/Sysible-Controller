@@ -63,7 +63,8 @@ sudo sysible_controller webgui start    # console on :8800
 
 **Container:**
 ```bash
-sudo ./start-container.sh               # builds from the current checkout, sets the LAN address
+sudo ./deploy/sysible_ctl install       # once: put the sysible_ctl CLI on PATH
+sudo sysible_ctl controller up          # builds from the current checkout, seeds the LAN address
 # or: docker compose up -d --build      # see DOCKER.md
 ```
 
@@ -71,7 +72,7 @@ Then open `https://<host>:8800/` and complete the **first-run screen** to create
 your administrator account (you choose the password). Your browser warns once
 about the self-signed cert — proceed and it's remembered. To drop the name-mismatch
 warning, put your host's IP/DNS in the cert (`SYSIBLE_CONTROLLER_HOSTNAMES`, or
-`start-container.sh` does it for you).
+`sysible_ctl controller up <lan-ip>` does it for you).
 
 On first start the controller also **enrolls itself** as a managed host, so it
 shows up in the fleet like any other box (opt out with `SYSIBLE_NO_SELF_ENROLL=1`).
@@ -86,9 +87,9 @@ containers — never both at once, because they compete for the same ports
 
 | | Standalone | Container |
 |---|---|---|
-| Install | `install_sysible.sh` → `/opt/sysible` | `start-container.sh` / compose |
+| Install | `install_sysible.sh` → `/opt/sysible` | `sysible_ctl controller up` / compose |
 | Runs | `sysible-backend` + `sysible-webgui` (systemd) | `controller` + `webgui` containers |
-| Update | `sudo sysible_controller update` | re-run `start-container.sh` (rebuilds) |
+| Update | `sudo sysible_controller update` | `sysible_ctl controller update` (rebuilds) |
 | Code lives in | `/opt/sysible` (rsynced snapshot, no `.git`) | the image (rebuilt from your checkout) |
 
 > **Standalone gotcha:** the service runs the code in `/opt/sysible`, which the
@@ -113,7 +114,7 @@ sudo sysible_controller start && sudo sysible_controller webgui start
 **Going container → stop the standalone services:**
 ```bash
 sudo systemctl disable --now sysible-backend sysible-webgui
-sudo ./start-container.sh <lan-ip>
+sudo sysible_ctl controller up <lan-ip>
 ```
 
 **Verify one controller owns the port** (the LAN IP, not just loopback):
@@ -255,7 +256,7 @@ two services answer the port (§4, one controller per port).
 
 **Changes didn't take effect.** Standalone runs the `/opt/sysible` snapshot, not
 your checkout — `sysible_controller update`. Containers run the image — rebuild
-(`start-container.sh`). Either way, **restart** so the process reloads.
+(`sysible_ctl controller update`). Either way, **restart** so the process reloads.
 
 **Reached as two hosts / port conflict after a mode switch.** See §4 — retire the
 old side and confirm one process owns `:9000`.

@@ -29,7 +29,7 @@ services:
       # The address AGENTS reach this controller at, baked into agent enrollment
       # bundles. REQUIRED in a container: without it the controller advertises its
       # docker-bridge IP (172.x) and bundles strand the fleet on an unreachable
-      # address. Set it to this host's LAN IP / DNS name (start-container.sh does).
+      # address. Set it to this host's LAN IP / DNS name (sysible_ctl controller up does).
       SYSIBLE_CONTROLLER_ADDR: "${SYSIBLE_CONTROLLER_ADDR:-}"
       # Optionally set the first superuser's password (else one is generated and
       # printed to the logs once on first run):

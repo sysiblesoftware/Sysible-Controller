@@ -232,7 +232,8 @@ function EnvFleetCard({ group, postureLoaded, onOpenHost }) {
         )}
       </div>
       {open && (
-        <div style={{ padding: "0 10px 10px", display: "grid", gap: 8,
+        <div style={{ padding: "0 10px 10px", display: "grid",
+                      gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 8,
                       borderTop: "1px solid var(--border)", paddingTop: 8 }}>
           {group.hosts.map((h) => <FleetHostCard key={h.host} h={h} onOpenHost={onOpenHost} />)}
         </div>
@@ -1086,7 +1087,7 @@ export default function Dashboard({ role, edition, onOpen }) {
                 — {fleetEnvs.clear}/{fleetEnvs.total} hosts clear
               </span>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 10 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 10, alignItems: "start" }}>
               {fleetEnvs.envs.map((e) => (
                 <EnvFleetCard key={e.env} group={e} postureLoaded={posture.length > 0} onOpenHost={openHost} />
               ))}

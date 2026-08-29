@@ -603,6 +603,15 @@ def admin_login(username: str, password: str):
     return result
 
 
+def sso_provision(username: str, role: str):
+    """SLOP single sign-on bridge: turn a gateway-asserted identity into a normal
+    admin token. Authenticated by the backend API key (in _headers), NOT a
+    password — the console calls this after the SLOP gateway has already
+    authenticated the browser. Returns {username, role, token, sudo_connect}.
+    Does NOT set the process-wide admin token (the BFF keeps it per-session)."""
+    return _request("POST", "/admin/sso-provision", json={"username": username, "role": role})
+
+
 def admin_logout():
     """Revoke this session's RBAC token server-side and clear it locally.
     Best-effort: the local token is cleared even if the network call fails,

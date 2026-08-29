@@ -3145,6 +3145,54 @@ def issue_api_key_for_superuser(body: AdminLoginRequest, request: Request):
     return {"status": "ok", "api_key": get_or_create_api_key()}
 
 
+@app.post("/admin/sso-provision", dependencies=[Depends(require_api_key)])
+def admin_sso_provision(body: dict = Body(...)):
+    """Bridge for SLOP single sign-on (unified login across the Sysible apps).
+
+    The web console holds the root-only backend API key. When it is fronted by
+    the SLOP gateway, the gateway has ALREADY authenticated the browser (against
+    SLOP's user store) and asserts the identity to the console. The console then
+    calls this endpoint, on the API key, to turn that asserted identity into a
+    normal RBAC token it can use for all the console's backend calls:
+
+      * ensure a matching administrator account exists with the asserted role —
+        SLOP is the identity authority, so a new SSO user is provisioned and an
+        existing one's role is realigned to what SLOP asserts;
+      * mint and return a standard admin token for it (the same kind /admin/login
+        issues), so every existing token-gated route works unchanged.
+
+    NO password is involved: SSO users authenticate at SLOP, never here. The
+    account is created with an unusable random password so it can't be logged
+    into locally — it exists only to satisfy token resolution and RBAC. This is
+    only reachable by the API-key holder (root on the controller host), which
+    already implies full control, so it grants no privilege the key lacks.
+    """
+    username = (str(body.get("username") or "")).strip()
+    role = body.get("role")
+    if role not in ("superuser", "sysadmin", "auditor"):
+        role = "auditor"  # fail closed to least privilege on an unknown role
+    if not username:
+        raise HTTPException(status_code=400, detail="username is required")
+
+    acct = get_administrator(username)
+    if acct is None:
+        # Unusable local password — SSO users never authenticate here.
+        salt, password_hash = portal_auth.hash_password(secrets.token_urlsafe(32))
+        add_administrator(username, password_hash, salt, must_change_password=0,
+                          created_by="sso", role=role)
+        log_admin_audit("sso_account_provisioned", username, f"role={role} (via SLOP SSO)")
+    elif (acct.get("role") or "superuser") != role:
+        # SLOP is authoritative for identity → keep the local role in lockstep.
+        set_administrator_role(username, role)
+        log_admin_audit("sso_role_synced", username, f"role -> {role} (via SLOP SSO)")
+
+    token = secrets.token_hex(32)
+    create_admin_token(token, username, role, time.time() + 12 * 60 * 60)
+    record_administrator_login(username)
+    sudo_connect = bool((acct or {}).get("sudo_connect")) if acct else False
+    return {"username": username, "role": role, "token": token, "sudo_connect": sudo_connect}
+
+
 @app.get("/admin/whoami", dependencies=[Depends(require_api_key)])
 def admin_whoami(request: Request):
     """Resolve the caller's admin token to its LIVE identity/role, or 401 if the

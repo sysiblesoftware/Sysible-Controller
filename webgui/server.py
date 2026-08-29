@@ -293,9 +293,74 @@ _FRONTEND_DIST = _REPO_ROOT / "webgui" / "frontend" / "dist"
 # ----------------------------------------------------------------------
 # Auth
 # ----------------------------------------------------------------------
+# --- SLOP single sign-on: trust the gateway-asserted identity ---------------
+# When the console runs behind the SLOP gateway, the gateway has already
+# authenticated the browser against SLOP (the suite's identity provider) and
+# asserts the identity as request headers. We trust them ONLY when SSO mode is
+# on AND the request carries the shared secret proving it came through the
+# gateway — a browser hitting the console directly can't know the secret, so it
+# can't forge an identity. Both default OFF, so a standalone console is unchanged.
+_TRUST_SSO = os.getenv("SYSIBLE_WEBGUI_TRUST_SSO", "0") == "1"
+_SSO_SECRET = os.getenv("SYSIBLE_SSO_SHARED_SECRET", "")
+if _TRUST_SSO and not _SSO_SECRET:
+    _log.warning("SYSIBLE_WEBGUI_TRUST_SSO=1 but SYSIBLE_SSO_SHARED_SECRET is empty — "
+                 "gateway identity will be IGNORED (fail closed). Set the shared secret.")
+# SLOP's canonical roles map onto the controller's (superuser / sysadmin / auditor).
+_SSO_ROLE_MAP = {"superuser": "superuser", "operator": "sysadmin", "auditor": "auditor"}
+
+
+def _sso_identity(request: Request):
+    """(user, controller_role) asserted by the SLOP gateway for this request, or
+    None. Guarded by the shared secret so it can't be spoofed by a direct client."""
+    if not (_TRUST_SSO and _SSO_SECRET):
+        return None
+    import hmac
+    if not hmac.compare_digest(request.headers.get("x-sysible-auth", ""), _SSO_SECRET):
+        return None
+    user = (request.headers.get("x-sysible-user") or "").strip()
+    if not user:
+        return None
+    role = _SSO_ROLE_MAP.get((request.headers.get("x-sysible-role") or "").strip().lower(), "auditor")
+    return user, role
+
+
+def _ensure_sso_session(request: Request):
+    """If the SLOP gateway asserts an identity, make the BFF session reflect it —
+    provisioning a backend token for that user on first sight (or when SLOP changes
+    the user/role). Called at the top of every auth gate, so every protected route
+    inherits SSO with no per-route change. A no-op when SSO mode is off or the
+    request didn't come through the gateway. Never raises: on a provisioning
+    failure the session is left as-is and the caller's normal 401 path applies."""
+    ident = _sso_identity(request)
+    if not ident:
+        return
+    user, role = ident
+    sess = request.session
+    # Already an SSO session for this exact identity, with a live token → reuse it
+    # (no backend round-trip). Re-provision only on first hit / a changed identity.
+    if sess.get("_sso") and sess.get("user") == user and sess.get("role") == role \
+            and _token_from_session(sess):
+        return
+    try:
+        result = api.sso_provision(user, role)
+    except Exception as e:
+        _log.warning("SSO provision failed for %r: %s", user, e)
+        return
+    request.session.clear()  # session-fixation hardening, mirrors /api/login
+    sess = request.session
+    sess["_sso"] = True
+    sess["user"] = user
+    sess["role"] = result.get("role") or role
+    sess["sudo_connect"] = bool(result.get("sudo_connect"))
+    sess["must_change_password"] = False  # SSO users have no local password to rotate
+    if result.get("token"):
+        sess["token_enc"] = _encrypt_token(result["token"])
+
+
 def require_login(request: Request):
     """Dependency: 401 unless the session cookie carries a logged-in
     admin username. Every /api route except /api/login uses this."""
+    _ensure_sso_session(request)
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -315,6 +380,7 @@ def require_operator(request: Request):
     auditors may not (running tools, fleet actions, terminals, etc.). The
     controller also blocks command dispatch for auditors server-side, so this
     is the front-of-house half of a defence-in-depth pair."""
+    _ensure_sso_session(request)
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -342,6 +408,7 @@ def require_superuser_session(request: Request):
     on the controller host), so enforcing the superuser/sysadmin split here is
     the effective control; the high-value writes also get controller-side
     require_superuser as defence-in-depth."""
+    _ensure_sso_session(request)
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -723,6 +790,7 @@ def logout(request: Request):
 
 @app.get("/api/me")
 def me(request: Request):
+    _ensure_sso_session(request)
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -758,6 +826,7 @@ def auth_verify(request: Request, response: Response):
     through; Cache-Control:no-store keeps any proxy from caching the decision.
     See Sysible-Linux-Operations-Platform/docs/SSO.md.
     """
+    _ensure_sso_session(request)
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")

@@ -35,6 +35,12 @@ services:
       # printed to the logs once on first run):
       # SYSIBLE_ADMIN_USERNAME: "admin"
       # SYSIBLE_ADMIN_PASSWORD: "change-me-please"
+      # Single sign-on behind the SLOP gateway. Both default OFF/empty, so a
+      # standalone controller keeps its own login untouched. The SLOP installer
+      # sets these so the controller trusts the gateway-asserted identity ONLY
+      # when the request carries the matching shared secret (see SLOP docs/SSO.md).
+      SYSIBLE_WEBGUI_TRUST_SSO: "${SYSIBLE_WEBGUI_TRUST_SSO:-0}"
+      SYSIBLE_SSO_SHARED_SECRET: "${SYSIBLE_SSO_SHARED_SECRET:-}"
     volumes:
       - sysible-data:/data   # DB, certs, API key, cookie secret, portal files
 

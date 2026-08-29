@@ -21,7 +21,6 @@ import Topology from "./views/Topology.jsx";
 import UpdatesBadge from "./components/UpdatesBadge.jsx";
 import HealthBanner from "./components/HealthBanner.jsx";
 import SudoModal from "./components/SudoModal.jsx";
-import StandaloneTerminal from "./components/StandaloneTerminal.jsx";
 
 const SECTIONS = {
   hosts: "Host Enrollment",
@@ -80,7 +79,6 @@ const ICONS = {
   move: <><path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/></>,
   server: <><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><line x1="7" y1="7" x2="7.01" y2="7"/><line x1="7" y1="17" x2="7.01" y2="17"/></>,
   tools: <><path d="M3 21h4L17 11l-4-4L3 17v4z"/><path d="M14.5 5.5l4 4"/></>,
-  terminal: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></>,
   activity: <><path d="M4 12h4l2-6 4 12 2-6h4"/></>,
   chart: <><path d="M4 19V5M4 19h16M8 16l3-4 3 3 4-6"/></>,
   cog: <><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></>,
@@ -342,11 +340,6 @@ export default function App() {
   // A temporary password must be rotated before anything else is reachable.
   if (mustChange) {
     return <ForcePasswordChange username={user} onDone={() => setMustChange(false)} onLogout={onLogout} />;
-  }
-
-  const qs = new URLSearchParams(location.search);
-  if (qs.get("term")) {
-    return <StandaloneTerminal hostId={qs.get("term")} label={qs.get("label") || ""} />;
   }
 
   const isSuper = role === "superuser";

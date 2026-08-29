@@ -55,7 +55,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from fastapi import (
-    FastAPI, HTTPException, Request, Depends, WebSocket, WebSocketDisconnect,
+    FastAPI, HTTPException, Request, Depends,
     UploadFile, File, Form,
 )
 from fastapi.responses import JSONResponse, FileResponse, Response
@@ -651,8 +651,9 @@ def login(body: LoginRequest, request: Request):
     # as defense-in-depth against an unexpected/degraded response.
     request.session["role"] = result.get("role") or "auditor"
     # Per-admin opt-in for the Sysible Connect terminal's "Send sudo password"
-    # button (granted by a superuser). Enforced server-side in the terminal ws
-    # sudo handler below.
+    # button (granted by a superuser). Surfaced to the session so the standalone
+    # Sysible Connect app can consume it; the interactive terminal itself now
+    # lives in that separate app rather than this console.
     request.session["sudo_connect"] = bool(result.get("sudo_connect"))
     # Keep the controller-issued admin token (encrypted) so the BFF can call
     # superuser-gated controller routes on this admin's behalf. Encrypted with
@@ -4001,186 +4002,6 @@ async def files_download(host: str, path: str, request: Request,
     return FileResponse(str(dest), filename=filename,
                         media_type="application/octet-stream",
                         background=BackgroundTask(_cleanup))
-
-
-# ----------------------------------------------------------------------
-# Sysible Connect - browser terminal over a websocket
-# ----------------------------------------------------------------------
-# The controller exposes an SSH PTY as a poll-based HTTP API (open ->
-# read/write/resize -> close) via client.api. xterm.js in the browser
-# wants a stream, so this websocket bridges the two: a background task
-# polls read_terminal() and pushes output frames to the browser, while
-# inbound frames are written/resized/closed straight through. All
-# client.api calls are blocking (requests), so they run in threads to
-# keep the event loop free.
-#
-# Wire protocol (JSON text frames):
-#   server -> browser: {"t":"ready"} | {"t":"o","d":<output>} | {"t":"closed"} | {"t":"error","d":msg}
-#   browser -> server: {"t":"open","host":<id>,"cols":N,"rows":N}
-#                      {"t":"i","d":<keystrokes>} | {"t":"r","cols":N,"rows":N}
-@app.websocket("/api/terminal/ws")
-async def terminal_ws(ws: WebSocket):
-    # Defense-in-depth against cross-site websocket hijacking: reject a
-    # handshake whose Origin isn't our own host. (The SameSite=Strict session
-    # cookie already prevents a cross-site handshake from carrying the login,
-    # but an explicit Origin check is the canonical CSWSH control.)
-    origin = ws.headers.get("origin")
-    if origin:
-        host = ws.headers.get("host", "")
-        try:
-            from urllib.parse import urlparse
-            if urlparse(origin).netloc != host:
-                await ws.close(code=1008)
-                return
-        except Exception:
-            await ws.close(code=1008)
-            return
-    # Auth: SessionMiddleware populates the websocket scope's session the
-    # same way it does for HTTP, so the login cookie gates this too.
-    _sess = ws.scope.get("session", {}) or {}
-    if not _sess.get("user"):
-        await ws.close(code=1008)
-        return
-    # Read-only 'auditor' accounts cannot open an interactive terminal.
-    if _sess.get("role") == "auditor":
-        await ws.close(code=1008)
-        return
-    # Forced first-login password change gates the HTTP write/dispatch routes
-    # (require_operator); this WS does its own inline auth, so it must apply the
-    # same gate — otherwise an operator on a temporary/shared credential could
-    # open a fully interactive shell (the most privileged action) without ever
-    # rotating it.
-    if _sess.get("must_change_password"):
-        await ws.close(code=1008)
-        return
-    await ws.accept()
-
-    session_id = None
-    reader = None
-    try:
-        # First frame must open a terminal on a chosen host.
-        first = await ws.receive_json()
-        if first.get("t") != "open" or not first.get("host"):
-            await ws.send_json({"t": "error", "d": "expected open frame with host"})
-            await ws.close()
-            return
-        host = first["host"]
-        # Open the terminal WITH the admin token set, so the controller runs
-        # the shell as the admin's user (runuser -u <admin>) instead of the
-        # raw SSH login (root). The token is only needed at open time.
-        ws_token = _token_from_session(ws.scope.get("session"))
-        try:
-            opened = await asyncio.to_thread(lambda: _with_token(ws_token, lambda: api.open_terminal(host)))
-            session_id = opened["session_id"]
-        except Exception as e:
-            await ws.send_json({"t": "error", "d": f"could not open terminal: {e}"})
-            await ws.close()
-            return
-
-        # Audit trail: an interactive shell is the single most privileged action
-        # in the product, so record that admin X opened one on host Y (attributed
-        # via the login token, refused for auditors). Best-effort — a logging
-        # failure must never stop the operator getting their terminal.
-        _open_label = first.get("label") or host
-        try:
-            await asyncio.to_thread(
-                lambda: _with_token(ws_token,
-                                    lambda: api.log_action(_open_label, "opened an interactive terminal")))
-        except Exception:
-            pass
-
-        # Initial size, if provided.
-        if first.get("cols") and first.get("rows"):
-            try:
-                await asyncio.to_thread(api.resize_terminal, session_id,
-                                        int(first["cols"]), int(first["rows"]))
-            except Exception:
-                pass
-        await ws.send_json({"t": "ready"})
-
-        async def pump_output():
-            """Poll the controller for new PTY output and push it to the
-            browser. Light idle backoff keeps latency low while typing
-            without busy-spinning an idle shell."""
-            idle = 0
-            while True:
-                try:
-                    res = await asyncio.to_thread(api.read_terminal, session_id)
-                except Exception as e:
-                    await ws.send_json({"t": "error", "d": str(e)})
-                    return
-                data = res.get("data", "")
-                if data:
-                    await ws.send_json({"t": "o", "d": data})
-                    idle = 0
-                else:
-                    idle = min(idle + 1, 6)
-                if res.get("closed"):
-                    await ws.send_json({"t": "closed"})
-                    return
-                await asyncio.sleep(0.03 + idle * 0.02)   # 30ms..150ms
-
-        ws_user = (ws.scope.get("session") or {}).get("user")
-        ws_label = first.get("label") or host
-
-        async def pump_input():
-            """Keystrokes / resize / send-sudo-password from the browser -> host."""
-            from webgui import sudo_store
-            while True:
-                msg = await ws.receive_json()
-                t = msg.get("t")
-                if t == "i":
-                    await asyncio.to_thread(api.write_terminal, session_id, msg.get("d", ""))
-                elif t == "r" and msg.get("cols") and msg.get("rows"):
-                    await asyncio.to_thread(api.resize_terminal, session_id,
-                                            int(msg["cols"]), int(msg["rows"]))
-                elif t == "sudo":
-                    # Opt-in, granted per-account by a superuser. Enforce it
-                    # server-side (the button is also hidden client-side): never
-                    # inject the password for an account that hasn't been granted.
-                    if not (ws.scope.get("session") or {}).get("sudo_connect"):
-                        await ws.send_json({"t": "o", "d":
-                            "\r\n[sudo on Connect is not enabled for your account — ask a superuser to grant it in Settings → Administrators]\r\n"})
-                        continue
-                    # Inject the operator's stored sudo password (host scope wins
-                    # over fleet default) + Enter — for an interactive sudo prompt.
-                    pw = sudo_store.resolve(ws_user, ws_label)
-                    if pw:
-                        await asyncio.to_thread(api.write_terminal, session_id, pw + "\n")
-                    else:
-                        await ws.send_json({"t": "o", "d":
-                            "\r\n[no sudo password stored — set it via 'Sudo Password' in the header]\r\n"})
-
-        reader = asyncio.create_task(pump_output())
-        writer = asyncio.create_task(pump_input())
-        # Whichever finishes first (shell exits / output side closes, or the
-        # browser disconnects) ends the session; cancel the other.
-        done, pending = await asyncio.wait(
-            {reader, writer}, return_when=asyncio.FIRST_COMPLETED
-        )
-        for task in pending:
-            task.cancel()
-    except WebSocketDisconnect:
-        pass
-    except Exception:
-        pass
-    finally:
-        if reader is not None:
-            reader.cancel()
-        if session_id is not None:
-            try:
-                await asyncio.to_thread(api.close_terminal, session_id)
-            except Exception:
-                pass
-            # Close the audit loop opened above so a session has a clear
-            # start/end pair in the feed. Best-effort.
-            try:
-                _close_label = first.get("label") or host
-                await asyncio.to_thread(
-                    lambda: _with_token(ws_token,
-                                        lambda: api.log_action(_close_label, "closed the interactive terminal")))
-            except Exception:
-                pass
 
 
 # ----------------------------------------------------------------------

@@ -59,7 +59,6 @@ _SNAPSHOT_MAX = _int_env("SYSIBLE_MAX_SNAPSHOT_BYTES", 512 * 1024)
 _MEASUREMENTS_MAX = _int_env("SYSIBLE_MAX_MEASUREMENTS_BYTES", 512 * 1024)
 _COMMAND_MAX = _int_env("SYSIBLE_MAX_COMMAND_BYTES", 1024 * 1024)
 _RESULT_MAX = _int_env("SYSIBLE_MAX_RESULT_BYTES", 4 * 1024 * 1024)
-_PTY_DATA_MAX = _int_env("SYSIBLE_MAX_PTY_CHUNK_BYTES", 512 * 1024)
 
 
 def _bounded_dict(v, cap, name):
@@ -171,11 +170,3 @@ class TaskResultRequest(BaseModel):
     agent_secret: str = Field(max_length=_ID_MAX)
     task_id: int
     result: str = Field(max_length=_RESULT_MAX)
-
-
-class PtyOutputRequest(BaseModel):
-    """Agent -> controller: a chunk of shell output for an agent-hosted terminal
-    (Option B). `ended` marks the shell exiting."""
-    agent_secret: str = Field(max_length=_ID_MAX)
-    data: str = Field(default="", max_length=_PTY_DATA_MAX)
-    ended: bool = False

@@ -85,12 +85,6 @@ class TestWrongTypes:
                                   "task_id": "abc", "result": "{}"})
         assert r.status_code == 422
 
-    def test_resize_cols_non_numeric(self, controller):
-        # Body validation (cols must be int) fires before the session lookup.
-        r = controller.post("/remote/terminal/nope/resize",
-                            headers=key_headers(), json={"cols": "wide", "rows": 24})
-        assert r.status_code == 422
-
     def test_log_flag_wrong_type(self, controller, ssh_host, superuser_headers):
         name = ssh_host()
         r = controller.post(f"/remote/hosts/{name}/exec", headers=superuser_headers,

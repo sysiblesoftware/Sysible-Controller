@@ -64,12 +64,3 @@ class EnrollSSHRequest(BaseModel):
     @field_validator("username")
     @classmethod
     def _v_username(cls, v): return _validate(_SSH_LOGIN_RE, v, "username")
-
-
-class TerminalWriteRequest(BaseModel):
-    data: str
-
-
-class TerminalResizeRequest(BaseModel):
-    cols: int
-    rows: int

@@ -92,7 +92,6 @@ from backend.models.agent_models import (
     ActivityLogRequest,
     EnrollRequest,
     HeartbeatRequest,
-    PtyOutputRequest,
     SelfDisenrollRequest,
     TaskCreateRequest,
     TaskResultRequest,
@@ -144,7 +143,7 @@ app = FastAPI(title="Sysible Controller", docs_url=None, redoc_url=None, openapi
 
 # ---------------------------------------------------------------------------
 # Scrub a per-host agent secret from access logs. Current agents send the secret
-# in the X-Agent-Secret header (never logged), but the poll/pty endpoints also
+# in the X-Agent-Secret header (never logged), but the poll endpoints also
 # accept it as a `?agent_secret=` query param for backward compatibility with
 # older field agents — and a secret in the URL lands in the uvicorn access log
 # (and any TLS-terminating proxy log) in cleartext. Redact it there so the
@@ -1602,29 +1601,6 @@ def post_task_result(host_id: str, body: TaskResultRequest):
     return {
         "status": "recorded" if applied else "ignored"
     }
-
-
-# =========================================================
-# AGENT-HOSTED PTY (Option B): the agent runs the shell locally and streams it
-# to the controller over these outbound calls, so terminals work with no inbound
-# SSH to the host. Authenticated by the per-host agent secret. See
-# backend/remote_routes.py for the controller-side session buffers.
-# =========================================================
-@app.post("/agents/{host_id}/pty/{session_id}/output")
-def pty_output(host_id: str, session_id: str, body: PtyOutputRequest):
-    verify_agent(host_id, body.agent_secret)
-    from backend.remote_routes import pty_push_output
-    closed = pty_push_output(session_id, host_id, body.data, body.ended)
-    return {"ok": True, "closed": closed}
-
-
-@app.get("/agents/{host_id}/pty/{session_id}/io")
-def pty_io(host_id: str, session_id: str, agent_secret: str = "",
-           x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
-    verify_agent(host_id, x_agent_secret or agent_secret)
-    from backend.remote_routes import pty_take_input
-    msgs, closed = pty_take_input(session_id, host_id, wait=25.0)
-    return {"msgs": msgs, "closed": closed}
 
 
 @app.get("/agents/{host_id}/results", dependencies=[Depends(require_api_key)])

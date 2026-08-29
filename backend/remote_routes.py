@@ -494,7 +494,19 @@ def add_host(body: AddHostRequest):
 
 @router.get("/hosts")
 def list_hosts():
-    return load_hosts()
+    # Return name/ip/user/environment only — NOT key_path. The controller's private
+    # SSH key path adds no operator value to the inventory view and needn't be
+    # disclosed to every API-key holder (it hinted at the on-disk key location).
+    # exec_remote/_connect_sftp read key_path straight from the local hosts.json
+    # (load_hosts()), never from this response, so dropping it changes no behaviour.
+    hosts = load_hosts()
+    out = {}
+    for name, h in hosts.items():
+        if isinstance(h, dict):
+            out[name] = {k: v for k, v in h.items() if k != "key_path"}
+        else:
+            out[name] = h
+    return out
 
 
 @router.get("/agent-bundle")
@@ -729,6 +741,53 @@ def _as_admin_remote(ssh_user: str, admin: str, cmd: str, elevate=False, passwor
             f"exit 126; }}; {switch}")
 
 
+def _internal_exec_allowed(request: Request) -> bool:
+    """Whether a TOKENLESS exec is permitted — i.e. the caller is a genuine
+    controller-internal principal, NOT an API-key holder coming in off the
+    network. The co-located BFF reaches the backend over 127.0.0.1:9000 for its
+    background probes (posture/metrics sweeps, user-list sync, scheduled jobs), so
+    a loopback peer is trusted. uvicorn on :9000 runs WITHOUT proxy-header trust
+    (docker/supervisord.conf), so request.client.host is the real socket peer and
+    a LAN caller can't spoof it to loopback. A split BFF/backend topology (BFF on a
+    different host) can opt in explicitly with SYSIBLE_REMOTE_INTERNAL_EXEC=1 —
+    mirroring require_remote_file_access's SYSIBLE_REMOTE_FILE_API flag."""
+    client = request.client.host if request.client else ""
+    if client in ("127.0.0.1", "::1", "localhost"):
+        return True
+    return os.getenv("SYSIBLE_REMOTE_INTERNAL_EXEC", "").strip().lower() in ("1", "true", "yes")
+
+
+def _authorize_exec(request: Request):
+    """Authorize a /hosts/{name}/exec call and return the attributed admin
+    username, or None for an authorized tokenless INTERNAL caller. Raises 401/403
+    otherwise. Exec on an enrolled host is arbitrary command execution as the SSH
+    login user (root), so authorization must match that blast radius:
+
+      * a resolvable OPERATOR admin token (superuser or sysadmin) → the attributed
+        path (runs AS that admin, per-user least privilege, audited). A read-only
+        auditor is refused (403); an invalid/expired token is 401.
+      * NO token → allowed ONLY for a genuine controller-internal caller
+        (_internal_exec_allowed): the co-located BFF's background probes. Any other
+        tokenless caller — e.g. an API-key holder hitting the LAN-exposed :9000 —
+        is refused (403). This closes the previous "no token => run body.cmd as
+        root, unattributed" bypass that any machine-key holder could reach.
+    """
+    token = request.headers.get("X-Sysible-Admin-Token")
+    if token:
+        from backend.db import resolve_admin_token
+        admin = resolve_admin_token(token)
+        if not admin:
+            raise HTTPException(status_code=401, detail="Invalid or expired admin token")
+        if admin.get("role") == "auditor":
+            raise HTTPException(status_code=403, detail="Auditor accounts are read-only.")
+        return admin["username"]
+    if _internal_exec_allowed(request):
+        return None
+    raise HTTPException(
+        status_code=403,
+        detail="Remote command execution requires an operator login token.")
+
+
 @router.post("/hosts/{name}/exec")
 def exec_remote(name: str, body: ExecRequest, request: Request):
     hosts = load_hosts()
@@ -736,20 +795,17 @@ def exec_remote(name: str, body: ExecRequest, request: Request):
     if name not in hosts:
         raise HTTPException(status_code=404, detail="host not found")
 
-    # Read-only auditors may NEVER run a command on a host — logged or not.
-    # This block is unconditional (not gated on the client-supplied body.log):
-    # a caller could otherwise set log=False to skip both this check AND the
-    # audit record below and execute arbitrary commands as an auditor with no
-    # trail. _reject_auditor is a no-op when no admin token is present, so the
-    # genuine internal read-only sweeps (posture, fleet-health, user-list sync)
-    # — which are dispatched tokenless — still pass through. Mirrors the agent
-    # dispatch path's unconditional auditor block in app.py.
-    _reject_auditor(request)
+    # Authorize BEFORE doing anything (see _authorize_exec): an operator token, or
+    # a genuine controller-internal tokenless caller — nothing else. Read-only
+    # auditors are rejected regardless of the client-supplied body.log (a caller
+    # could otherwise set log=False to slip past both the role check and the audit
+    # write). The tokenless=root branch is no longer reachable by an API-key holder
+    # off the network.
+    admin = _authorize_exec(request)
 
-    # Activity feed: record admin-initiated SSH exec (identity from token),
-    # unless this is a background/internal read (body.log=False, e.g. the
-    # user-list sync) which isn't an operator action.
-    admin = _resolve_admin_username(request)
+    # Activity feed: record admin-initiated SSH exec (identity from the token),
+    # unless this is a background/internal read (body.log=False, e.g. the user-list
+    # sync) which isn't an operator action. Tokenless internal probes carry no admin.
     if admin and body.log:
         from backend.db import log_activity
         log_activity(admin, name, body.description or ("ran: " + body.cmd[:80]), body.cmd)

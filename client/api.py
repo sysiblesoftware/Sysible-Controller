@@ -166,10 +166,13 @@ def ping():
         return False
 
 
-def _request(method, path, **kwargs):
+def _request(method, path, extra_headers=None, **kwargs):
     timeout = kwargs.pop("timeout", 15)
+    headers = _headers()
+    if extra_headers:
+        headers.update(extra_headers)
     r = _request_with_tls_refresh(lambda: _SESSION.request(
-        method, f"{BASE_URL}{path}", headers=_headers(),
+        method, f"{BASE_URL}{path}", headers=headers,
         timeout=timeout, verify=_VERIFY, **kwargs,
     ))
     if not r.ok:
@@ -605,11 +608,17 @@ def admin_login(username: str, password: str):
 
 def sso_provision(username: str, role: str):
     """SLOP single sign-on bridge: turn a gateway-asserted identity into a normal
-    admin token. Authenticated by the backend API key (in _headers), NOT a
-    password — the console calls this after the SLOP gateway has already
-    authenticated the browser. Returns {username, role, token, sudo_connect}.
-    Does NOT set the process-wide admin token (the BFF keeps it per-session)."""
-    return _request("POST", "/admin/sso-provision", json={"username": username, "role": role})
+    admin token. Authenticated by the backend API key (in _headers) AND the SLOP
+    gateway shared secret (X-Sysible-Auth) — the backend refuses this endpoint to a
+    bare-API-key caller, so a LAN attacker with only the key can't mint/promote a
+    superuser through it. The console calls this only after the SLOP gateway has
+    already authenticated the browser. Returns {username, role, token,
+    sudo_connect}. Does NOT set the process-wide admin token (the BFF keeps it
+    per-session)."""
+    secret = os.getenv("SYSIBLE_SSO_SHARED_SECRET", "") or ""
+    extra = {"X-Sysible-Auth": secret} if secret else None
+    return _request("POST", "/admin/sso-provision",
+                    json={"username": username, "role": role}, extra_headers=extra)
 
 
 def admin_logout():

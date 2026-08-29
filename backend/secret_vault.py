@@ -32,6 +32,12 @@ except Exception:  # pragma: no cover - cryptography is a hard dep, but degrade 
 
 _PREFIX = "v1:"
 _KEY_FILE_NAME = "controller_secret.key"
+_SALT_FILE_NAME = "controller_secret.salt"
+# PBKDF2 work factor for a passphrase-shaped master key. >=600k SHA-256 iterations
+# (OWASP 2023 floor) turns a would-be fast offline dictionary attack on a DB backup
+# into an infeasible one.
+_KDF_ITERATIONS = 600_000
+_SALT_BYTES = 16
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _cached_key = None  # bytes | None
@@ -131,20 +137,60 @@ def _load_or_create_key():
     return _cached_key
 
 
+def _install_salt():
+    """A stable per-installation salt for the passphrase KDF, persisted 0600 next to
+    the local key file and generated once on first use. Same O_EXCL|O_NOFOLLOW
+    hardening as the key file: a local user can't pre-plant a symlink to redirect the
+    salt read/write. If it genuinely can't be persisted (read-only mount), fall back
+    to a fixed application salt — weaker (not per-install unique) but still stretched,
+    never bare SHA-256."""
+    sf = _run_dir() / _SALT_FILE_NAME
+    try:
+        _run_dir().mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        fd = os.open(str(sf), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            salt = os.urandom(_SALT_BYTES)
+            os.write(fd, salt)
+            return salt
+        finally:
+            os.close(fd)
+    except FileExistsError:
+        try:
+            rfd = os.open(str(sf), os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                data = os.read(rfd, 4096)
+            finally:
+                os.close(rfd)
+            if data:
+                return data
+        except OSError:
+            pass
+    except OSError:
+        pass
+    return b"sysible-secret-vault-kdf-v1"  # fixed fallback (read-only mount)
+
+
 def _coerce_to_fernet_key(raw):
     """Return a VALID Fernet key (urlsafe-b64 of 32 bytes) for ``raw``.
 
     If ``raw`` is already a valid Fernet key it is returned UNCHANGED — so an
     operator-provided key, the auto-created 0600 local file key, and a
-    KMS/Vault-issued Fernet key all key existing ciphertext exactly as before.
-    Otherwise a key is DERIVED from it by SHA-256. This lets SYSIBLE_SECRET_KEY
-    be any high-entropy string (a passphrase, or a Helm-generated random value)
-    without silently disabling at-rest encryption: a non-Fernet-format value used
-    to make Fernet() raise → _fernet() returned None → strict mode refused every
-    write and non-strict stored PLAINTEXT. Derivation is deterministic, so a
-    derived key round-trips its own ciphertext. NOTE: audit_hmac_key() /
-    derive_fernet_key() intentionally HMAC the RAW master key (not this coerced
-    form), so their outputs are unchanged."""
+    KMS/Vault-issued Fernet key all key existing ciphertext exactly as before. THIS
+    is the recommended input: generate one with Fernet.generate_key().
+
+    Otherwise (a non-Fernet string, e.g. a passphrase) a key is STRETCHED from it
+    with PBKDF2-HMAC-SHA256 (>=600k iterations) over a stable per-installation salt,
+    NOT a bare unsalted SHA-256. Bare SHA-256 let an attacker who obtained a DB
+    backup run a fast offline dictionary attack (hash each candidate, try to
+    Fernet-decrypt a known ciphertext) to recover the master key — and thus every
+    stored secret and the admin bearer token. PBKDF2 + salt makes that infeasible.
+    Derivation is deterministic given the persisted salt, so a derived key
+    round-trips its own ciphertext. NOTE: audit_hmac_key() / derive_fernet_key()
+    intentionally HMAC the RAW master key (not this coerced form), so their outputs
+    are unchanged."""
     if not raw:
         return None
     kb = raw if isinstance(raw, bytes) else str(raw).encode()
@@ -156,7 +202,8 @@ def _coerce_to_fernet_key(raw):
             pass
     import base64
     import hashlib
-    return base64.urlsafe_b64encode(hashlib.sha256(kb).digest())
+    dk = hashlib.pbkdf2_hmac("sha256", kb, _install_salt(), _KDF_ITERATIONS, dklen=32)
+    return base64.urlsafe_b64encode(dk)
 
 
 def available() -> bool:

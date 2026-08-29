@@ -400,7 +400,7 @@ function ControllerCfg() {
           onClick={async () => {
             setErr(""); setMsg(""); setBusy(true);
             try {
-              const res = await fetch(api.agentBundleUrl(), { credentials: "include" });
+              const res = await fetch(api.agentBundleUrl(), { method: "POST", credentials: "include" });
               noteRawStatus(res.status);  // bypasses req(); bounce to login on 401
               if (!res.ok) {
                 let d = ""; try { d = (await res.json()).detail || ""; } catch { /* not JSON */ }

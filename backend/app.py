@@ -2,6 +2,7 @@ from typing import Optional
 
 from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
+import hmac
 import json
 import os
 import re
@@ -260,6 +261,33 @@ def _openapi_loopback(request: Request):
     if client not in ("127.0.0.1", "::1", "localhost"):
         raise HTTPException(status_code=404, detail="Not found")
     return app.openapi()
+
+
+# =========================================================
+# Gateway / loopback trust helpers
+# =========================================================
+_LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+
+
+def _is_loopback(request: Request) -> bool:
+    """True when the TCP peer is loopback. uvicorn is launched WITHOUT proxy-header
+    trust on :9000 (see docker/supervisord.conf), so request.client.host is the real
+    socket peer and cannot be spoofed via X-Forwarded-For by a LAN caller. The
+    co-located BFF/CLI reach the backend over 127.0.0.1:9000 (SYSIBLE_API_URL); a
+    LAN attacker hitting the host's routable :9000 arrives with a non-loopback peer."""
+    client = request.client.host if request.client else ""
+    return client in _LOOPBACK_HOSTS
+
+
+def _gateway_secret_ok(request: Request) -> bool:
+    """True when the request carries the SLOP gateway shared secret (constant-time),
+    proving it transited the gateway/BFF rather than being sent straight to the
+    LAN-exposed backend. Fails closed when the secret is unset (SSO not configured)."""
+    secret = os.getenv("SYSIBLE_SSO_SHARED_SECRET", "") or ""
+    if not secret:
+        return False
+    presented = request.headers.get("x-sysible-auth", "") or ""
+    return hmac.compare_digest(presented, secret)
 
 # Log which directory + commit is actually running, so a wrong-directory deploy is
 # obvious in `journalctl -u sysible-backend` (see backend/build_info.py).
@@ -1226,13 +1254,22 @@ def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
     if run_as and body.become_password:
         _store_become(task_id, body.become_password)
 
-    # Activity feed: record who did what, where. Only for admin-initiated
-    # tasks (run_as set), and not background/internal reads - the user-list
-    # sync and SSH auto-enroll aren't operator actions and would just be
-    # noise (showing as "ran a script" after an unrelated click).
-    if run_as and body.log and body.kind not in _NON_LOGGED_KINDS:
-        log_activity(run_as, get_agent_hostname(host_id),
-                     body.description or _describe_command(body.command), body.command)
+    # Activity feed: record who did what, where — UNCONDITIONALLY of run_as, so a
+    # key-only (no admin token) dispatch, which the agent runs as ROOT, can no
+    # longer land on a host completely unattributed and untraceable. Attribution:
+    # the initiating admin when a token was presented, else 'api-key' for a
+    # machine/key-only call. An operator (run_as set) may still suppress the
+    # per-host row via body.log=False — the BFF does this for a grouped multi-host
+    # run and writes ONE summary via /activity — but a key-only caller cannot use
+    # log=False to silence the audit of a root command. Genuine controller-internal
+    # reads (sync_users, ssh_* — the background probes) stay out of the feed as
+    # before via _NON_LOGGED_KINDS.
+    if body.kind not in _NON_LOGGED_KINDS:
+        actor = run_as or "api-key"
+        should_log = body.log if run_as else True
+        if should_log:
+            log_activity(actor, get_agent_hostname(host_id),
+                         body.description or _describe_command(body.command), body.command)
 
     return {
         "task_id": task_id,
@@ -1750,6 +1787,32 @@ def _health_warnings():
                 "hint": ("Check the controller service and its TLS cert first; if the "
                          "cert or address changed, re-deploy the pinned cert/bundle to "
                          "the affected hosts."),
+            })
+    except Exception:
+        pass
+
+    # --- Audit chain written UNKEYED. When no master key is resolvable the
+    # activity/admin-audit chain degrades to plain SHA-256 (tamper-EVIDENT but
+    # forgeable by anyone with DB write access) — surface it as an actionable alarm
+    # rather than only in verify_*_chain's keyed:False. In strict-audit mode
+    # (default) auditable actions fail closed instead, so this fires only where the
+    # operator opted out (SYSIBLE_AUDIT_REQUIRED=0) yet the key is missing.
+    try:
+        from backend.db import _audit_key
+        if _audit_key() is None:
+            warnings.append({
+                "id": "audit_unkeyed",
+                "severity": "warning",
+                "title": "Audit log is not cryptographically keyed",
+                "detail": ("No master key is resolvable, so the activity/admin-audit "
+                           "hash chain is written UNKEYED (plain SHA-256). It stays "
+                           "tamper-evident on verify, but is forgeable by anyone with "
+                           "write access to the controller database."),
+                "hint": ("Set SYSIBLE_SECRET_KEY / SYSIBLE_SECRET_KEY_CMD (KMS/Vault) "
+                         "so the audit chain is HMAC-keyed, or ensure the local key "
+                         "directory is writable. Strict-audit mode "
+                         "(SYSIBLE_AUDIT_REQUIRED=1, the default) fails auditable "
+                         "actions closed until this is fixed."),
             })
     except Exception:
         pass
@@ -3076,7 +3139,20 @@ def issue_api_key_for_superuser(body: AdminLoginRequest, request: Request):
 
     Deliberately NOT behind require_api_key: needing the key to obtain the key
     is the exact friction this removes. The throttle + role gate + audit trail
-    are the compensating controls."""
+    are the compensating controls.
+
+    Network gate (defence against pulling the master key straight off the
+    LAN-exposed :9000): the request must either originate from loopback — the
+    co-located BFF/CLI reaching the backend over 127.0.0.1 — OR carry the SLOP
+    gateway shared secret, mirroring /admin/enroll-token/generate. A superuser's
+    console password alone, replayed from another host on the LAN, no longer
+    yields the root master key: the exchange only works through the gateway/BFF."""
+    if not (_is_loopback(request) or _gateway_secret_ok(request)):
+        log_admin_audit("api_key_issue_denied", (body.username or "").strip(),
+                        "off-gateway request refused (not loopback / no shared secret)")
+        raise HTTPException(
+            status_code=403,
+            detail="This endpoint is reachable only through the local gateway/BFF.")
     username = body.username.strip()
     throttle_key = username or "(empty)"
 
@@ -3122,27 +3198,40 @@ def issue_api_key_for_superuser(body: AdminLoginRequest, request: Request):
 
 
 @app.post("/admin/sso-provision", dependencies=[Depends(require_api_key)])
-def admin_sso_provision(body: dict = Body(...)):
+def admin_sso_provision(request: Request, body: dict = Body(...)):
     """Bridge for SLOP single sign-on (unified login across the Sysible apps).
 
     The web console holds the root-only backend API key. When it is fronted by
     the SLOP gateway, the gateway has ALREADY authenticated the browser (against
     SLOP's user store) and asserts the identity to the console. The console then
-    calls this endpoint, on the API key, to turn that asserted identity into a
-    normal RBAC token it can use for all the console's backend calls:
+    calls this endpoint, on the API key AND the gateway shared secret, to turn
+    that asserted identity into a normal RBAC token it can use for all the
+    console's backend calls:
 
       * ensure a matching administrator account exists with the asserted role —
         SLOP is the identity authority, so a new SSO user is provisioned and an
-        existing one's role is realigned to what SLOP asserts;
+        existing SSO-owned account's role is realigned to what SLOP asserts;
       * mint and return a standard admin token for it (the same kind /admin/login
         issues), so every existing token-gated route works unchanged.
 
     NO password is involved: SSO users authenticate at SLOP, never here. The
     account is created with an unusable random password so it can't be logged
-    into locally — it exists only to satisfy token resolution and RBAC. This is
-    only reachable by the API-key holder (root on the controller host), which
-    already implies full control, so it grants no privilege the key lacks.
+    into locally — it exists only to satisfy token resolution and RBAC.
+
+    Trust boundary (do NOT rely on require_api_key alone): a bare-API-key caller
+    on the LAN must NOT be able to mint or promote a superuser through this path.
+    So the request must PROVE it transited the gateway — the SLOP shared secret,
+    constant-time compared — and SSO must actually be configured (secret set); a
+    missing/mismatched secret is refused. And an account NOT created by SSO is
+    never re-graded here, so this path can only manage its OWN (created_by='sso')
+    accounts and can't silently promote a locally-managed admin to superuser.
     """
+    if not _gateway_secret_ok(request):
+        raise HTTPException(
+            status_code=403,
+            detail="SSO provisioning requires the gateway shared secret "
+                   "(SYSIBLE_SSO_SHARED_SECRET); refused.")
+
     username = (str(body.get("username") or "")).strip()
     role = body.get("role")
     if role not in ("superuser", "sysadmin", "auditor"):
@@ -3150,17 +3239,33 @@ def admin_sso_provision(body: dict = Body(...)):
     if not username:
         raise HTTPException(status_code=400, detail="username is required")
 
+    # Originating identity for the audit trail: the request proved it came through
+    # the gateway (secret verified above), so attribute the provision to the
+    # gateway acting for this asserted username, not just the target name.
+    origin = f"gateway({request.client.host if request.client else '?'})"
+
     acct = get_administrator(username)
     if acct is None:
         # Unusable local password — SSO users never authenticate here.
         salt, password_hash = portal_auth.hash_password(secrets.token_urlsafe(32))
         add_administrator(username, password_hash, salt, must_change_password=0,
                           created_by="sso", role=role)
-        log_admin_audit("sso_account_provisioned", username, f"role={role} (via SLOP SSO)")
-    elif (acct.get("role") or "superuser") != role:
-        # SLOP is authoritative for identity → keep the local role in lockstep.
-        set_administrator_role(username, role)
-        log_admin_audit("sso_role_synced", username, f"role -> {role} (via SLOP SSO)")
+        log_admin_audit("sso_account_provisioned", username,
+                        f"role={role} (via SLOP SSO, {origin})")
+    else:
+        # Only ever manage accounts SSO itself owns. A locally-managed admin
+        # (created_by != 'sso') must never be re-graded through the SSO bridge —
+        # that would let the gateway path silently promote an existing account.
+        if (acct.get("created_by") or "") != "sso":
+            raise HTTPException(
+                status_code=409,
+                detail="An administrator with that username already exists and is "
+                       "not SSO-managed; refusing to re-grade it via SSO.")
+        if (acct.get("role") or "superuser") != role:
+            # SLOP is authoritative for identity → keep the local SSO role in lockstep.
+            set_administrator_role(username, role)
+            log_admin_audit("sso_role_synced", username,
+                            f"role -> {role} (via SLOP SSO, {origin})")
 
     token = secrets.token_hex(32)
     create_admin_token(token, username, role, time.time() + 12 * 60 * 60)

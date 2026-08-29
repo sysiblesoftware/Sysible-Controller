@@ -82,7 +82,12 @@ def _save(cfg):
 
 
 def _encrypt(pw):
-    key = sudo_store._get_key()
+    # NEW writes use the store's PRIMARY key (master-derived when a vault key is
+    # resolvable, else the legacy co-located file key) — the same custody as the
+    # sudo-password store. sudo_store._get_key() was removed in the master-key
+    # migration; calling it here 500'd every alert-config save and left the SMTP
+    # password unencryptable.
+    key = sudo_store._primary_key()
     if not key or not pw:
         return ""
     from cryptography.fernet import Fernet
@@ -90,14 +95,18 @@ def _encrypt(pw):
 
 
 def _decrypt(token):
-    key = sudo_store._get_key()
-    if not key or not token:
+    if not token:
         return ""
-    try:
-        from cryptography.fernet import Fernet, InvalidToken
-        return Fernet(key).decrypt(token.encode()).decode()
-    except Exception:
-        return ""
+    # Try EVERY custody key (derived, then legacy), newest first, so a password
+    # written under the legacy file key still decrypts after this host gains a
+    # master key — mirrors sudo_store.get_password.
+    from cryptography.fernet import Fernet
+    for key in sudo_store._read_keys():
+        try:
+            return Fernet(key).decrypt(token.encode()).decode()
+        except Exception:
+            continue
+    return ""
 
 
 def get_config_redacted():

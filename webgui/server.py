@@ -232,13 +232,18 @@ app.add_middleware(
 app.add_middleware(_BodyLimitMiddleware, max_bytes=_MAX_BFF_BODY_BYTES)
 
 
-# State-changing HTTP methods carry a same-origin backstop: SameSite=Strict already keeps
-# the session cookie off cross-site requests, but an explicit Origin/Referer check is the
-# canonical CSRF control and closes the gap on any client that mishandles SameSite. If the
-# browser sent an Origin (or Referer) on a mutating /api call, its host must match ours; a
-# forged cross-site POST carries the attacker's origin and is refused. Absent both headers,
-# SameSite=Strict remains the control, so we allow (keeps non-browser/loopback tooling OK).
+# State-changing HTTP methods carry a same-origin backstop. The session cookie is
+# SameSite=Lax (see SessionMiddleware below — Strict breaks legitimate top-level
+# navigations into the console), so an explicit Origin/Referer check is the canonical
+# CSRF control. If the browser sent an Origin (or Referer) on a mutating /api call, its
+# host must match ours; a forged cross-site POST carries the attacker's origin and is
+# refused. When BOTH are absent we FAIL CLOSED *if the request carries our session
+# cookie* — a CSRF attack rides that ambient cookie, and a real browser always attaches
+# Origin/Referer to a script-initiated mutating request, so a cookie'd mutating call with
+# neither header is not a normal same-origin fetch. Cookieless callers (API-key/CLI
+# tooling) have no ambient credential to abuse and are still allowed through.
 _CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
+_SESSION_COOKIE_NAME = "sysible_web"
 
 
 @app.middleware("http")
@@ -254,6 +259,12 @@ async def csrf_origin_guard(request: Request, call_next):
                     return JSONResponse({"detail": "Cross-origin request rejected."}, status_code=403)
             except Exception:
                 return JSONResponse({"detail": "Cross-origin request rejected."}, status_code=403)
+        elif request.cookies.get(_SESSION_COOKIE_NAME):
+            # Ambient session cookie present but no Origin/Referer on a mutating call:
+            # fail closed. (This middleware runs OUTSIDE SessionMiddleware, so read the
+            # raw cookie, not request.session.)
+            return JSONResponse(
+                {"detail": "Cross-origin request rejected."}, status_code=403)
     return await call_next(request)
 
 
@@ -372,6 +383,23 @@ def require_login(request: Request):
     return user
 
 
+def require_login_changed(request: Request):
+    """require_login PLUS the forced first-login/reset password-change gate. Use on
+    MUTATING routes that are otherwise superuser/sysadmin-neutral require_login
+    routes (admin management, controller/policy config, environment + host-sudo
+    writes): a temporary/reset credential must be rotated before it can create a
+    second admin, hijack another admin's password, or rewrite controller config —
+    the SPA only SHOWS a change-password modal, which the API can bypass. Read-only
+    GETs (get_policy, get_cfg, license, me) and the change-credentials route itself
+    stay on plain require_login so the flag can still be cleared."""
+    user = require_login(request)
+    if request.session.get("must_change_password"):
+        raise HTTPException(
+            status_code=403,
+            detail="You must change your temporary password before performing this action.")
+    return user
+
+
 def require_operator(request: Request):
     """Dependency for any write/dispatch route: 401 if not logged in, 403 for
     the read-only 'auditor' role. Superuser-only routes don't need this (they
@@ -446,6 +474,15 @@ _LOGIN_MAX_ATTEMPTS = int(os.getenv("SYSIBLE_WEBGUI_LOGIN_MAX_ATTEMPTS", "8"))
 _LOGIN_WINDOW_S = int(os.getenv("SYSIBLE_WEBGUI_LOGIN_WINDOW", "300"))
 _login_attempts: dict[str, list] = {}
 _login_attempts_lock = threading.Lock()  # guards _login_attempts across worker threads
+# Number of trusted proxy hops in front of the BFF (each APPENDS its peer to XFF).
+# _client_ip indexes this many entries from the RIGHT to recover the real peer.
+_TRUSTED_HOPS = max(1, int(os.getenv("SYSIBLE_WEBGUI_TRUSTED_HOPS", "1")))
+# Global (all-IP) login-attempt backstop: even if XFF spoofing or a botnet spreads
+# guesses across many per-IP buckets, the total failed-login rate is capped so an
+# attacker can't drive unbounded PBKDF2/verify load or brute volume from one source.
+# Generous by default (a busy console still logs in) — 0 disables it.
+_LOGIN_GLOBAL_MAX = int(os.getenv("SYSIBLE_WEBGUI_LOGIN_GLOBAL_MAX", "60"))
+_login_global: list = []
 
 # The controller admin token is a privileged bearer credential. We keep it in
 # the session cookie but ENCRYPTED with a server-side key (the same 0600 key
@@ -572,10 +609,21 @@ def _client_ip(request: Request) -> str:
     # in front (SYSIBLE_WEBGUI_TRUSTED_PROXY=1) — otherwise a direct client could
     # spoof the header to evade the per-IP login throttle. Default to the real
     # socket peer.
+    #
+    # Take the RIGHTMOST hop, not the leftmost. X-Forwarded-For is client-appendable:
+    # a brute-forcer sending `X-Forwarded-For: <random>` on each attempt controls the
+    # LEFTMOST value, so keying the throttle on it gave every guess a fresh bucket and
+    # the lockout never tripped. The trusted proxy APPENDS the real peer to the right,
+    # so the entry _SYSIBLE_WEBGUI_TRUSTED_HOPS from the end is the peer as the proxy
+    # saw it (default 1 = the single co-located gateway). Indexing from the right by the
+    # known hop count is the spoof-resistant choice for this fixed topology.
     if _TRUST_PROXY:
         fwd = request.headers.get("x-forwarded-for")
         if fwd:
-            return fwd.split(",")[0].strip()
+            parts = [p.strip() for p in fwd.split(",") if p.strip()]
+            if parts:
+                idx = min(_TRUSTED_HOPS, len(parts))
+                return parts[-idx]
     return request.client.host if request.client else "unknown"
 
 
@@ -587,18 +635,34 @@ def _throttle_check(ip: str):
         _login_attempts[ip] = hits
         over = len(hits) >= _LOGIN_MAX_ATTEMPTS
         first = hits[0] if hits else now
+        # Global backstop: total failed logins across ALL IPs in the window. Keys the
+        # decision on nothing the client controls, so XFF spoofing / a spread-out botnet
+        # can't sidestep it the way it sidesteps the per-IP bucket.
+        global _login_global
+        _login_global = [t for t in _login_global if now - t < _LOGIN_WINDOW_S]
+        global_over = _LOGIN_GLOBAL_MAX > 0 and len(_login_global) >= _LOGIN_GLOBAL_MAX
+        global_first = _login_global[0] if _login_global else now
     if over:
         retry = int(_LOGIN_WINDOW_S - (now - first))
         raise HTTPException(
             status_code=429,
             detail=f"Too many login attempts. Try again in {max(retry, 1)} seconds.",
         )
+    if global_over:
+        retry = int(_LOGIN_WINDOW_S - (now - global_first))
+        raise HTTPException(
+            status_code=429,
+            detail=f"The console is temporarily rate-limiting logins. Try again in "
+                   f"{max(retry, 1)} seconds.",
+        )
 
 
 def _throttle_record_failure(ip: str):
     import time
+    now = time.time()
     with _login_attempts_lock:
-        _login_attempts.setdefault(ip, []).append(time.time())
+        _login_attempts.setdefault(ip, []).append(now)
+        _login_global.append(now)
 
 
 @app.post("/api/login")
@@ -2216,7 +2280,7 @@ class EnvironmentCreate(BaseModel):
 
 
 @app.post("/api/environments")
-def create_environment(body: EnvironmentCreate, request: Request, user: str = Depends(require_login)):
+def create_environment(body: EnvironmentCreate, request: Request, user: str = Depends(require_login_changed)):
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Environment name is required.")
@@ -2224,7 +2288,7 @@ def create_environment(body: EnvironmentCreate, request: Request, user: str = De
 
 
 @app.delete("/api/environments/{name}")
-def delete_environment(name: str, request: Request, user: str = Depends(require_login)):
+def delete_environment(name: str, request: Request, user: str = Depends(require_login_changed)):
     return _wrap(lambda: _as_admin(request, lambda: api.delete_environment(name)))
 
 
@@ -2431,7 +2495,9 @@ def controller_key(user: str = Depends(require_login)):
     try:
         return api._request("GET", "/remote/controller-key")
     except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        # Redact: str(e) carries the controller's internal address/port and TLS
+        # details. Log server-side, return the constant "Controller unreachable."
+        raise _bad_gateway(e)
 
 
 class EnrollRequest(BaseModel):
@@ -2594,7 +2660,7 @@ class SudoRequiredRequest(BaseModel):
 
 @app.post("/api/host/{host_id}/sudo")
 def set_host_sudo(host_id: str, body: SudoRequiredRequest, request: Request,
-                  user: str = Depends(require_login)):
+                  user: str = Depends(require_login_changed)):
     return _wrap(lambda: _as_admin(request, lambda: api.set_sudo_password_required(host_id, body.required)))
 
 
@@ -2610,7 +2676,7 @@ class EnvSudoDefaultRequest(BaseModel):
 
 @app.post("/api/environment-sudo-default")
 def set_env_sudo_default(body: EnvSudoDefaultRequest, request: Request,
-                         user: str = Depends(require_login)):
+                         user: str = Depends(require_login_changed)):
     return _wrap(lambda: _as_admin(request, lambda: api.set_environment_sudo_default(body.name, body.required)))
 
 
@@ -2647,7 +2713,11 @@ def _wrap(fn):
             except Exception:
                 pass
             raise HTTPException(status_code=code, detail=detail or str(e))
-        raise HTTPException(status_code=502, detail=str(e))
+        # Genuine transport failure (no controller response): redact str(e), which
+        # carries the controller's internal address/port/TLS internals — log it
+        # server-side and return the constant "Controller unreachable." The
+        # controller-HTTP passthrough above is a real answer, not a transport leak.
+        raise _bad_gateway(e)
 
 
 # ----------------------------------------------------------------------
@@ -2686,13 +2756,13 @@ class AdminCreate(BaseModel):
 
 
 @app.post("/api/admins")
-def add_admin(body: AdminCreate, request: Request, user: str = Depends(require_login)):
+def add_admin(body: AdminCreate, request: Request, user: str = Depends(require_login_changed)):
     return _wrap(lambda: _as_admin(request, lambda: api.add_administrator(
         body.username, body.password, actor=user, role=body.role)))
 
 
 @app.delete("/api/admins/{username}")
-def del_admin(username: str, request: Request, user: str = Depends(require_login)):
+def del_admin(username: str, request: Request, user: str = Depends(require_login_changed)):
     return _wrap(lambda: _as_admin(request, lambda: api.remove_administrator(username, actor=user)))
 
 
@@ -2702,7 +2772,7 @@ class AdminPasswordReset(BaseModel):
 
 @app.post("/api/admins/{username}/password")
 def reset_admin_password(username: str, body: AdminPasswordReset, request: Request,
-                         user: str = Depends(require_login)):
+                         user: str = Depends(require_login_changed)):
     return _wrap(lambda: _as_admin(request, lambda: api.reset_administrator_password(
         username, body.new_password, actor=user)))
 
@@ -2713,7 +2783,7 @@ class AdminSudoConnect(BaseModel):
 
 @app.post("/api/admins/{username}/sudo-connect")
 def set_admin_sudo_connect(username: str, body: AdminSudoConnect, request: Request,
-                           user: str = Depends(require_login)):
+                           user: str = Depends(require_login_changed)):
     # Superuser-gated on the controller (via the admin token in _as_admin):
     # grant/revoke the account's Sysible Connect "Send sudo password" button.
     return _wrap(lambda: _as_admin(request, lambda: api.set_administrator_sudo_connect(
@@ -2726,7 +2796,7 @@ class AdminRole(BaseModel):
 
 @app.post("/api/admins/{username}/role")
 def set_admin_role(username: str, body: AdminRole, request: Request,
-                   user: str = Depends(require_login)):
+                   user: str = Depends(require_login_changed)):
     # Superuser-gated on the controller (via the admin token in _as_admin):
     # promote/demote the account's role. The controller refuses to demote the
     # last superuser and enforces seat caps.
@@ -2740,7 +2810,7 @@ def get_policy(user: str = Depends(require_login)):
 
 
 @app.post("/api/password-policy")
-def set_policy(body: dict, request: Request, user: str = Depends(require_login)):
+def set_policy(body: dict, request: Request, user: str = Depends(require_login_changed)):
     return _wrap(lambda: _as_admin(request, lambda: api.set_admin_password_policy(body)))
 
 
@@ -2757,7 +2827,7 @@ class ControllerCfg(BaseModel):
 
 
 @app.post("/api/controller-config")
-def set_cfg(body: ControllerCfg, request: Request, user: str = Depends(require_login)):
+def set_cfg(body: ControllerCfg, request: Request, user: str = Depends(require_login_changed)):
     return _wrap(lambda: _as_admin(request, lambda: api.set_controller_config(
         body.hostname, body.ip, body.address_mode, body.port)))
 
@@ -2878,7 +2948,10 @@ def trust_certificate(user: str = Depends(require_login)):
     try:
         api.download_trust_certificate(str(dest))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not fetch trust cert: {e}")
+        # Redact the exception (internal address / TLS internals) — log server-side,
+        # return only the constant message.
+        _log.warning("trust-certificate fetch failed: %s", e)
+        raise HTTPException(status_code=502, detail="Could not fetch trust cert.")
 
     def _cleanup():
         try:
@@ -2945,7 +3018,7 @@ def get_env_policy(user: str = Depends(require_login)):
 
 
 @app.post("/api/environmental-policy")
-def set_env_policy(body: dict, request: Request, user: str = Depends(require_login)):
+def set_env_policy(body: dict, request: Request, user: str = Depends(require_login_changed)):
     return _wrap(lambda: _as_admin(request, lambda: api.set_environmental_policy(body)))
 
 
@@ -3340,19 +3413,24 @@ def remove_enroll_allowlist(entry_id: int, request: Request,
     return _wrap(lambda: _as_admin(request, lambda: api.remove_enroll_allowlist(entry_id)))
 
 
-@app.get("/api/agent-bundle")
+@app.post("/api/agent-bundle")
 def agent_bundle(request: Request, user: str = Depends(require_superuser_session)):
     """Download the ready-to-run agent bundle (tar.gz) the desktop's Host
     Enrollment page hands out. Superuser-only: building a bundle mints a fresh
     enrollment token (create_enroll_token), so it's a privileged host-onboarding
-    action, not a read. Forwarded with the caller's token so the controller's own
-    require_superuser gate on /controller-config/agent-bundle also holds."""
+    action, not a read. POST (not GET) so the token-minting side effect can't be
+    triggered by a top-level browser navigation — SameSite=Lax would attach the
+    session cookie to such a GET; the CSRF Origin/Referer guard only covers
+    non-safe methods, so this must be one. Forwarded with the caller's token so the
+    controller's own require_superuser gate on /controller-config/agent-bundle
+    also holds."""
     tmpdir = Path(tempfile.mkdtemp(prefix="sysible-bundle-"))
     dest = tmpdir / "sysible-agent.tar.gz"
     try:
         _as_admin(request, lambda: api.download_agent_bundle(str(dest)))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not build bundle: {e}")
+        _log.warning("agent-bundle build failed: %s", e)
+        raise HTTPException(status_code=502, detail="Could not build agent bundle.")
 
     def _cleanup():
         try:

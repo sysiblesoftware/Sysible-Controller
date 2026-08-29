@@ -80,6 +80,9 @@ def test_tail_truncation_is_detected(fresh_db):
 def test_unkeyed_fallback_still_verifies(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "unkeyed.db")
     monkeypatch.setattr(db, "_audit_key", lambda: None)  # no master key
+    # Strict-audit mode fails closed on a missing key; this test exercises the
+    # deliberate degraded/dev fallback, so opt out of strict mode explicitly.
+    monkeypatch.setenv("SYSIBLE_AUDIT_REQUIRED", "0")
     db.init_db()
     for i in range(3):
         db.log_activity("u", "h", "x %d" % i)

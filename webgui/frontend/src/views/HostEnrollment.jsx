@@ -521,7 +521,32 @@ export default function HostEnrollment() {
             The ready-to-run bundle, built on demand — each download bakes in a fresh, one-time enrollment token.
             Copy it to the target host, unzip, and run <code>./run_agent.sh</code>.
           </p>
-          <a className="btn sm" href={api.agentBundleUrl()}>Download Agent Bundle</a>
+          <button className="btn sm" disabled={busy === "bundle"}
+            onClick={async () => {
+              // POST (not a plain <a href> GET): building the bundle mints a fresh
+              // one-time enrollment token, so it must NOT be triggerable by a
+              // top-level navigation that SameSite=Lax would authorize. Fetch as a
+              // blob and save it, mirroring Settings' "Regenerate agent bundle".
+              setErr(""); setMsg(""); setBusy("bundle");
+              try {
+                const res = await fetch(api.agentBundleUrl(), { method: "POST", credentials: "include" });
+                if (!res.ok) {
+                  let d = ""; try { d = (await res.json()).detail || ""; } catch { /* not JSON */ }
+                  throw new Error(d || `Bundle download failed (HTTP ${res.status}).`);
+                }
+                const blob = await res.blob();
+                const cd = res.headers.get("Content-Disposition") || "";
+                const m = /filename="?([^"]+)"?/.exec(cd);
+                const name = (m && m[1]) || "sysible-agent-bundle.zip";
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url; a.download = name; document.body.appendChild(a); a.click();
+                a.remove(); URL.revokeObjectURL(url);
+              } catch (e) { setErr(e.message); }
+              finally { setBusy(""); }
+            }}>
+            {busy === "bundle" ? "Building…" : "Download Agent Bundle"}
+          </button>
         </fieldset>
 
         <fieldset className="tool-group-box"><legend>Headless install (curl one-liner)</legend>

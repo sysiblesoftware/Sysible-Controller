@@ -98,7 +98,7 @@ def require_superuser(x_admin_token: str = Header(default=None, alias="X-Sysible
 
     db is imported lazily to avoid an import cycle (db has no dependency on
     auth, but importing it at module load would still couple the two)."""
-    from backend.db import resolve_admin_token, count_administrators
+    from backend.db import resolve_admin_token, count_administrators, get_administrator
 
     if not x_admin_token:
         # Bootstrap only: no admins yet => allow (so the very first account can
@@ -115,6 +115,20 @@ def require_superuser(x_admin_token: str = Header(default=None, alias="X-Sysible
         raise HTTPException(status_code=401, detail="Invalid or expired admin token")
     if admin.get("role") != "superuser":
         raise HTTPException(status_code=403, detail="This action requires a superuser account.")
+
+    # Defence-in-depth for the forced first-login/reset password change: a superuser
+    # still carrying a temporary credential (must_change_password) must not be able
+    # to drive privileged superuser routes until they rotate it — regardless of which
+    # front end sends the token. The self-service credential-change endpoints
+    # (/admin/credentials, /admin/force-password-change) are api-key-only, NOT gated
+    # by this dependency, so they stay reachable to clear the flag. The BFF enforces
+    # the same gate (require_login_changed / require_operator); this closes the
+    # controller-side hole so a raw-API call can't bypass it either.
+    acct = get_administrator(admin["username"])
+    if acct and acct.get("must_change_password"):
+        raise HTTPException(
+            status_code=403,
+            detail="You must change your temporary password before performing this action.")
 
 
 def acting_admin_name(x_admin_token: str = Header(default=None, alias="X-Sysible-Admin-Token")):

@@ -2445,6 +2445,24 @@ def _audit_key():
         return None
 
 
+class AuditKeyUnavailable(RuntimeError):
+    """Raised in strict-audit mode when an auditable action can't be HMAC-keyed —
+    so the action fails CLOSED rather than writing a forgeable unkeyed row."""
+
+
+def _audit_required():
+    """The audit chain must NOT silently degrade to unkeyed (forgeable) SHA-256
+    when the HMAC key is unavailable. STRICT BY DEFAULT (mirrors
+    SYSIBLE_SECRET_REQUIRED): a master key is normally always resolvable (a 0600
+    local key auto-creates), so this only bites a genuinely broken host (no crypto
+    lib / unwritable key dir) or an offline copy attack — where failing closed is
+    the correct posture. A deliberate degraded/dev environment can opt OUT with
+    SYSIBLE_AUDIT_REQUIRED=0, which restores the old unkeyed-fallback behaviour."""
+    import os
+    return (os.getenv("SYSIBLE_AUDIT_REQUIRED", "1") or "").strip().lower() not in (
+        "0", "false", "no", "off")
+
+
 _AUDIT_UNKEYED_WARNED = False
 
 
@@ -2601,6 +2619,12 @@ def log_activity(username, host, description, command=""):
   key = _audit_key()
   algo = "hmac-sha256" if key else "sha256"
   if not key:
+    # Fail CLOSED by default: an action that can't be tamper-evidently keyed must
+    # not be written as a forgeable unkeyed row. Opt out with SYSIBLE_AUDIT_REQUIRED=0.
+    if _audit_required():
+      raise AuditKeyUnavailable(
+          "audit HMAC key unavailable (SYSIBLE_AUDIT_REQUIRED=1) — refusing to "
+          "write an unkeyed, forgeable activity row")
     _warn_audit_unkeyed_once()
   with _ACTIVITY_LOCK:
     with contextlib.closing(_connect()) as conn:  # close even if the write raises
@@ -2833,6 +2857,12 @@ def log_admin_audit(event, username, detail=""):
     key = _audit_key()
     algo = "hmac-sha256" if key else "sha256"
     if not key:
+        # Fail CLOSED by default (SYSIBLE_AUDIT_REQUIRED): an admin/auth event that
+        # can't be HMAC-keyed must not be written as a forgeable unkeyed row.
+        if _audit_required():
+            raise AuditKeyUnavailable(
+                "audit HMAC key unavailable (SYSIBLE_AUDIT_REQUIRED=1) — refusing to "
+                "write an unkeyed, forgeable admin-audit row")
         _warn_audit_unkeyed_once()
     with _ADMIN_AUDIT_LOCK:
         with contextlib.closing(_connect()) as conn:  # close even if the write raises

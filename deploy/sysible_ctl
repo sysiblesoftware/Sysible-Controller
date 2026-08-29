@@ -95,7 +95,27 @@ SELF="$(cd "$(dirname "$_SRC")" && pwd)/$(basename "$_SRC")"
 # The Controller checkout that ships this script (…/deploy/sysible_ctl → repo root).
 _CTL_REPO="$(cd "$(dirname "$SELF")/.." && pwd)"
 
-_need_docker() { command -v docker >/dev/null 2>&1 || _die "docker is not installed or not on PATH. Install Docker Engine: https://docs.docker.com/engine/install/"; }
+_need_docker() {
+  command -v docker >/dev/null 2>&1 || _die "docker is not installed or not on PATH. Install Docker Engine: https://docs.docker.com/engine/install/"
+  docker info >/dev/null 2>&1 && return 0
+  # Docker is installed but we can't reach the daemon. The usual cause is that the
+  # invoking user isn't in the 'docker' group, so the root-owned socket is denied.
+  # If so and we're not root, transparently re-run the whole command under sudo.
+  local err; err="$(docker info 2>&1 >/dev/null || true)"
+  case "$err" in
+    *ermission\ denied*|*connect*docker.sock*|*dial\ unix*)
+      if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+        _warn "No access to the Docker socket as '$(id -un)' — re-running with sudo."
+        _warn "Skip sudo next time: sudo usermod -aG docker $(id -un)  then log out/in (or: newgrp docker)."
+        exec sudo -- "$0" "${_ARGV[@]}"
+      fi
+      _die "No permission to access the Docker socket. Run with sudo, or add yourself to the docker group: sudo usermod -aG docker $(id -un)  then log out/in (or: newgrp docker)."
+      ;;
+    *)
+      _die "the Docker daemon isn't reachable. Is it running?  Try: sudo systemctl start docker  (docker said: $err)"
+      ;;
+  esac
+}
 
 # --- compose plumbing ------------------------------------------------------
 DC=()
@@ -362,6 +382,7 @@ _run_cmd() {  # _run_cmd <cmd> <product> [args…]  — validates cmd, handles -
 }
 
 main() {
+  _ARGV=("$@")   # original args, for a transparent sudo re-exec in _need_docker
   local a1="${1:-help}" a2="${2:-}"
   case "$a1" in
     help|-h|--help) usage; return 0 ;;

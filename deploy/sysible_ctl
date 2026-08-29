@@ -26,59 +26,52 @@ set -euo pipefail
 
 # --- product registry ------------------------------------------------------
 # Every known product id. Add one here + a case in each _p_* accessor to extend.
-PRODUCTS="controller controller-ee slep connect slop"
+PRODUCTS="controller slep connect slop"
 
-# For discovery we need ONE container of the product's compose stack. EE's compose
-# sets no container_name, so it takes compose's default project names — the project
-# is the compose dir's basename ("docker"), giving docker-controller-1. Override
-# with SYSIBLE_CONTROLLER_EE_CONTAINER if your project name differs.
+# For discovery we need ONE container of the product's compose stack.
 _p_container() { case "$1" in
   controller)    echo "${SYSIBLE_CONTROLLER_CONTAINER:-sysible-controller}" ;;
-  controller-ee) echo "${SYSIBLE_CONTROLLER_EE_CONTAINER:-docker-controller-1}" ;;
   slep)          echo "${SYSIBLE_SLEP_CONTAINER:-sysible-slep}" ;;
   connect)       echo "${SYSIBLE_CONNECT_CONTAINER:-sysible-connect}" ;;
   slop)          echo "${SYSIBLE_SLOP_CONTAINER:-sysible-slop-gateway}" ;;
 esac; }
 _p_pretty() { case "$1" in
   controller)    echo "Sysible Controller" ;;
-  controller-ee) echo "Sysible Controller EE" ;;
   slep)          echo "Sysible LEP" ;;
   connect)       echo "Sysible Connect" ;;
   slop)          echo "Sysible SLOP gateway" ;;
 esac; }
 _p_port() { case "$1" in
-  controller|controller-ee) echo 8800 ;;
-  slep)                     echo 8810 ;;
-  connect)                  echo 8700 ;;
-  slop)                     echo 443 ;;
+  controller) echo 8800 ;;
+  slep)       echo 8810 ;;
+  connect)    echo 8700 ;;
+  slop)       echo 443 ;;
 esac; }
-# Space-separated volume list (EE keeps its state across several named volumes).
+# Space-separated volume list (a product may keep state across several volumes).
 _p_volume() { case "$1" in
   controller)    echo sysible-data ;;
-  controller-ee) echo "pgdata controller-certs controller-secrets controller-run controller-data webgui-run" ;;
   slep)          echo slep-data ;;
   connect)       echo connect-data ;;
   slop)          echo "slop-caddy-data slop-caddy-config" ;;
 esac; }
 _p_health_path() { case "$1" in
-  controller|controller-ee|slep) echo /api/health ;;
-  connect)                       echo /healthz ;;
-  slop)                          echo / ;;   # the portal apex (Caddy serves the landing page)
+  controller|slep) echo /api/health ;;
+  connect)         echo /healthz ;;
+  slop)            echo / ;;   # the portal apex (Caddy serves the landing page)
 esac; }
 # True when the product is a multi-service compose stack (drive it via compose,
-# not single docker-by-container commands).
-_p_multi() { case "$1" in controller-ee) return 0 ;; *) return 1 ;; esac; }
+# not single docker-by-container commands). None in CE today.
+_p_multi() { case "$1" in *) return 1 ;; esac; }
 # Optional explicit checkout dir (used when the container isn't running).
 _p_dir_override() { case "$1" in
   controller)    echo "${SYSIBLE_CONTROLLER_DIR:-}" ;;
-  controller-ee) echo "${SYSIBLE_CONTROLLER_EE_DIR:-}" ;;
   slep)          echo "${SYSIBLE_SLEP_DIR:-}" ;;
   connect)       echo "${SYSIBLE_CONNECT_DIR:-}" ;;
   slop)          echo "${SYSIBLE_SLOP_DIR:-}" ;;
 esac; }
 
 # Normalise product aliases → canonical id.
-_canon() { case "$1" in ee) echo controller-ee ;; ce|controller) echo controller ;; *) echo "$1" ;; esac; }
+_canon() { case "$1" in ce|controller) echo controller ;; *) echo "$1" ;; esac; }
 _is_product() { case " $PRODUCTS " in *" $(_canon "$1") "*) return 0 ;; *) return 1 ;; esac; }
 
 # --- colours (only on a TTY) -----------------------------------------------
@@ -199,8 +192,8 @@ p_status() {
   _health "$p" || true
 }
 
-# Lifecycle: drive the whole compose stack when we can discover it (correct for
-# EE's postgres+controller+webgui), else fall back to the single container.
+# Lifecycle: drive the whole compose stack when we can discover it (correct for a
+# multi-service stack), else fall back to the single container.
 p_logs()    { if _discover "$1"; then _compose logs -f --tail="${2:-200}"; else docker logs -f --tail="${2:-200}" "$(_p_container "$1")"; fi; }
 p_restart() { _hdr "Restarting $(_p_pretty "$1")"; if _discover "$1"; then _compose restart; else docker restart "$(_p_container "$1")" >/dev/null; fi && _ok "restarted"; }
 p_start()   { _hdr "Starting $(_p_pretty "$1")";   if _discover "$1"; then _compose start;   else docker start   "$(_p_container "$1")" >/dev/null; fi && _ok "started"; }
@@ -209,7 +202,7 @@ p_stop()    { _hdr "Stopping $(_p_pretty "$1")";   if _discover "$1"; then _comp
 p_backup() {
   local p="$1" stamp file vol
   stamp="$(date +%Y%m%d-%H%M%S)"
-  # One tarball per named volume (a product may keep state in several, e.g. EE).
+  # One tarball per named volume (a product may keep state in several).
   for vol in $(_p_volume "$p"); do
     file="${vol}-backup-${stamp}.tgz"
     if docker volume inspect "$vol" >/dev/null 2>&1; then
@@ -247,9 +240,9 @@ p_up() {
   _detect_compose
 
   local envargs=() addr=""
-  # Both controller editions must advertise a routable address to agents (not the
+  # The controller must advertise a routable address to agents (not the
   # docker-bridge IP), so seed .env next to the compose file's project dir.
-  if [[ "$p" == "controller" || "$p" == "controller-ee" ]]; then
+  if [[ "$p" == "controller" ]]; then
     addr="${1:-${SYSIBLE_CONTROLLER_ADDR:-}}"
     [[ -n "$addr" ]] || addr="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
     [[ -n "$addr" ]] || _die "couldn't auto-detect this host's LAN IP. Pass it: sysible_ctl $p up <lan-ip-or-dns>"
@@ -270,7 +263,7 @@ EOF
   ( cd "$(dirname "$cfg")"; "${DC[@]}" -f "$cfg" "${envargs[@]}" up -d --build )
   _health "$p" || true
   _ok "$(_p_pretty "$p") is up. Volume(s) '$(_p_volume "$p")' persist across rebuilds."
-  [[ ( "$p" == "controller" || "$p" == "controller-ee" ) && -n "$addr" ]] && cat <<EOF
+  [[ "$p" == "controller" && -n "$addr" ]] && cat <<EOF
   Web console : https://$addr:8800/   (first run: create your administrator)
   Agent API   : https://$addr:9000/   (SLEP + agents connect here)
 EOF
@@ -315,10 +308,10 @@ ${BOLD}sysible_ctl${RESET} — manage every Sysible product container from one C
 
 ${BOLD}Usage:${RESET}
   $(basename "$0") ${CYAN}<product>${RESET} <command> [args]     e.g. sysible_ctl controller update
-  $(basename "$0") <command> ${CYAN}all${RESET}                 e.g. sysible_ctl update all
-  $(basename "$0") status                          overview of every product
+  $(basename "$0") <command> ${CYAN}all${RESET}                 e.g. sysible_ctl start all
+  $(basename "$0") ${CYAN}start${RESET}|${CYAN}stop${RESET}|${CYAN}restart${RESET}|${CYAN}status${RESET}       act on EVERY product (same as '… all')
 
-${BOLD}Products:${RESET} ${CYAN}controller${RESET}  ${CYAN}controller-ee${RESET} (alias ${CYAN}ee${RESET})  ${CYAN}slep${RESET}  ${CYAN}connect${RESET}  ${CYAN}slop${RESET}
+${BOLD}Products:${RESET} ${CYAN}controller${RESET}  ${CYAN}slep${RESET}  ${CYAN}connect${RESET}  ${CYAN}slop${RESET}
 
 ${BOLD}Commands:${RESET}
   ${CYAN}up${RESET}       First-run bring-up (or re-roll) from a checkout: build from source and
@@ -329,7 +322,9 @@ ${BOLD}Commands:${RESET}
              in place. Preserves the product's data volume.
   ${CYAN}status${RESET}   Container state + console health probe.
   ${CYAN}logs${RESET}     Follow logs (last 200 lines; pass a number for a different tail).
-  ${CYAN}restart${RESET} / ${CYAN}start${RESET} / ${CYAN}stop${RESET}   Lifecycle (stop keeps the data volume).
+  ${CYAN}restart${RESET} / ${CYAN}start${RESET} / ${CYAN}stop${RESET}   Lifecycle (stop keeps the data volume). With no
+             product they act on EVERY product — 'sysible_ctl start all' (or just
+             'sysible_ctl start') starts all the containers at once.
   ${CYAN}backup${RESET}   Tarball the product's data volume into the current directory.
   ${CYAN}destroy${RESET}  Remove the container (add ${BOLD}-v${RESET} to also delete its data volume).
 
@@ -340,12 +335,6 @@ ${BOLD}Meta:${RESET}
 ${BOLD}Finding products:${RESET} discovered from each running container's compose labels. If a
 container isn't running, point at its checkout with SYSIBLE_<PRODUCT>_DIR, e.g.
   SYSIBLE_SLEP_DIR=/opt/sysible-slep sysible_ctl slep update
-
-${BOLD}Enterprise Controller (ee):${RESET} a 3-service stack (postgres + controller + webgui)
-whose containers take compose's default names. For first-run 'up', point at the
-checkout: SYSIBLE_CONTROLLER_EE_DIR=/opt/sysible-controller-ee sysible_ctl ee up.
-Override the discovery container with SYSIBLE_CONTROLLER_EE_CONTAINER if your
-compose project name isn't the default.
 
 ${BOLD}SLOP gateway (slop):${RESET} the front door (Caddy) that fronts the other three apps —
 it does NOT manage them; bring the apps up first, then the door. For first-run
@@ -380,7 +369,7 @@ main() {
     uninstall)      cmd_uninstall; return 0 ;;
   esac
 
-  # Form:  sysible_ctl <product> <cmd> [args]   (product may be an alias, e.g. ee)
+  # Form:  sysible_ctl <product> <cmd> [args]   (product may be an alias, e.g. ce)
   if _is_product "$a1"; then
     local prod; prod="$(_canon "$a1")"
     [[ -n "$a2" ]] || { p_status "$prod"; return 0; }
@@ -401,8 +390,11 @@ main() {
     p_all "$a1"; return 0
   fi
 
-  # Bare read-only command with no target → apply to all (friendly default).
-  if [[ "$a1" == "status" ]]; then p_all status; return 0; fi
+  # Bare fleet-wide command with no target → apply to all (friendly default), so
+  # `sysible_ctl start` == `sysible_ctl start all`, and likewise stop/restart/status.
+  case "$a1" in
+    status|start|stop|restart) p_all "$a1"; return 0 ;;
+  esac
 
   _err "unknown or ambiguous: '$a1${a2:+ $a2}'"
   echo >&2

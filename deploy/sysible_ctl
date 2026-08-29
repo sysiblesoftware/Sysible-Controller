@@ -290,6 +290,29 @@ EOF
   return 0
 }
 
+# Locate the SLOP checkout (which carries the whole-stack installer). Prefers an
+# explicit SYSIBLE_SLOP_DIR, then a SLOP-looking current dir, then common paths.
+_find_slop_dir() {
+  local d
+  for d in "${SYSIBLE_SLOP_DIR:-}" "$PWD" \
+           /opt/sysible-linux-operations-platform /opt/Sysible-Linux-Operations-Platform \
+           /opt/sysible-src/sysible-linux-operations-platform "$HOME/sysible-linux-operations-platform"; do
+    [[ -n "$d" ]] || continue
+    if [[ -f "$d/install.sh" && -f "$d/gateway/Caddyfile" ]]; then printf '%s\n' "$d"; return 0; fi
+  done
+  return 1
+}
+
+# The SLOP portal URL — SLOP_DOMAIN from the environment, else the SLOP checkout's
+# .env, else the default. Printed after a bring-up so the user knows where to go.
+_slop_url() {
+  local dom="${SLOP_DOMAIN:-}" d
+  if [[ -z "$dom" ]] && d="$(_find_slop_dir)" && [[ -f "$d/.env" ]]; then
+    dom="$(sed -n 's/^SLOP_DOMAIN=//p' "$d/.env" | tail -n1)"
+  fi
+  printf 'https://%s/\n' "${dom:-slop.lan}"
+}
+
 # Run a command across every present product.
 p_all() {
   local cmd="$1"; shift || true
@@ -297,7 +320,33 @@ p_all() {
   for p in $PRODUCTS; do
     if _present "$p"; then any=1; "p_$cmd" "$p" "$@" || true; echo; fi
   done
-  [[ $any -eq 1 ]] || _warn "No Sysible product containers found. Start one, or set SYSIBLE_<PRODUCT>_DIR."
+  if [[ $any -eq 0 ]]; then
+    # Nothing is built yet. For a bring-up intent, the first-run path is the SLOP
+    # installer (clone + build + start the whole stack) — run it if we can find it,
+    # since that's what 'start all' is expected to do on a fresh box.
+    case "$cmd" in
+      start|restart|up)
+        local slop
+        if slop="$(_find_slop_dir)"; then
+          _hdr "Nothing is built yet — running the first-run bring-up: $slop/install.sh"
+          if [[ $EUID -ne 0 ]] && command -v sudo >/dev/null 2>&1; then
+            exec sudo -- sh "$slop/install.sh"
+          fi
+          exec sh "$slop/install.sh"
+        fi
+        _warn "Nothing is built yet, and no SLOP checkout was found to bootstrap from."
+        _warn "Run the whole-stack installer from the SLOP repo:  sudo ./install.sh"
+        _warn "(or set SYSIBLE_SLOP_DIR=/path/to/sysible-linux-operations-platform and retry)."
+        return 0
+        ;;
+    esac
+    _warn "No Sysible product containers found. Bring the stack up first:  sudo ./install.sh  (from the SLOP repo)."
+    return 0
+  fi
+  # After a successful bring-up, tell the user where the front door is.
+  case "$cmd" in
+    start|restart|up) _present slop && { _ok "SLOP portal: $(_slop_url)"; } ;;
+  esac
 }
 
 # =========================================================
@@ -412,9 +461,10 @@ main() {
   fi
 
   # Bare fleet-wide command with no target → apply to all (friendly default), so
-  # `sysible_ctl start` == `sysible_ctl start all`, and likewise stop/restart/status.
+  # `sysible_ctl start` == `sysible_ctl start all`, and likewise up/stop/restart/status.
+  # (Bare `up` with nothing built runs the SLOP whole-stack installer — see p_all.)
   case "$a1" in
-    status|start|stop|restart) p_all "$a1"; return 0 ;;
+    status|start|stop|restart|up) p_all "$a1"; return 0 ;;
   esac
 
   _err "unknown or ambiguous: '$a1${a2:+ $a2}'"

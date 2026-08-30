@@ -16,6 +16,13 @@
 # ---- stage 1: build the React web console into static files ----------------
 FROM node:20-slim AS frontend
 WORKDIR /src/webgui/frontend
+# URL prefix the console is served under: "/" standalone (served at the domain
+# root), "/controller/" behind the SLOP gateway (which path-routes /controller/*
+# to this app on one shared origin). Vite bakes it into the asset URLs and the
+# SPA's API base — see webgui/frontend/vite.config.js. SLOP passes /controller/
+# via --build-arg; a plain `docker build` keeps the standalone root default.
+ARG SYSIBLE_BASE_PATH=/
+ENV SYSIBLE_BASE_PATH=${SYSIBLE_BASE_PATH}
 # Install deps first (better layer caching), then build.
 COPY webgui/frontend/package.json webgui/frontend/package-lock.json* ./
 RUN npm install --no-audit --no-fund

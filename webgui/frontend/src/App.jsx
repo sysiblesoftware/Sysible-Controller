@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import { api, setUnauthorizedHandler } from "./api.js";
+import { api, apiUrl, setUnauthorizedHandler } from "./api.js";
 import Logo from "./Logo.jsx";
 import Login from "./views/Login.jsx";
 import Setup from "./views/Setup.jsx";
@@ -368,14 +368,14 @@ export default function App() {
         <div className="rail-nav">
           {nav.map((n) => (
             n.external ? (
-              <a key={n.key ?? "dash"} className="rail-item" href={n.external}
+              <a key={n.key ?? "dash"} className="rail-item" href={apiUrl(n.external)}
                  target="_blank" rel="noopener"
                  title="Open the documentation in a new tab">
                 <NavIcon name={n.icon} /><span>{n.label}</span>
                 <span className="rail-ext" aria-hidden="true">↗</span>
               </a>
             ) : n.download ? (
-              <a key={n.key ?? "dash"} className="rail-item" href={n.download} download
+              <a key={n.key ?? "dash"} className="rail-item" href={apiUrl(n.download)} download
                  title="Download the offline documentation">
                 <NavIcon name={n.icon} /><span>{n.label}</span>
                 <span className="rail-ext" aria-hidden="true">↓</span>

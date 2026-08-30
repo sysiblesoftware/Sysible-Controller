@@ -6,6 +6,14 @@
 // A global "session is gone" handler. api.js calls it whenever the BFF answers a
 // 401 (other than a failed login), so the app can drop the stale session and bounce
 // back to the login screen instead of leaving the user on a dead, half-loaded UI.
+// URL prefix the console is served under. "" when standalone (served at the
+// domain root), "/controller" when behind the SLOP gateway, which path-routes
+// /controller/* to this app on one shared origin. Vite's import.meta.env.BASE_URL
+// carries the build-time `base` ("/" or "/controller/"); every request path and
+// raw asset URL is prefixed with this so the SAME code works in both layouts.
+const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/+$/, "");
+export function apiUrl(path) { return API_BASE + path; }
+
 let _onUnauthorized = null;
 export function setUnauthorizedHandler(fn) { _onUnauthorized = fn; }
 function _fireUnauthorized() {
@@ -45,7 +53,7 @@ async function req(path, { method = "GET", body, headers, raw = false, timeout }
 
   let res;
   try {
-    res = await fetch(path, opts);
+    res = await fetch(apiUrl(path), opts);
   } catch (e) {
     if (timer) clearTimeout(timer);
     if (e && e.name === "AbortError") {
@@ -139,7 +147,7 @@ export const api = {
     req("/api/admin/change-credentials", { method: "POST", body: { current_password, new_username, new_password } }),
   localIps: () => req("/api/local-ips"),
   tlsInfo: () => req("/api/tls-info"),
-  trustCertUrl: () => "/api/trust-certificate",
+  trustCertUrl: () => apiUrl("/api/trust-certificate"),
   regenerateSelfSignedCert: () => req("/api/tls-regenerate-self-signed", { method: "POST" }),
   installCertificate: (certFile, keyFile, chainFile) => {
     const fd = new FormData();
@@ -163,7 +171,7 @@ export const api = {
   portalSessions: () => req("/api/portal/sessions"),
   portalRevokeSession: (id) => req(`/api/portal/sessions/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
   portalUploads: () => req("/api/portal/uploads"),
-  portalUploadUrl: (name) => `/api/portal/uploads/${encodeURIComponent(name)}`,
+  portalUploadUrl: (name) => apiUrl(`/api/portal/uploads/${encodeURIComponent(name)}`),
   portalUploadDelete: (name) => req(`/api/portal/uploads/${encodeURIComponent(name)}`, { method: "DELETE" }),
   portalDownloads: () => req("/api/portal/downloads"),
   portalStageDownload: (file) => { const fd = new FormData(); fd.append("file", file); return req("/api/portal/downloads", { method: "POST", body: fd }); },
@@ -200,7 +208,7 @@ export const api = {
     req(`/api/enroll-allowlist/${id}`, { method: "DELETE" }),
   // Cache-buster so a repeat download after a controller hostname/IP change
   // can't be served from the browser cache (server also sends no-store).
-  agentBundleUrl: () => `/api/agent-bundle?t=${Date.now()}`,
+  agentBundleUrl: () => apiUrl(`/api/agent-bundle?t=${Date.now()}`),
   // Sudo (become) password — encrypted at rest on the controller, per admin.
   sudoStatus: () => req("/api/sudo"),
   setSudo: (password, scope) =>
@@ -259,7 +267,7 @@ export const api = {
     return req("/api/files/upload", { method: "POST", body: fd });
   },
   downloadUrl: (host, path) =>
-    `/api/files/download?host=${encodeURIComponent(host)}&path=${encodeURIComponent(path)}`,
+    apiUrl(`/api/files/download?host=${encodeURIComponent(host)}&path=${encodeURIComponent(path)}`),
   compareFile: (path, targets) =>
     req("/api/files/compare", { method: "POST", body: { path, targets } }),
 };

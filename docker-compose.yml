@@ -14,7 +14,13 @@
 
 services:
   controller:
-    build: .
+    build:
+      context: .
+      args:
+        # URL prefix the console is served under. "/" standalone; the SLOP
+        # installer sets "/controller/" so the SPA's assets + API base live under
+        # the gateway's /controller/* path on the one shared origin.
+        SYSIBLE_BASE_PATH: "${SYSIBLE_BASE_PATH:-/}"
     image: sysible-controller:latest
     container_name: sysible-controller
     restart: unless-stopped

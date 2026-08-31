@@ -52,7 +52,7 @@ _p_volume() { case "$1" in
   controller)    echo sysible-data ;;
   slep)          echo slep-data ;;
   connect)       echo connect-data ;;
-  slop)          echo "slop-caddy-data slop-caddy-config" ;;
+  slop)          echo "slop-idp-data slop-caddy-data slop-caddy-config" ;;
 esac; }
 _p_health_path() { case "$1" in
   controller|slep) echo /api/health ;;
@@ -197,6 +197,24 @@ p_update() {
   fi
   _hdr "Rebuilding + recreating via compose ($CFG)"
   _compose up -d --build
+  # SLOP's gateway is the stock caddy image with a BIND-MOUNTED Caddyfile + portal,
+  # so `up --build` recreates the built idp but leaves the gateway container as-is
+  # (its image and compose config didn't change). A Caddyfile the git pull just
+  # brought in would then sit on disk unloaded. Reload Caddy so gateway/portal
+  # changes take effect with zero downtime; fall back to a restart if reload fails.
+  # (The portal's static files are served live from the read-only mount — no reload.)
+  if [[ "$p" == "slop" ]]; then
+    local gwc; gwc="$(_p_container slop)"
+    if docker inspect "$gwc" >/dev/null 2>&1; then
+      _hdr "Reloading the gateway (Caddy) config"
+      if docker exec "$gwc" caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+        _ok "  gateway config reloaded"
+      else
+        _warn "  caddy reload failed — restarting the gateway to apply changes"
+        docker restart "$gwc" >/dev/null 2>&1 || true
+      fi
+    fi
+  fi
   _hdr "New state"
   _compose ps 2>/dev/null || docker ps -a --filter "name=^/${CONTAINER}$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
   _health "$p" || true
@@ -386,48 +404,109 @@ cmd_uninstall() {
 KNOWN_CMDS="up update status logs restart start stop backup destroy"
 
 usage() {
+  local me; me="$(basename "$0")"
   cat <<EOF
 ${BOLD}sysible_ctl${RESET} — manage every Sysible product container from one CLI
 
-${BOLD}Usage:${RESET}
-  $(basename "$0") ${CYAN}<product>${RESET} <command> [args]     e.g. sysible_ctl controller update
-  $(basename "$0") <command> ${CYAN}all${RESET}                 e.g. sysible_ctl start all
-  $(basename "$0") ${CYAN}start${RESET}|${CYAN}stop${RESET}|${CYAN}restart${RESET}|${CYAN}status${RESET}       act on EVERY product (same as '… all')
+One tool for all four products. 'update' git-pulls the checkout, rebuilds from
+source, and recreates the container IN PLACE — your data volume is never touched,
+so DBs, TLS certs, keys, users and files survive every update.
 
-${BOLD}Products:${RESET} ${CYAN}controller${RESET}  ${CYAN}slep${RESET}  ${CYAN}connect${RESET}  ${CYAN}slop${RESET}
+${BOLD}USAGE${RESET}
+  $me ${CYAN}<product>${RESET} <command> [args]      e.g. $me controller update
+  $me <command> ${CYAN}all${RESET}                  e.g. $me update all
+  $me ${CYAN}<product>${RESET}                       (no command) → status of that product
+  $me ${CYAN}status${RESET}|${CYAN}start${RESET}|${CYAN}stop${RESET}|${CYAN}restart${RESET}|${CYAN}up${RESET}    (no product) → act on EVERY product
 
-${BOLD}Commands:${RESET}
-  ${CYAN}up${RESET}       First-run bring-up (or re-roll) from a checkout: build from source and
-             start. For the controller, seeds .env with this host's reachable
-             address so agents don't get the docker-bridge IP:
-               sysible_ctl controller up [lan-ip-or-dns]
-  ${CYAN}update${RESET}   Refresh code (git pull the checkout) + rebuild from source + recreate
-             in place. Preserves the product's data volume.
-  ${CYAN}status${RESET}   Container state + console health probe.
-  ${CYAN}logs${RESET}     Follow logs (last 200 lines; pass a number for a different tail).
-  ${CYAN}restart${RESET} / ${CYAN}start${RESET} / ${CYAN}stop${RESET}   Lifecycle (stop keeps the data volume). With no
-             product they act on EVERY product — 'sysible_ctl start all' (or just
-             'sysible_ctl start') starts all the containers at once.
-  ${CYAN}backup${RESET}   Tarball the product's data volume into the current directory.
-  ${CYAN}destroy${RESET}  Remove the container (add ${BOLD}-v${RESET} to also delete its data volume).
+${BOLD}PRODUCTS${RESET}
+  ${CYAN}controller${RESET}   Sysible Controller — console :8800, agent API :9000   (alias: ce)
+  ${CYAN}slep${RESET}         Sysible LEP — engineering platform console :8810
+  ${CYAN}connect${RESET}      Sysible Connect — :8700
+  ${CYAN}slop${RESET}         SLOP gateway — the single front door (Caddy + IdP) on :443
 
-${BOLD}Meta:${RESET}
-  ${CYAN}install${RESET} / ${CYAN}uninstall${RESET}   Put this CLI on your PATH as 'sysible_ctl'.
-  ${CYAN}help${RESET}
+${BOLD}COMMANDS${RESET}
+  ${CYAN}up${RESET}        First-run bring-up (or re-roll) from a checkout: build from source
+              and start. Re-runnable any time to roll to the latest code.
+  ${CYAN}update${RESET}    git pull the checkout + rebuild from source + recreate in place.
+              Data volume preserved. (For slop, also hot-reloads the gateway.)
+  ${CYAN}status${RESET}    Container state + console health probe.
+  ${CYAN}logs${RESET}      Follow logs. Default tail 200; pass a number for more/less.
+  ${CYAN}start${RESET}     Start a stopped container.
+  ${CYAN}stop${RESET}      Stop the container (data volume kept).
+  ${CYAN}restart${RESET}   Restart the container.
+  ${CYAN}backup${RESET}    Tarball the product's data volume(s) into the current directory.
+  ${CYAN}destroy${RESET}   Remove the container. Add ${BOLD}-v${RESET} to ALSO delete its data volume.
 
-${BOLD}Finding products:${RESET} discovered from each running container's compose labels. If a
-container isn't running, point at its checkout with SYSIBLE_<PRODUCT>_DIR, e.g.
-  SYSIBLE_SLEP_DIR=/opt/sysible-slep sysible_ctl slep update
+${BOLD}EXAMPLES — updating${RESET}
+  $me update all                    # git pull + rebuild + recreate EVERY product
+  $me controller update             # just the Controller
+  $me slep update                   # just SLEP
+  $me connect update                # just Connect
+  $me slop update                   # just the SLOP gateway (+ Caddy hot-reload)
 
-${BOLD}SLOP gateway (slop):${RESET} the front door (Caddy) that fronts the other three apps —
-it does NOT manage them; bring the apps up first, then the door. For first-run
-'up', point at the SLOP checkout:
-  SYSIBLE_SLOP_DIR=/opt/sysible-linux-operations-platform sysible_ctl slop up
-There is no domain to set — SLOP serves on 443 for whatever IP this host has, at
-https://<server-ip>/. Only the SSO secret + app upstreams live in that checkout's
-.env (copy .env.example); override the upstreams there if the apps run elsewhere.
+${BOLD}EXAMPLES — status & logs${RESET}
+  $me status                        # overview of every product (state + health)
+  $me slep                          # short for: $me slep status
+  $me controller logs               # follow Controller logs (last 200 lines)
+  $me slop logs 1000                # follow gateway logs, last 1000 lines
 
-First time: ${BOLD}sudo ./deploy/sysible_ctl install${RESET}
+${BOLD}EXAMPLES — lifecycle${RESET}
+  $me start                         # start ALL products   (= '$me start all')
+  $me stop                          # stop ALL products
+  $me restart                       # restart ALL products
+  $me controller restart            # restart just the Controller
+  $me connect stop                  # stop just Connect (its data volume is kept)
+
+${BOLD}EXAMPLES — first-run bring-up${RESET}
+  sudo ./install.sh                 # (from the SLOP repo) the whole stack, easiest
+  $me controller up 192.168.1.50    # Controller, advertising this LAN IP to agents
+  $me controller up                 # auto-detect the LAN IP
+  SYSIBLE_SLEP_DIR=/opt/sysible-slep $me slep up
+  SYSIBLE_SLOP_DIR=/opt/sysible-linux-operations-platform $me slop up
+
+${BOLD}EXAMPLES — backup & restore${RESET}
+  $me controller backup             # writes sysible-data-backup-<stamp>.tgz here
+  $me slop backup                   # backs up the IdP user store + the Caddy CA/certs
+  # restore a volume from a tarball (stop the product first):
+  $me controller stop
+  docker run --rm -v sysible-data:/data -v "\$PWD:/backup" alpine \\
+    sh -c 'rm -rf /data/* && tar xzf /backup/sysible-data-backup-<stamp>.tgz -C /data'
+  $me controller start
+
+${BOLD}EXAMPLES — teardown${RESET}
+  $me connect destroy               # remove the container, KEEP the data volume
+  $me connect destroy -v            # remove the container AND delete the data volume
+
+${BOLD}FINDING PRODUCTS${RESET}
+Each product is discovered automatically from its running container's compose
+labels — no matter where the repo lives. If a container ISN'T running yet, point
+the tool at its checkout with SYSIBLE_<PRODUCT>_DIR:
+  SYSIBLE_CONTROLLER_DIR=/opt/sysible-controller   $me controller up
+  SYSIBLE_SLEP_DIR=/opt/sysible-slep               $me slep update
+  SYSIBLE_CONNECT_DIR=/opt/sysible-connect         $me connect up
+  SYSIBLE_SLOP_DIR=/opt/sysible-linux-operations-platform  $me slop up
+Override a container name with SYSIBLE_<PRODUCT>_CONTAINER if you renamed it.
+
+${BOLD}SLOP GATEWAY (slop)${RESET}
+The front door (Caddy + IdP) that fronts the other three apps over ONE origin,
+path-routed: /controller /slep /connect. It does NOT start/stop the apps — bring
+the apps up first, then the door. There is NO domain to set: SLOP serves on 443
+for whatever IP this host has, at https://<server-ip>/ (accept the one-time
+self-signed cert warning). The SSO shared secret + app upstreams live in the SLOP
+checkout's .env (copy .env.example). 'slop update' git-pulls that checkout,
+rebuilds the IdP, recreates changed services, and hot-reloads Caddy so a pulled
+Caddyfile/portal takes effect with no downtime.
+
+${BOLD}META${RESET}
+  $me install                       # put this CLI on your PATH as 'sysible_ctl'
+  $me uninstall                     # remove it from your PATH
+  $me help                          # this help
+
+${BOLD}NOTES${RESET}
+  • 'update' NEVER deletes a data volume — only 'destroy -v' does.
+  • Docker socket denied? The tool re-runs itself under sudo automatically. To
+    skip sudo: sudo usermod -aG docker \$USER  then log out/in (or: newgrp docker).
+  • First time on a box: ${BOLD}sudo ./deploy/sysible_ctl install${RESET}, then run '$me …' anywhere.
 EOF
 }
 

@@ -303,14 +303,13 @@ _find_slop_dir() {
   return 1
 }
 
-# The SLOP portal URL — SLOP_DOMAIN from the environment, else the SLOP checkout's
-# .env, else the default. Printed after a bring-up so the user knows where to go.
+# The SLOP portal URL. There is NO domain: SLOP answers on 443 for whatever IP
+# this host has, so we print the host's primary IP. Shown after a bring-up so the
+# user knows where to go.
 _slop_url() {
-  local dom="${SLOP_DOMAIN:-}" d
-  if [[ -z "$dom" ]] && d="$(_find_slop_dir)" && [[ -f "$d/.env" ]]; then
-    dom="$(sed -n 's/^SLOP_DOMAIN=//p' "$d/.env" | tail -n1)"
-  fi
-  printf 'https://%s/\n' "${dom:-slop.lan}"
+  local ip
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  printf 'https://%s/\n' "${ip:-<this-host-IP>}"
 }
 
 # Run a command across every present product.
@@ -409,8 +408,9 @@ ${BOLD}SLOP gateway (slop):${RESET} the front door (Caddy) that fronts the other
 it does NOT manage them; bring the apps up first, then the door. For first-run
 'up', point at the SLOP checkout:
   SYSIBLE_SLOP_DIR=/opt/sysible-linux-operations-platform sysible_ctl slop up
-Set SLOP_DOMAIN + upstreams in that checkout's .env (copy .env.example) first if
-the defaults (slop.lan, apps on this host) don't fit. Serves https://\$SLOP_DOMAIN/.
+There is no domain to set — SLOP serves on 443 for whatever IP this host has, at
+https://<server-ip>/. Only the SSO secret + app upstreams live in that checkout's
+.env (copy .env.example); override the upstreams there if the apps run elsewhere.
 
 First time: ${BOLD}sudo ./deploy/sysible_ctl install${RESET}
 EOF

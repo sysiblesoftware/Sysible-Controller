@@ -87,6 +87,8 @@ ENV PYTHONUNBUFFERED=1 \
     SYSIBLE_API_KEY_FILE=/data/api_key.txt \
     SYSIBLE_API_URL=https://127.0.0.1:9000 \
     SYSIBLE_CA_CERT=/data/certs/server.crt \
+    SYSIBLE_CERT_FILE=/data/certs/server.crt \
+    SYSIBLE_KEY_FILE=/data/certs/server.key \
     SYSIBLE_WEBGUI_PORT=8800 \
     SYSIBLE_BACKEND_PORT=9000
 

@@ -3153,6 +3153,31 @@ def issue_api_key_for_superuser(body: AdminLoginRequest, request: Request):
         raise HTTPException(
             status_code=403,
             detail="This endpoint is reachable only through the local gateway/BFF.")
+
+    # --- SSO path: no console password (the SLOP login carries through) --------
+    # When a sibling relays a gateway-asserted identity (X-Sysible-User/-Role) AND
+    # proves trust with the SLOP shared secret, issue the key WITHOUT a password.
+    # SSO users authenticate at SLOP and have NO local Controller password, so the
+    # shared secret + the SLOP-asserted identity ARE the authentication — the same
+    # trust model as /admin/sso-provision. Gated to a superuser identity (extracting
+    # the master key is superuser-only) and to a secret-proven request (a bare
+    # loopback caller still takes the password path below). Triggered only when an
+    # X-Sysible-User header is present, so a normal username/password call is
+    # unaffected.
+    sso_user = (request.headers.get("x-sysible-user") or "").strip()
+    if sso_user and _gateway_secret_ok(request):
+        sso_role = (request.headers.get("x-sysible-role") or "").strip().lower()
+        if sso_role != "superuser":
+            log_admin_audit("api_key_issue_denied", sso_user,
+                            f"SSO identity role={sso_role or 'none'} is not superuser")
+            raise HTTPException(
+                status_code=403,
+                detail="Connecting an external tool via SSO requires a superuser identity.")
+        log_admin_audit("api_key_issued", sso_user,
+                        "backend API key issued to a connecting tool via SLOP SSO (no password)")
+        from backend.auth import get_or_create_api_key
+        return {"status": "ok", "api_key": get_or_create_api_key()}
+
     username = body.username.strip()
     throttle_key = username or "(empty)"
 

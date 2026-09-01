@@ -73,10 +73,17 @@ def get_or_create_api_key():
 _API_KEY = get_or_create_api_key()
 
 
+def valid_api_key(x_api_key: str) -> bool:
+    """True iff `x_api_key` is the machine API key (constant-time). Exposed so a combined
+    dependency can accept EITHER the API key OR the SLOP gateway shared secret without
+    reaching into this module's private state."""
+    return bool(x_api_key) and secrets.compare_digest(x_api_key, _API_KEY)
+
+
 def require_api_key(x_api_key: str = Header(default=None, alias="X-API-Key")):
     """FastAPI dependency - raise 401 unless a valid admin API key is presented."""
 
-    if not x_api_key or not secrets.compare_digest(x_api_key, _API_KEY):
+    if not valid_api_key(x_api_key):
         raise HTTPException(status_code=401, detail="Missing or invalid API key")
 
 

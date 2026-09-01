@@ -290,6 +290,22 @@ def _gateway_secret_ok(request: Request) -> bool:
     presented = request.headers.get("x-sysible-auth", "") or ""
     return hmac.compare_digest(presented, secret)
 
+
+def require_api_key_or_gateway(request: Request):
+    """Accept EITHER the machine API key OR the SLOP gateway shared secret. Used to gate
+    the fleet/remote read + transport routes so a co-located app behind the gateway (e.g.
+    Sysible Connect attaching to the LOCAL Controller in the SLOP stack) can reach them
+    with the SSO trust it already holds — no separate machine API key to provision. The
+    shared-secret path proves the request transited the gateway (the same trust boundary
+    the console SSO exchange uses); superuser-gated routes keep their own admin-token
+    check on top, so this only opens the api-key floor, never the role floor."""
+    from backend.auth import valid_api_key
+    if valid_api_key(request.headers.get("x-api-key")):
+        return
+    if _gateway_secret_ok(request):
+        return
+    raise HTTPException(status_code=401, detail="Missing or invalid API key")
+
 # Log which directory + commit is actually running, so a wrong-directory deploy is
 # obvious in `journalctl -u sysible-backend` (see backend/build_info.py).
 try:
@@ -315,7 +331,7 @@ async def _security_headers(request, call_next):
     return response
 
 
-app.include_router(remote_router, dependencies=[Depends(require_api_key)])
+app.include_router(remote_router, dependencies=[Depends(require_api_key_or_gateway)])
 
 
 def verify_agent(host_id: str, agent_secret: str):
@@ -1967,7 +1983,7 @@ def _is_controller_host(hostname, ip, names, ips):
     return bool(ip) and ip in ips
 
 
-@app.get("/agents", dependencies=[Depends(require_api_key)])
+@app.get("/agents", dependencies=[Depends(require_api_key_or_gateway)])
 def get_agents():
 
     from backend import agent_integrity

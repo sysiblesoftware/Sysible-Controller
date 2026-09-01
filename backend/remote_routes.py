@@ -510,7 +510,7 @@ def list_hosts():
 
 
 @router.get("/agent-bundle")
-def download_agent_bundle():
+def download_agent_bundle(environment: str = ""):
     """Mint a fresh one-time AGENT enrollment bundle (zip) for a trusted machine peer
     to install on a host it owns — e.g. SLEP enrolling the VMs it just built. This is
     the agent (pull) enrollment path: the target runs run_agent.sh from the zip and
@@ -518,8 +518,14 @@ def download_agent_bundle():
     and no human superuser console token is needed (unlike POST /hosts, which is the
     Sysible-Connect SSH-transport path). Authenticated by the machine API key — the
     whole /remote router requires X-API-Key. Each call bakes a NEW single-use token,
-    so a caller fetches one bundle PER host it enrolls."""
-    from backend.db import get_controller_config
+    so a caller fetches one bundle PER host it enrolls.
+
+    `environment` (optional query param) stamps the bundle so the host lands directly
+    in that Controller environment on enroll — this is how SLEP builds VMs straight
+    into a chosen environment instead of "Unassigned". It's accepted only if it names a
+    real, existing environment (an unknown value is ignored → the host stays
+    unassigned rather than spawning a phantom group off a typo)."""
+    from backend.db import get_controller_config, list_environments
     from backend.agent_bundle import mint_agent_bundle, bundle_addresses
     config = get_controller_config()
     addresses = bundle_addresses(config)
@@ -528,7 +534,12 @@ def download_agent_bundle():
             status_code=409,
             detail="The controller has no configured address, so an agent bundle "
                    "can't be built. Set one in Controller Configuration first.")
-    filename, zip_bytes = mint_agent_bundle(addresses, config["port"])
+    env = (environment or "").strip()
+    if env:
+        known = {(e.get("name") if isinstance(e, dict) else e) for e in list_environments()}
+        if env not in known:
+            env = ""   # ignore an unknown environment rather than creating a phantom group
+    filename, zip_bytes = mint_agent_bundle(addresses, config["port"], environment=env)
     return Response(
         content=zip_bytes, media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'})

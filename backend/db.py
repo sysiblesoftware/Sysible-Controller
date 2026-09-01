@@ -335,6 +335,16 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
+    # The environment a bundle's host should land in. A caller minting a bundle for a
+    # specific environment (e.g. SLEP building VMs "into" a Controller environment)
+    # stamps it here; the enroll handler applies it to the host the moment it enrolls,
+    # so agent-enrolled VMs arrive already grouped instead of "Unassigned". Empty for
+    # the normal console-minted bundle (host stays unassigned until an admin sets it).
+    try:
+        cur.execute("ALTER TABLE enroll_tokens ADD COLUMN environment TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+
     # -----------------------------------------------------
     # Enrollment control (single row, id=1) — a kill-switch for /agents/enroll.
     # When paused, the controller refuses all new enrollments. This is the
@@ -1497,7 +1507,7 @@ def enroll_ip_allowed(ip):
     return False
 
 
-def create_enroll_token(token):
+def create_enroll_token(token, environment=""):
     conn = _connect()
     cur = conn.cursor()
 
@@ -1514,18 +1524,35 @@ def create_enroll_token(token):
         token,
         created,
         expires,
-        used
+        used,
+        environment
     )
-    VALUES (?, ?, ?, 0)
+    VALUES (?, ?, ?, 0, ?)
     """,
     (
         _token_at_rest(token),
         created,
-        expires
+        expires,
+        environment or ""
     ))
 
     conn.commit()
     conn.close()
+
+
+def enroll_token_environment(token):
+    """The environment stamped on `token` when its bundle was minted, or "" if none
+    (or the token is unknown). Read AFTER consume so the enroll handler can drop a
+    freshly-enrolled host straight into that environment. The row persists post-claim
+    (used=1), so this still resolves once the token has been consumed."""
+    if not token:
+        return ""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT environment FROM enroll_tokens WHERE token=?", (_token_at_rest(token),))
+    row = cur.fetchone()
+    conn.close()
+    return (row[0] or "") if row else ""
 
 
 def create_reissue_token(token, host_id):

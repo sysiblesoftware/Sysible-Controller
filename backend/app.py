@@ -19,6 +19,7 @@ from backend.db import (
     validate_enroll_token,
     resolve_enroll_token_host,
     consume_enroll_token,
+    enroll_token_environment,
     create_or_update_agent,
     update_agent_heartbeat,
     insert_metric_sample,
@@ -850,6 +851,11 @@ def enroll(req: EnrollRequest, request: Request):
         # (conditional UPDATE), so even if a second replica raced past validate with
         # the same fresh token, only one claim wins; the loser gets 409 here rather
         # than both enrolling distinct hosts off one token.
+        # Brand-new host? (No existing/adopted record before this enroll.) Only a
+        # first enroll inherits the bundle's environment — a re-enroll must never
+        # clobber an environment an admin later set on the host.
+        is_fresh_enroll = existing is None
+
         if not consume_enroll_token(req.token, host_id):
             raise HTTPException(
                 status_code=409,
@@ -867,6 +873,16 @@ def enroll(req: EnrollRequest, request: Request):
             agent_secret,
             req.ip
         )
+
+        # A bundle minted for a specific environment (e.g. SLEP building VMs INTO a
+        # chosen Controller environment) stamps that environment on the token; apply
+        # it now so an agent-enrolled VM arrives already grouped instead of landing in
+        # "Unassigned". Fresh enrolls only, and set_agent_environment also inherits the
+        # environment's sudo-password default — same as an admin assigning it by hand.
+        if is_fresh_enroll:
+            _bundle_env = enroll_token_environment(req.token)
+            if _bundle_env:
+                set_agent_environment(host_id, _bundle_env)
 
         # Re-seal the integrity baseline for this (re-)enrollment. The baseline is
         # keyed by host_id and SURVIVES disenroll, but a re-enroll reuses the same

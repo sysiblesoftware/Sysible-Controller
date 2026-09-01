@@ -871,9 +871,13 @@ def build_agent_bundle(controller_addresses, controller_port: int, token: str):
     return BUNDLE_FILENAME, buf.getvalue()
 
 
-def mint_agent_bundle(controller_addresses, controller_port: int):
+def mint_agent_bundle(controller_addresses, controller_port: int, environment: str = ""):
     """Mint a fresh single-use enrollment token and build the agent bundle
     against it, returning (filename, zip_bytes).
+
+    `environment` (optional) is stamped on the token so the host lands directly in
+    that Controller environment when it self-enrolls — used by SLEP to build VMs
+    straight into a chosen environment. Empty for a normal console-minted bundle.
 
     This is the ONE place that couples token creation to the build. Every
     download route (the admin API's /download-agent-bundle, the portal's
@@ -897,5 +901,5 @@ def mint_agent_bundle(controller_addresses, controller_port: int):
     enforce_host_limit()
 
     token = secrets.token_hex(16)
-    create_enroll_token(token)
+    create_enroll_token(token, environment=environment)
     return build_agent_bundle(controller_addresses, controller_port, token)

@@ -43,6 +43,14 @@ fi
 mkdir -p "$RUN_DIR" 2>/dev/null
 
 _require_root() {
+  # Inside the container the services run as the unprivileged 'sysible' user (UID
+  # 10001, set in the Dockerfile) which OWNS /data and the SQLite DB — that's all the
+  # container-safe commands touch (reset-admin, rotate-api-key, revoke-enroll-tokens,
+  # status, logs). There is no root or sudo in the container, so enforcing root here
+  # made `docker exec <ctr> sysible_controller reset-admin` impossible ("Run as root:
+  # sudo …", then "command not found"). The root gate is only meaningful on the HOST
+  # (systemd services + root-owned /opt paths), so skip it in the container.
+  [[ "${IN_CONTAINER:-0}" == "1" ]] && return 0
   if [[ $EUID -ne 0 ]]; then
     echo "Run as root: sudo sysible_controller $1"
     exit 1

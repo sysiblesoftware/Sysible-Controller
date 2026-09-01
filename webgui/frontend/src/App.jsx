@@ -172,6 +172,19 @@ function viewFromSearch() {
   } catch { /* ignore */ }
   return null; // dashboard
 }
+function targetFromSearch() {
+  // Seed the view's target from the URL so a deep link can open a specific
+  // sub-tab — e.g. the SLOP Administration console linking straight to
+  // Settings → Enrollment Access via ?view=settings&tab=enrollacl. Only the
+  // tabbed views (Settings, the sysadmin tools grid) read target.tab.
+  try {
+    const q = new URLSearchParams(window.location.search);
+    const v = q.get("view");
+    const tab = q.get("tab");
+    if (tab && (v === "settings" || v === "sysadmin")) return { tab };
+  } catch { /* ignore */ }
+  return null;
+}
 function setSearchView(v) {
   // Keep the address bar in sync with the current top-level view via
   // replaceState — no new history entries (the in-app "← Back" owns view
@@ -193,7 +206,7 @@ export default function App() {
   // its own sub-page when its nav item is clicked again — see ToolRunner.
   const [navTick, setNavTick] = useState(0);
   const [view, setView] = useState(viewFromSearch); // null = dashboard; seeded from ?view=
-  const [target, setTarget] = useState(null);
+  const [target, setTarget] = useState(targetFromSearch); // seeded from ?tab= for tabbed views
   const [history, setHistory] = useState([]); // breadcrumb stack of {view,target}
   const [edition, setEdition] = useState(null);
   const [sudoOpen, setSudoOpen] = useState(false);

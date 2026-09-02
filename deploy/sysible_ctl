@@ -473,7 +473,8 @@ ${BOLD}USAGE${RESET}
   $me ${CYAN}status${RESET}|${CYAN}start${RESET}|${CYAN}stop${RESET}|${CYAN}restart${RESET}|${CYAN}up${RESET}    (no product) → act on EVERY product
 
   ${BOLD}Build + start EVERYTHING (what most people want):${RESET}
-    ${BOLD}$me up all${RESET}   — same as: '$me build all', '$me install all', or bare '$me up'
+    ${BOLD}$me install all${RESET}   — build every product from source and start it
+    (identical: '$me build all', '$me up all', or bare '$me up')
 
 ${BOLD}PRODUCTS${RESET}
   ${CYAN}controller${RESET}   Sysible Controller — console :8800, agent API :9000   (alias: ce)
@@ -484,7 +485,9 @@ ${BOLD}PRODUCTS${RESET}
 ${BOLD}COMMANDS${RESET}
   ${CYAN}up${RESET}        First-run bring-up (or re-roll) from a checkout: BUILD from source
               and start. Re-runnable any time to roll to the latest code.
-              Aliases: ${BOLD}build${RESET} (and '${BOLD}install all${RESET}' / 'install <product>').
+              Usually written ${BOLD}install all${RESET}. Aliases: ${BOLD}install${RESET} <all|product>,
+              ${BOLD}build${RESET}, ${BOLD}up${RESET}. (Bare '${BOLD}install${RESET}' with NO target puts this CLI on
+              your PATH — it does not build anything.)
   ${CYAN}update${RESET}    git pull the checkout + rebuild from source + recreate in place.
               Data volume preserved. (For slop, also hot-reloads the gateway.)
   ${CYAN}status${RESET}    Container state + console health probe.
@@ -516,11 +519,12 @@ ${BOLD}EXAMPLES — lifecycle${RESET}
   $me connect stop                  # stop just Connect (its data volume is kept)
 
 ${BOLD}EXAMPLES — build + start
-  sysible_ctl up all                        # BUILD from source + start EVERY product
+  sysible_ctl install all                   # BUILD from source + start EVERY product
   sysible_ctl build all                     # identical (alias)
-  sysible_ctl install all                   # identical (alias)
+  sysible_ctl up all                        # identical (alias)
   sysible_ctl up                            # identical (bare command = all)
-  sysible_ctl slep up                       # build + start just SLEP
+  sysible_ctl install slep                  # build + start just SLEP
+  sysible_ctl slep build                    # identical
   A product with no checkout is REPORTED and SKIPPED — the others still come up.
 
 EXAMPLES — first-run bring-up${RESET}
@@ -600,9 +604,13 @@ main() {
     install)
       # Bare `install` puts THIS CLI on PATH. `install all` (or `install <product>`)
       # is what people reach for to build the products — route it to `up`.
-      if [[ -n "$a2" ]]; then _need_docker
-        if [[ "$a2" == "all" ]]; then p_all up; return 0; fi
-        if _is_product "$a2"; then _run_cmd up "$(_canon "$a2")"; return 0; fi
+      # A target that is neither must be an ERROR: falling through to cmd_install
+      # would answer a typo ('install slpe') by silently linking the CLI, which
+      # looks like success and builds nothing.
+      if [[ -n "$a2" ]]; then
+        if [[ "$a2" == "all" ]]; then _need_docker; p_all up; return 0; fi
+        if _is_product "$a2"; then _need_docker; _run_cmd up "$(_canon "$a2")"; return 0; fi
+        _die "install: '$a2' is not a product. Use 'all', or one of: $PRODUCTS"
       fi
       cmd_install; return 0 ;;
     uninstall)      cmd_uninstall; return 0 ;;

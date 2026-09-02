@@ -222,20 +222,6 @@ def log_action(host: str, description: str):
     return _request("POST", "/activity", json={"host": host, "description": description})
 
 
-def get_metrics_timeseries(window=3600):
-    """Per-host performance time-series (load/mem/disk) for the last `window`
-    seconds. Returns {"hosts": [...], "window": int, "now": float}."""
-    return _request("GET", f"/metrics/timeseries?window={int(window)}")
-
-
-def get_host_snapshot(host_id):
-    """Latest rich detail snapshot (per-core CPU, memory breakdown, per-interface
-    network, per-mount disk, top processes) for one host's metrics drill-down.
-    Returns {"host_id", "ts", "snapshot": {...}|None}."""
-    from urllib.parse import quote
-    return _request("GET", f"/metrics/snapshot/{quote(str(host_id), safe='')}")
-
-
 def get_fleet_health_readings():
     """Latest fleet-health reading per host from heartbeat data (disk/mem/load +
     failed-units/systemd/OOM), so the dashboard can render health without a live

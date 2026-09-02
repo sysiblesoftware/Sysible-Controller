@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 
 # Size caps for the agent-facing channel. A managed host runs the agent, and a
 # compromised/malicious agent could otherwise POST arbitrarily large payloads
-# every heartbeat (metrics/snapshot/measurements dicts, task results, PTY output)
+# every heartbeat (metrics/measurements dicts, task results, PTY output)
 # to bloat the DB / the integrity state file or drive controller RSS to OOM.
 # These bound each field; string fields use Pydantic's max_length, dict fields a
 # validator on the serialized size. Generous enough for real payloads, small
@@ -55,7 +55,6 @@ def _validate_agent_hostname(cls, v):
 
 
 _METRICS_MAX = _int_env("SYSIBLE_MAX_METRICS_BYTES", 64 * 1024)
-_SNAPSHOT_MAX = _int_env("SYSIBLE_MAX_SNAPSHOT_BYTES", 512 * 1024)
 _MEASUREMENTS_MAX = _int_env("SYSIBLE_MAX_MEASUREMENTS_BYTES", 512 * 1024)
 _COMMAND_MAX = _int_env("SYSIBLE_MAX_COMMAND_BYTES", 1024 * 1024)
 _RESULT_MAX = _int_env("SYSIBLE_MAX_RESULT_BYTES", 4 * 1024 * 1024)
@@ -106,15 +105,12 @@ class HeartbeatRequest(BaseModel):
     # run the current agent (drives the web console's Update-agents progress).
     # Older agents omit it.
     agent_version: Optional[str] = Field(default=None, max_length=_SHORT_MAX)
-    # Optional performance sample (load/cpu/mem/swap/disk/net/io/procs). Sent by
-    # newer agents at most once per SYSIBLE_METRICS_INTERVAL, not on every
-    # heartbeat; older agents omit it (or send only load1/cores/mem/disk). See
-    # host_agent/agent.py's _sample_metrics().
+    # Optional fleet-health sample (disk/mem/load + failed-units/systemd/OOM,
+    # hypervisor role). Sent by newer agents at most once per
+    # SYSIBLE_METRICS_INTERVAL, not on every heartbeat; older agents omit it (or
+    # send only load1/cores/mem/disk). Extra keys are ignored. See
+    # host_agent/agent.py's _collect_metrics().
     metrics: Optional[Dict[str, Any]] = None
-    # Optional rich detail snapshot (per-core CPU, memory breakdown, per-interface
-    # network, per-mount disk, top processes) for the per-host drill-down. Latest
-    # only - overwritten each interval. See host_agent/agent.py's _sample_snapshot().
-    snapshot: Optional[Dict[str, Any]] = None
     # Agent integrity (Tier 1): the agent's self-measurement manifest (sha256 of
     # its own files + version). Optional so older agents that don't send it keep
     # working; when present the controller compares it to the host's sealed
@@ -125,11 +121,6 @@ class HeartbeatRequest(BaseModel):
     @classmethod
     def _cap_metrics(cls, v):
         return _bounded_dict(v, _METRICS_MAX, "metrics")
-
-    @field_validator("snapshot")
-    @classmethod
-    def _cap_snapshot(cls, v):
-        return _bounded_dict(v, _SNAPSHOT_MAX, "snapshot")
 
     @field_validator("measurements")
     @classmethod

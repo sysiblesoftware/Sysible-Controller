@@ -98,8 +98,6 @@ export const api = {
   environments: () => req("/api/environments"),
   tools: () => req("/api/tools"),
   fleetHealth: (refresh) => req("/api/fleet-health" + (refresh ? "?refresh=1" : "")),
-  fleetMetrics: (window = 3600) => req(`/api/fleet-metrics?window=${window}`),
-  hostSnapshot: (hostId) => req(`/api/host-snapshot/${encodeURIComponent(hostId)}`),
   // Posture / compliance (read-only sweep + per-host drill-down)
   fleetPosture: (refresh = false) => req(`/api/fleet-posture${refresh ? "?refresh=1" : ""}`),
   hostPosture: (hostId) => req(`/api/host-posture/${encodeURIComponent(hostId)}`),

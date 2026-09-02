@@ -208,66 +208,15 @@ def init_db():
         )
 
     # -----------------------------------------------------
-    # Metric samples (fleet performance time-series)
-    #
-    # Lightweight rolling history fed by the agent itself: each agent
-    # samples a few cheap numbers (load, memory %, worst-disk %) and
-    # piggybacks them on its heartbeat at most every
-    # SYSIBLE_METRICS_INTERVAL seconds (NOT every heartbeat - see
-    # host_agent/agent.py). The controller appends one row per sample
-    # and prunes anything older than the retention window on write, so
-    # the table stays bounded (~a couple thousand rows per host/day).
-    # Read back by the web console's Performance view, grouped by
-    # environment with per-host drill-down.
-    #
-    # Deliberately not a foreign key to agents: a disenroll deletes the
-    # agent row but old samples just age out via the retention prune, so
-    # a brief post-removal window can't error on an orphan reference.
+    # Migration: the Fleet Performance view and its per-host drill-down were
+    # removed, taking the `metric_samples` time-series and `host_snapshot`
+    # tables with them. Nothing writes or reads either any more, so drop them
+    # on upgraded databases to reclaim the space - they held throwaway rolling
+    # history (26h retention), never a record of anything. Idempotent
+    # (IF EXISTS), so fresh installs and repeated starts are unaffected.
     # -----------------------------------------------------
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS metric_samples (
-        host_id TEXT NOT NULL,
-        ts REAL NOT NULL,
-        load1 REAL,
-        cores INTEGER,
-        mem INTEGER,
-        disk INTEGER,
-        PRIMARY KEY (host_id, ts)
-    )
-    """)
-    cur.execute(
-        "CREATE INDEX IF NOT EXISTS idx_metric_samples_ts ON metric_samples(ts)"
-    )
-    # Richer scalar time-series (added later): CPU%, load 5/15m, swap%, network
-    # throughput (bytes/s), disk I/O (bytes/s), and process count. All nullable
-    # so older agents (which omit them) and existing rows keep working.
-    for _col, _type in (
-        ("load5", "REAL"), ("load15", "REAL"), ("cpu", "REAL"), ("swap", "INTEGER"),
-        ("net_rx", "REAL"), ("net_tx", "REAL"), ("io_r", "REAL"), ("io_w", "REAL"),
-        ("procs", "INTEGER"),
-    ):
-        try:
-            cur.execute(f"ALTER TABLE metric_samples ADD COLUMN {_col} {_type}")
-        except sqlite3.OperationalError:
-            pass
-
-    # -----------------------------------------------------
-    # Host snapshot (latest rich detail for the per-host drill-down)
-    #
-    # Unlike metric_samples (a rolling scalar time-series), this holds just the
-    # LATEST detailed snapshot per host - per-core CPU, memory breakdown,
-    # per-interface network, per-mount disk, and top processes - as a JSON blob
-    # the agent attaches alongside its metrics. One row per host, overwritten
-    # each interval, so it never grows with time. Powers the per-host metrics
-    # drill-down without a separate on-demand probe.
-    # -----------------------------------------------------
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS host_snapshot (
-        host_id TEXT PRIMARY KEY,
-        ts REAL NOT NULL,
-        data TEXT
-    )
-    """)
+    cur.execute("DROP TABLE IF EXISTS metric_samples")
+    cur.execute("DROP TABLE IF EXISTS host_snapshot")
 
     # -----------------------------------------------------
     # Latest fleet-HEALTH reading per host (one row, overwritten each metrics
@@ -683,7 +632,7 @@ def init_db():
     # poll) filters host_id+status; reclaim_stale_tasks scans status+dispatched; the
     # prune and per-host result lookups filter status/host_id. Without these the most
     # frequent query in the system is a full-table scan that grows with every command
-    # ever queued (the tasks tables, unlike metric_samples, are age-pruned).
+    # ever queued.
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_agent_tasks_host_status "
         "ON agent_tasks(host_id, status)")
@@ -978,10 +927,6 @@ def delete_agent(host_id):
             "DELETE FROM agent_results WHERE host_id=?",
             (host_id,)
         )
-        cur.execute(
-            "DELETE FROM metric_samples WHERE host_id=?",
-            (host_id,)
-        )
 
         conn.commit()
 
@@ -999,7 +944,7 @@ def decommission_wipe():
             n = cur.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
         except Exception:
             n = 0
-        for tbl in ("agents", "agent_tasks", "agent_results", "metric_samples",
+        for tbl in ("agents", "agent_tasks", "agent_results",
                     "enroll_tokens", "agent_integrity", "agent_ssh_state",
                     "pending_become", "controller_config"):
             try:
@@ -1011,68 +956,8 @@ def decommission_wipe():
 
 
 # =========================================================
-# METRIC SAMPLES (fleet performance time-series)
+# HOST HEALTH (latest fleet-health reading per host)
 # =========================================================
-# Keep ~26h of history so the web console can offer up to a 24h window
-# with a little headroom; everything older is pruned on write.
-METRIC_RETENTION_S = 26 * 3600
-
-
-def insert_metric_sample(host_id, ts, load1, cores, mem, disk,
-                         load5=None, load15=None, cpu=None, swap=None,
-                         net_rx=None, net_tx=None, io_r=None, io_w=None, procs=None):
-    """Append one performance sample for a host and prune anything past the
-    retention window. Called from the heartbeat path (only when the agent
-    actually attached metrics, i.e. at most once per SYSIBLE_METRICS_INTERVAL),
-    so the write rate is low enough not to add meaningful heartbeat contention.
-    The trailing args are the richer scalars added later (CPU%, load 5/15m,
-    swap%, network/disk throughput, process count); older agents omit them."""
-    # closing(): release the connection even if the write raises, so a leaked
-    # WAL reservation can't compound lock contention on the heartbeat path.
-    with contextlib.closing(_connect()) as conn:
-        cur = conn.cursor()
-        # INSERT OR REPLACE: the (host_id, ts) PK makes a duplicate timestamp
-        # (e.g. a retried heartbeat) idempotent rather than an error.
-        cur.execute(
-            "INSERT OR REPLACE INTO metric_samples "
-            "(host_id, ts, load1, cores, mem, disk, load5, load15, cpu, swap, "
-            " net_rx, net_tx, io_r, io_w, procs) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (host_id, float(ts), load1, cores, mem, disk, load5, load15, cpu, swap,
-             net_rx, net_tx, io_r, io_w, procs),
-        )
-        cur.execute(
-            "DELETE FROM metric_samples WHERE ts < ?",
-            (float(ts) - METRIC_RETENTION_S,),
-        )
-        conn.commit()
-
-
-def upsert_host_snapshot(host_id, ts, data_json):
-    """Store the latest rich detail snapshot (JSON string) for a host,
-    overwriting any previous one. One row per host - never grows with time."""
-    with contextlib.closing(_connect()) as conn:  # close even if the write raises
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT OR REPLACE INTO host_snapshot (host_id, ts, data) VALUES (?, ?, ?)",
-            (host_id, float(ts), data_json),
-        )
-        conn.commit()
-
-
-def get_host_snapshot(host_id):
-    """Return {ts, data} for a host's latest snapshot (data is the raw JSON
-    string the agent sent), or None if there isn't one."""
-    conn = _connect()
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute("SELECT ts, data FROM host_snapshot WHERE host_id = ?", (host_id,))
-    row = cur.fetchone()
-    conn.close()
-    if not row:
-        return None
-    return {"ts": row["ts"], "data": row["data"]}
-
 
 def upsert_host_health(host_id, ts, disk, mem, load1, cores, failed, oom,
                        uptime, sysd, mount, units, hyp=None, vms=None, vm_names=None):
@@ -1125,80 +1010,6 @@ def get_all_host_health():
             "hyp": r["hyp"], "vms": r["vms"], "vm_names": vm_names,
         }
     return out
-
-
-# Cap on the number of time-series points returned PER HOST, regardless of
-# window width or how many raw samples the retention window holds. At the 60s
-# metrics cadence a 24h window is ~1440 raw samples/host; without a cap the
-# endpoint's payload (and the client-side render) grew linearly with retention
-# AND fleet size — the "fast when the DB was small, slow now" regression on the
-# Performance view. Downsampling to a fixed budget keeps cost flat: a chart only
-# a few hundred pixels wide can't show more points than this anyway.
-_METRIC_MAX_POINTS = 300
-
-
-def _downsample(samples, max_points=_METRIC_MAX_POINTS):
-    """Reduce an ascending-time sample list to at most `max_points` by keeping
-    every k-th sample (k chosen so the result fits the budget) and always the
-    most recent one, so the tail of the chart stays accurate."""
-    n = len(samples)
-    if n <= max_points:
-        return samples
-    step = (n + max_points - 1) // max_points  # ceil(n/max_points)
-    out = samples[::step]
-    if out[-1] is not samples[-1]:
-        out.append(samples[-1])
-    return out
-
-
-def get_metric_samples(window_s=3600):
-    """Return per-host performance time-series within the last `window_s`
-    seconds, joined to the agent inventory for hostname/environment. Shape:
-    [{host_id, hostname, environment, samples: [{t, load1, cores, mem, disk}, ...]}]
-    with samples in ascending time order, downsampled to <=_METRIC_MAX_POINTS per
-    host. Hosts with no samples in the window are omitted."""
-    window_s = max(60, min(int(window_s or 3600), METRIC_RETENTION_S))
-    cutoff = time.time() - window_s
-    conn = _connect()
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT s.host_id, s.ts, s.load1, s.cores, s.mem, s.disk,
-               s.load5, s.load15, s.cpu, s.swap, s.net_rx, s.net_tx,
-               s.io_r, s.io_w, s.procs,
-               a.hostname, a.environment
-        FROM metric_samples s
-        LEFT JOIN agents a ON a.host_id = s.host_id
-        WHERE s.ts >= ?
-        ORDER BY s.host_id, s.ts
-        """,
-        (cutoff,),
-    )
-    rows = cur.fetchall()
-    conn.close()
-
-    by_host = {}
-    for r in rows:
-        h = by_host.get(r["host_id"])
-        if h is None:
-            h = {
-                "host_id": r["host_id"],
-                "hostname": r["hostname"] or r["host_id"],
-                "environment": r["environment"] or "Unassigned",
-                "samples": [],
-            }
-            by_host[r["host_id"]] = h
-        h["samples"].append({
-            "t": r["ts"], "load1": r["load1"], "cores": r["cores"],
-            "mem": r["mem"], "disk": r["disk"],
-            "load5": r["load5"], "load15": r["load15"], "cpu": r["cpu"],
-            "swap": r["swap"], "net_rx": r["net_rx"], "net_tx": r["net_tx"],
-            "io_r": r["io_r"], "io_w": r["io_w"], "procs": r["procs"],
-        })
-    for h in by_host.values():
-        h["samples"] = _downsample(h["samples"])
-    return list(by_host.values())
 
 
 def get_agent_secret(host_id):

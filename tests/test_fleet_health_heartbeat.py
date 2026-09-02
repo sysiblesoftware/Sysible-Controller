@@ -111,20 +111,6 @@ def test_health_from_stored_partial_when_no_sysd():
     assert r["failed"] == 0 and r["units"] == []   # unknown until agent upgrade
 
 
-def test_metric_samples_downsampled_to_budget():
-    """Wide windows must not return unbounded points: get_metric_samples caps
-    per-host output at _METRIC_MAX_POINTS regardless of raw sample volume."""
-    import backend.db as d
-    raw = [{"t": float(i)} for i in range(5000)]
-    out = d._downsample(raw)
-    assert len(out) <= d._METRIC_MAX_POINTS + 1
-    assert out[-1]["t"] == 4999.0          # newest point preserved
-    assert out[0]["t"] == 0.0              # oldest anchor preserved
-    # A list already within budget is returned unchanged (identity).
-    small = [{"t": float(i)} for i in range(50)]
-    assert d._downsample(small) is small
-
-
 def test_host_bounded_passes_normal_and_kills_hang():
     """Read-only recon dispatches are wrapped so a wedged probe can't occupy the
     agent's serial task loop for the full 30-min agent command timeout. A normal

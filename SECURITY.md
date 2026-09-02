@@ -383,7 +383,7 @@ before a production rollout:
 - **Scheduled jobs run in the target host's local timezone**, not the operator's
   browser — cron and systemd timers use the host clock. Set each host to the
   timezone you expect maintenance windows in.
-- **Agent-channel payloads are size-capped** (metrics/snapshot/measurements,
+- **Agent-channel payloads are size-capped** (metrics/measurements,
   task results, PTY output/buffer) to bound controller memory against a
   misbehaving agent; the caps are generous but env-tunable
   (`SYSIBLE_MAX_*_BYTES`) if a legitimate payload is ever truncated.

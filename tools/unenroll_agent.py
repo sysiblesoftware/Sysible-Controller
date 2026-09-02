@@ -29,7 +29,7 @@ _CANDIDATES = [
     str(Path(__file__).resolve().parent.parent / "backend" / "sysible.db"),
 ]
 
-_CLEANUP_TABLES = ["agent_tasks", "agent_results", "metric_samples"]
+_CLEANUP_TABLES = ["agent_tasks", "agent_results"]
 
 
 def _resolve_db(explicit):

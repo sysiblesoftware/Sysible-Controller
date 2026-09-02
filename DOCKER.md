@@ -14,7 +14,7 @@ database, or the pinned TLS certificate:
 
 ```
 /data
-├── sysible.db        # SQLite database (agents, admins, config, metrics)
+├── sysible.db        # SQLite database (agents, admins, config, host health)
 ├── certs/            # server.crt / server.key / trust.crt (agents pin these)
 ├── api_key.txt       # backend API key (backend <-> BFF/CLI)
 ├── run/              # cookie secret, pid/port sidecars

@@ -4,6 +4,23 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Removed — Fleet Performance and Network Topology views
+
+- **Fleet Performance** (time-series charts + per-host snapshot drill-down) and
+  **Network Topology** are gone from the console, together with only their exclusive
+  plumbing: the `/api/fleet-metrics` and `/api/host-snapshot/{id}` console routes, the
+  controller's `/metrics/timeseries` and `/metrics/snapshot/{id}` endpoints, the
+  heartbeat's perf-only `snapshot` field (and its `SYSIBLE_MAX_SNAPSHOT_BYTES` cap), and
+  the `metric_samples` / `host_snapshot` tables — dropped on the next start (they held
+  throwaway rolling history, so nothing is migrated). Bookmarked `?view=perf` /
+  `?view=topology` links land on the Dashboard. Auditors now see the Dashboard, Update
+  Hosts, Activity & Logs and the Documentation.
+- **Unchanged:** the dashboard's fleet-health grading, the per-host health readings
+  (`/metrics/fleet-health`), alert thresholds and the agent's metrics heartbeat all
+  stay — they never depended on the removed views. The agent itself is untouched, so
+  no *Update agents* push is needed; pre-removal agents that still attach the
+  `snapshot` payload are simply ignored.
+
 ### Security — post-assessment hardening (batch 1)
 
 - **Admin API-key rotation on demand** (`sysible_controller rotate-api-key`). Generates

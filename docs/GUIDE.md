@@ -185,8 +185,7 @@ across checked hosts with per-host result tabs:
 
 The **Dashboard/Fleet** view rolls up live **health** (OK/Warning/Critical) and a
 read-only **compliance & posture** scan per environment, worst-first and expandable
-to hosts; **Performance** gives environment-first time-series charts fed by the
-agent's heartbeat. **Find any action by name** with the dashboard search box.
+to hosts. **Find any action by name** with the dashboard search box.
 
 ---
 

@@ -22,10 +22,6 @@ from backend.db import (
     enroll_token_environment,
     create_or_update_agent,
     update_agent_heartbeat,
-    insert_metric_sample,
-    get_metric_samples,
-    upsert_host_snapshot,
-    get_host_snapshot,
     upsert_host_health,
     get_all_host_health,
     list_agents,
@@ -178,7 +174,7 @@ _logging.getLogger("uvicorn.access").addFilter(_RedactAgentSecretFilter())
 
 def _max_request_bytes() -> int:
     """Global request-body ceiling for the controller API. The high-volume agent
-    endpoints (heartbeat snapshot, task result, metrics) otherwise accept an
+    endpoints (heartbeat, task result, metrics) otherwise accept an
     UNBOUNDED JSON body that Starlette buffers into RAM before validation, so a
     single authenticated/compromised agent could exhaust memory. 16 MiB is far above
     any legitimate heartbeat/result yet bounds the blast radius. Set
@@ -974,37 +970,17 @@ def heartbeat(req: HeartbeatRequest):
         # window. Never raises.
         agent_integrity.note_missing(req.host_id)
 
-    # Persist a performance sample if this heartbeat carried one (newer agents
-    # attach one ~once per SYSIBLE_METRICS_INTERVAL). Wrapped so a malformed
-    # payload or a transient write error can never fail the heartbeat itself -
-    # losing one sample is harmless; a 500 here would spam the agent log.
+    # Persist the latest fleet-health reading if this heartbeat carried metrics
+    # (newer agents attach them ~once per SYSIBLE_METRICS_INTERVAL, including
+    # failed/sysd/oom so the dashboard can render health without a live probe).
+    # Best-effort: a malformed payload or a transient write error must never fail
+    # the heartbeat itself - a miss just means that host gets live-probed next
+    # sweep, and a 500 here would spam the agent log. Any extra keys an older
+    # agent still sends alongside these are simply ignored.
     if req.metrics:
-        try:
-            def _num(key, cast):
-                v = req.metrics.get(key)
-                return None if v is None else cast(v)
-            insert_metric_sample(
-                req.host_id,
-                time.time(),
-                _num("load1", float),
-                _num("cores", int),
-                _num("mem", int),
-                _num("disk", int),
-                load5=_num("load5", float),
-                load15=_num("load15", float),
-                cpu=_num("cpu", float),
-                swap=_num("swap", int),
-                net_rx=_num("net_rx", float),
-                net_tx=_num("net_tx", float),
-                io_r=_num("io_r", float),
-                io_w=_num("io_w", float),
-                procs=_num("procs", int),
-            )
-        except Exception:
-            pass
-        # Latest fleet-health reading (newer agents attach failed/sysd/oom so the
-        # dashboard can render health without a live probe). Best-effort; a miss
-        # just means that host gets live-probed next sweep.
+        def _num(key, cast):
+            v = req.metrics.get(key)
+            return None if v is None else cast(v)
         try:
             upsert_host_health(
                 req.host_id, time.time(),
@@ -1018,14 +994,6 @@ def heartbeat(req: HeartbeatRequest):
                 _num("vms", int),
                 (req.metrics.get("vm_names") or []),
             )
-        except Exception:
-            pass
-
-    # Persist the latest rich detail snapshot if attached (newer agents only).
-    # Stored as one row per host (overwritten), feeding the per-host drill-down.
-    if req.snapshot:
-        try:
-            upsert_host_snapshot(req.host_id, time.time(), json.dumps(req.snapshot))
         except Exception:
             pass
 
@@ -1887,15 +1855,6 @@ def get_controller_log_route(lines: int = 400):
 # =========================================================
 # INVENTORY
 # =========================================================
-@app.get("/metrics/timeseries", dependencies=[Depends(require_api_key)])
-def get_metrics_timeseries(window: int = 3600):
-    """Per-host performance time-series (load/mem/disk) for the last `window`
-    seconds, grouped for the web console's Performance view. Read-only; the
-    samples are reported by the agents themselves on heartbeat."""
-    hosts = get_metric_samples(window)
-    return {"hosts": hosts, "window": window, "now": time.time()}
-
-
 @app.get("/metrics/fleet-health", dependencies=[Depends(require_api_key)])
 def get_fleet_health_readings_route():
     """Latest fleet-HEALTH reading for every host, keyed by host_id, from what the
@@ -1903,21 +1862,6 @@ def get_fleet_health_readings_route():
     the console render the dashboard health donut without a live probe per host.
     Read-only; the console computes the verdict + freshness from these."""
     return {"hosts": get_all_host_health(), "now": time.time()}
-
-
-@app.get("/metrics/snapshot/{host_id}", dependencies=[Depends(require_api_key)])
-def get_metrics_snapshot_route(host_id: str):
-    """Latest rich detail snapshot for one host (per-core CPU, memory breakdown,
-    per-interface network, per-mount disk, top processes) for the per-host
-    metrics drill-down. Reported by the agent on heartbeat; read-only."""
-    snap = get_host_snapshot(host_id)
-    if not snap:
-        return {"host_id": host_id, "ts": None, "snapshot": None}
-    try:
-        data = json.loads(snap["data"]) if snap.get("data") else None
-    except (ValueError, TypeError):
-        data = None
-    return {"host_id": host_id, "ts": snap.get("ts"), "snapshot": data}
 
 
 _CTRL_IDENTITY_CACHE = {"ts": 0.0, "val": None}
@@ -1957,7 +1901,7 @@ def _controller_identity():
     # baked into agent bundles). The OS hostname / NIC-detected IPs can diverge
     # from how the controller is actually addressed — e.g. after a LAN renumber or
     # on a multi-homed box — which would stop the controller recognising its OWN
-    # self-managed host (drawing it as a duplicate managed host in the topology).
+    # self-managed host (drawing it as a duplicate managed host on the dashboard).
     # DNS-free: this only reads the stored config row.
     try:
         from backend.db import get_controller_config

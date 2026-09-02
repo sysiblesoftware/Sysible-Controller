@@ -161,6 +161,11 @@ function viewFromSearch() {
   try {
     const v = new URLSearchParams(window.location.search).get("view");
     if (v && VIEW_KEYS.has(v)) return v;
+    // Drill-in views aren't in the sidebar, so they're absent from VIEW_KEYS —
+    // but ?view=host&id=… is a real deep link (the Visualizer's fleet map opens a
+    // node here). Only honour it with an id; canSeeView already allows DRILL_VIEWS
+    // and per-host access is still gated server-side.
+    if (v && DRILL_VIEWS.has(v) && new URLSearchParams(window.location.search).get("id")) return v;
   } catch { /* ignore */ }
   return null; // dashboard
 }
@@ -174,6 +179,13 @@ function targetFromSearch() {
     const v = q.get("view");
     const tab = q.get("tab");
     if (tab && (v === "settings" || v === "sysadmin")) return { tab };
+    // ?view=host&id=<host id>[&label=<name>] — a deep link straight to one host's
+    // posture page, used by the Sysible Visualizer fleet map. The label is only a
+    // heading hint while HostDetail loads; the id is what actually fetches.
+    if (v === "host") {
+      const id = q.get("id");
+      if (id) return { id, label: q.get("label") || "" };
+    }
   } catch { /* ignore */ }
   return null;
 }

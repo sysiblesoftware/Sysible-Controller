@@ -2,9 +2,10 @@
 # sysible_ctl — one CLI to manage every Sysible product container.
 #
 # Products: controller (Sysible Controller), slep (Sysible Linux Engineering
-# Platform), connect (Sysible Connect), flashback (Sysible Flashback — the config
-# time machine), slop (the SLOP gateway/portal — the single front door in front of
-# the other modules). Each runs as a docker-compose service
+# Platform), connect (Sysible Connect), slop (the SLOP gateway/portal — the single
+# front door; its compose also bundles the Flashback config-time-machine module, so
+# `slop up/status/logs` covers it — there is no separate flashback product). Each
+# runs as a docker-compose service
 # from its own checkout; this tool drives them all with a single, consistent set
 # of commands so you don't have to remember per-product invocations or cd around.
 #
@@ -27,28 +28,25 @@ set -euo pipefail
 
 # --- product registry ------------------------------------------------------
 # Every known product id. Add one here + a case in each _p_* accessor to extend.
-PRODUCTS="controller slep connect flashback slop"
+PRODUCTS="controller slep connect slop"
 
 # For discovery we need ONE container of the product's compose stack.
 _p_container() { case "$1" in
   controller)    echo "${SYSIBLE_CONTROLLER_CONTAINER:-sysible-controller}" ;;
   slep)          echo "${SYSIBLE_SLEP_CONTAINER:-sysible-slep}" ;;
   connect)       echo "${SYSIBLE_CONNECT_CONTAINER:-sysible-connect}" ;;
-  flashback)     echo "${SYSIBLE_FLASHBACK_CONTAINER:-sysible-flashback}" ;;
   slop)          echo "${SYSIBLE_SLOP_CONTAINER:-sysible-slop-gateway}" ;;
 esac; }
 _p_pretty() { case "$1" in
   controller)    echo "Sysible Controller" ;;
   slep)          echo "Sysible LEP" ;;
   connect)       echo "Sysible Connect" ;;
-  flashback)     echo "Sysible Flashback" ;;
   slop)          echo "Sysible SLOP gateway" ;;
 esac; }
 _p_port() { case "$1" in
   controller) echo 8800 ;;
   slep)       echo 8810 ;;
   connect)    echo 8700 ;;
-  flashback)  echo 8720 ;;
   slop)       echo 443 ;;
 esac; }
 # Space-separated volume list (a product may keep state across several volumes).
@@ -56,11 +54,12 @@ _p_volume() { case "$1" in
   controller)    echo sysible-data ;;
   slep)          echo slep-data ;;
   connect)       echo connect-data ;;
-  flashback)     echo flashback-data ;;
-  slop)          echo "slop-idp-data slop-caddy-data slop-caddy-config" ;;
+  # The slop stack keeps the IdP user store, Caddy's certs/config, AND the Flashback
+  # version store (Flashback is a service in the slop compose, not a separate stack).
+  slop)          echo "slop-idp-data slop-caddy-data slop-caddy-config flashback-data" ;;
 esac; }
 _p_health_path() { case "$1" in
-  controller|slep|flashback) echo /api/health ;;
+  controller|slep) echo /api/health ;;
   connect)         echo /healthz ;;
   slop)            echo / ;;   # the portal apex (Caddy serves the landing page)
 esac; }
@@ -72,7 +71,6 @@ _p_dir_override() { case "$1" in
   controller)    echo "${SYSIBLE_CONTROLLER_DIR:-}" ;;
   slep)          echo "${SYSIBLE_SLEP_DIR:-}" ;;
   connect)       echo "${SYSIBLE_CONNECT_DIR:-}" ;;
-  flashback)     echo "${SYSIBLE_FLASHBACK_DIR:-}" ;;
   slop)          echo "${SYSIBLE_SLOP_DIR:-}" ;;
 esac; }
 
@@ -428,8 +426,7 @@ ${BOLD}PRODUCTS${RESET}
   ${CYAN}controller${RESET}   Sysible Controller — console :8800, agent API :9000   (alias: ce)
   ${CYAN}slep${RESET}         Sysible LEP — engineering platform console :8810
   ${CYAN}connect${RESET}      Sysible Connect — :8700
-  ${CYAN}flashback${RESET}    Sysible Flashback — the config time machine :8720
-  ${CYAN}slop${RESET}         SLOP gateway — the single front door (Caddy + IdP) on :443
+  ${CYAN}slop${RESET}         SLOP gateway — front door (Caddy + IdP + Flashback) on :443
 
 ${BOLD}COMMANDS${RESET}
   ${CYAN}up${RESET}        First-run bring-up (or re-roll) from a checkout: build from source

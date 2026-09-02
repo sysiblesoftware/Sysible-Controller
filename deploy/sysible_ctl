@@ -294,7 +294,14 @@ p_up() {
   dir="$(_p_dir_override "$p")"
   if [[ -z "$dir" ]] && _discover "$p"; then dir="$WD"; fi
   if [[ -z "$dir" && "$p" == "controller" ]]; then dir="$_CTL_REPO"; fi
-  [[ -n "$dir" ]] || _die "$(_p_pretty "$p"): can't find its checkout. Set SYSIBLE_${p^^}_DIR=/path/to/checkout, then re-run."
+  # Standard clone location (install.sh's /opt/sysible-src/<repo>) before giving up.
+  if [[ -z "$dir" ]]; then dir="$(_find_checkout "$p" || true)"; fi
+  # RETURN, never _die: _die exits the whole process, so one product without a
+  # checkout used to abort an entire `up all` and silently skip the rest.
+  if [[ -z "$dir" ]]; then
+    _err "$(_p_pretty "$p"): can't find its checkout. Clone it (or set SYSIBLE_${p^^}_DIR=/path/to/checkout) and re-run."
+    return 1
+  fi
   cfg="$(_compose_file_in "$dir")" || _die "$(_p_pretty "$p"): no docker-compose.yml under $dir (or $dir/deploy)."
   _detect_compose
 
@@ -329,6 +336,39 @@ EOF
 
 # Locate the SLOP checkout (which carries the whole-stack installer). Prefers an
 # explicit SYSIBLE_SLOP_DIR, then a SLOP-looking current dir, then common paths.
+# Standard checkout locations for a product, tried in order. install.sh clones
+# every app to $SYSIBLE_SRC_DIR (default /opt/sysible-src)/<repo-name>, so a stock
+# install is discoverable WITHOUT the operator exporting SYSIBLE_<P>_DIR. Without
+# this, `up all` on a fresh box could only find whatever happened to be running.
+_p_repo_dir() { case "$1" in
+  controller)    echo "sysible-controller" ;;
+  slep)          echo "sysible-linux-engineering-platform" ;;
+  connect)       echo "sysible-connect" ;;
+  slop)          echo "sysible-linux-operations-platform" ;;
+esac; }
+
+_find_checkout() {  # _find_checkout <product> -> prints dir, or returns 1
+  local p="$1" repo d src="${SYSIBLE_SRC_DIR:-/opt/sysible-src}"
+  repo="$(_p_repo_dir "$p")" || return 1
+  [[ -n "$repo" ]] || return 1
+  for d in "$src/$repo" "/opt/$repo" "$HOME/$repo" "$(dirname "$_CTL_REPO")/$repo"; do
+    [[ -n "$d" && -d "$d" ]] || continue
+    # A real checkout has a compose file (at the root or under deploy/).
+    if _app_compose_dir_of "$d" >/dev/null; then printf '%s\n' "$d"; return 0; fi
+  done
+  return 1
+}
+
+_app_compose_dir_of() {  # the dir holding <d>'s compose file, or 1
+  local d="$1" sub f
+  for sub in "$d" "$d/deploy"; do
+    for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
+      [[ -f "$sub/$f" ]] && { printf '%s\n' "$sub"; return 0; }
+    done
+  done
+  return 1
+}
+
 _find_slop_dir() {
   local d
   for d in "${SYSIBLE_SLOP_DIR:-}" "$PWD" \
@@ -352,10 +392,20 @@ _slop_url() {
 # Run a command across every present product.
 p_all() {
   local cmd="$1"; shift || true
-  local any=0 p
+  local any=0 p failed=""
   for p in $PRODUCTS; do
-    if _present "$p"; then any=1; "p_$cmd" "$p" "$@" || true; echo; fi
+    # For a bring-up, attempt every product whose checkout we can find — not just
+    # the ones already built, or `up all` could never install anything new.
+    if _present "$p" || { [[ "$cmd" == "up" ]] && _find_checkout "$p" >/dev/null 2>&1; }; then
+      any=1
+      "p_$cmd" "$p" "$@" || failed="$failed $p"
+      echo
+    fi
   done
+  if [[ -n "$failed" ]]; then
+    _warn "Completed with problems:$failed"
+    _warn "The other products above were still processed — re-run for just one with: $(basename "$0") <product> $cmd"
+  fi
   if [[ $any -eq 0 ]]; then
     # Nothing is built yet. For a bring-up intent, the first-run path is the SLOP
     # installer (clone + build + start the whole stack) — run it if we can find it,
@@ -405,7 +455,7 @@ cmd_uninstall() {
   [[ $removed -eq 1 ]] || _warn "No installed 'sysible_ctl' found."
 }
 
-KNOWN_CMDS="up update status logs restart start stop backup destroy"
+KNOWN_CMDS="up build update status logs restart start stop backup destroy"
 
 usage() {
   local me; me="$(basename "$0")"
@@ -422,6 +472,9 @@ ${BOLD}USAGE${RESET}
   $me ${CYAN}<product>${RESET}                       (no command) → status of that product
   $me ${CYAN}status${RESET}|${CYAN}start${RESET}|${CYAN}stop${RESET}|${CYAN}restart${RESET}|${CYAN}up${RESET}    (no product) → act on EVERY product
 
+  ${BOLD}Build + start EVERYTHING (what most people want):${RESET}
+    ${BOLD}$me up all${RESET}   — same as: '$me build all', '$me install all', or bare '$me up'
+
 ${BOLD}PRODUCTS${RESET}
   ${CYAN}controller${RESET}   Sysible Controller — console :8800, agent API :9000   (alias: ce)
   ${CYAN}slep${RESET}         Sysible LEP — engineering platform console :8810
@@ -429,8 +482,9 @@ ${BOLD}PRODUCTS${RESET}
   ${CYAN}slop${RESET}         SLOP gateway — front door (Caddy + IdP + Flashback) on :443
 
 ${BOLD}COMMANDS${RESET}
-  ${CYAN}up${RESET}        First-run bring-up (or re-roll) from a checkout: build from source
+  ${CYAN}up${RESET}        First-run bring-up (or re-roll) from a checkout: BUILD from source
               and start. Re-runnable any time to roll to the latest code.
+              Aliases: ${BOLD}build${RESET} (and '${BOLD}install all${RESET}' / 'install <product>').
   ${CYAN}update${RESET}    git pull the checkout + rebuild from source + recreate in place.
               Data volume preserved. (For slop, also hot-reloads the gateway.)
   ${CYAN}status${RESET}    Container state + console health probe.
@@ -461,7 +515,15 @@ ${BOLD}EXAMPLES — lifecycle${RESET}
   $me controller restart            # restart just the Controller
   $me connect stop                  # stop just Connect (its data volume is kept)
 
-${BOLD}EXAMPLES — first-run bring-up${RESET}
+${BOLD}EXAMPLES — build + start
+  sysible_ctl up all                        # BUILD from source + start EVERY product
+  sysible_ctl build all                     # identical (alias)
+  sysible_ctl install all                   # identical (alias)
+  sysible_ctl up                            # identical (bare command = all)
+  sysible_ctl slep up                       # build + start just SLEP
+  A product with no checkout is REPORTED and SKIPPED — the others still come up.
+
+EXAMPLES — first-run bring-up${RESET}
   sudo ./install.sh                 # (from the SLOP repo) the whole stack, easiest
   $me controller up 192.168.1.50    # Controller, advertising this LAN IP to agents
   $me controller up                 # auto-detect the LAN IP
@@ -517,8 +579,10 @@ EOF
 # =========================================================
 # Dispatch
 # =========================================================
+_canon_cmd() { case "$1" in build) echo up ;; *) echo "$1" ;; esac; }
+
 _run_cmd() {  # _run_cmd <cmd> <product> [args…]  — validates cmd, handles -v for destroy
-  local cmd="$1" p="$2"; shift 2 || true
+  local cmd; cmd="$(_canon_cmd "$1")"; local p="$2"; shift 2 || true
   case " $KNOWN_CMDS " in *" $cmd "*) ;; *) _die "unknown command: $cmd (try: $(basename "$0") help)" ;; esac
   _need_docker
   if [[ "$cmd" == "destroy" ]]; then
@@ -533,7 +597,14 @@ main() {
   local a1="${1:-help}" a2="${2:-}"
   case "$a1" in
     help|-h|--help) usage; return 0 ;;
-    install)        cmd_install; return 0 ;;
+    install)
+      # Bare `install` puts THIS CLI on PATH. `install all` (or `install <product>`)
+      # is what people reach for to build the products — route it to `up`.
+      if [[ -n "$a2" ]]; then _need_docker
+        if [[ "$a2" == "all" ]]; then p_all up; return 0; fi
+        if _is_product "$a2"; then _run_cmd up "$(_canon "$a2")"; return 0; fi
+      fi
+      cmd_install; return 0 ;;
     uninstall)      cmd_uninstall; return 0 ;;
   esac
 
@@ -549,20 +620,21 @@ main() {
   # Form:  sysible_ctl all <cmd>   or   sysible_ctl <cmd> all
   _need_docker
   if [[ "$a1" == "all" ]]; then
-    local cmd="${a2:-status}"
+    local cmd; cmd="$(_canon_cmd "${a2:-status}")"
     case " $KNOWN_CMDS " in *" $cmd "*) ;; *) _die "unknown command: $cmd" ;; esac
     p_all "$cmd"; return 0
   fi
   if [[ "$a2" == "all" ]]; then
-    case " $KNOWN_CMDS " in *" $a1 "*) ;; *) _die "unknown command: $a1" ;; esac
-    p_all "$a1"; return 0
+    local cmd2; cmd2="$(_canon_cmd "$a1")"
+    case " $KNOWN_CMDS " in *" $cmd2 "*) ;; *) _die "unknown command: $a1" ;; esac
+    p_all "$cmd2"; return 0
   fi
 
   # Bare fleet-wide command with no target → apply to all (friendly default), so
   # `sysible_ctl start` == `sysible_ctl start all`, and likewise up/stop/restart/status.
   # (Bare `up` with nothing built runs the SLOP whole-stack installer — see p_all.)
   case "$a1" in
-    status|start|stop|restart|up) p_all "$a1"; return 0 ;;
+    status|start|stop|restart|up|build) p_all "$(_canon_cmd "$a1")"; return 0 ;;
   esac
 
   _err "unknown or ambiguous: '$a1${a2:+ $a2}'"

@@ -28,11 +28,19 @@ export default function UpdatesBadge({ onOpen }) {
   const ctrlBehind = !!((c.checked && c.available) || c.restart_needed);
   const agentsBehind = (a.outdated_count || 0) > 0;
   if (!ctrlBehind && !agentsBehind) return null;
+  // Nothing for the operator to do: the controller is current and the agents are
+  // rolling themselves forward. Staying silent is the honest state here — a
+  // permanent "Updates available" pill for work already underway is noise.
+  if (!ctrlBehind && agentsBehind && a.auto_update) return null;
 
   const bits = [];
   if (c.restart_needed) bits.push("controller update pulled — restart to apply");
   else if (ctrlBehind) bits.push("controller update available");
-  if (agentsBehind) bits.push(`${a.outdated_count} agent${a.outdated_count === 1 ? "" : "s"} on an older build`);
+  if (agentsBehind) {
+    // Auto-update is on by default: an older agent is mid-rollout, not a chore.
+    bits.push(`${a.outdated_count} agent${a.outdated_count === 1 ? "" : "s"} on an older build`
+      + (a.auto_update ? " (updating automatically)" : ""));
+  }
 
   return (
     <button className="btn sm" onClick={onOpen}

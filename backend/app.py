@@ -955,6 +955,11 @@ def heartbeat(req: HeartbeatRequest):
 
     update_agent_heartbeat(req.host_id, req.ip, req.hostname, agent_version=req.agent_version)
 
+    # Keep the fleet on one build: a host reporting an older agent gets the
+    # self-update queued automatically (see _maybe_auto_update_agent — memoized
+    # per host+build, so this costs one string compare on a current fleet).
+    _maybe_auto_update_agent(req.host_id, req.agent_version)
+
     # Agent integrity (Tier 1): when the agent reports a self-measurement,
     # compare it against this host's sealed baseline (trust-on-first-use) and
     # quarantine on mismatch. evaluate() never raises, so integrity can't break
@@ -1402,6 +1407,74 @@ def update_agents_route(request: Request):
                        "Each applies it on its next check-in and restarts."}
 
 
+# --- automatic agent updates ------------------------------------------------
+# An agent whose build differs from the controller's is out of date, and leaving
+# it that way means a fleet slowly drifts onto mixed builds until somebody
+# remembers to click "Update agents". The heartbeat already tells us each host's
+# build on every check-in, so that is the natural place to close the gap: when a
+# host reports a version that isn't ours, queue the same self-update the manual
+# push sends. Offline hosts are handled for free — they get it on the heartbeat
+# after they come back.
+#
+# The dangerous failure mode is a host that can never finish the update: agents
+# heartbeat every ~1.5s, so a naive "version differs -> queue" would enqueue
+# thousands of tasks a minute forever. Hence the per-host memo below: at most one
+# queued update per host per TARGET BUILD, and a cooldown before re-trying that
+# same build, so a host that keeps failing costs one task every half hour instead
+# of one per second.
+_AGENT_AUTO_UPDATE = os.environ.get("SYSIBLE_AGENT_AUTO_UPDATE", "1") == "1"
+_AGENT_AUTO_UPDATE_RETRY_S = int(os.environ.get("SYSIBLE_AGENT_AUTO_UPDATE_RETRY_S", "1800"))
+_auto_update_sent = {}          # host_id -> (target_version, queued_at)
+_auto_update_lock = threading.Lock()
+
+
+def _auto_update_should_queue(host_id: str, target: str) -> bool:
+    """True at most once per host per target build, then again only after the
+    retry cooldown. Holds the lock for a dict read/write only."""
+    now = time.time()
+    with _auto_update_lock:
+        prev = _auto_update_sent.get(host_id)
+        if prev and prev[0] == target and (now - prev[1]) < _AGENT_AUTO_UPDATE_RETRY_S:
+            return False
+        _auto_update_sent[host_id] = (target, now)
+        return True
+
+
+def _maybe_auto_update_agent(host_id: str, reported: str | None) -> None:
+    """Queue an agent self-update for a host running an older build. Called from
+    the heartbeat, so it must be cheap and must NEVER raise: a failure here is a
+    missed update, but an exception would fail the heartbeat itself and take the
+    host offline in the console."""
+    if not _AGENT_AUTO_UPDATE or not reported:
+        return
+    try:
+        target = _current_agent_version()
+        # No target (unreadable agent source) or already current → nothing to do.
+        # The cheap comparison comes FIRST: this runs on every heartbeat of every
+        # host, and for a healthy fleet it must cost one string compare.
+        if not target or reported == target:
+            return
+        agent = _find_agent(host_id)
+        # A revoked/disenrolled host keeps its row but is no longer managed, and
+        # its secret can't poll the task anyway.
+        if not agent or agent.get("revoked"):
+            return
+        if not _auto_update_should_queue(host_id, target):
+            return
+        _, cmd = _build_agent_update_command()
+        queue_task(host_id, cmd, kind="agent-update", run_as=None)
+        # The agent's files and reported version change as a result — an expected,
+        # controller-initiated change, so open a re-seal window rather than
+        # quarantining the host when its next measurement diverges.
+        from backend import agent_integrity
+        agent_integrity.mark_updating(host_id)
+        log_activity("controller", agent.get("hostname") or host_id,
+                     f"Auto-updating agent {reported} \u2192 {target}", "")
+    except Exception:
+        # Best-effort by design; the next heartbeat retries after the cooldown.
+        pass
+
+
 def _current_agent_version():
     """Short hash of the controller's CURRENT host_agent/agent.py — the build an
     'update agents' push would deliver. Agents report theirs on heartbeat, so a
@@ -1553,7 +1626,12 @@ def update_status_route():
         "controller": controller,
         "agents": {"current_version": cur_ver, "total": len(agents),
                    "outdated": outdated, "outdated_count": len(outdated),
-                   "unknown_count": unknown},
+                   "unknown_count": unknown,
+                   # With auto-update on, an outdated agent is a host that hasn't
+                   # checked in (or applied it) YET, not one waiting on an
+                   # operator — the console says so rather than nagging.
+                   "auto_update": _AGENT_AUTO_UPDATE,
+                   "auto_update_retry_s": _AGENT_AUTO_UPDATE_RETRY_S},
     }
 
 

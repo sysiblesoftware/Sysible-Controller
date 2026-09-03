@@ -987,10 +987,13 @@ function UpdatesAvailable({ avail, checking, onRecheck }) {
               Controller: couldn't check{c.reason ? ` — ${c.reason}` : ""}
               {c.current ? ` (at ${c.current})` : ""}</span>
           )}
-          {/* Agents */}
+          {/* Agents. With auto-update on, an older build means "hasn't checked in
+              and applied it YET" — not "waiting for you to press a button", so
+              say that instead of nagging. */}
           {agentsBehind
             ? <span><span className="dot" style={{ background: "#e0a83a", marginRight: 6 }} />
-                <strong>{a.outdated_count}</strong> of {a.total} agent{a.total === 1 ? "" : "s"} on an older build</span>
+                <strong>{a.outdated_count}</strong> of {a.total} agent{a.total === 1 ? "" : "s"} on an older build
+                {a.auto_update ? <span className="faint"> — updating automatically on check-in</span> : null}</span>
             : <span><span className="dot" style={{ background: "#4ec07a", marginRight: 6 }} />
                 {a.total ? `All ${a.total} agent${a.total === 1 ? "" : "s"} on the current build` : "No agents enrolled"}</span>}
           {a.unknown_count ? (

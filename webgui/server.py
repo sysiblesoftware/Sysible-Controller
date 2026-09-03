@@ -368,10 +368,38 @@ def _ensure_sso_session(request: Request):
         sess["token_enc"] = _encrypt_token(result["token"])
 
 
+def sso_only() -> bool:
+    """True when SLOP is the identity authority for this console.
+
+    In that mode the gateway is the ONLY way in. That matters because this BFF
+    also listens on its own published port: a session cookie minted from an SSO
+    visit would otherwise keep working there after the user signed out of SLOP,
+    and the local /api/login would be a second account SLOP does not manage.
+    """
+    return bool(_TRUST_SSO and _SSO_SECRET)
+
+
+def _require_gateway_when_sso(request: Request):
+    """Refuse a request that carries no gateway assertion while SLOP owns identity.
+
+    The BFF mints a session cookie from the SSO headers, so without this a cookie
+    picked up through the gateway goes on working directly against the console's
+    own published port — outliving the SLOP sign-out that was supposed to end it,
+    for the cookie's full life. Clear it and refuse. Called by EVERY auth gate,
+    including /api/me, which does its own session check rather than depending on
+    require_login and would otherwise still answer from that cookie.
+    """
+    if sso_only() and not _sso_identity(request):
+        request.session.clear()
+        raise HTTPException(status_code=401,
+                            detail="Sign in at the Sysible Linux Operations Platform.")
+
+
 def require_login(request: Request):
     """Dependency: 401 unless the session cookie carries a logged-in
     admin username. Every /api route except /api/login uses this."""
     _ensure_sso_session(request)
+    _require_gateway_when_sso(request)
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -670,6 +698,15 @@ def login(body: LoginRequest, request: Request):
     """Verify credentials against the controller (client.api holds the
     API key) and, on success, store the username in the signed session
     cookie. Mirrors the desktop admin login exactly."""
+    if sso_only():
+        # No second login when SLOP owns identity: accounts live in SLOP
+        # Administration, and leaving this open would let someone reach the
+        # console's published port with a controller-local credential the
+        # platform's sign-out does not touch.
+        raise HTTPException(status_code=403,
+                            detail="This console has no separate login — sign in at the "
+                                   "Sysible Linux Operations Platform. Accounts are "
+                                   "managed in SLOP Administration.")
     import requests
     ip = _client_ip(request)
     _throttle_check(ip)
@@ -856,6 +893,7 @@ def logout(request: Request):
 @app.get("/api/me")
 def me(request: Request):
     _ensure_sso_session(request)
+    _require_gateway_when_sso(request)
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")

@@ -206,6 +206,9 @@ export default function App() {
   const [checking, setChecking] = useState(true);
   const [setupRequired, setSetupRequired] = useState(false);
   const [mustChange, setMustChange] = useState(false);
+  // True when SLOP owns identity: accounts are managed in SLOP Administration,
+  // so this console must not offer a second set of them.
+  const [sso, setSso] = useState(false);
   // Bumped on every nav click so a stateful view (e.g. the tools grid) can reset
   // its own sub-page when its nav item is clicked again — see ToolRunner.
   const [navTick, setNavTick] = useState(0);
@@ -274,7 +277,8 @@ export default function App() {
 
   useEffect(() => {
     api.me()
-      .then((d) => { setUser(d.username); setRole(d.role || ""); setMustChange(!!d.must_change_password); })
+      .then((d) => { setUser(d.username); setRole(d.role || ""); setMustChange(!!d.must_change_password);
+                     setSso(!!d.sso); })
       .catch(async () => {
         setUser(null);
         // Not signed in — on a brand-new controller with no admin yet, show the
@@ -458,7 +462,7 @@ export default function App() {
             onOpen={(section, opts) => go(section, opts || null)} />}
           {isSuper && view === "hosts" && <HostEnrollment />}
           {isSuper && view === "migrate" && <Migrate />}
-          {isSuper && view === "settings" && <Settings initialTab={target?.tab} />}
+          {isSuper && view === "settings" && <Settings initialTab={target?.tab} sso={sso} />}
           {!isAuditor && view === "quickactions" && <ToolRunner solo="Quick System Actions" />}
           {!isAuditor && view === "fleetquery" && <FleetQuery />}
           {!isAuditor && view === "sysadmin" && <ToolRunner openTool={target?.tool} openTab={target?.tab}

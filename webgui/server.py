@@ -276,7 +276,12 @@ async def security_headers(request: Request, call_next):
     inline styles, and connect-src 'self' covers the same-origin
     terminal websocket."""
     resp = await call_next(request)
-    resp.headers.setdefault("X-Frame-Options", "DENY")
+    # SAMEORIGIN / frame-ancestors 'self', not DENY / 'none': behind SLOP every
+    # app shares ONE origin, and SLOP Administration hosts this console's own
+    # settings UI in-page rather than maintaining a second copy of it that drifts.
+    # 'self' still refuses every OTHER site, so the clickjacking protection on the
+    # destructive panels is unchanged. Standalone, 'self' is equally restrictive.
+    resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("Referrer-Policy", "same-origin")
     resp.headers.setdefault(
@@ -284,7 +289,7 @@ async def security_headers(request: Request, call_next):
         "default-src 'self'; img-src 'self' data:; "
         "script-src 'self'; object-src 'none'; "
         "style-src 'self' 'unsafe-inline'; connect-src 'self'; "
-        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+        "frame-ancestors 'self'; base-uri 'self'; form-action 'self'",
     )
     if _HTTPS_ONLY:
         resp.headers.setdefault(
@@ -906,6 +911,11 @@ def me(request: Request):
         "role": request.session.get("role") or "auditor",
         "sudo_connect": bool(request.session.get("sudo_connect")),
         "must_change_password": bool(request.session.get("must_change_password")),
+        # SLOP owns identity here, so the console must not offer account
+        # management of its own: "Administrators" and "My Account" would be a
+        # SECOND account store, which is the very thing single sign-on removes.
+        # The SPA hides those tabs and points at SLOP Administration instead.
+        "sso": sso_only(),
     }
 
 

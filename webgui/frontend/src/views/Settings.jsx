@@ -3,17 +3,37 @@ import { api, noteRawStatus } from "../api.js";
 
 // Sysible Controller Settings: administrators, password policy, controller
 // address/port, license, and the admin audit log.
-export default function Settings({ initialTab }) {
-  const [tab, setTab] = useState(initialTab || "admins");
+export default function Settings({ initialTab, sso }) {
+  // Under SLOP single sign-on there is ONE account store, and it is SLOP's.
+  // Administrators and My Account are therefore not shown here: offering them
+  // would be a second set of accounts that SLOP Administration does not manage
+  // and that signing out of SLOP would not end. Everything else stays, and is
+  // ALSO reachable without leaving SLOP (Administration → Apps hosts it).
+  const TABS = [
+    ...(sso ? [] : [["admins", "Administrators"], ["me", "My Account"]]),
+    ["policy", "Password Policy"], ["controller", "Controller"],
+    ["enrollacl", "Enrollment Access"], ["tls", "TLS / Certificates"],
+    ["license", "License"], ["audit", "Audit Log"],
+  ];
+  const valid = new Set(TABS.map(([k]) => k));
+  const first = TABS[0][0];
+  const [tab, setTab] = useState(valid.has(initialTab) ? initialTab : first);
+  // A deep link to a tab this mode doesn't have (e.g. ?tab=admins under SSO)
+  // must land somewhere real rather than rendering nothing.
+  useEffect(() => { if (!valid.has(tab)) setTab(first); }, [sso]); // eslint-disable-line
   return (
     <div>
       <div className="tabs" style={{ marginBottom: 16 }}>
-        {[["admins", "Administrators"], ["me", "My Account"], ["policy", "Password Policy"],
-          ["controller", "Controller"], ["enrollacl", "Enrollment Access"], ["tls", "TLS / Certificates"],
-          ["license", "License"], ["audit", "Audit Log"]].map(([k, l]) => (
+        {TABS.map(([k, l]) => (
           <button key={k} className={tab === k ? "active" : ""} onClick={() => setTab(k)}>{l}</button>
         ))}
       </div>
+      {sso && (
+        <div className="faint" style={{ marginBottom: 12, fontSize: 12.5 }}>
+          Accounts and password resets are managed for every Sysible app at once in
+          Sysible Linux Operations Platform → Administration → Accounts.
+        </div>
+      )}
       {tab === "admins" && <Admins />}
       {tab === "me" && <MyAccount />}
       {tab === "policy" && <PasswordPolicy />}

@@ -80,6 +80,32 @@ except Exception:
     AGENT_VERSION = ""
 
 
+# Make the agent's own output actually reach the journal.
+#
+# Under systemd, stdout is a PIPE, so Python block-buffers it (4-8 KB). The agent
+# prints a line or two per task, so those blocks take hours or days to fill: the
+# unit promises "its output goes to the journal (journalctl -u sysible-agent)"
+# and in practice `journalctl -u sysible-agent` showed nothing but systemd's own
+# start/stop lines for a whole day of running. That is not a cosmetic problem —
+# it is why a host with a silently failing terminal could not be diagnosed at all,
+# by its operator or by us.
+#
+# Line buffering fixes it for every ALREADY-INSTALLED agent, because this file is
+# what the self-update ships; the unit template also sets PYTHONUNBUFFERED=1 now,
+# which is the right fix for new installs but never reaches an existing one.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(line_buffering=True)
+    except Exception:      # pre-3.7, or a stream that can't be reconfigured
+        pass
+
+# Say which build is running, at every start and after every self-update re-exec.
+# Without it the only way to answer "does this host's agent support terminals?"
+# is to read the source on the box.
+print(f"[agent] sysible agent build {AGENT_VERSION or 'unknown'} starting "
+      f"(python {sys.version.split()[0]})")
+
+
 # A self-update task rewrites this file on disk and asks systemd to restart us.
 # When that external restart doesn't take (a wedged transient unit, systemd-run
 # missing, a restart that races the task), the process keeps running the OLD

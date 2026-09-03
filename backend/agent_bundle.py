@@ -300,6 +300,12 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile={_AGENT_INSTALL_DIR}/sysible_agent.env
 WorkingDirectory={_AGENT_INSTALL_DIR}
+# Without this, systemd gives the agent a PIPE for stdout, Python block-buffers
+# it, and the one or two lines a task prints sit in a 4-8 KB buffer for hours —
+# so `journalctl -u sysible-agent` shows nothing but systemd's own start/stop
+# lines, and a misbehaving host cannot be diagnosed at all. (agent.py also
+# line-buffers itself, which is what fixes hosts already running an older unit.)
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 {_AGENT_INSTALL_DIR}/agent.py
 Restart=always
 RestartSec=5

@@ -53,6 +53,31 @@ def exec_remote(name: str, cmd: str, description: str = None, become_password: s
     return _request("POST", f"/remote/hosts/{name}/exec", json=body)
 
 
+def open_terminal(name: str):
+    # Returns {"host", "session_id", "opened"}. Each call opens a fresh,
+    # independent session; read/write/close address it by session_id.
+    return _request("POST", f"/remote/hosts/{name}/terminal/open", timeout=20)
+
+
+def write_terminal(session_id: str, data: str):
+    return _request("POST", f"/remote/terminal/{session_id}/write", json={"data": data})
+
+
+def read_terminal(session_id: str):
+    return _request("GET", f"/remote/terminal/{session_id}/read")
+
+
+def close_terminal(session_id: str):
+    return _request("POST", f"/remote/terminal/{session_id}/close")
+
+
+def resize_terminal(session_id: str, cols: int, rows: int):
+    return _request(
+        "POST", f"/remote/terminal/{session_id}/resize",
+        json={"cols": cols, "rows": rows},
+    )
+
+
 def upload_file_ssh(name: str, local_path, remote_path: str):
     local_path = Path(local_path)
     with open(local_path, "rb") as f:

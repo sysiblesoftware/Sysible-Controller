@@ -90,6 +90,7 @@ from backend.models.agent_models import (
     ActivityLogRequest,
     EnrollRequest,
     HeartbeatRequest,
+    PtyOutputRequest,
     SelfDisenrollRequest,
     TaskCreateRequest,
     TaskResultRequest,
@@ -141,7 +142,7 @@ app = FastAPI(title="Sysible Controller", docs_url=None, redoc_url=None, openapi
 
 # ---------------------------------------------------------------------------
 # Scrub a per-host agent secret from access logs. Current agents send the secret
-# in the X-Agent-Secret header (never logged), but the poll endpoints also
+# in the X-Agent-Secret header (never logged), but the poll/pty endpoints also
 # accept it as a `?agent_secret=` query param for backward compatibility with
 # older field agents — and a secret in the URL lands in the uvicorn access log
 # (and any TLS-terminating proxy log) in cleartext. Redact it there so the
@@ -1718,6 +1719,29 @@ def post_task_result(host_id: str, body: TaskResultRequest):
     }
 
 
+# =========================================================
+# AGENT-HOSTED PTY (Option B): the agent runs the shell locally and streams it
+# to the controller over these outbound calls, so terminals work with no inbound
+# SSH to the host. Authenticated by the per-host agent secret. See
+# backend/remote_routes.py for the controller-side session buffers.
+# =========================================================
+@app.post("/agents/{host_id}/pty/{session_id}/output")
+def pty_output(host_id: str, session_id: str, body: PtyOutputRequest):
+    verify_agent(host_id, body.agent_secret)
+    from backend.remote_routes import pty_push_output
+    closed = pty_push_output(session_id, host_id, body.data, body.ended)
+    return {"ok": True, "closed": closed}
+
+
+@app.get("/agents/{host_id}/pty/{session_id}/io")
+def pty_io(host_id: str, session_id: str, agent_secret: str = "",
+           x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
+    verify_agent(host_id, x_agent_secret or agent_secret)
+    from backend.remote_routes import pty_take_input
+    msgs, closed = pty_take_input(session_id, host_id, wait=25.0)
+    return {"msgs": msgs, "closed": closed}
+
+
 @app.get("/agents/{host_id}/results", dependencies=[Depends(require_api_key)])
 def get_agent_results(
     host_id: str,
@@ -3276,6 +3300,54 @@ def issue_api_key_for_superuser(body: AdminLoginRequest, request: Request):
     return {"status": "ok", "api_key": get_or_create_api_key()}
 
 
+# SLOP role name -> Controller role. SLOP's "operator" is the Controller's
+# "sysadmin"; anything unrecognised falls closed to the read-only auditor. Kept
+# here (not only in the BFF) because the run-as resolution needs the same mapping
+# and two copies of a privilege table drift.
+SSO_ROLE_MAP = {"superuser": "superuser", "operator": "sysadmin", "auditor": "auditor"}
+
+
+def sso_role_for(asserted: str) -> str:
+    return SSO_ROLE_MAP.get((asserted or "").strip().lower(), "auditor")
+
+
+def ensure_sso_account(username: str, role: str, origin: str = "gateway") -> None:
+    """Make sure an SSO-owned administrator row exists for `username` at `role`.
+
+    SLOP is the identity authority, so a first-seen SSO user is provisioned and an
+    existing SSO-owned account's role is realigned to what SLOP asserts. An account
+    NOT created by SSO is never re-graded here (raises ValueError), so this path can
+    only manage its OWN accounts and cannot silently promote a locally-managed admin.
+
+    THE CALLER MUST HAVE PROVEN the request transited the gateway (the shared
+    secret) before calling this — it creates administrator rows.
+    """
+    acct = get_administrator(username)
+    if acct is None:
+        # Validate before CREATING a row (an existing account is left alone, so an
+        # older name that predates this check keeps working). The name ends up in the
+        # audit trail and, as the run-as, inside a host command — shlex-quoted there,
+        # but the Controller's own admin-name policy is the right floor either way.
+        # SLOP's own username rule is narrower than this apart from a leading '.'/'-'.
+        from backend.models.portal_models import _validate_admin_name
+        username = _validate_admin_name(username)     # raises ValueError if malformed
+        # Unusable local password — SSO users never authenticate here.
+        salt, password_hash = portal_auth.hash_password(secrets.token_urlsafe(32))
+        add_administrator(username, password_hash, salt, must_change_password=0,
+                          created_by="sso", role=role)
+        log_admin_audit("sso_account_provisioned", username,
+                        f"role={role} (via SLOP SSO, {origin})")
+        return
+    if (acct.get("created_by") or "") != "sso":
+        raise ValueError("An administrator with that username already exists and is "
+                         "not SSO-managed; refusing to re-grade it via SSO.")
+    if (acct.get("role") or "superuser") != role:
+        # SLOP is authoritative for identity → keep the local SSO role in lockstep.
+        set_administrator_role(username, role)
+        log_admin_audit("sso_role_synced", username,
+                        f"role -> {role} (via SLOP SSO, {origin})")
+
+
 @app.post("/admin/sso-provision", dependencies=[Depends(require_api_key)])
 def admin_sso_provision(request: Request, body: dict = Body(...)):
     """Bridge for SLOP single sign-on (unified login across the Sysible apps).
@@ -3323,33 +3395,17 @@ def admin_sso_provision(request: Request, body: dict = Body(...)):
     # gateway acting for this asserted username, not just the target name.
     origin = f"gateway({request.client.host if request.client else '?'})"
 
-    acct = get_administrator(username)
-    if acct is None:
-        # Unusable local password — SSO users never authenticate here.
-        salt, password_hash = portal_auth.hash_password(secrets.token_urlsafe(32))
-        add_administrator(username, password_hash, salt, must_change_password=0,
-                          created_by="sso", role=role)
-        log_admin_audit("sso_account_provisioned", username,
-                        f"role={role} (via SLOP SSO, {origin})")
-    else:
-        # Only ever manage accounts SSO itself owns. A locally-managed admin
-        # (created_by != 'sso') must never be re-graded through the SSO bridge —
-        # that would let the gateway path silently promote an existing account.
-        if (acct.get("created_by") or "") != "sso":
-            raise HTTPException(
-                status_code=409,
-                detail="An administrator with that username already exists and is "
-                       "not SSO-managed; refusing to re-grade it via SSO.")
-        if (acct.get("role") or "superuser") != role:
-            # SLOP is authoritative for identity → keep the local SSO role in lockstep.
-            set_administrator_role(username, role)
-            log_admin_audit("sso_role_synced", username,
-                            f"role -> {role} (via SLOP SSO, {origin})")
+    try:
+        ensure_sso_account(username, role, origin)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
     token = secrets.token_hex(32)
     create_admin_token(token, username, role, time.time() + 12 * 60 * 60)
     record_administrator_login(username)
-    sudo_connect = bool((acct or {}).get("sudo_connect")) if acct else False
+    # Re-read after ensuring the row: for a freshly provisioned account this is the
+    # column default (off), and for an existing one it is that admin's real flag.
+    sudo_connect = bool((get_administrator(username) or {}).get("sudo_connect"))
     return {"username": username, "role": role, "token": token, "sudo_connect": sudo_connect}
 
 

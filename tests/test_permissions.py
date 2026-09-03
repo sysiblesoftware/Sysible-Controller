@@ -66,6 +66,11 @@ class TestAuditorReadOnly:
                             json={"cmd": "id", "log": False})
         assert r.status_code == 403
 
+    def test_auditor_cannot_open_terminal(self, controller, auditor_headers, ssh_host):
+        name = ssh_host()
+        r = controller.post(f"/remote/hosts/{name}/terminal/open", headers=auditor_headers)
+        assert r.status_code == 403
+
     def test_auditor_cannot_revoke_agent(self, controller, auditor_headers, agent):
         host_id, _ = agent()
         r = controller.post(f"/agents/{host_id}/revoke", headers=auditor_headers)

@@ -58,6 +58,8 @@ def _isolate():
             f.unlink()
     db.init_db()
     # Clear module-level in-memory maps that would otherwise leak across tests.
+    remote_routes._PTY.clear()
+    remote_routes._TERMINAL_SESSIONS.clear()
     app_module._PENDING_BECOME.clear()
     yield
 

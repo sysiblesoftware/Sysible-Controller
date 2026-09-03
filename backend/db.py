@@ -2947,6 +2947,19 @@ def get_task_kind(task_id):
     return row[0] if row else None
 
 
+def get_task_status(task_id):
+    """A queued task's status ('pending' | 'dispatched' | 'done' | 'timed_out'), or
+    None if it no longer exists. Used to explain a terminal that opened but has
+    drawn nothing: 'pending' means the agent has not collected the pty_open task
+    yet, anything later means it did and the silence is on the agent's side."""
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT status FROM agent_tasks WHERE id=?", (task_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
 def get_task_host(task_id):
     """The host_id a task was queued for, or None if the task doesn't exist.
     Used to confirm a result-reporting agent actually owns the task it's

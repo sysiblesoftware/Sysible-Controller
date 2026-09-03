@@ -1136,9 +1136,70 @@ except ValueError:
 def pty_create(host_id, cols=80, rows=24, owner=None):
     sid = uuid.uuid4().hex
     with _PTY_LOCK:
+        # task_id/seen exist to explain a session that opens and then draws
+        # NOTHING — the failure an operator sees as a blank pane with a cursor.
+        # The open only queues work for the agent, so silence afterwards can mean
+        # the agent never collected the task, or collected it and never streamed.
+        # Those have completely different fixes, and without recording which task
+        # this session is waiting on there is no way to tell them apart.
         _PTY[sid] = {"host_id": host_id, "out": [], "inq": [], "cols": cols, "rows": rows,
-                     "closed": False, "ended": False, "last": time.time(), "owner": owner}
+                     "closed": False, "ended": False, "last": time.time(), "owner": owner,
+                     "task_id": None, "seen": False, "opened": time.time()}
     return sid
+
+
+def pty_note_task(session_id, task_id):
+    """Record the pty_open task this session is waiting on."""
+    with _PTY_LOCK:
+        s = _PTY.get(session_id)
+        if s is not None:
+            s["task_id"] = task_id
+
+
+# Grace before a silent session is reported as stalled. An agent polls on its own
+# cadence, so a second or two of quiet at the start is normal, not a fault.
+_PTY_STALL_AFTER_S = float(os.getenv("SYSIBLE_TERMINAL_STALL_AFTER_S", "6"))
+
+
+def pty_wait_reason(session_id):
+    """Why a PTY session has drawn nothing yet, or None when there is nothing to
+    explain (output has flowed, the session is young, or it isn't a PTY session).
+
+    Returned to the client so a stalled terminal says what it is waiting for
+    instead of showing an empty screen. Every branch names something the operator
+    can act on."""
+    with _PTY_LOCK:
+        s = _PTY.get(session_id)
+        if s is None or s["seen"] or s["closed"] or s["ended"]:
+            return None
+        if time.time() - s["opened"] < _PTY_STALL_AFTER_S:
+            return None
+        host_id, task_id = s["host_id"], s["task_id"]
+
+    from backend.db import get_task_status, list_agents
+    rec = next((a for a in list_agents() if a.get("host_id") == host_id), None)
+    seen_ago = int(time.time() - ((rec or {}).get("last_seen") or 0))
+    if rec is None:
+        return (f"the controller has no agent record for this host ({host_id}), so "
+                "there is nothing to open a shell on.")
+    if seen_ago > 120:
+        return (f"this host's agent last checked in {seen_ago}s ago, so it has not "
+                "picked up the request. Check the agent is running: "
+                "systemctl status sysible-agent")
+
+    status = get_task_status(task_id) if task_id is not None else None
+    if status == "pending":
+        return ("waiting for this host's agent to collect the terminal request "
+                "(it checks in periodically) — nothing is wrong yet.")
+    if status in ("dispatched", "done"):
+        return ("this host's agent collected the terminal request but has not sent "
+                "any output. That usually means its build predates agent-hosted "
+                "terminals, or it could not open a shell. Check the agent log: "
+                "journalctl -u sysible-agent -n 50")
+    if status == "timed_out":
+        return ("the terminal request timed out before this host's agent collected it.")
+    return ("the terminal request is no longer queued and no output arrived — "
+            "check the agent log: journalctl -u sysible-agent -n 50")
 
 
 def _terminal_owner(session_id):
@@ -1187,6 +1248,7 @@ def pty_push_output(session_id, host_id, data, ended=False):
             return True
         s["last"] = time.time()
         if data:
+            s["seen"] = True
             s["out"].append(data)
             # Bound the buffer: if it has outgrown the cap (browser not draining,
             # or a flood), coalesce and keep only the most recent bytes.
@@ -1445,8 +1507,9 @@ def open_terminal(name: str, request: Request):
         # the agent falls back to a root shell only if that user doesn't exist.
         who = _resolve_admin_username(request) or ""
         session_id = pty_create(host_id, owner=(who or None))
-        queue_task(host_id, json.dumps({"session_id": session_id, "user": who,
-                                        "cols": 80, "rows": 24}), kind="pty_open")
+        _tid = queue_task(host_id, json.dumps({"session_id": session_id, "user": who,
+                                               "cols": 80, "rows": 24}), kind="pty_open")
+        pty_note_task(session_id, _tid)
         return {"host": name, "session_id": session_id, "opened": True, "via": "agent"}
 
     # Non-agent (pure SSH / Connect) host: the standing controller-key SSH path.
@@ -1564,7 +1627,14 @@ def read_terminal(session_id: str, request: Request):
             if r is None:
                 return {"session_id": session_id, "data": "", "closed": True}
             if r["data"] or r["closed"] or _t.time() >= deadline:
-                return {"session_id": session_id, "data": r["data"], "closed": r["closed"]}
+                out = {"session_id": session_id, "data": r["data"], "closed": r["closed"]}
+                if not r["data"] and not r["closed"]:
+                    # Nothing has been drawn. Say what the session is waiting for,
+                    # so a stalled terminal is a diagnosis instead of a blank pane.
+                    why = pty_wait_reason(session_id)
+                    if why:
+                        out["waiting"] = why
+                return out
             _t.sleep(0.08)
 
     session = _get_terminal_session(session_id)

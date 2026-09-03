@@ -27,6 +27,7 @@ SSO path, which had no coverage at all because that path resolved no identity.
 """
 import json
 import os
+import time
 
 import pytest
 
@@ -348,3 +349,81 @@ def test_the_agent_half_of_the_bridge_needs_the_agent_secret(controller, sso, ag
     assert bad.status_code in (401, 403), bad.text
     assert controller.get(f"/agents/{host_id}/pty/{sid}/io",
                           headers={"X-Agent-Secret": "wrong"}).status_code in (401, 403)
+
+
+# ---- a terminal that draws nothing must say why ---------------------------
+# The reported failure was a blank pane with a cursor and no way to tell whether
+# the agent had not collected the request yet, had collected it and gone quiet, or
+# was not checking in at all. Those have different fixes, so the read now carries
+# the reason.
+def _no_stall_grace(monkeypatch):
+    monkeypatch.setattr(remote_routes, "_PTY_STALL_AFTER_S", 0.0)
+
+
+def test_a_session_that_has_drawn_nothing_reports_what_it_waits_for(
+        controller, sso, agent, monkeypatch):
+    _no_stall_grace(monkeypatch)
+    agent(host_id="h-w1", hostname="web01", ip="10.0.0.41")
+    sid = controller.post("/remote/hosts/web01/terminal/open",
+                          headers=sso_headers()).json()["session_id"]
+    r = controller.get(f"/remote/terminal/{sid}/read", headers=sso_headers())
+    assert r.status_code == 200
+    assert r.json()["data"] == "" and r.json()["closed"] is False
+    assert "collect the terminal request" in r.json()["waiting"], r.json()
+
+
+def test_an_agent_that_took_the_request_and_went_quiet_is_named_as_such(
+        controller, sso, agent, monkeypatch):
+    """The agent collected the pty_open task and streamed nothing — an agent build
+    without terminal support looks exactly like this, and it is the one case an
+    operator cannot guess from the UI."""
+    _no_stall_grace(monkeypatch)
+    host_id, _ = agent(host_id="h-w2", hostname="web02", ip="10.0.0.42")
+    sid = controller.post("/remote/hosts/web02/terminal/open",
+                          headers=sso_headers()).json()["session_id"]
+    db.fetch_pending_tasks(host_id)          # the agent collects it -> 'dispatched'
+    why = controller.get(f"/remote/terminal/{sid}/read",
+                         headers=sso_headers()).json()["waiting"]
+    assert "collected the terminal request but has not sent any output" in why, why
+    assert "journalctl -u sysible-agent" in why, "give the operator the next step"
+
+
+def test_a_stale_agent_is_reported_with_how_long_it_has_been_gone(
+        controller, sso, monkeypatch):
+    _no_stall_grace(monkeypatch)
+    db.create_or_update_agent("h-w3", "web03", "linux", "6.1", "online",
+                              time.time(), "s", "10.0.0.43")
+    sid = controller.post("/remote/hosts/web03/terminal/open",
+                          headers=sso_headers()).json()["session_id"]
+    # The agent goes away AFTER the session opened.
+    db.create_or_update_agent("h-w3", "web03", "linux", "6.1", "online",
+                              time.time() - 3600, "s", "10.0.0.43")
+    why = controller.get(f"/remote/terminal/{sid}/read",
+                         headers=sso_headers()).json()["waiting"]
+    assert "last checked in" in why and "systemctl status sysible-agent" in why, why
+
+
+def test_output_that_has_flowed_is_never_reported_as_stalled(
+        controller, sso, agent, monkeypatch):
+    _no_stall_grace(monkeypatch)
+    host_id, secret = agent(host_id="h-w4", hostname="web04", ip="10.0.0.44")
+    sid = controller.post("/remote/hosts/web04/terminal/open",
+                          headers=sso_headers()).json()["session_id"]
+    controller.post(f"/agents/{host_id}/pty/{sid}/output",
+                    json={"agent_secret": secret, "data": "$ ", "ended": False})
+    first = controller.get(f"/remote/terminal/{sid}/read", headers=sso_headers()).json()
+    assert first["data"] == "$ " and "waiting" not in first
+    # An idle shell after a prompt is normal quiet, not a stall.
+    idle = controller.get(f"/remote/terminal/{sid}/read", headers=sso_headers()).json()
+    assert "waiting" not in idle, idle
+
+
+def test_a_young_session_is_given_grace_before_being_called_stalled(
+        controller, sso, agent):
+    """An agent polls on its own cadence; a second of quiet at the start is normal
+    and must not be reported as a fault."""
+    agent(host_id="h-w5", hostname="web05", ip="10.0.0.45")
+    sid = controller.post("/remote/hosts/web05/terminal/open",
+                          headers=sso_headers()).json()["session_id"]
+    assert "waiting" not in controller.get(f"/remote/terminal/{sid}/read",
+                                           headers=sso_headers()).json()

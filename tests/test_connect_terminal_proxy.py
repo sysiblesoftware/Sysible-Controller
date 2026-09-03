@@ -282,3 +282,69 @@ def test_an_sso_owned_role_is_realigned_when_slop_changes_it(sso):
     assert db.get_administrator("erin")["role"] == "superuser"
     remote_routes._resolve_admin_username(_Req(sso_headers("erin", "auditor")))
     assert db.get_administrator("erin")["role"] == "auditor"
+
+
+# ---- the full bridge, both halves, one round trip -------------------------
+def test_a_shell_streams_end_to_end_through_the_bridge(controller, sso, agent):
+    """Every hop Connect and the agent actually use, in order, in one test:
+
+        Connect  -> POST /remote/hosts/web01/terminal/open      (SSO secret)
+        agent    -> GET  /agents/h/pty/<sid>/io                 (picks up input)
+        agent    -> POST /agents/h/pty/<sid>/output             (shell output up)
+        Connect  -> GET  /remote/terminal/<sid>/read            (output down)
+        Connect  -> POST /remote/terminal/<sid>/write           (keystrokes up)
+        agent    -> GET  /agents/h/pty/<sid>/io                 (keystrokes down)
+        Connect  -> POST /remote/terminal/<sid>/close
+
+    Route-existence checks alone would not have caught a half-restored bridge:
+    the browser half and the agent half were removed by the same commit, and one
+    without the other is a session that opens and then never draws.
+    """
+    host_id, secret = agent(host_id="h-e2e", hostname="web01", ip="10.0.0.31")
+
+    r = controller.post("/remote/hosts/web01/terminal/open",
+                        headers=sso_headers("alice", "operator"))
+    assert r.status_code == 200, r.text
+    sid = r.json()["session_id"]
+
+    # The agent collects the pty_open task, then streams a prompt up.
+    tasks = db.fetch_pending_tasks(host_id)
+    assert any(t.get("kind") == "pty_open" for t in tasks), tasks
+    up = controller.post(f"/agents/{host_id}/pty/{sid}/output",
+                         json={"agent_secret": secret, "data": "alice@web01:~$ ",
+                               "ended": False})
+    assert up.status_code == 200, up.text
+
+    # Connect reads it back off the Controller.
+    down = controller.get(f"/remote/terminal/{sid}/read", headers=sso_headers())
+    assert down.status_code == 200, down.text
+    assert down.json()["data"] == "alice@web01:~$ "
+    assert down.json()["closed"] is False
+
+    # Keystrokes travel the other way: Connect writes, the agent picks them up.
+    w = controller.post(f"/remote/terminal/{sid}/write", headers=sso_headers(),
+                        json={"data": "id\n"})
+    assert w.status_code == 200, w.text
+    io = controller.get(f"/agents/{host_id}/pty/{sid}/io",
+                        headers={"X-Agent-Secret": secret})
+    assert io.status_code == 200, io.text
+    # The agent's wire format for an input message (host_agent/agent.py: t == "i").
+    assert {"t": "i", "d": "id\n"} in io.json()["msgs"], io.json()
+
+    # And the close propagates to the agent's side of the bridge.
+    c = controller.post(f"/remote/terminal/{sid}/close", headers=sso_headers())
+    assert c.status_code == 200, c.text
+    io2 = controller.get(f"/agents/{host_id}/pty/{sid}/io",
+                         headers={"X-Agent-Secret": secret})
+    assert io2.json()["closed"] is True
+
+
+def test_the_agent_half_of_the_bridge_needs_the_agent_secret(controller, sso, agent):
+    host_id, secret = agent(host_id="h-e2e2", hostname="web02", ip="10.0.0.32")
+    sid = controller.post("/remote/hosts/web02/terminal/open",
+                          headers=sso_headers()).json()["session_id"]
+    bad = controller.post(f"/agents/{host_id}/pty/{sid}/output",
+                          json={"agent_secret": "wrong", "data": "x", "ended": False})
+    assert bad.status_code in (401, 403), bad.text
+    assert controller.get(f"/agents/{host_id}/pty/{sid}/io",
+                          headers={"X-Agent-Secret": "wrong"}).status_code in (401, 403)

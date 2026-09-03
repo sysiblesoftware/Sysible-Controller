@@ -204,25 +204,108 @@ p_update() {
   # SLOP's gateway is the stock caddy image with a BIND-MOUNTED Caddyfile + portal,
   # so `up --build` recreates the built idp but leaves the gateway container as-is
   # (its image and compose config didn't change). A Caddyfile the git pull just
-  # brought in would then sit on disk unloaded. Reload Caddy so gateway/portal
-  # changes take effect with zero downtime; fall back to a restart if reload fails.
+  # brought in would then sit on disk unloaded, so it has to be applied explicitly.
   # (The portal's static files are served live from the read-only mount — no reload.)
+  local gw_rc=0
   if [[ "$p" == "slop" ]]; then
-    local gwc; gwc="$(_p_container slop)"
-    if docker inspect "$gwc" >/dev/null 2>&1; then
-      _hdr "Reloading the gateway (Caddy) config"
-      if docker exec "$gwc" caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
-        _ok "  gateway config reloaded"
-      else
-        _warn "  caddy reload failed — restarting the gateway to apply changes"
-        docker restart "$gwc" >/dev/null 2>&1 || true
-      fi
-    fi
+    _slop_apply_gateway_config || gw_rc=1
   fi
   _hdr "New state"
   _compose ps 2>/dev/null || docker ps -a --filter "name=^/${CONTAINER}$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
   _health "$p" || true
+  if [[ $gw_rc -ne 0 ]]; then
+    # The images were rebuilt, but the gateway is NOT running the config that was
+    # just pulled. Saying "updated" here is the lie that hid this for a whole day.
+    _err "$(_p_pretty "$p"): images updated, but the gateway config was NOT applied (see above)."
+    return 1
+  fi
   _ok "$(_p_pretty "$p") updated. Volume '$(_p_volume "$p")' preserved."
+}
+
+# Load the on-disk Caddyfile into the running gateway, and PROVE it took.
+#
+# This is the whole authentication boundary: forward_auth plus the 401 -> /login
+# deny path. An update that quietly fails to apply it leaves the fleet serving the
+# previous — possibly vulnerable — config while reporting success.
+#
+# It used to be three lines whose failure paths all ended in /dev/null or `|| true`,
+# and it failed in exactly that shape: `caddy reload` failed, its error was
+# discarded, `docker restart` failed too, that was swallowed by `|| true`, and the
+# update printed "updated" over a gateway still running the pre-fix Caddyfile. The
+# giveaway was `ps` reporting "Up 19 hours" right after a supposed restart — a real
+# restart resets that clock, so the container had never come back. Every step here
+# is therefore checked, every error is shown, and the outcome is verified against
+# the live gateway rather than inferred from an exit status.
+_slop_apply_gateway_config() {
+  local gwc out; gwc="$(_p_container slop)"
+  if ! docker inspect "$gwc" >/dev/null 2>&1; then
+    _warn "  no gateway container '$gwc' — skipping the config reload."
+    _warn "  Set SYSIBLE_SLOP_CONTAINER if the gateway runs under another name."
+    return 0
+  fi
+  _hdr "Applying the gateway (Caddy) config"
+
+  # Validate BEFORE touching the running server. Caddy refuses to start on an
+  # invalid config, so restarting into one turns a working gateway into a down
+  # one — the worst possible outcome of an update. Keep serving the old config
+  # and say so instead.
+  if ! out="$(docker exec "$gwc" caddy validate --config /etc/caddy/Caddyfile 2>&1)"; then
+    _err "the Caddyfile on disk is INVALID — refusing to apply it. The gateway is"
+    _err "still serving its previous config. Fix the file, then re-run this update."
+    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    return 1
+  fi
+
+  # Reload = zero downtime. On failure keep the output: it is the diagnosis.
+  if out="$(docker exec "$gwc" caddy reload --config /etc/caddy/Caddyfile 2>&1)"; then
+    _ok "  gateway config reloaded"
+  else
+    _warn "  caddy reload failed — restarting the gateway to apply changes"
+    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    if ! out="$(docker restart "$gwc" 2>&1)"; then
+      _err "the gateway could not be restarted either, so the new config is NOT live —"
+      _err "it is still running the previous one. docker said:"
+      printf '%s\n' "$out" | sed 's/^/    /' >&2
+      return 1
+    fi
+    _ok "  gateway restarted"
+  fi
+
+  _slop_verify_gateway_denies
+}
+
+# Prove the gateway is enforcing auth, instead of trusting that a reload did what
+# it said. An anonymous request for the portal apex must be bounced to the sign-in
+# page. A 200 means the deny path is a no-op and every app behind the gateway is
+# being served to anyone — which has happened once already: inside handle_response
+# `redir /login?... 302` parses as a MATCHER plus destination "302", so the 401
+# branch matched nothing and requests fell through as if signed in. It adapted,
+# started, and logged no warning (gateway/tests/test_caddyfile.py pins the syntax;
+# this pins the behaviour of the gateway actually running).
+_slop_verify_gateway_denies() {
+  local port code i
+  port="$(_p_port slop)"
+  command -v curl >/dev/null 2>&1 || {
+    _warn "  curl is not installed — cannot verify that the gateway denies anonymous requests."
+    return 0
+  }
+  # Up to ~15s: the idp is rebuilt by the same update, and while it is starting
+  # forward_auth has nothing to ask, so a transient 502 here is expected.
+  for i in $(seq 1 15); do
+    code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "https://localhost:${port}/" 2>/dev/null || true)"
+    case "$code" in
+      30[1237]) _ok "  verified: anonymous requests are redirected to sign-in ($code)"; return 0 ;;
+      200)      _err "the gateway served the portal to an UNAUTHENTICATED request (HTTP 200)."
+                _err "The forward_auth deny path is not firing — every app behind the gateway is"
+                _err "exposed. Do not leave this running: check gateway/Caddyfile for a directive"
+                _err "inside handle_response with no explicit '*' matcher."
+                return 1 ;;
+    esac
+    sleep 1
+  done
+  _warn "  could not verify the gateway's deny path (last HTTP status: ${code:-none})."
+  _warn "  Check it by hand: curl -sk -o /dev/null -w '%{http_code}\\n' https://localhost:${port}/  (expect 302)"
+  return 0
 }
 
 p_status() {

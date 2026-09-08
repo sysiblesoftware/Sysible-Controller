@@ -16,7 +16,6 @@ Two things are needed and tested here: a real description for every command, and
 a server-side `source` so the feed can be filtered to what PEOPLE did.
 """
 import importlib
-import sqlite3
 
 import pytest
 
@@ -166,7 +165,9 @@ def test_an_unknown_filter_value_is_ignored_rather_than_returning_nothing(
 def test_rows_written_before_the_column_existed_read_as_api(controller, superuser_headers):
     """An upgrade must not blank out the existing feed."""
     db.log_activity("api-key", "web03", "ran a command", "whoami")
-    conn = sqlite3.connect(db.DB_PATH)
+    # Through the backend's own connector, not sqlite3 directly: Enterprise runs
+    # this same file against PostgreSQL.
+    conn = db._connect()
     conn.execute("UPDATE activity_log SET source=NULL")
     conn.commit()
     conn.close()

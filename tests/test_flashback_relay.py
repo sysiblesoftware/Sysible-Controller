@@ -258,3 +258,31 @@ def test_an_unreachable_flashback_is_reported_without_leaking_the_token(controll
     assert r.status_code == 503
     assert "unreachable" in r.json()["detail"]
     assert "super-secret-token" not in r.text
+
+
+# ---- the wiring that makes any of this reach the process -------------------
+# Both of these were missing on the first cut, and the symptom was silence: the
+# installer wrote SYSIBLE_FLASHBACK_* into the controller's .env, compose never
+# passed them in, so flashback.configured() was False forever and every snapshot
+# got a 503 that nothing surfaced. A feature that is inert by omission needs a
+# test that reads the deployment file, not just the code.
+def _controller_compose():
+    import os
+    import yaml
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "docker-compose.yml")) as fh:
+        return yaml.safe_load(fh)["services"]["controller"]
+
+
+def test_compose_passes_the_flashback_settings_into_the_container():
+    env = _controller_compose()["environment"]
+    for var in ("SYSIBLE_FLASHBACK_URL", "SYSIBLE_FLASHBACK_AGENT_TOKEN"):
+        assert var in env, f"{var} never reaches the controller process"
+
+
+def test_compose_can_actually_reach_the_host_where_flashback_listens():
+    """Flashback publishes its agent API on the SLOP host's LOOPBACK. Inside a
+    container 127.0.0.1 is the container, so the controller needs the host
+    gateway mapped or every snapshot dies in connection-refused."""
+    hosts = _controller_compose().get("extra_hosts") or []
+    assert any(str(h).startswith("host.docker.internal:") for h in hosts), hosts

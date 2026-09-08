@@ -47,6 +47,22 @@ services:
       # when the request carries the matching shared secret (see SLOP docs/SSO.md).
       SYSIBLE_WEBGUI_TRUST_SSO: "${SYSIBLE_WEBGUI_TRUST_SSO:-0}"
       SYSIBLE_SSO_SHARED_SECRET: "${SYSIBLE_SSO_SHARED_SECRET:-}"
+      # Config backup (Sysible Flashback). Agents post their /etc snapshots to
+      # THIS controller and it relays them, so it is the only thing that holds
+      # Flashback's agent token. Both empty by default: a standalone controller
+      # simply never offers config backup. The SLOP installer sets them.
+      #
+      # The URL must be reachable FROM THIS CONTAINER. Flashback publishes its
+      # agent API on the SLOP host's loopback, and inside a container 127.0.0.1
+      # is the container itself — so the default goes via host.docker.internal,
+      # mapped below. Without both of these the feature is silently inert: the
+      # variables sat in .env and never reached the process.
+      SYSIBLE_FLASHBACK_URL: "${SYSIBLE_FLASHBACK_URL:-}"
+      SYSIBLE_FLASHBACK_AGENT_TOKEN: "${SYSIBLE_FLASHBACK_AGENT_TOKEN:-}"
+    extra_hosts:
+      # Reach services published on the host (Flashback's agent API). Linux needs
+      # this mapping explicitly; it is a no-op where the name already resolves.
+      - "host.docker.internal:host-gateway"
     volumes:
       - sysible-data:/data   # DB, certs, API key, cookie secret, portal files
 

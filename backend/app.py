@@ -928,7 +928,8 @@ def enroll(req: EnrollRequest, request: Request):
     # hiccup must never fail the enroll.
     try:
         log_activity("enrollment", req.hostname or host_id,
-                     f"Host enrolled ({req.platform or 'agent'}) at {req.ip or 'unknown IP'}", "")
+                     f"Host enrolled ({req.platform or 'agent'}) at {req.ip or 'unknown IP'}", "",
+                     source="automation")
     except Exception:
         pass
 
@@ -1274,8 +1275,9 @@ def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
         actor = run_as or "api-key"
         should_log = body.log if run_as else True
         if should_log:
-            log_activity(actor, get_agent_hostname(host_id),
-                         body.description or _describe_command(body.command), body.command)
+            desc = body.description or _describe_command(body.command)
+            log_activity(actor, get_agent_hostname(host_id), desc, body.command,
+                         source=_classify_activity(body.command, desc, bool(run_as)))
 
     return {
         "task_id": task_id,
@@ -1299,7 +1301,8 @@ def post_activity_route(body: ActivityLogRequest, request: Request):
     desc = (body.description or "").strip()[:200]
     if not desc:
         raise HTTPException(status_code=400, detail="description required")
-    log_activity(admin["username"], (body.host or "")[:200], desc, "")
+    # An admin token resolved, so this is unambiguously a person.
+    log_activity(admin["username"], (body.host or "")[:200], desc, "", source="user")
     return {"ok": True}
 
 
@@ -1470,7 +1473,8 @@ def _maybe_auto_update_agent(host_id: str, reported: str | None) -> None:
         from backend import agent_integrity
         agent_integrity.mark_updating(host_id)
         log_activity("controller", agent.get("hostname") or host_id,
-                     f"Auto-updating agent {reported} \u2192 {target}", "")
+                     f"Auto-updating agent {reported} \u2192 {target}", "",
+                     source="automation")
     except Exception:
         # Best-effort by design; the next heartbeat retries after the cooldown.
         pass
@@ -1636,26 +1640,98 @@ def update_status_route():
     }
 
 
+# The controller's OWN read-only sweeps, recognised by a stable fragment of the
+# command each client/_api_dispatch.py builder emits. They run on every dashboard
+# load, against every host, so they dominate the activity feed — and with no
+# description they all read "ran a command", which is how a fleet-wide audit log
+# ends up saying nothing at all.
+#
+# Matching on a fragment (rather than requiring every call site to remember a
+# description) means a caller that forgets one still gets something real.
+# tests/test_activity_descriptions.py walks every cmd_* builder and fails if one
+# stops matching, so a reworded command can't silently fall back to the generic
+# phrase again.
+_COMMAND_SIGNATURES = (
+    ("POSTURE|",                        "collected host posture", "automation"),
+    ("mgr=unknown; total=0; sec=0",     "checked for available package updates", "automation"),
+    ("disk_detail=$(df -hPT",           "ran a fleet health check", "automation"),
+    ("disk=$(df -P",                    "collected host metrics", "automation"),
+    ("== Identity ==",                  "collected support information", None),
+    ("sosreport",                       "generated an sos report", None),
+    ("journalctl",                      "read the system journal", None),
+    ("systemctl --failed",              "listed failed services", None),
+    ("df -hT",                          "checked disk usage", None),
+    ("free -",                          "checked memory use", None),
+    ("uptime",                          "checked uptime", None),
+)
+
+# Shell scaffolding that says nothing about what a script DOES; skipped when
+# summarising so "ran a 24-line script (export, if)" doesn't happen.
+_NOISE_TOKENS = {
+    "export", "if", "then", "else", "elif", "fi", "for", "do", "done", "while",
+    "case", "esac", "set", "cd", "echo", "printf", "true", "false", ":", "{", "}",
+    "(", ")", "#", "local", "return", "exit", "trap", "shift", "read", "eval",
+}
+
+
+def _script_programs(command: str, want=3):
+    """The distinctive programs a script actually invokes, in order of first use."""
+    seen = []
+    for raw in command.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Walk the words so `if command -v dnf` yields "dnf", not "if".
+        for word in line.replace(";", " ").replace("|", " ").replace("&", " ").split():
+            w = word.strip("`'\"()${}")
+            if not w or w in _NOISE_TOKENS or "=" in w or w.startswith("-"):
+                continue
+            if w in ("command", "sudo", "sh", "bash", "-c", "timeout", "nohup", "env"):
+                continue
+            if w not in seen:
+                seen.append(w)
+            break                      # one program per line is enough
+        if len(seen) >= want:
+            break
+    return seen[:want]
+
+
 def _describe_command(command: str) -> str:
-    """Fallback human description when a tool didn't supply one. Deliberately
-    NEVER echoes raw code into the feed: multi-line / script / python
-    commands collapse to a generic phrase, and a concise single-line shell
-    command shows just its leading program name (e.g. 'ran: systemctl')."""
+    """Human description when a caller didn't supply one.
+
+    Never echoes raw code into the feed — but "ran a command" for everything
+    multi-line was worse than useless: the audit log became a wall of identical
+    rows with no way to tell a posture sweep from someone running a script as
+    root. A known probe gets its real name; anything else gets its shape and the
+    programs it calls, e.g. "ran a 24-line script (systemctl, find, awk)".
+    """
     c = (command or "").strip()
     if not c:
         return "ran a command"
-    first = c.split("\n", 1)[0].strip()
-    is_scripty = (
-        "\n" in c
-        or first.startswith(("import ", "python", "#!", "cat <<", "base64", "{"))
-        or len(first) > 80
-    )
-    # Never the words "ran a script" here — that phrasing is reserved for the
-    # explicit "Run a script on all hosts" action from Connect (which passes its
-    # own description). A generic multi-line/opaque command is just "ran a command".
-    if is_scripty:
-        return "ran a command"
-    return "ran: " + first[:80]
+    for fragment, text, _src in _COMMAND_SIGNATURES:
+        if fragment in c:
+            return text
+    lines = [l for l in (ln.strip() for ln in c.splitlines()) if l and not l.startswith("#")]
+    first = lines[0] if lines else ""
+    if len(lines) == 1 and len(first) <= 80:
+        return "ran: " + first
+    progs = _script_programs(c)
+    shape = "a %d-line script" % len(lines) if len(lines) > 1 else "a command"
+    if progs:
+        return "ran %s (%s)" % (shape, ", ".join(progs))
+    return "ran %s" % shape
+
+
+def _classify_activity(command: str, description: str, has_identity: bool) -> str:
+    """Where an activity row came from: 'automation' for the controller's own
+    read-only sweeps, 'user' when an operator identity was attributed, else
+    'api'. Derived server-side — a caller does not get to label its own rows."""
+    c = (command or "")
+    d = (description or "").strip().lower()
+    for fragment, text, src in _COMMAND_SIGNATURES:
+        if src == "automation" and (fragment in c or d == text):
+            return "automation"
+    return "user" if has_identity else "api"
 
 
 @app.get("/agents/{host_id}/tasks")
@@ -1767,13 +1843,19 @@ def get_edition():
 
 
 @app.get("/activity-log", dependencies=[Depends(require_api_key), Depends(require_activity_viewer)])
-def get_activity_log_route(limit: int = 200, since_id: int = 0):
+def get_activity_log_route(limit: int = 200, since_id: int = 0, source: str = ""):
     """Human-readable, attributed feed of actions the controller carried out
     (who did what, where) - a fleet-wide audit view. Visible to superusers and
     the read-only 'auditor' role (see require_activity_viewer). The controller
     service log below stays superuser-only. `since_id` lets the GUI poll for
-    only new rows."""
-    return {"entries": get_activity_log(limit=_clamp_limit(limit), since_id=since_id)}
+    only new rows.
+
+    `source` narrows the feed to one class of caller — 'user' (an operator did
+    it), 'api' (a key-only call) or 'automation' (the controller's own read-only
+    sweeps). Without it the sweeps, which run against every host on every
+    dashboard load, bury everything a person actually did."""
+    return {"entries": get_activity_log(limit=_clamp_limit(limit), since_id=since_id,
+                                        source=(source or None))}
 
 
 @app.get("/activity-log/verify",

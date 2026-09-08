@@ -28,7 +28,8 @@ function groupActivity(entries) {
       g._lastTs = ts; g.timestamp = Math.max(g.timestamp, ts); g.id = Math.max(g.id, e.id || 0);
     } else {
       const ng = { id: e.id || 0, timestamp: ts, _lastTs: ts, username: e.username,
-        description: e.description, command: e.command, hosts: e.host ? [e.host] : [] };
+        description: e.description, command: e.command, source: e.source,
+        hosts: e.host ? [e.host] : [] };
       groups.push(ng); openByKey[key] = ng;
     }
   }
@@ -81,6 +82,27 @@ export function isAutomationActor(name) {
   return AUTOMATION_RX.test(String(name || ""));
 }
 
+// What KIND of caller a row came from. The controller now classifies this
+// server-side ('user' | 'api' | 'automation'), which is the only way to tell
+// "api-key collected host posture" — a sweep that runs against every host on
+// every dashboard load — from "api-key ran rm -rf", which is a key-only action
+// you very much want to see. Rows written before that column existed all read
+// 'api', so the old username heuristic stays as the fallback for them.
+export function activityClass(row) {
+  const src = row && row.source;
+  if (src === "automation" || src === "user") return src;
+  return isAutomationActor(row && row.username) ? "automation" : (src || "api");
+}
+
+export const SOURCE_LABEL = { user: "Person", api: "API", automation: "Automation" };
+
+export const ACTIVITY_FILTERS = [
+  { key: "people", label: "People", help: "Actions an operator took." },
+  { key: "api", label: "API", help: "Key-only calls with no operator identity." },
+  { key: "automation", label: "Automation", help: "The controller's own read-only sweeps." },
+  { key: "all", label: "All", help: "Everything, unfiltered." },
+];
+
 export default function LiveActivity({ role }) {
   // The read-only 'auditor' role may read the activity feed but NOT the
   // controller service log (which stays superuser-only and 403s for them).
@@ -95,7 +117,9 @@ export default function LiveActivity({ role }) {
   const [hostInv, setHostInv] = useState([]);  // fleet inventory for env-aware host labels
   const [q, setQ] = useState("");              // free-text filter (user / host / action)
   const [filterUser, setFilterUser] = useState("");   // "" = all users
-  const [hideAuto, setHideAuto] = useState(true);     // hide API-key/automation noise by default
+  // Default to People: the feed's job is "who did what", and the sweeps outnumber
+  // real actions by orders of magnitude on any real fleet.
+  const [srcFilter, setSrcFilter] = useState("people");
   const timer = useRef(null);
 
   useEffect(() => { api.hosts().then((d) => setHostInv(d.hosts || [])).catch(() => {}); }, []);
@@ -128,17 +152,25 @@ export default function LiveActivity({ role }) {
   const ql = q.trim().toLowerCase();
   const shown = grouped.filter((g) => {
     if (filterUser && g.username !== filterUser) return false;
-    // Selecting a specific actor overrides "hide automation" so you can still
-    // inspect exactly what an API key has been doing.
-    if (hideAuto && !filterUser && isAutomationActor(g.username)) return false;
+    // Selecting a specific actor overrides the class filter, so you can still
+    // inspect exactly what one API key has been doing.
+    if (!filterUser && srcFilter !== "all") {
+      const cls = activityClass(g);
+      const want = srcFilter === "people" ? "user" : srcFilter;
+      if (cls !== want) return false;
+    }
     if (ql) {
       const hay = `${g.username || ""} ${(g.hosts || []).join(" ")} ${g.description || ""}`.toLowerCase();
       if (!hay.includes(ql)) return false;
     }
     return true;
   });
-  const hiddenAuto = (hideAuto && !filterUser)
-    ? grouped.reduce((n, g) => n + (isAutomationActor(g.username) ? 1 : 0), 0) : 0;
+  const counts = grouped.reduce((acc, g) => {
+    const c = activityClass(g);
+    acc[c] = (acc[c] || 0) + 1;
+    return acc;
+  }, {});
+  const countFor = (k) => (k === "all" ? grouped.length : counts[k === "people" ? "user" : k] || 0);
 
   return (
     <div>
@@ -167,11 +199,17 @@ export default function LiveActivity({ role }) {
                 <option key={u} value={u}>{u}{isAutomationActor(u) ? " (automation)" : ""}</option>
               ))}
             </select>
-            <label className="checkrow" style={{ margin: 0 }}
-                   title="Hide API-key / service-account rows from this view. The records are kept — this only filters what you see.">
-              <input type="checkbox" checked={hideAuto} onChange={(e) => setHideAuto(e.target.checked)} />
-              <span className="faint">Hide automation{hiddenAuto ? ` (${hiddenAuto} hidden)` : ""}</span>
-            </label>
+            {/* Who did it. The records are untouched — this only filters the view. */}
+            <span className="seg" role="group" aria-label="Filter by caller">
+              {ACTIVITY_FILTERS.map((f) => (
+                <button key={f.key} type="button" title={f.help}
+                        className={"btn sm" + (srcFilter === f.key ? "" : " ghost")}
+                        aria-pressed={srcFilter === f.key}
+                        onClick={() => setSrcFilter(f.key)}>
+                  {f.label} <span className="faint">{countFor(f.key)}</span>
+                </button>
+              ))}
+            </span>
           </div>
           <span className="faint" style={{ fontSize: 12 }}>{shown.length} of {grouped.length} shown</span>
         </div>
@@ -179,10 +217,10 @@ export default function LiveActivity({ role }) {
 
       {tab === "activity" ? (
         activity.length === 0 ? <div className="empty">No activity recorded yet.</div> :
-        shown.length === 0 ? <div className="empty">No activity matches this filter. {hiddenAuto > 0 && "Untick “Hide automation” or "}Clear the filters to see all {grouped.length} entries.</div> : (
+        shown.length === 0 ? <div className="empty">No activity matches this filter. Pick <b>All</b> to see all {grouped.length} entries.</div> : (
           <div style={{ overflowX: "auto" }}>
           <table>
-            <thead><tr><th>Time</th><th>User</th><th>Host</th><th>Action</th></tr></thead>
+            <thead><tr><th>Time</th><th>User</th><th>Source</th><th>Host</th><th>Action</th></tr></thead>
             <tbody>
               {shown.map((a, i) => (
                 <tr key={a.id ?? i} style={{ cursor: "pointer" }}
@@ -190,6 +228,7 @@ export default function LiveActivity({ role }) {
                     title="Click to see the exact command">
                   <td className="faint mono">{fmtTime(a.timestamp)}</td>
                   <td>{a.username || "(unknown)"}</td>
+                  <td className="faint">{SOURCE_LABEL[activityClass(a)] || "API"}</td>
                   <td title={a.hosts.join(", ")}>{summarizeHosts(a.hosts, hostInv)}</td>
                   <td>{a.description || ""}</td>
                 </tr>

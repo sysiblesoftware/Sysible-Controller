@@ -709,6 +709,18 @@ def init_db():
             cur.execute("ALTER TABLE %s ADD COLUMN entry_hash TEXT" % _tbl)
         if "hash_algo" not in _cols:
             cur.execute("ALTER TABLE %s ADD COLUMN hash_algo TEXT DEFAULT 'sha256'" % _tbl)
+    # Where an activity row came from: 'user' (an operator identity was
+    # attributed), 'api' (an API-key-only call with no operator), or 'automation'
+    # (one of the controller's own read-only sweeps — posture, health, update
+    # checks — which otherwise bury real operator actions in the feed).
+    #
+    # Deliberately NOT part of the tamper-evident digest: adding a field to
+    # _activity_digest would invalidate every already-chained row. It is a display
+    # classification, derived server-side and re-derivable from `description` and
+    # `command`, which ARE chained — so nothing security-relevant rests on it.
+    cur.execute("PRAGMA table_info(activity_log)")
+    if "source" not in {c[1] for c in cur.fetchall()}:
+        cur.execute("ALTER TABLE activity_log ADD COLUMN source TEXT")
     cur.execute("""
     CREATE TABLE IF NOT EXISTS audit_chain_head (
         chain TEXT PRIMARY KEY,
@@ -2446,7 +2458,7 @@ def _backfill_audit_chains(conn):
 
 
 # --- Activity log (Live Activity & Logs feed) ---
-def log_activity(username, host, description, command=""):
+def log_activity(username, host, description, command="", source=None):
   ts = time.time()
   uname = username or "(unknown)"
   h = host or ""
@@ -2473,9 +2485,9 @@ def log_activity(username, host, description, command=""):
       prev = (_row[0] if _row and _row[0] else _ACTIVITY_GENESIS)
       entry = _activity_digest(prev, ts, uname, h, desc, cmd, algo=algo, key=key)
       cur.execute(
-          "INSERT INTO activity_log (timestamp, username, host, description, command, prev_hash, entry_hash, hash_algo) "
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-          (ts, uname, h, desc, cmd, prev, entry, algo),
+          "INSERT INTO activity_log (timestamp, username, host, description, command, source, prev_hash, entry_hash, hash_algo) "
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          (ts, uname, h, desc, cmd, source or "api", prev, entry, algo),
       )
       _new_id = cur.lastrowid
       conn.commit()
@@ -2559,11 +2571,21 @@ def get_agent_hostname(host_id):
     return (row[0] if row else None) or host_id
 
 
-def get_activity_log(limit=200, since_id=0):
+def get_activity_log(limit=200, since_id=0, source=None):
+    """Newest-first activity rows. `source` filters to one class of caller —
+    'user', 'api' or 'automation' — so an operator can read what PEOPLE did
+    without the controller's own read-only sweeps burying it. Rows written before
+    the column existed have source NULL and are treated as 'api', which is what
+    they were (the pre-existing feed was overwhelmingly key-only dispatch)."""
     conn = _connect()
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cols = "id, timestamp, username, host, description, command"
+    cols = "id, timestamp, username, host, description, command, COALESCE(source, 'api') AS source"
+    where = ""
+    args_pre = []
+    if source in ("user", "api", "automation"):
+        where = "COALESCE(source, 'api') = ? AND "
+        args_pre = [source]
     if since_id and since_id > 0:
         # Incremental poll: select the CONTIGUOUS oldest-unseen window above since_id
         # (ORDER BY id ASC), not the newest `limit`. A plain `id > since_id ORDER BY id
@@ -2572,16 +2594,17 @@ def get_activity_log(limit=200, since_id=0):
         # gets them again (audit-feed data loss during a fleet-wide burst). We keep the
         # newest-first RESPONSE shape by reversing, so callers are unaffected.
         cur.execute(
-            f"SELECT {cols} FROM activity_log WHERE id > ? ORDER BY id ASC LIMIT ?",
-            (since_id, limit),
+            f"SELECT {cols} FROM activity_log WHERE {where}id > ? ORDER BY id ASC LIMIT ?",
+            (*args_pre, since_id, limit),
         )
         rows = [dict(r) for r in cur.fetchall()]
         rows.reverse()
     else:
         # Initial / latest-N view: newest-first.
         cur.execute(
-            f"SELECT {cols} FROM activity_log ORDER BY id DESC LIMIT ?",
-            (limit,),
+            f"SELECT {cols} FROM activity_log {('WHERE ' + where[:-5]) if where else ''} "
+            "ORDER BY id DESC LIMIT ?",
+            (*args_pre, limit),
         )
         rows = [dict(r) for r in cur.fetchall()]
     conn.close()

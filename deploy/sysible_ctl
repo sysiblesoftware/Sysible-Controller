@@ -39,7 +39,7 @@ _p_container() { case "$1" in
 esac; }
 _p_pretty() { case "$1" in
   controller)    echo "Sysible Controller" ;;
-  slep)          echo "Sysible LEP" ;;
+  slep)          echo "Sysible Linux Engineering Platform" ;;
   connect)       echo "Sysible Connect" ;;
   slop)          echo "Sysible SLOP gateway" ;;
 esac; }
@@ -405,6 +405,88 @@ p_status() {
   if _discover "$p"; then _compose ps 2>/dev/null || true
   else docker ps -a --filter "name=^/$(_p_container "$p")$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null | tail -n +1; fi
   _health "$p" || true
+  [[ "$p" == "slop" ]] && _flashback_status
+  return 0
+}
+
+# Config backup (Flashback) status.
+#
+# Flashback is a service inside the slop compose, so `ps` shows its container and
+# nothing more — and "Up 4 hours" is exactly what it said all the way through an
+# outage where no host could back anything up. Running is not the same as working
+# here: capture needs an agent token on BOTH sides, and the Controller reaching
+# Flashback over the host. This reports the chain, not the container.
+_flashback_status() {
+  local fbc="${SYSIBLE_FLASHBACK_CONTAINER:-sysible-flashback}"
+  docker inspect "$fbc" >/dev/null 2>&1 || return 0     # not deployed here
+  _hdr "Sysible Flashback (config backup)"
+
+  local up; up="$(docker inspect -f '{{.State.Status}}' "$fbc" 2>/dev/null || echo unknown)"
+  printf '  container: %s\n' "$up"
+
+  # Both halves of the token. Flashback FAILS CLOSED without one, so an unset
+  # token means every snapshot is refused — silently, from the console's side.
+  local fbtok ctok
+  fbtok="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$fbc" 2>/dev/null \
+           | sed -n 's/^SYSIBLE_FLASHBACK_AGENT_TOKEN=//p' | tail -n1)"
+  local ctlc; ctlc="$(_p_container controller)"
+  local cenv=""
+  docker inspect "$ctlc" >/dev/null 2>&1 && \
+    cenv="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$ctlc" 2>/dev/null)"
+  ctok="$(printf '%s\n' "$cenv" | sed -n 's/^SYSIBLE_FLASHBACK_AGENT_TOKEN=//p' | tail -n1)"
+  local curl_url; curl_url="$(printf '%s\n' "$cenv" | sed -n 's/^SYSIBLE_FLASHBACK_URL=//p' | tail -n1)"
+
+  if [[ -z "$fbtok" ]]; then
+    _err "  agent token: NOT SET on Flashback — it refuses every snapshot (fails closed)."
+    _warn "    fix: add SYSIBLE_FLASHBACK_AGENT_TOKEN to the SLOP .env, then 'sysible_ctl slop update'"
+  elif [[ -z "$ctok" ]]; then
+    _err "  agent token: set on Flashback but MISSING on the Controller — nothing can post a backup."
+    _warn "    fix: 'sysible_ctl slop update' seeds it, then 'sysible_ctl controller update'"
+  elif [[ "$fbtok" != "$ctok" ]]; then
+    _err "  agent token: the two sides DO NOT MATCH — every snapshot is rejected 401."
+    _warn "    fix: re-run 'sysible_ctl slop update' so both take the SLOP .env value"
+  else
+    _ok "  agent token: matches on both sides"
+  fi
+
+  [[ -n "$curl_url" ]] && printf '  controller reaches it at: %s\n' "$curl_url"
+
+  # Does the Controller ACTUALLY reach it? The wiring can be perfect and the URL
+  # still point at the container's own loopback instead of the host.
+  if [[ -n "$ctok" && -n "$curl_url" ]] && docker inspect "$ctlc" >/dev/null 2>&1; then
+    local code
+    code="$(docker exec "$ctlc" python -c "
+import os,urllib.request
+try:
+    r=urllib.request.urlopen(os.environ['SYSIBLE_FLASHBACK_URL'].rstrip('/')+'/api/health',timeout=5)
+    print(r.status)
+except Exception as e:
+    print(type(e).__name__)
+" 2>/dev/null | tail -n1)"
+    if [[ "$code" == "200" ]]; then
+      _ok "  controller -> Flashback: reachable"
+    else
+      _err "  controller -> Flashback: UNREACHABLE ($code) — backups cannot be delivered."
+    fi
+  fi
+
+  # How many hosts have actually reported, straight from the version store.
+  local hosts
+  hosts="$(docker exec "$fbc" python -c "
+import sys
+sys.path.insert(0,'/app')
+from backend import store
+h=store.list_hosts()
+print(len(h), sum(x.get('versions') or 0 for x in h))
+" 2>/dev/null | tail -n1)"
+  if [[ -n "$hosts" ]]; then
+    set -- $hosts
+    if [[ "${1:-0}" == "0" ]]; then
+      _warn "  stored backups: none yet (no host has reported a snapshot)"
+    else
+      _ok "  stored backups: ${1} host(s), ${2} version(s)"
+    fi
+  fi
 }
 
 # Lifecycle: drive the whole compose stack when we can discover it (correct for a
@@ -651,7 +733,7 @@ ${BOLD}USAGE${RESET}
 
 ${BOLD}PRODUCTS${RESET}
   ${CYAN}controller${RESET}   Sysible Controller — console :8800, agent API :9000   (alias: ce)
-  ${CYAN}slep${RESET}         Sysible LEP — engineering platform console :8810
+  ${CYAN}slep${RESET}         Sysible Linux Engineering Platform — console :8810
   ${CYAN}connect${RESET}      Sysible Connect — :8700
   ${CYAN}slop${RESET}         SLOP gateway — front door (Caddy + IdP + Flashback) on :443
 

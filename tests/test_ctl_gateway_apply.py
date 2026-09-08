@@ -406,3 +406,83 @@ def test_seeding_is_a_no_op_when_slop_has_no_token_yet(sandbox, tmp_path):
         _slop_seed_cross_app_env
     ''', FAKE_NO_CONTAINER="1")
     assert not (ctl / ".env").exists() or "FLASHBACK" not in (ctl / ".env").read_text()
+
+
+# ---- `slop status` must report whether config backup can actually work -----
+# `ps` said "sysible-flashback  Up 4 hours" throughout an outage in which no host
+# could back anything up: the container was fine, the CHAIN was not. Running is
+# not working here — capture needs the token on both sides and the controller
+# able to reach Flashback over the host.
+FAKE_DOCKER_FB = r"""#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_LOG"
+case "$1" in
+  inspect)
+    case "$*" in
+      *State.Status*) echo running; exit 0 ;;
+      *Config.Env*)
+        case "$*" in
+          *flashback*) [ -n "${FB_TOKEN:-}" ] && echo "SYSIBLE_FLASHBACK_AGENT_TOKEN=$FB_TOKEN"; exit 0 ;;
+          *)
+            [ -n "${CTL_TOKEN:-}" ] && echo "SYSIBLE_FLASHBACK_AGENT_TOKEN=$CTL_TOKEN"
+            [ -n "${CTL_URL:-}" ] && echo "SYSIBLE_FLASHBACK_URL=$CTL_URL"
+            exit 0 ;;
+        esac ;;
+    esac
+    [ "${NO_CTL:-0}" = 1 ] && case "$*" in *controller*) exit 1 ;; esac
+    exit 0 ;;
+  exec)
+    case "$*" in
+      *urllib*) echo "${REACH:-200}"; exit 0 ;;
+      *store*)  echo "${STORE:-0 0}"; exit 0 ;;
+    esac
+    exit 0 ;;
+esac
+exit 0
+"""
+
+
+@pytest.fixture
+def fbsandbox(sandbox, tmp_path):
+    p = tmp_path / "bin" / "docker"
+    p.write_text(FAKE_DOCKER_FB)
+    p.chmod(0o755)
+    return sandbox
+
+
+def test_status_flags_a_token_missing_on_flashback(fbsandbox):
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="", CTL_TOKEN="t", CTL_URL="http://h:8770")
+    assert "NOT SET on Flashback" in err
+    assert "fails closed" in err
+
+
+def test_status_flags_a_token_the_controller_never_got(fbsandbox):
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="", CTL_URL="")
+    assert "MISSING on the Controller" in err
+    assert "slop update" in err          # and says how to fix it
+
+
+def test_status_flags_two_halves_that_do_not_match(fbsandbox):
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="a", CTL_TOKEN="b", CTL_URL="http://h:8770")
+    assert "DO NOT MATCH" in err
+
+
+def test_status_flags_a_controller_that_cannot_reach_flashback(fbsandbox):
+    """The wiring can be perfect and the URL still point at the container's own
+    loopback instead of the host — which is exactly what shipped."""
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
+                       CTL_URL="http://127.0.0.1:8770", REACH="URLError")
+    assert "UNREACHABLE" in err
+
+
+def test_status_reports_a_healthy_chain_with_no_backups_yet(fbsandbox):
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
+                       CTL_URL="http://h:8770", REACH="200", STORE="0 0")
+    assert "matches on both sides" in out
+    assert "reachable" in out
+    assert "none yet" in err or "none yet" in out
+
+
+def test_status_reports_real_stored_backups(fbsandbox):
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
+                       CTL_URL="http://h:8770", REACH="200", STORE="3 47")
+    assert "3 host(s), 47 version(s)" in out

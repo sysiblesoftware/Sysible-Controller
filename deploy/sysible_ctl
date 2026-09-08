@@ -192,12 +192,35 @@ p_update() {
   local p="$1"
   _discover "$p" || { _warn "$(_p_pretty "$p"): not found — no container '$(_p_container "$p")' and no SYSIBLE_${p^^}_DIR set. Skipping."; return 1; }
   _hdr "Updating $(_p_pretty "$p")"
-  local gr
+  # Whether the SOURCE actually advanced. A failed pull used to be a yellow
+  # warning followed by a green "updated" — so `update` rebuilt byte-identical
+  # code and reported success, and the only symptom was that nothing changed.
+  # Same class of lie as the gateway-config one below: the command has to say
+  # when it did NOT bring in new code.
+  local gr code_rc=0 before='' after=''
   if gr="$(_git_root "$WD")" && command -v git >/dev/null 2>&1; then
+    before="$(git -C "$gr" rev-parse --short HEAD 2>/dev/null || true)"
     _hdr "Pulling latest code (git) in $gr"
-    git -C "$gr" pull --ff-only || _warn "git pull failed — rebuilding the code already present."
+    if git -C "$gr" pull --ff-only; then
+      after="$(git -C "$gr" rev-parse --short HEAD 2>/dev/null || true)"
+      if [[ -n "$before" && "$before" == "$after" ]]; then
+        _ok "Already at ${after:-?} — no new commits to pull."
+      else
+        _ok "Code advanced: ${before:-?} -> ${after:-?}"
+      fi
+    else
+      code_rc=1
+      _err "git pull --ff-only FAILED in $gr — the code did NOT advance (still ${before:-?})."
+      _warn "Nothing new can be built until that checkout can fast-forward. Usual causes:"
+      _warn "  * no upstream for this branch: git -C $gr status -sb"
+      _warn "      fix: git -C $gr branch --set-upstream-to=origin/\$(git -C $gr branch --show-current)"
+      _warn "  * local edits block the fast-forward: git -C $gr status --short"
+      _warn "  * detached HEAD or a diverged branch: git -C $gr log --oneline -1"
+    fi
   else
-    _warn "compose dir '$WD' is not a git checkout — rebuilding the code already present."
+    code_rc=1
+    _err "compose dir '$WD' is not a git checkout — an 'update' has no source to pull from, so it cannot bring in anything newer."
+    _warn "Re-clone the product next to its compose file, or set SYSIBLE_${p^^}_DIR to a git checkout."
   fi
   _hdr "Rebuilding + recreating via compose ($CFG)"
   _compose up -d --build
@@ -219,7 +242,14 @@ p_update() {
     _err "$(_p_pretty "$p"): images updated, but the gateway config was NOT applied (see above)."
     return 1
   fi
-  _ok "$(_p_pretty "$p") updated. Volume '$(_p_volume "$p")' preserved."
+  if [[ $code_rc -ne 0 ]]; then
+    # Containers were rebuilt and recreated, but from the SAME source as before.
+    # Reporting "updated" here is what makes a broken checkout look like a no-op
+    # update: the command goes green and the fix you pushed never ships.
+    _err "$(_p_pretty "$p"): rebuilt from the code ALREADY on disk — the source never advanced, so this is not an update to newer code (see above)."
+    return 1
+  fi
+  _ok "$(_p_pretty "$p") updated${after:+ to $after}. Volume '$(_p_volume "$p")' preserved."
 }
 
 # Load the on-disk Caddyfile into the running gateway, and PROVE it took.

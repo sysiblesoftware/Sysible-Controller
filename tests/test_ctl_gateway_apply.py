@@ -191,7 +191,8 @@ def test_p_update_reports_failure_when_the_gateway_config_did_not_apply(sandbox)
         _discover() { CONTAINER=gw; CFG=/tmp/dc.yml; WD=/tmp; return 0; }
         _compose()  { :; }
         _health()   { :; }
-        _git_root() { return 1; }
+        _git_root() { echo /tmp/fakegr; return 0; }
+        git() { for a in "$@"; do case "$a" in rev-parse) echo abc1234; return 0 ;; esac; done; return 0; }
         _slop_apply_gateway_config() { return 1; }
         p_update slop
     """)
@@ -205,12 +206,13 @@ def test_p_update_still_succeeds_for_slop_when_the_config_applies(sandbox):
         _discover() { CONTAINER=gw; CFG=/tmp/dc.yml; WD=/tmp; return 0; }
         _compose()  { :; }
         _health()   { :; }
-        _git_root() { return 1; }
+        _git_root() { echo /tmp/fakegr; return 0; }
+        git() { for a in "$@"; do case "$a" in rev-parse) echo abc1234; return 0 ;; esac; done; return 0; }
         _slop_apply_gateway_config() { return 0; }
         p_update slop
     """)
     assert rc == 0, err
-    assert "updated. Volume" in out
+    assert "updated to abc1234. Volume" in out and "preserved" in out
 
 
 def test_non_slop_products_do_not_run_the_gateway_apply(sandbox):
@@ -218,13 +220,14 @@ def test_non_slop_products_do_not_run_the_gateway_apply(sandbox):
         _discover() { CONTAINER=c; CFG=/tmp/dc.yml; WD=/tmp; return 0; }
         _compose()  { :; }
         _health()   { :; }
-        _git_root() { return 1; }
+        _git_root() { echo /tmp/fakegr; return 0; }
+        git() { for a in "$@"; do case "$a" in rev-parse) echo abc1234; return 0 ;; esac; done; return 0; }
         _slop_apply_gateway_config() { echo "SHOULD-NOT-RUN"; return 1; }
         p_update controller
     """)
     assert rc == 0, err
     assert "SHOULD-NOT-RUN" not in out
-    assert "updated. Volume" in out
+    assert "updated to abc1234. Volume" in out and "preserved" in out
 
 
 # ---- source-level guard ---------------------------------------------------
@@ -243,3 +246,105 @@ def test_no_step_in_the_gateway_apply_path_is_swallowed():
         if any(c in line for c in ("caddy validate", "caddy reload", "docker restart")):
             assert ">/dev/null" not in line, \
                 f"the error output IS the diagnosis — capture it, don't discard it: {line.strip()}"
+
+
+# ---- `update` must not report success when the SOURCE never advanced -------
+# Reported: "nothing is updating when I do slop update". The command went green
+# every time. A failed `git pull --ff-only` was only a yellow warning, so update
+# rebuilt byte-identical code from disk and then printed "SLOP updated." — the
+# same class of lie the gateway-config check above exists to prevent, one step
+# earlier in the pipeline. These drive the real p_update with a real git
+# checkout, one per shape of broken checkout.
+GIT_ENV = {
+    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+}
+
+
+def _git(*args, cwd):
+    e = dict(os.environ); e.update(GIT_ENV)
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, env=e)
+
+
+def _compose_dir(tmp_path, name="slopsrc"):
+    d = tmp_path / name
+    d.mkdir()
+    (d / "docker-compose.yml").write_text("services:\n  flashback:\n    build: ./flashback\n")
+    return d
+
+
+def _origin_with_a_commit(tmp_path):
+    """A bare 'remote' plus a clone of it, so a pull can really fast-forward."""
+    bare = tmp_path / "origin.git"
+    bare.mkdir()
+    _git("init", "--bare", "-q", "--initial-branch=main", cwd=str(bare))
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    _git("init", "-q", "-b", "main", cwd=str(seed))
+    (seed / "docker-compose.yml").write_text("services:\n  flashback:\n    build: ./flashback\n")
+    _git("add", "-A", cwd=str(seed)); _git("commit", "-qm", "one", cwd=str(seed))
+    _git("remote", "add", "origin", str(bare), cwd=str(seed))
+    _git("push", "-q", "-u", "origin", "main", cwd=str(seed))
+    return bare, seed
+
+
+def test_update_fails_loudly_when_the_compose_dir_is_not_a_git_checkout(sandbox, tmp_path):
+    d = _compose_dir(tmp_path)
+    rc, out, err = run(sandbox, 'p_update slop', SYSIBLE_SLOP_DIR=str(d), FAKE_HTTP_CODE="302")
+    assert rc != 0, out
+    assert "not a git checkout" in err
+    assert "updated. Volume" not in out          # must NOT claim success
+
+
+def test_update_fails_loudly_when_the_pull_cannot_fast_forward(sandbox, tmp_path):
+    """A checkout with no upstream: `git pull --ff-only` errors. Before this fix
+    that was a warning and the command still went green."""
+    d = _compose_dir(tmp_path)
+    _git("init", "-q", "-b", "main", cwd=str(d))
+    _git("add", "-A", cwd=str(d)); _git("commit", "-qm", "local", cwd=str(d))
+    rc, out, err = run(sandbox, 'p_update slop', SYSIBLE_SLOP_DIR=str(d), FAKE_HTTP_CODE="302")
+    assert rc != 0, out
+    assert "did NOT advance" in err
+    assert "updated. Volume" not in out
+    # and it must say what to actually do about it
+    assert "upstream" in err
+
+
+def test_update_says_the_source_never_moved_not_just_that_the_pull_failed(sandbox, tmp_path):
+    """The operator-facing point: containers WERE rebuilt, from the same code."""
+    d = _compose_dir(tmp_path)
+    _git("init", "-q", "-b", "main", cwd=str(d))
+    _git("add", "-A", cwd=str(d)); _git("commit", "-qm", "local", cwd=str(d))
+    rc, out, err = run(sandbox, 'p_update slop', SYSIBLE_SLOP_DIR=str(d), FAKE_HTTP_CODE="302")
+    assert rc != 0
+    assert "code ALREADY on disk" in err and "not an update to newer code" in err
+
+
+def test_update_reports_the_commit_it_advanced_to(sandbox, tmp_path):
+    bare, seed = _origin_with_a_commit(tmp_path)
+    clone = tmp_path / "clone"
+    _git("clone", "-q", str(bare), str(clone), cwd=str(tmp_path))
+    assert (clone / "docker-compose.yml").exists(), "fixture: the clone came out empty"
+    # A new commit lands upstream after the clone.
+    (seed / "new.txt").write_text("x")
+    _git("add", "-A", cwd=str(seed)); _git("commit", "-qm", "two", cwd=str(seed))
+    _git("push", "-q", "origin", "main", cwd=str(seed))
+    head = _git("rev-parse", "--short", "HEAD", cwd=str(seed)).stdout.strip()
+
+    rc, out, err = run(sandbox, 'p_update slop', SYSIBLE_SLOP_DIR=str(clone), FAKE_HTTP_CODE="302")
+    assert rc == 0, err
+    assert "Code advanced" in out and head in out
+    assert "updated" in out
+
+
+def test_update_is_happy_and_explicit_when_already_current(sandbox, tmp_path):
+    """No new commits is a legitimate success — but it must SAY that, so 'nothing
+    changed' is distinguishable from 'nothing could be pulled'."""
+    bare, seed = _origin_with_a_commit(tmp_path)
+    clone = tmp_path / "clone2"
+    _git("clone", "-q", str(bare), str(clone), cwd=str(tmp_path))
+    assert (clone / "docker-compose.yml").exists(), "fixture: the clone came out empty"
+    rc, out, err = run(sandbox, 'p_update slop', SYSIBLE_SLOP_DIR=str(clone), FAKE_HTTP_CODE="302")
+    assert rc == 0, err
+    assert "no new commits" in out
+    assert "did NOT advance" not in err

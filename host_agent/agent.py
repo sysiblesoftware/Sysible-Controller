@@ -207,6 +207,31 @@ def _current_poll_delay():
 # Performance graphs usable resolution. Set <=0 to disable reporting entirely.
 METRICS_INTERVAL = float(os.getenv("SYSIBLE_METRICS_INTERVAL", "60"))
 
+# ---- config backup (Sysible Flashback) ------------------------------------
+# Seconds between config snapshots; 0 disables capture entirely on this host.
+D3_INTERVAL = float(os.getenv("SYSIBLE_D3LOREAN_INTERVAL", "3600"))
+# Roots to track. Colon-separated, files or directories.
+D3_PATHS = os.getenv("SYSIBLE_D3LOREAN_PATHS", "/etc:/boot/grub/grub.cfg:/var/spool/cron")
+# How often to look for a restore an operator queued in the console. Restores
+# should land promptly, so this is much shorter than the capture interval.
+D3_RESTORE_POLL = float(os.getenv("SYSIBLE_D3LOREAN_RESTORE_POLL", "60"))
+D3_MAX_FILE = int(os.getenv("SYSIBLE_D3LOREAN_MAX_FILE_BYTES", str(256 * 1024)))
+# Below the controller's per-snapshot cap (12 MiB), which is itself below its
+# global 16 MiB request ceiling — so a host that outgrows this trims itself and
+# says so, rather than being cut off by a middleware with a generic message.
+D3_MAX_TOTAL = int(os.getenv("SYSIBLE_D3LOREAN_MAX_TOTAL_BYTES", str(8 * 1024 * 1024)))
+# Paths NEVER captured, even under a tracked root. Config backup is not a secret
+# store: these are credentials and private keys, and copying them into a
+# fleet-wide version store — readable by anyone with console access, kept for 50
+# versions — would turn a config-history feature into a credential archive.
+# fnmatch patterns against the absolute path; override to extend or replace.
+D3_EXCLUDE = os.getenv("SYSIBLE_D3LOREAN_EXCLUDE", ":".join([
+    "/etc/shadow", "/etc/shadow-", "/etc/gshadow", "/etc/gshadow-",
+    "/etc/ssh/ssh_host_*_key", "/etc/ssl/private/*", "/etc/ssl/private/**",
+    "/etc/sysible/*secret*", "/etc/sysible/api_key.txt",
+    "*/.git/*", "*.gpg", "*.kbx", "/etc/pki/**/private/*",
+]))
+
 # =========================================================
 # TLS
 # The controller's cert is self-signed (LAN-only, no public domain),
@@ -1327,6 +1352,217 @@ def _heartbeat_loop(state):
 
 
 # =========================================================
+# CONFIG BACKUP (Sysible Flashback): snapshot the tracked config paths on a
+# schedule, and apply restores an operator queued in the console.
+#
+# Everything goes through the CONTROLLER, not Flashback directly. The controller
+# authenticates this agent and stamps our host_id downstream, so no host holds
+# Flashback's token and no host can read or write another host's backups. It also
+# means this works on an outbound-only host exactly like every other agent call.
+# =========================================================
+def _d3_excluded(path, patterns):
+    import fnmatch
+    return any(fnmatch.fnmatch(path, pat) for pat in patterns if pat)
+
+
+def _d3_collect():
+    """Read the tracked config files. Returns (files, skipped, truncated).
+
+    Best-effort by design: an unreadable file, a dangling symlink or a path that
+    vanished mid-walk is skipped, never fatal — a snapshot of most of /etc beats
+    no snapshot because one file was busy."""
+    import base64
+    import stat as statmod
+
+    patterns = [p for p in D3_EXCLUDE.split(":") if p]
+    roots = [p for p in D3_PATHS.split(":") if p]
+    files, skipped, total = [], 0, 0
+    truncated = False
+
+    def add(fp):
+        nonlocal total, skipped, truncated
+        if truncated or _d3_excluded(fp, patterns):
+            return
+        try:
+            st = os.stat(fp)                     # follows symlinks on purpose:
+            if not statmod.S_ISREG(st.st_mode):  # /etc/resolv.conf is often one
+                return
+            if st.st_size > D3_MAX_FILE:
+                skipped += 1
+                return
+            with open(fp, "rb") as fh:
+                data = fh.read(D3_MAX_FILE + 1)
+        except OSError:
+            skipped += 1
+            return
+        if len(data) > D3_MAX_FILE:
+            skipped += 1
+            return
+        b64 = base64.b64encode(data).decode("ascii")
+        if total + len(b64) > D3_MAX_TOTAL:
+            truncated = True
+            return
+        total += len(b64)
+        files.append({"path": fp, "content_b64": b64})
+
+    for root in roots:
+        if os.path.isfile(root):
+            add(root)
+            continue
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            # Prune whole excluded subtrees rather than walking into them.
+            dirnames[:] = [d for d in dirnames
+                           if not _d3_excluded(os.path.join(dirpath, d) + "/", patterns)]
+            for name in filenames:
+                add(os.path.join(dirpath, name))
+            if truncated:
+                break
+    return files, skipped, truncated
+
+
+def _d3_send_snapshot(state):
+    files, skipped, truncated = _d3_collect()
+    if not files:
+        return
+    r = _request(
+        "POST", f"/agents/{state['host_id']}/config-snapshot",
+        headers={"X-Agent-Secret": state["agent_secret"]},
+        json={"files": files},
+        timeout=60,
+    )
+    if r.status_code >= 400:
+        # 503 = this controller has no Flashback configured. Say it once per tick
+        # at most; it is a platform wiring fact, not a per-host fault.
+        detail = ""
+        try:
+            detail = (r.json() or {}).get("detail") or ""
+        except Exception:
+            detail = r.text[:200]
+        print(f"[agent] config snapshot refused (HTTP {r.status_code}): {detail}")
+        return
+    try:
+        out = r.json()
+    except Exception:
+        out = {}
+    note = f"[agent] config snapshot: {len(files)} file(s), {out.get('changed', '?')} changed"
+    if skipped:
+        note += f", {skipped} skipped (unreadable or over {D3_MAX_FILE} bytes)"
+    if truncated:
+        note += f" — TRUNCATED at {D3_MAX_TOTAL} bytes; narrow SYSIBLE_D3LOREAN_PATHS"
+    print(note)
+
+
+def _d3_apply_restore(state, item):
+    """Write one queued version back, keeping what it replaced."""
+    import hashlib
+    import shutil
+    rid = item.get("id")
+    r = _request(
+        "GET", f"/agents/{state['host_id']}/config-restores/{rid}/payload",
+        headers={"X-Agent-Secret": state["agent_secret"]}, timeout=60,
+    )
+    if r.status_code >= 400:
+        print(f"[agent] restore {rid}: controller returned HTTP {r.status_code}")
+        return
+    path = r.headers.get("X-Flashback-Path") or item.get("path") or ""
+    want = (r.headers.get("X-Flashback-Sha256") or "").lower()
+    content = r.content
+    if not path or not path.startswith("/"):
+        print(f"[agent] restore {rid}: refusing a non-absolute path {path!r}")
+        return
+    got = hashlib.sha256(content).hexdigest()
+    if want and got != want:
+        # Never write bytes that don't match the digest the store recorded. Ack as
+        # FAILED so the console shows it rather than leaving it pending forever.
+        print(f"[agent] restore {rid}: digest mismatch for {path} — not writing")
+        _d3_ack(state, rid, False, path)
+        return
+    ok = True
+    try:
+        d = os.path.dirname(path) or "/"
+        os.makedirs(d, exist_ok=True)
+        # Keep what we replace. A restore is the one thing here that changes the
+        # host, and "I restored the wrong version" needs a way back.
+        if os.path.exists(path):
+            backup = f"{path}.sysible-backup-{int(time.time())}"
+            try:
+                shutil.copy2(path, backup)
+                print(f"[agent] restore {rid}: kept previous {path} as {backup}")
+            except OSError as e:
+                print(f"[agent] restore {rid}: could not back up {path}: {e}")
+        # Write via a temp file in the SAME directory + rename, so a reader never
+        # sees a half-written config and the swap is atomic on the same fs.
+        tmp = f"{path}.sysible-restore.tmp"
+        mode = None
+        try:
+            mode = os.stat(path).st_mode & 0o7777
+        except OSError:
+            pass
+        with open(tmp, "wb") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if mode is not None:
+            os.chmod(tmp, mode)
+        os.replace(tmp, path)
+        print(f"[agent] restore {rid}: wrote {path} ({len(content)} bytes)")
+    except OSError as e:
+        ok = False
+        print(f"[agent] restore {rid}: FAILED to write {path}: {e}")
+        try:
+            os.unlink(f"{path}.sysible-restore.tmp")
+        except OSError:
+            pass
+    _d3_ack(state, rid, ok, path)
+
+
+def _d3_ack(state, rid, ok, path=""):
+    try:
+        _request("POST", f"/agents/{state['host_id']}/config-restores/{rid}/ack",
+                 headers={"X-Agent-Secret": state["agent_secret"]},
+                 json={"ok": bool(ok), "path": path}, timeout=20)
+    except requests.RequestException as e:
+        print(f"[agent] restore {rid}: could not acknowledge: {e}")
+
+
+def _d3_poll_restores(state):
+    r = _request("GET", f"/agents/{state['host_id']}/config-restores",
+                 headers={"X-Agent-Secret": state["agent_secret"]}, timeout=20)
+    if r.status_code >= 400:
+        return
+    try:
+        items = (r.json() or {}).get("restores") or []
+    except Exception:
+        return
+    for item in items:
+        try:
+            _d3_apply_restore(state, item)
+        except Exception as e:
+            print(f"[agent] restore {item.get('id')}: {e}")
+
+
+def _d3_loop(state):
+    """Capture on D3_INTERVAL, check for restores on the shorter D3_RESTORE_POLL.
+    Its own thread, like metrics: a big /etc walk must never delay a heartbeat.
+    Every error is caught and retried — config backup is best-effort and must not
+    be able to stop an agent doing its real work."""
+    if D3_INTERVAL <= 0:
+        print("[agent] config backup disabled (SYSIBLE_D3LOREAN_INTERVAL=0)")
+        return
+    next_capture = 0.0
+    while True:
+        try:
+            now = time.time()
+            if now >= next_capture:
+                _d3_send_snapshot(state)
+                next_capture = now + D3_INTERVAL
+            _d3_poll_restores(state)
+        except Exception as e:
+            print("[agent] config backup thread:", e)
+        time.sleep(max(5.0, D3_RESTORE_POLL))
+
+
+# =========================================================
 # AGENT-HOSTED PTY (Option B): run the interactive shell locally and stream it
 # to the controller over the agent's own outbound HTTP channel, so terminals
 # work on hosts the controller can't reach inbound (NAT/firewall, no SSH).
@@ -1591,6 +1827,13 @@ def loop(state):
     if METRICS_INTERVAL > 0:
         threading.Thread(target=_metrics_loop, args=(state,), daemon=True,
                          name="sysible-metrics").start()
+
+    # Config backup (Flashback): snapshot /etc on its own cadence and apply any
+    # restore queued in the console. Daemon, and entirely best-effort — a host
+    # whose controller has no Flashback configured just logs it and carries on.
+    if D3_INTERVAL > 0:
+        threading.Thread(target=_d3_loop, args=(state,), daemon=True,
+                         name="sysible-config-backup").start()
 
     while True:
         # Self-heal: if a self-update replaced agent.py on disk but the external

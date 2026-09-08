@@ -1818,6 +1818,94 @@ def pty_io(host_id: str, session_id: str, agent_secret: str = "",
     return {"msgs": msgs, "closed": closed}
 
 
+# =========================================================
+# CONFIG BACKUP (Sysible Flashback) — the agent-facing relay.
+#
+# Hosts never talk to Flashback directly. Flashback's agent API is guarded by ONE
+# bearer token and its endpoints take host_id from the caller, so a token on every
+# host would let any compromised host read every other host's stored config and
+# queue a restore onto it. Instead the agent posts here over the channel it already
+# has, the controller authenticates it with verify_agent(), and the host_id used
+# downstream is the one from the URL that just authenticated — never a value the
+# agent chose. The token stays on the controller.
+#
+# Every route degrades rather than breaks: an unconfigured or unreachable Flashback
+# answers with a reason the agent logs and backs off from, so config backup being
+# down never disturbs check-ins or task execution.
+# =========================================================
+def _flashback_or_503(fn, *a, **kw):
+    from backend.flashback import FlashbackUnavailable
+    try:
+        return fn(*a, **kw)
+    except FlashbackUnavailable as e:
+        raise HTTPException(status_code=e.status, detail=e.reason)
+
+
+@app.post("/agents/{host_id}/config-snapshot")
+def agent_config_snapshot(host_id: str, body: dict = Body(...),
+                          x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
+    """One config snapshot from an enrolled agent, relayed to Flashback."""
+    from backend import flashback
+    verify_agent(host_id, x_agent_secret or (body or {}).get("agent_secret") or "")
+    files = (body or {}).get("files") or []
+    if not isinstance(files, list):
+        raise HTTPException(status_code=400, detail="files must be a list")
+    # Bound what one host can push. Flashback dedupes by content, but the relay
+    # still has to hold the body, and an agent with a mis-set path list could
+    # otherwise hand us a filesystem.
+    total = sum(len(str(f.get("content_b64") or "")) for f in files if isinstance(f, dict))
+    if total > flashback.MAX_SNAPSHOT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"snapshot too large ({total} bytes); the limit is "
+                   f"{flashback.MAX_SNAPSHOT_BYTES}. Narrow SYSIBLE_D3LOREAN_PATHS on this host.")
+    label = get_agent_hostname(host_id) or host_id
+    return _flashback_or_503(flashback.post_snapshot, host_id, label, files)
+
+
+@app.get("/agents/{host_id}/config-restores")
+def agent_config_restores(host_id: str,
+                          x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
+    """Restores an operator queued for THIS host in the Flashback console."""
+    from backend import flashback
+    verify_agent(host_id, x_agent_secret or "")
+    return {"restores": _flashback_or_503(flashback.pending_restores, host_id)}
+
+
+@app.get("/agents/{host_id}/config-restores/{restore_id}/payload")
+def agent_config_restore_payload(host_id: str, restore_id: int,
+                                 x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
+    """The file content to write back, plus the digest the agent verifies first."""
+    from backend import flashback
+    verify_agent(host_id, x_agent_secret or "")
+    meta, content = _flashback_or_503(flashback.restore_payload, host_id, restore_id)
+    return Response(
+        content=content,
+        media_type="application/octet-stream",
+        headers={"X-Flashback-Path": meta["path"], "X-Flashback-Sha256": meta["sha256"]},
+    )
+
+
+@app.post("/agents/{host_id}/config-restores/{restore_id}/ack")
+def agent_config_restore_ack(host_id: str, restore_id: int, body: dict = Body(default=None),
+                             x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
+    """The agent reporting whether it applied the restore. Unlike a snapshot this
+    CHANGED a file on a host, so it is attributed in the activity feed."""
+    from backend import flashback
+    verify_agent(host_id, x_agent_secret or "")
+    ok = True
+    if isinstance(body, dict) and "ok" in body:
+        ok = bool(body["ok"])
+    out = _flashback_or_503(flashback.ack_restore, host_id, restore_id, ok)
+    path = (body or {}).get("path") if isinstance(body, dict) else None
+    log_activity("flashback", get_agent_hostname(host_id) or host_id,
+                 ("restored a config file from backup" if ok
+                  else "FAILED to restore a config file from backup")
+                 + (f" ({path})" if path else ""),
+                 "", source="automation")
+    return out
+
+
 @app.get("/agents/{host_id}/results", dependencies=[Depends(require_api_key)])
 def get_agent_results(
     host_id: str,

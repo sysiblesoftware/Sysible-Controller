@@ -348,3 +348,61 @@ def test_update_is_happy_and_explicit_when_already_current(sandbox, tmp_path):
     assert rc == 0, err
     assert "no new commits" in out
     assert "did NOT advance" not in err
+
+
+# ---- `slop update` must carry SLOP-owned settings to the apps that need them
+# install.sh seeded cross-product settings on a FIRST run and nothing did it
+# afterwards, so a setting a later SLOP release introduced never reached the app
+# that consumes it — and update went green having wired up nothing. That is how
+# config backup shipped inert: Flashback held its token, the Controller never got
+# it, and the console stayed empty with no error anywhere.
+def test_update_seeds_the_flashback_token_into_the_controller_env(sandbox, tmp_path):
+    slop = tmp_path / "slop"; slop.mkdir()
+    (slop / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=abc\nSYSIBLE_FLASHBACK_AGENT_TOKEN=tok123\n")
+    ctl = tmp_path / "controller"; ctl.mkdir()
+    (ctl / "docker-compose.yml").write_text("services: {}\n")
+    rc, out, err = run(sandbox, f'''
+        WD="{slop}"
+        _git_root() {{ echo "{slop}"; return 0; }}
+        _p_dir_override() {{ [ "$1" = controller ] && echo "{ctl}"; }}
+        _slop_seed_cross_app_env
+    ''', FAKE_NO_CONTAINER="1")
+    body = (ctl / ".env").read_text()
+    assert "SYSIBLE_FLASHBACK_AGENT_TOKEN=tok123" in body, body
+    # host.docker.internal, not loopback: the controller is containerised and
+    # Flashback publishes on the HOST.
+    assert "SYSIBLE_FLASHBACK_URL=http://host.docker.internal:8770" in body, body
+    assert "Seeded" in out
+
+
+def test_seeding_never_overwrites_a_value_an_operator_set(sandbox, tmp_path):
+    slop = tmp_path / "slop2"; slop.mkdir()
+    (slop / ".env").write_text("SYSIBLE_FLASHBACK_AGENT_TOKEN=tok123\n")
+    ctl = tmp_path / "controller2"; ctl.mkdir()
+    (ctl / "docker-compose.yml").write_text("services: {}\n")
+    (ctl / ".env").write_text("SYSIBLE_FLASHBACK_URL=http://elsewhere:9999\n")
+    run(sandbox, f'''
+        WD="{slop}"
+        _git_root() {{ echo "{slop}"; return 0; }}
+        _p_dir_override() {{ [ "$1" = controller ] && echo "{ctl}"; }}
+        _slop_seed_cross_app_env
+    ''', FAKE_NO_CONTAINER="1")
+    body = (ctl / ".env").read_text()
+    assert "http://elsewhere:9999" in body            # kept
+    assert body.count("SYSIBLE_FLASHBACK_URL=") == 1  # not duplicated
+    assert "SYSIBLE_FLASHBACK_AGENT_TOKEN=tok123" in body  # the missing one added
+
+
+def test_seeding_is_a_no_op_when_slop_has_no_token_yet(sandbox, tmp_path):
+    """An older .env predating the token must not produce a half-wired app."""
+    slop = tmp_path / "slop3"; slop.mkdir()
+    (slop / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=abc\n")
+    ctl = tmp_path / "controller3"; ctl.mkdir()
+    (ctl / "docker-compose.yml").write_text("services: {}\n")
+    run(sandbox, f'''
+        WD="{slop}"
+        _git_root() {{ echo "{slop}"; return 0; }}
+        _p_dir_override() {{ [ "$1" = controller ] && echo "{ctl}"; }}
+        _slop_seed_cross_app_env
+    ''', FAKE_NO_CONTAINER="1")
+    assert not (ctl / ".env").exists() or "FLASHBACK" not in (ctl / ".env").read_text()

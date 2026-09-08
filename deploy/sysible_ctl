@@ -188,6 +188,65 @@ _health() {
 # =========================================================
 # Per-product operations
 # =========================================================
+# Carry SLOP-owned settings that OTHER products need into their compose .env.
+#
+# install.sh does this on a first run, and nothing did it afterwards — so a
+# setting introduced by a later SLOP release never reached the app that consumes
+# it, and `slop update` reported success having wired up nothing. That is exactly
+# how config backup shipped inert: Flashback had its token, the Controller never
+# got it, and the console stayed empty with no error anywhere.
+#
+# Idempotent and additive: a value already present is left alone, so an operator
+# who set something by hand keeps it.
+_slop_seed_cross_app_env() {
+  local slopdir; slopdir="$(_git_root "$WD" 2>/dev/null || echo "$WD")"
+  local envf="$slopdir/.env"
+  [[ -f "$envf" ]] || return 0
+
+  # Flashback's agent token: minted by the SLOP installer, consumed by the
+  # Controller, which is the only thing that talks to Flashback's agent API.
+  local tok; tok="$(sed -n 's/^SYSIBLE_FLASHBACK_AGENT_TOKEN=//p' "$envf" | tail -n1)"
+  [[ -n "$tok" ]] || return 0
+
+  local cdir; cdir="$(_product_compose_dir controller)" || return 0
+  local cenv="$cdir/.env"
+  local port; port="$(sed -n 's/^SYSIBLE_FLASHBACK_AGENT_PORT=//p' "$envf" | tail -n1)"
+  [[ -n "$port" ]] || port=8770
+  # host.docker.internal, not loopback: the Controller runs in a container and
+  # Flashback publishes on the HOST. Its compose maps that name to the gateway.
+  _seed_kv "$cenv" SYSIBLE_FLASHBACK_URL "http://host.docker.internal:$port" \
+    && _ok "Seeded SYSIBLE_FLASHBACK_URL into $cenv"
+  _seed_kv "$cenv" SYSIBLE_FLASHBACK_AGENT_TOKEN "$tok" \
+    && _ok "Seeded the Flashback agent token into $cenv (config backup can now reach it)"
+}
+
+# Append KEY=VALUE to an env file if that key is not already set. Returns 0 when
+# it wrote, 1 when it left an existing value alone.
+_seed_kv() {
+  local f="$1" k="$2" v="$3"
+  [[ -n "$f" ]] || return 1
+  if [[ -f "$f" ]] && grep -q "^${k}=" "$f"; then return 1; fi
+  mkdir -p "$(dirname "$f")" 2>/dev/null || true
+  printf '%s=%s\n' "$k" "$v" >> "$f" || return 1
+  return 0
+}
+
+# The directory holding a product's compose file — where docker compose loads
+# its .env from. Mirrors install.sh's _app_compose_dir.
+_product_compose_dir() {
+  local p="$1" c d
+  if docker inspect "$(_p_container "$p")" >/dev/null 2>&1; then
+    d="$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir"}}' \
+         "$(_p_container "$p")" 2>/dev/null || true)"
+    [[ -n "$d" && -d "$d" ]] && { printf '%s\n' "$d"; return 0; }
+  fi
+  d="$(_p_dir_override "$p")"
+  for c in "$d" "$d/deploy"; do
+    [[ -n "$d" && -f "$c/docker-compose.yml" ]] && { printf '%s\n' "$c"; return 0; }
+  done
+  return 1
+}
+
 p_update() {
   local p="$1"
   _discover "$p" || { _warn "$(_p_pretty "$p"): not found — no container '$(_p_container "$p")' and no SYSIBLE_${p^^}_DIR set. Skipping."; return 1; }
@@ -231,6 +290,7 @@ p_update() {
   # (The portal's static files are served live from the read-only mount — no reload.)
   local gw_rc=0
   if [[ "$p" == "slop" ]]; then
+    _slop_seed_cross_app_env
     _slop_apply_gateway_config || gw_rc=1
   fi
   _hdr "New state"

@@ -11,4 +11,4 @@ If you think an ISO is needed, **ask first and stop**. When in doubt, do not bui
 
 For boot/desktop cosmetics: lock the look with **mockups first** (render at the real
 1024×768 boot resolution), get sign-off, and batch everything into ONE ISO at the end —
-never one build per tweak. (Full detail lives in `sysible-linux/CLAUDE.md`.)
+never one build per tweak. (Full detail lives in `sysible-workstation/CLAUDE.md`.)

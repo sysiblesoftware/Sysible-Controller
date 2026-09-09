@@ -486,3 +486,76 @@ def test_status_reports_real_stored_backups(fbsandbox):
     rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
                        CTL_URL="http://h:8770", REACH="200", STORE="3 47")
     assert "3 host(s), 47 version(s)" in out
+
+
+# ---- `slop up` must not run a compose that cannot possibly work ------------
+# Reported: the "Install Sysible SLOP" desktop icon does not install SLOP.
+# install-sysible ends by calling `sysible_ctl slop up`, which ran a bare
+# `docker compose up`. SLOP's compose declares the SSO secret as ${VAR:?...} in
+# five services, so compose ABORTS when it is unset — and on a first bring-up
+# nothing has minted it yet. install.sh is what mints it.
+def _slop_checkout(tmp_path, name, with_secret=False, with_installer=True):
+    d = tmp_path / name
+    d.mkdir()
+    (d / "docker-compose.yml").write_text(
+        "services:\n  gateway:\n    environment:\n"
+        "      X: ${SYSIBLE_SSO_SHARED_SECRET:?run install.sh}\n")
+    if with_secret:
+        (d / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=abc123\n")
+    if with_installer:
+        (d / "install.sh").write_text('#!/bin/sh\necho "INSTALL-SH RAN: $1"\n')
+        (d / "install.sh").chmod(0o755)
+    return d
+
+
+def test_first_slop_bring_up_hands_off_to_install_sh(sandbox, tmp_path):
+    d = _slop_checkout(tmp_path, "slop-fresh")
+    rc, out, err = run(sandbox, f'''
+        _health() {{ :; }}
+        _p_dir_override() {{ [ "$1" = slop ] && echo "{d}"; }}
+        p_up slop
+    ''', FAKE_NO_CONTAINER="1")
+    assert rc == 0, err
+    assert "INSTALL-SH RAN: gateway" in out, out
+    # and it must NOT have tried the compose that would abort
+    assert "up -d --build" not in docker_calls(sandbox)
+
+
+def test_a_configured_slop_uses_plain_compose(sandbox, tmp_path):
+    """Once the secret exists, the normal path — no re-running the installer."""
+    d = _slop_checkout(tmp_path, "slop-ready", with_secret=True)
+    rc, out, err = run(sandbox, f'''
+        _health() {{ :; }}
+        _p_dir_override() {{ [ "$1" = slop ] && echo "{d}"; }}
+        p_up slop
+    ''', FAKE_NO_CONTAINER="1")
+    assert rc == 0, err
+    assert "INSTALL-SH RAN" not in out
+    assert "up -d --build" in docker_calls(sandbox)
+
+
+def test_slop_with_no_secret_and_no_installer_fails_with_the_reason(sandbox, tmp_path):
+    """Never run the doomed compose and let its interpolation error be the
+    explanation — say which value is missing and where to put it."""
+    d = _slop_checkout(tmp_path, "slop-broken", with_installer=False)
+    rc, out, err = run(sandbox, f'''
+        _health() {{ :; }}
+        _p_dir_override() {{ [ "$1" = slop ] && echo "{d}"; }}
+        p_up slop
+    ''', FAKE_NO_CONTAINER="1")
+    assert rc != 0
+    assert "SYSIBLE_SSO_SHARED_SECRET" in err
+    assert "up -d --build" not in docker_calls(sandbox)
+
+
+def test_a_non_slop_product_is_unaffected(sandbox, tmp_path):
+    d = tmp_path / "ctlsrc"; d.mkdir()
+    (d / "docker-compose.yml").write_text("services: {}\n")
+    rc, out, err = run(sandbox, f'''
+        _health() {{ :; }}
+        _env_upsert() {{ :; }}
+        _p_dir_override() {{ [ "$1" = connect ] && echo "{d}"; }}
+        p_up connect
+    ''', FAKE_NO_CONTAINER="1")
+    assert rc == 0, err
+    assert "up -d --build" in docker_calls(sandbox)

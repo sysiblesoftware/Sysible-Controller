@@ -543,6 +543,19 @@ _env_upsert() {
   fi
 }
 
+# Is the SSO shared secret available to compose for the slop stack? Compose reads
+# it from the ambient environment or from the .env beside the compose file.
+_slop_secret_present() {
+  local dir="$1" cfg="$2" envf
+  [[ -n "${SYSIBLE_SSO_SHARED_SECRET:-}" ]] && return 0
+  envf="$(dirname "$cfg")/.env"
+  [[ -f "$envf" ]] && grep -q '^SYSIBLE_SSO_SHARED_SECRET=..*$' "$envf" && return 0
+  # install.sh keeps the canonical copy at the repo root, which may differ from
+  # the compose dir when the compose file lives under deploy/.
+  [[ -f "$dir/.env" ]] && grep -q '^SYSIBLE_SSO_SHARED_SECRET=..*$' "$dir/.env" && return 0
+  return 1
+}
+
 p_up() {
   local p="$1"; shift || true
   local dir cfg
@@ -576,6 +589,28 @@ p_up() {
     _env_upsert "$envf" SYSIBLE_TLS_HOSTS "$addr,localhost"
     _ok "Updated $envf (controller address $addr; other keys preserved)."
     envargs=(--env-file "$envf")
+  fi
+
+  # SLOP's compose REQUIRES the SSO shared secret: five services declare it with
+  # ${VAR:?...}, so a bare `compose up` aborts outright when it is unset. On a
+  # first bring-up there is no .env yet — nothing has minted the secret — so
+  # `sysible_ctl slop up` failed instantly and SLOP never installed. Its own
+  # install.sh is the supported first-run path: it mints the secret, writes the
+  # .env every later `up` then reads, and seeds the apps. Hand off to it, and only
+  # for the gateway, since the apps are brought up separately.
+  if [[ "$p" == "slop" ]] && ! _slop_secret_present "$dir" "$cfg"; then
+    if [[ -f "$dir/install.sh" ]]; then
+      _hdr "First bring-up of $(_p_pretty "$p") — running $dir/install.sh gateway"
+      _warn "(a bare 'compose up' cannot work yet: the SSO shared secret has not been minted)"
+      ( cd "$dir"; sh ./install.sh gateway ) || {
+        _err "$(_p_pretty "$p"): install.sh gateway failed — see the output above."; return 1; }
+      _health "$p" || true
+      _ok "$(_p_pretty "$p") is up."
+      return 0
+    fi
+    _err "$(_p_pretty "$p"): no SSO shared secret and no install.sh at $dir — compose would abort."
+    _warn "  fix: set SYSIBLE_SSO_SHARED_SECRET in $(dirname "$cfg")/.env, or re-clone the platform repo."
+    return 1
   fi
 
   _hdr "Building + starting $(_p_pretty "$p") from $dir"

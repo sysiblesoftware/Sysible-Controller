@@ -2689,6 +2689,30 @@ def set_host_sudo(host_id: str, body: SudoRequiredRequest, request: Request,
     return _wrap(lambda: _as_admin(request, lambda: api.set_sudo_password_required(host_id, body.required)))
 
 
+# --- Sysible Relay (bastion / jump-box transport) — superuser only ----------
+class RelayConfigBody(BaseModel):
+    relay_host: str | None = None
+    relay_user: str | None = None
+    relay_port: str | None = None
+    relay_identity: str | None = None
+    route_allowlist: str | None = None
+    relay_os: str | None = None
+
+
+@app.get("/api/relay")
+def get_relay_route(request: Request, user: str = Depends(require_superuser_session)):
+    return _wrap(lambda: _as_admin(request, lambda: api.get_relay_config()))
+
+
+@app.post("/api/relay")
+def set_relay_route(body: RelayConfigBody, request: Request,
+                    user: str = Depends(require_superuser_session)):
+    """Only the fields actually sent are applied, so saving one field can't blank
+    the rest — an omitted key is 'leave alone', an empty string is 'clear'."""
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    return _wrap(lambda: _as_admin(request, lambda: api.set_relay_config(updates)))
+
+
 @app.post("/api/host/{host_id}/backup-now")
 def host_backup_now(host_id: str, request: Request,
                     user: str = Depends(require_login)):

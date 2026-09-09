@@ -373,6 +373,31 @@ def init_db():
             pass
 
     # -----------------------------------------------------
+    # Relay / bastion configuration (single row, id=1)
+    # -----------------------------------------------------
+    # Which jump box the controller reaches segmented hosts THROUGH, and how.
+    # Single-row like controller_config because there is one relay. Every column
+    # is nullable and an empty value falls back to the matching SYSIBLE_RELAY_*
+    # environment variable (see backend/relay.py), so a compose deployment can
+    # bake the relay in and the console can still change it without a recreate.
+    #
+    # No secrets here: the relay authenticates with a KEY, and only the key's
+    # PATH is stored. The key itself lives on disk at 0600 (backend/relay_keys).
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS relay_config (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        relay_host TEXT,
+        relay_user TEXT,
+        relay_port TEXT,
+        relay_identity TEXT,
+        route_allowlist TEXT,
+        relay_os TEXT,
+        updated_at REAL,
+        updated_by TEXT
+    )
+    """)
+
+    # -----------------------------------------------------
     # License Configuration (single row, id=1)
     # Just a license key an admin has entered, surfaced alongside the
     # installed VERSION (see version.py) in the Sysible Controller
@@ -1546,6 +1571,52 @@ def consume_enroll_token(token, host_id):
 # CONTROLLER CONFIGURATION (single row - hostname/IP/port for agent
 # bundle generation; see Controller Configuration in the GUI)
 # =========================================================
+_RELAY_CONFIG_COLS = ("relay_host", "relay_user", "relay_port", "relay_identity",
+                      "route_allowlist", "relay_os")
+
+
+def get_relay_config():
+    """The stored relay row as a dict, or {} when nothing has been saved.
+
+    Returns {} rather than a row of empty strings on a fresh install, so
+    backend.relay can tell "not set here" from "explicitly cleared" and fall
+    through to the environment for each field independently."""
+    conn = _connect()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT " + ", ".join(_RELAY_CONFIG_COLS)
+                    + " FROM relay_config WHERE id = 1")
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return {}
+    return {col: (row[i] or "") for i, col in enumerate(_RELAY_CONFIG_COLS)}
+
+
+def set_relay_config(values, actor="system"):
+    """Upsert the relay row. Only the known columns are written; a field given as
+    an empty string is stored empty, which means "fall back to the environment"
+    rather than "route through an empty host" (backend.relay treats a blank relay
+    host as the relay being off)."""
+    vals = [str((values or {}).get(col) or "").strip() for col in _RELAY_CONFIG_COLS]
+    conn = _connect()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO relay_config (id, " + ", ".join(_RELAY_CONFIG_COLS)
+            + ", updated_at, updated_by) VALUES (1, "
+            + ", ".join("?" for _ in _RELAY_CONFIG_COLS) + ", ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            + ", ".join(f"{col}=excluded.{col}" for col in _RELAY_CONFIG_COLS)
+            + ", updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+            (*vals, time.time(), actor or ""))
+        conn.commit()
+    finally:
+        conn.close()
+    return True
+
+
 def get_controller_config():
     conn = _connect()
     cur = conn.cursor()

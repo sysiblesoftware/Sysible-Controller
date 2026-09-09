@@ -32,6 +32,7 @@ It manages target hosts through two interchangeable mechanisms, and a single fle
 
 - **The Sysible agent** — a small Python daemon installed on a host as its own systemd service, heartbeating back to the controller and polling for queued work. It runs as root by default; an opt-in install flag (`./run_agent.sh --unprivileged`) instead runs it as a dedicated, locked `sysible` system account with passwordless sudo, so the service isn't a root login and its actions go through a sudo audit trail.
 - **Direct SSH** — for hosts that shouldn't run a persistent agent. Hand the controller SSH credentials once; it generates and installs its own key pair on the host and drives it directly from then on, including a real interactive terminal session.
+- **Sysible Relay (bastion / jump box)** — for hosts on a segmented network the controller can't reach directly. It opens a single-hop SSH `ProxyJump` to a bastion and the on-bastion relay daemon forwards to permitted internal targets; both hops stay host-key-verified. Every SSH path routes through it — dispatch, key enrollment, the terminal, and file transfer — so a relayed host behaves like any other. A host goes through the relay either by explicit opt-in or by matching an allowlist of the networks behind the bastion, and the console serves the jump-box setup script so the bastion is never configured by hand. Configured under **Host Enrollment → Relay / Bastion**.
 
 Both paths feed the exact same fleet-wide tools, so day to day you don't think about which transport a given host uses.
 

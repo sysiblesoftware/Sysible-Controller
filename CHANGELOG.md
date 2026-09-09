@@ -4,6 +4,44 @@ All notable changes to the Sysible Controller are recorded here.
 
 ## Unreleased
 
+### Added — Sysible Relay (bastion / jump-box transport)
+
+- Administer hosts the controller cannot reach directly. Instead of dialling the
+  host it opens a **single-hop SSH ProxyJump** to a bastion, and the on-bastion
+  relay daemon forwards to permitted internal targets. At the transport level that
+  is one `ssh -J` (or one paramiko `direct-tcpip` channel), so it drops into every
+  SSH path the controller already has rather than adding a second connection model.
+- **All four SSH paths route**, not three: dispatch, key enrollment, the terminal,
+  and SFTP. A relay that reached only some of them would be worse than none — the
+  operator would see hosts working and have no way to tell which path silently went
+  around the jump box.
+- **Both hops stay host-key-verified.** The bastion is TOFU-pinned through the same
+  `known_hosts` store as everything else, and the tunnelled target is then verified
+  over the channel by the outer client.
+- **Which hosts route**: explicit per-host opt-in (a `relay` field on the host
+  record) or an auto-route allowlist of the CIDRs / domain suffixes *behind* the
+  bastion. With no allowlist set, only explicit opt-in routes — turning the relay on
+  never silently re-routes a fleet that was already reachable directly.
+- **Configured on Host Enrollment → Relay / Bastion**, next to the rest of getting
+  hosts managed. Settings are stored in the DB with the matching `SYSIBLE_RELAY_*`
+  environment variables as the fallback, so a compose deployment can bake a relay in
+  and the console can still point elsewhere without a recreate. A blank relay host
+  *is* "off" — there is no separate enable switch to get out of sync with it.
+- **Saving a relay that cannot work is refused**, not stored. Everywhere else a bad
+  relay config degrades to "connect directly", which is safe at connect time; at
+  save time that same behaviour means quietly reaching hosts *around* the bastion an
+  operator believes they are going through. Rejected: a loopback relay host, this
+  controller's own address, a `.pub` path where the private key belongs, and
+  anything that would not form a valid SSH endpoint.
+- The Windows/Linux **bastion setup scripts ship in the build** and are served from
+  `/api/relay/bastion-script`, so the jump box is never configured by hand, and the
+  console shows the relay public key to authorize on it. The controller's relay key
+  is minted on first save and **never regenerated** — a bastion has already
+  authorized the public half.
+- Shared with the Enterprise edition: same relay id, same config field names, same
+  bastion scripts, so one runbook covers both.
+
+
 ### Removed — Fleet Performance and Network Topology views
 
 - **Fleet Performance** (time-series charts + per-host snapshot drill-down) and

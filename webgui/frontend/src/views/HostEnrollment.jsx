@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { confirmDialog } from "../confirmDialog.js";
 
@@ -333,7 +333,8 @@ export default function HostEnrollment() {
 
   const reachable = `https://${cfg.address || "<controller>"}:${curlPort}`;
 
-  const TABS = [["hosts", "Enrolled Hosts"], ["enroll", "Enroll a Host"], ["portal", "Webserver Portal"]];
+  const TABS = [["hosts", "Enrolled Hosts"], ["enroll", "Enroll a Host"],
+                ["relay", "Relay / Bastion"], ["portal", "Webserver Portal"]];
 
   return (
     <div>
@@ -596,6 +597,11 @@ export default function HostEnrollment() {
       </div>
       )}
 
+      {/* ============================ TAB: RELAY / BASTION ============================ */}
+      {/* Administered next to enrollment rather than under Settings: the relay is how
+          a host is REACHED, so it belongs with the rest of "getting hosts managed". */}
+      {tab === "relay" && <RelayConfig />}
+
       {/* ============================ TAB: WEBSERVER PORTAL ============================ */}
       {tab === "portal" && (
       <div>
@@ -740,6 +746,143 @@ export default function HostEnrollment() {
         </div>
       </div>
       )}
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Sysible Relay — the bastion / jump-box transport.
+//
+// Reach hosts the controller can't dial directly: it opens a single-hop SSH
+// ProxyJump to the bastion and the on-bastion relay daemon forwards to permitted
+// internal targets. Blank relay host = off; there is no separate enable switch to
+// get out of sync with it.
+//
+// The controller REFUSES a configuration that can't work rather than storing it,
+// so a rejected save shows the reason here instead of silently reaching hosts
+// around the bastion.
+// ---------------------------------------------------------------------------
+function RelayConfig() {
+  const [cfg, setCfg] = useState(null);        // null = loading
+  const [draft, setDraft] = useState({});
+  const [pubkey, setPubkey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const load = useCallback(() => {
+    api.getRelay()
+      .then((d) => { setCfg(d.relay || {}); setPubkey(d.public_key || ""); setDraft({}); })
+      .catch((e) => setErr(e.message));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const val = (k) => (k in draft ? draft[k] : (cfg?.[k] ?? ""));
+  const set = (k, v) => setDraft((m) => ({ ...m, [k]: v }));
+  const dirty = Object.keys(draft).length;
+
+  async function save() {
+    setErr(""); setMsg(""); setBusy(true);
+    try {
+      const d = await api.setRelay(draft);
+      setCfg(d.relay || {}); setPubkey(d.public_key || ""); setDraft({});
+      setMsg((d.relay?.relay_host)
+        ? `Saved — hosts route through ${d.relay.relay_host}.`
+        : "Saved — the relay is off; every host is reached directly.");
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+
+  if (cfg === null) return <div className="empty"><span className="spin" /></div>;
+
+  const scriptUrl = (os) => `/api/relay/bastion-script?os=${os}`;
+
+  return (
+    <div style={{ maxWidth: 760 }}>
+      <div className="he-section-head" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
+        <h3>Relay / Bastion</h3>
+        <span className={"badge" + (cfg.relay_host ? " ok" : "")}>
+          {cfg.relay_host ? "Routing through " + cfg.relay_host : "Off"}
+        </span>
+      </div>
+      <p className="faint" style={{ marginTop: 0 }}>
+        The jump box this controller reaches hosts <strong>THROUGH</strong>. Leave the
+        relay host blank to route nothing. A host goes through the relay when it opts
+        in, or when it matches the auto-route allowlist below.
+      </p>
+
+      <fieldset className="tool-group-box"><legend>Relay endpoint</legend>
+        <label className="field"><span>Relay / bastion host</span>
+          <input value={val("relay_host")} placeholder="bastion.example.com"
+                 onChange={(e) => set("relay_host", e.target.value)} /></label>
+        <p className="faint" style={{ fontSize: 12, marginTop: -4 }}>
+          The BASTION — the machine where you ran install-*-bastion. Not this
+          controller's own address.
+        </p>
+        <label className="field"><span>Relay SSH user</span>
+          <input value={val("relay_user")} placeholder="sysible-relay"
+                 onChange={(e) => set("relay_user", e.target.value)} /></label>
+        <label className="field"><span>Relay SSH port</span>
+          <input type="number" value={val("relay_port")} placeholder="22"
+                 onChange={(e) => set("relay_port", e.target.value)} /></label>
+        <label className="field"><span>Relay identity key path (private)</span>
+          <input value={val("relay_identity")} placeholder="/data/relay_keys/relay_ed25519"
+                 onChange={(e) => set("relay_identity", e.target.value)} /></label>
+        <p className="faint" style={{ fontSize: 12, marginTop: -4 }}>
+          The PRIVATE key, not the .pub. It's created for you on first save.
+        </p>
+      </fieldset>
+
+      <fieldset className="tool-group-box"><legend>Which hosts route through it</legend>
+        <label className="field"><span>Auto-route allowlist (CIDRs / domain suffixes)</span>
+          <input value={val("route_allowlist")} placeholder="10.20.0.0/16, .internal.example.com"
+                 onChange={(e) => set("route_allowlist", e.target.value)} /></label>
+        <p className="faint" style={{ fontSize: 12, marginTop: -4 }}>
+          The network(s) <strong>behind</strong> the bastion — normally a different
+          subnet than this controller's own. Don't list the controller's own subnet:
+          those hosts are already reachable directly. Leave blank to require explicit
+          per-host opt-in.
+        </p>
+        <label className="field"><span>Relay OS</span>
+          <select value={val("relay_os") || "auto"} onChange={(e) => set("relay_os", e.target.value)}>
+            <option value="auto">auto</option>
+            <option value="linux">linux</option>
+            <option value="windows">windows</option>
+          </select></label>
+      </fieldset>
+
+      <div className="row" style={{ gap: 8, alignItems: "center" }}>
+        <button className="btn" disabled={busy || dirty === 0} onClick={save}>
+          {busy ? <span className="spin" /> : "Save"}</button>
+        {dirty > 0 && <span className="faint" style={{ fontSize: 12 }}>
+          {dirty} unsaved change{dirty === 1 ? "" : "s"}</span>}
+      </div>
+      {msg && <div className="ok-text" style={{ marginTop: 10 }}>{msg}</div>}
+      {err && <div className="error-box" style={{ marginTop: 10 }} role="alert">{err}</div>}
+
+      <fieldset className="tool-group-box" style={{ marginTop: 18 }}>
+        <legend>Set up the bastion</legend>
+        <p className="faint" style={{ marginTop: 0 }}>
+          Run the setup script <strong>on the jump box</strong> — it creates the
+          least-privilege relay account and installs the forwarding daemon. Then
+          authorize the key below so this controller can connect.
+        </p>
+        <div className="row" style={{ gap: 8 }}>
+          <a className="btn ghost sm" href={scriptUrl("linux")}>Linux setup script</a>
+          <a className="btn ghost sm" href={scriptUrl("windows")}>Windows setup script</a>
+        </div>
+        <div style={{ marginTop: 12 }}>
+          <span className="faint" style={{ fontSize: 12 }}>
+            This controller's relay public key — add it to the relay account's
+            authorized_keys on the bastion:
+          </span>
+          <pre className="mono" style={{ whiteSpace: "pre-wrap", wordBreak: "break-all",
+                                         marginTop: 6 }}>
+            {pubkey || "(no key yet — save a relay host and it is created for you)"}
+          </pre>
+        </div>
+      </fieldset>
     </div>
   );
 }

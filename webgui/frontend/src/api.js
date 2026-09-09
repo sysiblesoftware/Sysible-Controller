@@ -197,6 +197,9 @@ export const api = {
     req("/api/enroll-token/reissue", { method: "POST", body: { host_id: hostId } }),
   // Runaway kill-switch: pause/resume all new agent enrollment (superuser).
   enrollmentPause: () => req("/api/enrollment-pause"),
+  // Sysible Relay (bastion / jump-box transport) — superuser only.
+  getRelay: () => req("/api/relay"),
+  setRelay: (updates) => req("/api/relay", { method: "POST", body: updates }),
   setEnrollmentPause: (paused) =>
     req("/api/enrollment-pause", { method: "POST", body: { paused } }),
   enrollAllowlist: () => req("/api/enroll-allowlist"),

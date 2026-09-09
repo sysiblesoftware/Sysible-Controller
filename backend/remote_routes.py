@@ -322,6 +322,136 @@ def _new_ssh_client():
     return client
 
 
+# =========================================================
+# RELAY / BASTION TRANSPORT (Sysible Relay)
+#
+# A host behind a jump box is reached by tunnelling through the bastion rather
+# than dialling it directly. At the transport level that is one SSH ProxyJump,
+# so it drops into the paths below without a second connection model: `ssh -J`
+# for the subprocess path, a paramiko `direct-tcpip` channel for the rest.
+#
+# BOTH HOPS ARE PINNED. The bastion is TOFU host-key-verified through the same
+# known_hosts store as everything else here (_new_ssh_client), and the tunneled
+# target is then verified over the channel by the outer client. Routing through
+# a relay does not weaken host-key verification at either end.
+#
+# Which hosts route is decided by backend.relay — explicit per-host opt-in, or
+# the auto-route allowlist of the networks behind the bastion.
+# =========================================================
+def _host_proxy(host):
+    """The validated ProxyJump spec for reaching ``host`` through a relay/jump
+    box, or ``None`` when it's directly reachable. Never raises — a relay fault
+    degrades to a direct connection rather than breaking transport for hosts that
+    never needed the relay."""
+    try:
+        from backend import relay
+        return relay.resolve_ssh_proxy(host)
+    except Exception:
+        return None
+
+
+def _parse_jump_hop(hop):
+    """Split a validated ``[user@]host[:port]`` jump hop into ``(user, host,
+    port)``. ``host`` may be a bracketed IPv6 literal. Because the hop is
+    pre-validated by backend.relay.valid_jump, this parse is total and safe."""
+    user = None
+    if "@" in hop:
+        user, hop = hop.split("@", 1)
+    port = 22
+    if hop.startswith("["):                      # [ipv6](:port)
+        end = hop.find("]")
+        host = hop[1:end]
+        rest = hop[end + 1:]
+        if rest.startswith(":"):
+            port = int(rest[1:])
+    elif ":" in hop:
+        host, p = hop.rsplit(":", 1)
+        port = int(p)
+    else:
+        host = hop
+    return user, host, port
+
+
+def _proxy_sock(proxy, dest_ip, dest_port=22):
+    """Open a paramiko ``direct-tcpip`` channel to ``dest_ip:dest_port`` THROUGH
+    the bastion described by the validated ``proxy`` dict, for use as
+    ``SSHClient.connect(sock=)``. The jump client rides on the returned channel as
+    ``sysible_jump_client`` so the caller can tear it down."""
+    user, host, port = _parse_jump_hop(proxy["jump"].split(",")[0])
+    jclient = _new_ssh_client()
+    try:
+        jclient.connect(
+            host, port=port, username=(user or "root"), timeout=10,
+            banner_timeout=15, auth_timeout=15,
+            key_filename=proxy.get("identity") or str(CONTROLLER_KEY_PATH),
+        )
+        chan = jclient.get_transport().open_channel(
+            "direct-tcpip", (dest_ip, dest_port), ("127.0.0.1", 0), timeout=10)
+    except Exception:
+        # The bastion may have connected before the channel open failed, leaving a
+        # live SSH session that would otherwise leak a socket and a transport thread.
+        try:
+            jclient.close()
+        except Exception:
+            pass
+        raise
+    chan.sysible_jump_client = jclient
+    return chan
+
+
+def _ssh_connect(client, ip, proxy=None, **connect_kwargs):
+    """``client.connect(ip, ...)``, optionally tunnelled through a relay.
+
+    On the relay path the outer client's own ``close`` is wrapped so it also
+    closes the jump client. That is deliberate: this module closes clients from
+    a dozen places, and a per-call-site teardown would leak a whole SSH session
+    (socket + transport thread) from whichever one got missed. Raising leaves
+    nothing half-open — the jump client is closed before the exception
+    propagates."""
+    # Bound the banner and auth phases too, not just the TCP connect: a host that
+    # completes the TCP handshake then stalls at the banner/kex/auth (firewalled-
+    # but-listening, overloaded sshd, TCP black-hole) would otherwise tie up a
+    # worker for paramiko's much longer defaults.
+    connect_kwargs.setdefault("banner_timeout", 15)
+    connect_kwargs.setdefault("auth_timeout", 15)
+    if not proxy:
+        client.connect(ip, **connect_kwargs)
+        return
+    sock = _proxy_sock(proxy, ip, 22)
+    jump = getattr(sock, "sysible_jump_client", None)
+    connect_kwargs["sock"] = sock
+    try:
+        client.connect(ip, **connect_kwargs)
+    except Exception:
+        _close_jump(jump)
+        raise
+    _attach_jump(client, jump)
+
+
+def _attach_jump(client, jump):
+    """Make ``client.close()`` also close the relay hop underneath it."""
+    if jump is None:
+        return
+    client._sysible_jump_client = jump
+    _orig_close = client.close
+
+    def _close_both():
+        try:
+            _orig_close()
+        finally:
+            _close_jump(jump)
+
+    client.close = _close_both
+
+
+def _close_jump(jump):
+    try:
+        if jump is not None:
+            jump.close()
+    except Exception:
+        pass
+
+
 @router.get("/controller-key")
 def get_controller_key():
     """Public key text only - safe to display/copy in the GUI for
@@ -584,7 +714,10 @@ def add_host(body: AddHostRequest):
             "ip": body.ip,
             "user": body.user,
             "key_path": str(CONTROLLER_KEY_PATH),
-            "environment": body.environment or ""
+            "environment": body.environment or "",
+            # Only stored when set: an absent key means "decide by the relay's
+            # auto-route allowlist", which is not the same as an explicit "no".
+            **({"relay": body.relay} if body.relay else {}),
         }
         save_hosts(hosts)
 
@@ -742,13 +875,18 @@ def enroll_ssh(body: EnrollSSHRequest):
         "chmod 600 ~/.ssh/authorized_keys"
     )
 
+    # A host being enrolled can itself be behind the bastion, so resolve the relay
+    # from the values the request carries (there is no host record yet).
+    proxy = _host_proxy({"name": getattr(body, "name", None), "ip": body.ip,
+                         "user": body.username,
+                         "relay": getattr(body, "relay", None)})
+
     try:
-        client.connect(
-            body.ip,
+        _ssh_connect(
+            client, body.ip, proxy=proxy,
             username=body.username,
             password=body.password,
             timeout=10,
-            banner_timeout=15, auth_timeout=15,
         )
 
         stdin, stdout, stderr = client.exec_command(install_cmd)
@@ -790,7 +928,8 @@ def enroll_ssh(body: EnrollSSHRequest):
             "ip": body.ip,
             "user": body.username,
             "key_path": str(CONTROLLER_KEY_PATH),
-            "environment": body.environment or ""
+            "environment": body.environment or "",
+            **({"relay": body.relay} if body.relay else {}),
         }
         save_hosts(hosts)
 
@@ -812,19 +951,33 @@ _SSH_PRIV_ERR = re.compile(
     re.I)
 
 
-def _ssh_argv(key_path, target, remote_cmd):
-    return [
+def _ssh_argv(key_path, target, remote_cmd, proxy=None):
+    argv = [
         "ssh", "-i", key_path,
         "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", f"UserKnownHostsFile={KNOWN_HOSTS_PATH}",
         "-o", "HashKnownHosts=no", "-o", "ConnectTimeout=10",
+    ]
+    if proxy:
+        # Route through the bastion. `proxy` comes from backend.relay, which
+        # guarantees `jump` is `[user@]host[:port]` with no shell metacharacters
+        # and no leading dash, so it can't smuggle an extra ssh option. `-J` is a
+        # first-class option; the bastion is host-key-verified the same way
+        # (accept-new against our known_hosts). An optional relay identity is
+        # added for the jump hop only.
+        argv += ["-J", proxy["jump"]]
+        if proxy.get("identity"):
+            argv += ["-o", f"ProxyJump={proxy['jump']}",
+                     "-o", f"IdentityFile={proxy['identity']}"]
+    argv += [
         # "--" ends option parsing so a `target` like "-oProxyCommand=..." can't be
         # read as an ssh option (which would run code on THIS controller as root).
         # Defence-in-depth behind the charset validation on user/ip at ingest — the
         # host record's user@ip flows straight into `target` here.
         "--", target, remote_cmd,
     ]
+    return argv
 
 
 def _as_admin_remote(ssh_user: str, admin: str, cmd: str, elevate=False, password=False) -> str:
@@ -928,12 +1081,17 @@ def exec_remote(name: str, body: ExecRequest, request: Request):
     # Share the one TOFU trust store with the paramiko paths above.
     _ensure_known_hosts_file()
 
+    # Relay routing: if this host sits behind a jump box, tunnel through it.
+    # None => connect directly, exactly as before.
+    proxy = _host_proxy({"name": name, "ip": host.get("ip"), "user": ssh_user,
+                         "relay": host.get("relay")})
+
     def _run(remote_cmd, stdin=None):
         # errors="replace": an SSH host can emit non-UTF-8 bytes (a binary/log
         # cat, a locale-encoded message). Strict decoding (the text=True default)
         # would raise UnicodeDecodeError and 500 the whole dispatch; replace keeps
         # it a normal result. Matches the other decode sites in this module.
-        return subprocess.run(_ssh_argv(key_path, target, remote_cmd),
+        return subprocess.run(_ssh_argv(key_path, target, remote_cmd, proxy=proxy),
                               capture_output=True, text=True, errors="replace",
                               input=stdin, timeout=60)
 
@@ -1540,9 +1698,8 @@ def open_terminal(name: str, request: Request):
     client = _new_ssh_client()
     session_id = uuid.uuid4().hex
     try:
-        connect_kwargs.setdefault("banner_timeout", 15)
-        connect_kwargs.setdefault("auth_timeout", 15)
-        client.connect(ip, username=ssh_user, timeout=10, **connect_kwargs)
+        _ssh_connect(client, ip, proxy=_host_proxy({**host, "name": name}),
+                     username=ssh_user, timeout=10, **connect_kwargs)
         # Keepalive on the interactive session: an idle PTY whose TCP is silently
         # dropped (NAT timeout, network blip) would otherwise linger until the 180s
         # idle reaper. Server-alive probes surface a dead peer within ~30s.
@@ -1774,12 +1931,11 @@ def _connect_sftp(name: str):
     client = _new_ssh_client()
 
     try:
-        client.connect(
-            host["ip"],
+        _ssh_connect(
+            client, host["ip"], proxy=_host_proxy({**host, "name": name}),
             username=host.get("user", "root"),
             key_filename=key_path,
             timeout=10,
-            banner_timeout=15, auth_timeout=15,
         )
         sftp = client.open_sftp()
     except paramiko.BadHostKeyException as e:

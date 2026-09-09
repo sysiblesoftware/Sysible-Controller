@@ -439,6 +439,68 @@ def set_enrollment_pause_route(body: dict = Body(...),
     return get_enrollment_control()
 
 
+# =========================================================
+# SYSIBLE RELAY — the bastion / jump-box transport.
+#
+# Configure which jump box the controller reaches segmented hosts THROUGH, hand
+# an admin the setup script for the bastion, and show the public key the bastion
+# has to authorize. The transport itself lives in backend/relay.py and is applied
+# in backend/remote_routes.py; these are the console's controls for it.
+# =========================================================
+@app.get("/admin/relay", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def get_relay_route():
+    """The effective relay configuration plus the public key to authorize on the
+    bastion. No secret is returned — only the PATH of the private key, never the
+    key itself."""
+    from backend import relay
+    cfg = relay.config()
+    return {"relay": cfg, "configured": relay.configured(),
+            "relay_id": relay.RELAY_ID, "public_key": relay.public_key()}
+
+
+@app.post("/admin/relay", dependencies=[Depends(require_api_key), Depends(require_superuser)])
+def set_relay_route(body: dict = Body(...), acting: str = Depends(acting_admin_name)):
+    """Point the controller at a bastion, or clear it (blank relay host = off).
+
+    Validation REFUSES a configuration that cannot work rather than storing it.
+    Everywhere else a bad relay config degrades to "connect directly", which is
+    safe at connect time; here that same behaviour would mean quietly reaching
+    hosts AROUND the bastion an operator believes they are going through."""
+    from backend import relay
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Expected an object")
+    try:
+        cfg = relay.save_config(body, actor=acting)
+    except relay.RelayConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    # Mint the identity key now if it doesn't exist, so the operator can copy the
+    # public half straight into the bastion instead of hunting for ssh-keygen.
+    # Never regenerates an existing key.
+    relay.ensure_identity()
+    log_admin_audit("relay_configured", acting,
+                    "relay host -> " + (cfg.get("relay_host") or "(cleared)"))
+    return {"relay": cfg, "configured": relay.configured(),
+            "public_key": relay.public_key()}
+
+
+@app.get("/api/relay/bastion-script")
+def relay_bastion_script_route(os: str = ""):
+    """PUBLIC download of the jump-box setup script, so the bastion can fetch it
+    with one line instead of the operator copying it over. Public code only — it
+    holds no secrets. Query: os = 'windows' | 'linux'."""
+    from backend import relay
+    fam = (os or "").strip().lower()
+    if fam not in ("windows", "linux"):
+        raise HTTPException(status_code=400, detail="os must be 'windows' or 'linux'")
+    text = relay.bastion_script(fam)
+    if not text:
+        raise HTTPException(status_code=404,
+                            detail=f"This build ships no bastion setup script for '{fam}'.")
+    name = "install-windows-bastion.ps1" if fam == "windows" else "install-linux-bastion.sh"
+    return Response(content=text, media_type="text/plain; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 @app.get("/admin/enroll-allowlist", dependencies=[Depends(require_api_key), Depends(require_superuser)])
 def get_enroll_allowlist_route():
     """The enrollment source-IP allowlist. Empty == all sources allowed (a valid

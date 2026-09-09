@@ -20,11 +20,16 @@ def _validate(pattern, value, field):
     return v
 
 
+# `relay` is the per-host opt-in for the bastion transport: set it and this host is
+# reached THROUGH the jump box (backend.relay.resolve_ssh_proxy) instead of directly.
+# Optional because the auto-route allowlist covers the common case — this is for a
+# host that needs the relay but doesn't match it.
 class AddHostRequest(BaseModel):
     name: str
     ip: str
     user: str = "root"
     environment: str = ""
+    relay: Optional[str] = None      # relay opt-in; route this host via the jump box
 
     @field_validator("name")
     @classmethod
@@ -52,6 +57,7 @@ class EnrollSSHRequest(BaseModel):
     username: str = "root"
     password: str
     environment: str = ""
+    relay: Optional[str] = None      # relay opt-in; enroll + manage via the jump box
 
     @field_validator("name")
     @classmethod

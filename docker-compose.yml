@@ -59,6 +59,17 @@ services:
       # variables sat in .env and never reached the process.
       SYSIBLE_FLASHBACK_URL: "${SYSIBLE_FLASHBACK_URL:-}"
       SYSIBLE_FLASHBACK_AGENT_TOKEN: "${SYSIBLE_FLASHBACK_AGENT_TOKEN:-}"
+      # Sysible Relay (bastion / jump-box transport). These are the FALLBACK for
+      # each field — the console's Host Enrollment -> Relay / Bastion tab stores
+      # them in the DB and that wins, so an operator can point the controller at a
+      # different bastion without editing this file or recreating the container.
+      # Set them here to bake a relay into a fleet deployment.
+      SYSIBLE_RELAY_HOST: "${SYSIBLE_RELAY_HOST:-}"
+      SYSIBLE_RELAY_USER: "${SYSIBLE_RELAY_USER:-}"
+      SYSIBLE_RELAY_PORT: "${SYSIBLE_RELAY_PORT:-}"
+      SYSIBLE_RELAY_IDENTITY: "${SYSIBLE_RELAY_IDENTITY:-}"
+      SYSIBLE_RELAY_ALLOWLIST: "${SYSIBLE_RELAY_ALLOWLIST:-}"
+      SYSIBLE_RELAY_OS: "${SYSIBLE_RELAY_OS:-}"
     extra_hosts:
       # Reach services published on the host (Flashback's agent API). Linux needs
       # this mapping explicitly; it is a no-op where the name already resolves.

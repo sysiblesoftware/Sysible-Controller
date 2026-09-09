@@ -247,6 +247,17 @@ def disenroll_agent(host_id: str, purge_token: bool = False):
     return _request("DELETE", path)
 
 
+def get_relay_config():
+    """The relay/bastion configuration plus the public key the bastion authorizes."""
+    return _request("GET", "/admin/relay")
+
+
+def set_relay_config(updates: dict):
+    """Point the controller at a bastion, or clear it. The controller REFUSES a
+    configuration that cannot work rather than silently routing nothing."""
+    return _request("POST", "/admin/relay", json=dict(updates or {}))
+
+
 def get_enrollment_pause():
     """Whether new agent enrollment is currently paused (runaway kill-switch)."""
     return _request("GET", "/admin/enrollment-pause")

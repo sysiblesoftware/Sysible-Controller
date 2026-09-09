@@ -515,6 +515,12 @@ def set_sudo_password_required(host_id: str, required: bool):
                     json={"required": bool(required)})
 
 
+def get_config_poll_times():
+    """{host_id: last_config_poll} — when each agent last asked for config-backup
+    work. None for an agent that never has (a build without config backup)."""
+    return _request("GET", "/agents/config-poll-times")
+
+
 def request_config_capture(host_id: str):
     """Ask a host to snapshot its config on its next check-in ("Back up now")."""
     return _request("POST", f"/agents/{host_id}/request-capture")

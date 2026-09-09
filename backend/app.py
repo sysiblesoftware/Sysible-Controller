@@ -30,6 +30,8 @@ from backend.db import (
     revoke_agent,
     is_agent_revoked,
     agent_exists,
+    mark_config_poll,
+    get_config_poll_times,
     queue_task,
     fetch_pending_tasks,
     submit_task_result,
@@ -1946,6 +1948,18 @@ _CAPTURE_REQUESTS: set = set()
 _CAPTURE_LOCK = threading.Lock()
 
 
+@app.get("/agents/config-poll-times", dependencies=[Depends(require_api_key)])
+def agent_config_poll_times():
+    """When each agent last asked for config-backup work.
+
+    The console uses this to explain a host that never captures. An agent that
+    has NEVER polled is running a build without config backup — which is
+    otherwise indistinguishable from "its next check-in hasn't come round yet",
+    and that ambiguity is the whole reason "Back up now" could look like it did
+    nothing."""
+    return {"hosts": get_config_poll_times()}
+
+
 @app.post("/agents/{host_id}/request-capture", dependencies=[Depends(require_api_key)])
 def request_config_capture(host_id: str):
     """Ask a host to snapshot its config on its next poll."""
@@ -1965,6 +1979,11 @@ def agent_config_restores(host_id: str,
     makes, so on-demand backup needs no new channel and no inbound reachability."""
     from backend import flashback
     verify_agent(host_id, x_agent_secret or "")
+    # Record that this agent asks for config-backup work at all. An agent whose
+    # build predates config backup never reaches this line, and that is the only
+    # way the console can tell "wait for the next check-in" from "this host will
+    # never capture until its agent is updated".
+    mark_config_poll(host_id)
     with _CAPTURE_LOCK:
         wanted = host_id in _CAPTURE_REQUESTS
         _CAPTURE_REQUESTS.discard(host_id)     # hand it over exactly once

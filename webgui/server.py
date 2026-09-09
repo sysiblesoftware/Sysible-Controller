@@ -1000,6 +1000,15 @@ def hosts(user: str = Depends(require_login)):
     except Exception:
         last_seen = {}
 
+    # When each agent last asked for config-backup work. Flashback reads this to
+    # explain a host that never captures: an agent that has NEVER polled is
+    # running a build without config backup, which is otherwise indistinguishable
+    # from "the next check-in hasn't come round yet".
+    try:
+        config_poll = api.get_config_poll_times() or {}
+    except Exception:
+        config_poll = {}
+
     # Merge a read-only "critical" flag from the cached posture sweep so the host
     # picker can flag hosts with an active sev-1 finding. Cache-only: we never
     # force a sweep here, so a cold posture cache simply leaves `critical` null
@@ -1054,6 +1063,10 @@ def hosts(user: str = Depends(require_login)):
             "has_agent": e["kind"] in ("agent", "merged"),
             "last_seen": ls,
             "online": online,
+            # None = this agent has never asked for config-backup work (its build
+            # predates it). Absent meaning is deliberate: 0 would read as "polled
+            # at the epoch".
+            "last_config_poll": config_poll.get(agent_id) if agent_id else None,
             # null when posture hasn't been gathered for this host yet.
             "critical": (len(reasons) > 0) if pc else None,
             "critical_reasons": reasons,

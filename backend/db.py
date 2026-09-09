@@ -146,6 +146,20 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
+    # Migration: when this agent last asked the controller for config-backup work.
+    #
+    # This is a DIAGNOSTIC, and it earns its column. Config backup is the one
+    # feature whose failure is invisible: the console says "requested — the host
+    # captures on its next check-in", and if the agent's build predates config
+    # backup it simply never asks, so nothing happens and there is nothing to
+    # look at. An agent that has NEVER polled here is proof of exactly that, and
+    # it is the difference between "wait a minute" and "update this host's agent".
+    # Written by /agents/{id}/config-restores; never by the heartbeat.
+    try:
+        cur.execute("ALTER TABLE agents ADD COLUMN last_config_poll REAL")
+    except sqlite3.OperationalError:
+        pass
+
     # Migration: per-host sudo mode. 0 = NOPASSWD (agent uses `sudo -n`,
     # default); 1 = the host forbids passwordless sudo, so the GUI supplies
     # the operator's sudo password for dispatched commands and the agent
@@ -1047,6 +1061,34 @@ def get_all_host_health():
             "hyp": r["hyp"], "vms": r["vms"], "vm_names": vm_names,
         }
     return out
+
+
+def mark_config_poll(host_id, ts=None):
+    """Record that this agent just asked for config-backup work. Best-effort: a
+    diagnostic must never be able to fail the poll it is describing."""
+    try:
+        conn = _connect()
+        cur = conn.cursor()
+        cur.execute("UPDATE agents SET last_config_poll=? WHERE host_id=?",
+                    (ts if ts is not None else time.time(), host_id))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def get_config_poll_times():
+    """{host_id: last_config_poll or None} for every agent. None means the agent
+    has never asked for config-backup work — i.e. its build predates it."""
+    conn = _connect()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT host_id, last_config_poll FROM agents")
+        return {r[0]: r[1] for r in cur.fetchall()}
+    except Exception:
+        return {}
+    finally:
+        conn.close()
 
 
 def get_agent_secret(host_id):

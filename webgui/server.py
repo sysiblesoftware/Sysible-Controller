@@ -2689,6 +2689,14 @@ def set_host_sudo(host_id: str, body: SudoRequiredRequest, request: Request,
     return _wrap(lambda: _as_admin(request, lambda: api.set_sudo_password_required(host_id, body.required)))
 
 
+@app.post("/api/host/{host_id}/backup-now")
+def host_backup_now(host_id: str, request: Request,
+                    user: str = Depends(require_login)):
+    """Ask one host to capture its config now. Flashback's console calls this;
+    the host picks the request up on its next config-backup poll."""
+    return _wrap(lambda: _as_admin(request, lambda: api.request_config_capture(host_id)))
+
+
 @app.get("/api/environment-sudo-defaults")
 def env_sudo_defaults(user: str = Depends(require_login)):
     return _wrap(lambda: api.get_environment_sudo_defaults())

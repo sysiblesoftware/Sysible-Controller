@@ -1863,13 +1863,39 @@ def agent_config_snapshot(host_id: str, body: dict = Body(...),
     return _flashback_or_503(flashback.post_snapshot, host_id, label, files)
 
 
+# On-demand capture. An operator pressing "Back up now" cannot reach the host —
+# agents are outbound-only — so the request is parked here and handed to the agent
+# on its next config-backup poll (within a minute). Deliberately in memory: it is
+# a transient wish, and losing it across a controller restart just means the next
+# scheduled capture covers it, which is not worth a schema change.
+_CAPTURE_REQUESTS: set = set()
+_CAPTURE_LOCK = threading.Lock()
+
+
+@app.post("/agents/{host_id}/request-capture", dependencies=[Depends(require_api_key)])
+def request_config_capture(host_id: str):
+    """Ask a host to snapshot its config on its next poll."""
+    if not agent_exists(host_id):
+        raise HTTPException(status_code=404, detail="Unknown host_id")
+    with _CAPTURE_LOCK:
+        _CAPTURE_REQUESTS.add(host_id)
+    return {"host_id": host_id, "queued": True,
+            "detail": "The host will capture on its next check-in (within a minute)."}
+
+
 @app.get("/agents/{host_id}/config-restores")
 def agent_config_restores(host_id: str,
                           x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
-    """Restores an operator queued for THIS host in the Flashback console."""
+    """Restores an operator queued for THIS host in the Flashback console, plus
+    whether someone asked for a capture. Both ride the poll the agent already
+    makes, so on-demand backup needs no new channel and no inbound reachability."""
     from backend import flashback
     verify_agent(host_id, x_agent_secret or "")
-    return {"restores": _flashback_or_503(flashback.pending_restores, host_id)}
+    with _CAPTURE_LOCK:
+        wanted = host_id in _CAPTURE_REQUESTS
+        _CAPTURE_REQUESTS.discard(host_id)     # hand it over exactly once
+    return {"restores": _flashback_or_503(flashback.pending_restores, host_id),
+            "capture_requested": wanted}
 
 
 @app.get("/agents/{host_id}/config-restores/{restore_id}/payload")

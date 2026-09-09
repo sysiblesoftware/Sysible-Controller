@@ -504,6 +504,11 @@ def set_sudo_password_required(host_id: str, required: bool):
                     json={"required": bool(required)})
 
 
+def request_config_capture(host_id: str):
+    """Ask a host to snapshot its config on its next check-in ("Back up now")."""
+    return _request("POST", f"/agents/{host_id}/request-capture")
+
+
 def get_environment_sudo_defaults():
     return _request("GET", "/environments/sudo-defaults").get("defaults", {})
 

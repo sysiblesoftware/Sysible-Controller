@@ -1531,14 +1531,22 @@ def _d3_poll_restores(state):
     if r.status_code >= 400:
         return
     try:
-        items = (r.json() or {}).get("restores") or []
+        body = r.json() or {}
     except Exception:
         return
-    for item in items:
+    for item in body.get("restores") or []:
         try:
             _d3_apply_restore(state, item)
         except Exception as e:
             print(f"[agent] restore {item.get('id')}: {e}")
+    # "Back up now" from the console. It rides this poll rather than a new
+    # channel because an agent is outbound-only — nothing can reach in to ask.
+    if body.get("capture_requested"):
+        print("[agent] config snapshot requested from the console — capturing now")
+        try:
+            _d3_send_snapshot(state)
+        except Exception as e:
+            print("[agent] requested snapshot failed:", e)
 
 
 def _d3_loop(state):

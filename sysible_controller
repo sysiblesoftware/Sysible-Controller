@@ -1173,9 +1173,13 @@ if [[ "$IN_CONTAINER" == "1" ]]; then
       echo "Or with plain docker on the host:" >&2
       case "$1" in
         update)
-          echo "  # pull the newest image and recreate, via the compose file it was started from:" >&2
+          # The reference stack BUILDS the image from source, so `pull` is a no-op
+          # and `up -d` alone would recreate the same old image — the update has to
+          # be a --build. Keep `pull` for a registry deploy; it just does nothing here.
+          echo "  # rebuild and recreate, via the compose file it was started from:" >&2
           echo "  cfg=\$(docker inspect -f '{{ index .Config.Labels \"com.docker.compose.project.config_files\"}}' sysible-controller)" >&2
-          echo "  docker compose -f \"\$cfg\" pull && docker compose -f \"\$cfg\" up -d" >&2 ;;
+          echo "  docker compose -f \"\$cfg\" pull || true" >&2
+          echo "  docker compose -f \"\$cfg\" up -d --build" >&2 ;;
         destroy)
           echo "  docker rm -f sysible-controller        # add: docker volume rm sysible-data  to delete data" >&2 ;;
         *)

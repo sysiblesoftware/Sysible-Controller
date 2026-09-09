@@ -214,10 +214,34 @@ _slop_seed_cross_app_env() {
   [[ -n "$port" ]] || port=8770
   # host.docker.internal, not loopback: the Controller runs in a container and
   # Flashback publishes on the HOST. Its compose maps that name to the gateway.
+  local changed=0
   _seed_kv "$cenv" SYSIBLE_FLASHBACK_URL "http://host.docker.internal:$port" \
-    && _ok "Seeded SYSIBLE_FLASHBACK_URL into $cenv"
+    && { changed=1; _ok "Seeded SYSIBLE_FLASHBACK_URL into $cenv"; }
   _seed_kv "$cenv" SYSIBLE_FLASHBACK_AGENT_TOKEN "$tok" \
-    && _ok "Seeded the Flashback agent token into $cenv (config backup can now reach it)"
+    && { changed=1; _ok "Seeded the Flashback agent token into $cenv"; }
+
+  # A value written to .env is not a value the app HAS: docker reads .env when it
+  # creates a container, so the Controller keeps running with the old environment
+  # until it is recreated. Seeding without this was the same lie as everything
+  # else in this feature's history — the setting existed and never reached the
+  # process, and the operator was told it had been wired up.
+  if [[ $changed -eq 1 ]]; then
+    _recreate_product controller \
+      || _warn "  seeded $cenv, but could not recreate the Controller — run 'sysible_ctl controller update' so it picks the new values up."
+  fi
+}
+
+# Recreate a product from the images it already has, so it re-reads its .env.
+# No --build: this exists for an environment change, and a rebuild would cost
+# minutes for nothing.
+_recreate_product() {
+  local p="$1" dir cfg
+  dir="$(_product_compose_dir "$p")" || return 1
+  cfg="$(_compose_file_in "$dir")" || return 1
+  _detect_compose
+  _hdr "Recreating $(_p_pretty "$p") so it picks up the new settings"
+  ( cd "$dir"; "${DC[@]}" -f "$cfg" up -d ) || return 1
+  _ok "$(_p_pretty "$p") recreated with the seeded settings."
 }
 
 # Append KEY=VALUE to an env file if that key is not already set. Returns 0 when

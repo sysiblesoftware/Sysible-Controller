@@ -559,3 +559,64 @@ def test_a_non_slop_product_is_unaffected(sandbox, tmp_path):
     ''', FAKE_NO_CONTAINER="1")
     assert rc == 0, err
     assert "up -d --build" in docker_calls(sandbox)
+
+
+# ---- seeding a value is not the same as the app HAVING it ------------------
+# Reported: "I should just be able to do an update command." `slop update` did
+# seed the Controller's .env — and stopped there. docker reads .env when it
+# CREATES a container, so the Controller kept running with the old environment
+# and the setting sat on disk unread, while the command reported it had wired
+# things up. Same lie as every other step in this feature's history.
+def test_seeding_recreates_the_controller_so_it_reads_the_new_env(sandbox, tmp_path):
+    slop = tmp_path / "s1"; slop.mkdir()
+    (slop / ".env").write_text("SYSIBLE_FLASHBACK_AGENT_TOKEN=tok123\n")
+    ctl = tmp_path / "c1"; ctl.mkdir()
+    (ctl / "docker-compose.yml").write_text("services: {}\n")
+    rc, out, err = run(sandbox, f'''
+        WD="{slop}"
+        _git_root() {{ echo "{slop}"; return 0; }}
+        _p_dir_override() {{ [ "$1" = controller ] && echo "{ctl}"; }}
+        _slop_seed_cross_app_env
+    ''', FAKE_NO_CONTAINER="1")
+    assert "Seeded" in out
+    assert "Recreating" in out, out
+    calls = docker_calls(sandbox)
+    assert "up -d" in calls, calls
+    # An env change needs a recreate, NOT a rebuild — a --build would cost
+    # minutes for nothing.
+    assert "--build" not in calls, calls
+
+
+def test_nothing_is_recreated_when_there_was_nothing_to_seed(sandbox, tmp_path):
+    """An already-configured host must not have its Controller bounced on every
+    single update."""
+    slop = tmp_path / "s2"; slop.mkdir()
+    (slop / ".env").write_text("SYSIBLE_FLASHBACK_AGENT_TOKEN=tok123\n")
+    ctl = tmp_path / "c2"; ctl.mkdir()
+    (ctl / "docker-compose.yml").write_text("services: {}\n")
+    (ctl / ".env").write_text(
+        "SYSIBLE_FLASHBACK_URL=http://host.docker.internal:8770\n"
+        "SYSIBLE_FLASHBACK_AGENT_TOKEN=tok123\n")
+    rc, out, err = run(sandbox, f'''
+        WD="{slop}"
+        _git_root() {{ echo "{slop}"; return 0; }}
+        _p_dir_override() {{ [ "$1" = controller ] && echo "{ctl}"; }}
+        _slop_seed_cross_app_env
+    ''', FAKE_NO_CONTAINER="1")
+    assert "Recreating" not in out, out
+    assert "up -d" not in docker_calls(sandbox)
+
+
+def test_a_failed_recreate_tells_the_operator_what_to_run(sandbox, tmp_path):
+    """If the recreate cannot happen, the seeded value is still inert — say so
+    and name the command, rather than reporting success."""
+    slop = tmp_path / "s3"; slop.mkdir()
+    (slop / ".env").write_text("SYSIBLE_FLASHBACK_AGENT_TOKEN=tok123\n")
+    rc, out, err = run(sandbox, f'''
+        WD="{slop}"
+        _git_root() {{ echo "{slop}"; return 0; }}
+        _p_dir_override() {{ echo ""; }}
+        _slop_seed_cross_app_env
+    ''', FAKE_NO_CONTAINER="1")
+    # No controller checkout at all: seeding is skipped entirely, nothing claimed.
+    assert "Recreating" not in out

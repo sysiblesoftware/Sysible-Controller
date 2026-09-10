@@ -1452,6 +1452,61 @@ def _d3_send_snapshot(state):
     print(note)
 
 
+def _d3_restorable(path):
+    """(ok, reason) — is this a path a restore may actually be written to?
+
+    THE AGENT RUNS AS ROOT ON THE HOST. Until this existed, a restore wrote
+    whatever absolute path the payload named, and the only check was that it
+    started with "/". A restore is the one operation here that changes a managed
+    machine, so anything able to name the path — a compromised controller, a
+    poisoned row in the version store, a bug in either — could drop a file into
+    /etc/cron.d, /root/.ssh/authorized_keys or a systemd unit directory on every
+    host in the fleet at once, as root, in one poll interval. The agent is the
+    last component that can refuse, and it must not have to trust the thing
+    telling it what to write.
+
+    A restore is only ever a rollback of something THIS host captured, so the
+    rule is the capture rule: inside a tracked root, not on the never-captured
+    exclude list, and not reached through a symlinked parent that leaves the
+    root. The file ITSELF may be a symlink — /etc/resolv.conf usually is — and
+    that is fine: os.replace swaps the link, not what it points at.
+    """
+    import posixpath
+    if not path or not path.startswith("/"):
+        return False, "not an absolute path"
+    norm = posixpath.normpath(path)
+    if norm != path:
+        return False, "path is not in normal form (.. or redundant separators)"
+    if _d3_excluded(norm, [p for p in D3_EXCLUDE.split(":") if p]):
+        return False, "on the never-captured exclude list"
+
+    roots = [r.rstrip("/") or "/" for r in D3_PATHS.split(":") if r]
+    if not roots:
+        return False, "this host tracks no config paths"
+    # Compare against the literal roots AND their resolved forms: a distro where
+    # a tracked root sits under a symlink (/var -> /private/var and friends)
+    # must not have every restore refused as "outside".
+    allowed = set(roots)
+    for r in roots:
+        try:
+            allowed.add(os.path.realpath(r).rstrip("/") or "/")
+        except OSError:
+            pass
+
+    def _inside(cand):
+        return any(cand == root or cand.startswith(root + "/") for root in allowed)
+
+    if not _inside(norm):
+        return False, "outside every tracked config root"
+    try:
+        real_parent = os.path.realpath(os.path.dirname(norm) or "/").rstrip("/") or "/"
+    except OSError:
+        return False, "its directory could not be resolved"
+    if not _inside(posixpath.join(real_parent, posixpath.basename(norm))):
+        return False, f"its directory resolves outside the tracked roots ({real_parent})"
+    return True, ""
+
+
 def _d3_apply_restore(state, item):
     """Write one queued version back, keeping what it replaced."""
     import hashlib
@@ -1467,8 +1522,12 @@ def _d3_apply_restore(state, item):
     path = r.headers.get("X-Flashback-Path") or item.get("path") or ""
     want = (r.headers.get("X-Flashback-Sha256") or "").lower()
     content = r.content
-    if not path or not path.startswith("/"):
-        print(f"[agent] restore {rid}: refusing a non-absolute path {path!r}")
+    allowed, why = _d3_restorable(path)
+    if not allowed:
+        # Ack as FAILED, not silence: a refusal the console never sees leaves the
+        # restore pending forever and tells nobody the host said no.
+        print(f"[agent] restore {rid}: REFUSING to write {path!r} — {why}")
+        _d3_ack(state, rid, False, path)
         return
     got = hashlib.sha256(content).hexdigest()
     if want and got != want:

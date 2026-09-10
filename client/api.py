@@ -166,7 +166,34 @@ def ping():
         return False
 
 
+def _safe_path(path: str) -> str:
+    """Refuse a request path that is not a single, normalized path on THIS
+    controller.
+
+    Almost every call here builds its path with an f-string around a host id, an
+    admin name or a task id — values that arrive from a browser. `requests`
+    resolves dot segments before it sends (verified: "/agents/../admin/x" leaves
+    as "/admin/x"), so ONE unvalidated interpolation anywhere in this module is a
+    way to reach a different controller endpoint entirely, with the caller's
+    credentials attached. Checking it once here covers every caller, including the
+    ones written later.
+    """
+    import posixpath
+    if not isinstance(path, str) or not path.startswith("/") or path.startswith("//"):
+        raise ValueError(f"refusing a non-absolute controller path: {path!r}")
+    if any(ord(c) < 0x20 or ord(c) == 0x7f for c in path) or "\\" in path:
+        raise ValueError("refusing a controller path with control characters")
+    head = path.split("?", 1)[0].split("#", 1)[0]
+    norm = posixpath.normpath(head)
+    if head.endswith("/") and not norm.endswith("/"):
+        norm += "/"
+    if norm != head:
+        raise ValueError(f"refusing a non-normalized controller path: {path!r}")
+    return path
+
+
 def _request(method, path, extra_headers=None, **kwargs):
+    path = _safe_path(path)
     timeout = kwargs.pop("timeout", 15)
     headers = _headers()
     if extra_headers:
@@ -188,6 +215,7 @@ def _request(method, path, extra_headers=None, **kwargs):
 
 
 def _download_binary(path):
+    path = _safe_path(path)
     r = _request_with_tls_refresh(
         lambda: _SESSION.get(f"{BASE_URL}{path}", headers=_headers(), timeout=30, verify=_VERIFY))
     if not r.ok:

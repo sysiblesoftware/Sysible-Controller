@@ -146,10 +146,19 @@ class _Resp:
         return {}
 
 
-def _restore_harness(ag, target, content, sha=None, monkeypatch=None):
-    """Drive _d3_apply_restore with a canned payload; record the ack."""
+def _restore_harness(ag, target, content, sha=None, monkeypatch=None, tracked=True):
+    """Drive _d3_apply_restore with a canned payload; record the ack.
+
+    `tracked` points this agent's config roots AT the target's directory, because
+    a restore is only ever a rollback of something the host itself captured and
+    the agent refuses anything outside its tracked roots (see
+    tests/test_agent_restore_target.py). Pass tracked=False to exercise that
+    refusal."""
     acked = {}
     digest = sha if sha is not None else hashlib.sha256(content).hexdigest()
+    if tracked:
+        ag.D3_PATHS = os.path.dirname(target) or "/"
+        ag.D3_EXCLUDE = ""
 
     def fake_request(method, path, **kw):
         if "/payload" in path:
@@ -209,9 +218,25 @@ def test_the_file_mode_survives_a_restore(ag, tmp_path):
 def test_a_non_absolute_path_is_refused(ag, tmp_path, monkeypatch):
     """The path comes from the server; treat it as untrusted anyway."""
     monkeypatch.chdir(tmp_path)
-    acked = _restore_harness(ag, "relative/evil", b"x")
+    ag.D3_PATHS = str(tmp_path)
+    ag.D3_EXCLUDE = ""
+    acked = _restore_harness(ag, "relative/evil", b"x", tracked=False)
     assert not os.path.exists(tmp_path / "relative/evil")
-    assert acked == {}, "should not even ack a path it refuses to interpret"
+    # Acked FAILED rather than silently dropped: a refusal nobody can see leaves
+    # the restore pending forever and tells the console nothing.
+    assert acked.get("ok") is False
+
+
+def test_a_target_outside_the_tracked_config_is_refused(ag, tmp_path):
+    """The kill chain: the agent runs as root, so a restore that could name any
+    absolute path is a root write on every managed host at once."""
+    ag.D3_PATHS = str(tmp_path / "etc")
+    ag.D3_EXCLUDE = ""
+    (tmp_path / "etc").mkdir()
+    target = str(tmp_path / "root" / "authorized_keys")
+    acked = _restore_harness(ag, target, b"ssh-rsa AAAA attacker", tracked=False)
+    assert not os.path.exists(target), "wrote outside every tracked config root"
+    assert acked.get("ok") is False
 
 
 def test_no_temp_file_is_left_behind(ag, tmp_path):

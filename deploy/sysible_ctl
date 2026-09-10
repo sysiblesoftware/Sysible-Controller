@@ -230,6 +230,51 @@ _slop_seed_cross_app_env() {
   local envf="$slopdir/.env"
   [[ -f "$envf" ]] || return 0
 
+  # ---- SSO: the secret and each app's trust flag ----------------------------
+  #
+  # These decide whether an app accepts the gateway's asserted identity or falls
+  # back to its OWN login. install.sh writes them into each app's compose .env at
+  # install time and NOTHING ever wrote them again — so if they were lost (an app
+  # re-cloned, its .env regenerated, the app installed on its own), the app went
+  # on serving a login form to an operator who had already signed in to SLOP, and
+  # no command anywhere put it back. `slop update` now repairs it.
+  #
+  # SLOP's .env is authoritative, so a value that DISAGREES is corrected, not just
+  # a missing one: a stale secret fails the constant-time compare exactly like an
+  # absent one, and looks identical from the browser.
+  local sso; sso="$(sed -n 's/^SYSIBLE_SSO_SHARED_SECRET=//p' "$envf" | tail -n1)"
+  if [[ -n "$sso" ]]; then
+    local entry ap trust adir aenv cur fixed
+    for entry in "controller|SYSIBLE_WEBGUI_TRUST_SSO" \
+                 "slep|SLEP_TRUST_GATEWAY_AUTH" \
+                 "connect|SYSIBLE_CONNECT_TRUST_GATEWAY_AUTH"; do
+      ap="${entry%%|*}"; trust="${entry##*|}"
+      adir="$(_product_compose_dir "$ap")" || continue
+      aenv="$adir/.env"
+      fixed=0
+      # `|| true`: under `set -euo pipefail` a sed against an app that has no .env
+      # yet exits 2 and would take the whole update down before it could write one.
+      cur="$(sed -n "s/^SYSIBLE_SSO_SHARED_SECRET=//p" "$aenv" 2>/dev/null | tail -n1 || true)"
+      if [[ "$cur" != "$sso" ]]; then
+        _env_upsert "$aenv" SYSIBLE_SSO_SHARED_SECRET "$sso"; fixed=1
+        _warn "  $(_p_pretty "$ap") had ${cur:+a DIFFERENT}${cur:-no} SSO shared secret — corrected in $aenv"
+      fi
+      cur="$(sed -n "s/^${trust}=//p" "$aenv" 2>/dev/null | tail -n1 || true)"
+      if [[ "$cur" != "1" ]]; then
+        _env_upsert "$aenv" "$trust" 1; fixed=1
+        _warn "  $(_p_pretty "$ap") was not set to trust the gateway ($trust=${cur:-unset}) — corrected in $aenv"
+      fi
+      if [[ $fixed -eq 1 ]]; then
+        _warn "  Until it is recreated it keeps showing its OWN login to operators already signed in to SLOP."
+        _recreate_product "$ap" \
+          || _warn "  seeded $aenv, but could not recreate $ap — run 'sysible_ctl $ap update'."
+      fi
+    done
+  else
+    _warn "  No SYSIBLE_SSO_SHARED_SECRET in $envf — single sign-on cannot work and every"
+    _warn "  app will show its own login. Re-run the SLOP installer to mint one."
+  fi
+
   # Flashback's agent token: minted by the SLOP installer, consumed by the
   # Controller, which is the only thing that talks to Flashback's agent API.
   local tok; tok="$(sed -n 's/^SYSIBLE_FLASHBACK_AGENT_TOKEN=//p' "$envf" | tail -n1)"

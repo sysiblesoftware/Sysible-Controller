@@ -28,10 +28,21 @@ CTL = os.path.join(os.path.dirname(HERE), "deploy", "sysible_ctl")
 FAKE_DOCKER = r"""#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_LOG"
 case "$1" in
-  inspect) [ "${FAKE_NO_CONTAINER:-0}" = 1 ] && exit 1; exit 0 ;;
+  inspect)
+    [ "${FAKE_NO_CONTAINER:-0}" = 1 ] && exit 1
+    case "$*" in *StartedAt*) printf '%s' "${FAKE_STARTED:-2000-01-01T00:00:00Z}" ;; esac
+    exit 0 ;;
   ps)      echo "    sysible-slop-gateway  Exited (1) 3 seconds ago"; exit 0 ;;
   logs)    echo "run: adapting config using caddyfile: Caddyfile:12 - unrecognized directive"; exit 0 ;;
-  exec)    exit 0 ;;
+  exec)
+    case "$*" in
+      *reload*)
+        if [ "${FAKE_RELOAD_FAIL:-0}" = 1 ]; then
+          echo 'caddy: sending configuration to instance: performing request: Post "http://localhost:2019/load": dial tcp [::1]:2019: connect: connection refused' >&2
+          exit 1
+        fi ;;
+    esac
+    exit 0 ;;
   restart) exit 0 ;;
 esac
 exit 0
@@ -193,3 +204,144 @@ def test_a_non_slop_product_is_untouched_by_the_gateway_step(sandbox):
     """)
     assert "SHOULD_NOT_RUN" not in out
     assert rc == 0, err
+
+
+# ---------------------------------------------------------------------------
+# A FAILED UPDATE MUST LEAVE THE RUNNING SYSTEM ALONE.
+#
+# From a real host that had lost DNS: every `docker build` died at its FROM line
+# ("failed to resolve source metadata ... Temporary failure in name resolution"),
+# and `p_update` — which discarded the compose exit status — carried straight on
+# to _slop_apply_gateway_config and restarted the gateway. The update brought in
+# nothing and took :443 down with it. The machine was fine before the command ran.
+# ---------------------------------------------------------------------------
+def _update_stub(compose_ok=True, config_changed=True, extra=""):
+    """p_update with its discovery, git and reporting stubbed — so the test drives
+    the real ordering decisions and nothing else."""
+    return f"""
+        _discover() {{ WD=/nope; CFG=/nope/docker-compose.yml; CONTAINER=c; return 0; }}
+        _git_root() {{ echo /nope; }}
+        git() {{ return 0; }}
+        _compose() {{ {"return 0" if compose_ok else "return 1"}; }}
+        _slop_seed_cross_app_env() {{ :; }}
+        _slop_caddyfile_is_newer_than_gateway() {{ {"return 0" if config_changed else "return 1"}; }}
+        _slop_apply_gateway_config() {{ echo GATEWAY_TOUCHED; return 0; }}
+        _health_wait() {{ return 0; }}
+        {extra}
+        p_update slop
+    """
+
+
+def test_a_failed_build_never_reaches_the_gateway(sandbox):
+    rc, out, err = run(sandbox, _update_stub(compose_ok=False))
+    assert rc != 0
+    assert "GATEWAY_TOUCHED" not in out, "a failed update restarted the gateway"
+    assert "build/recreate FAILED" in err
+    assert "still serving what it was" in err
+
+
+def test_a_failed_build_says_the_running_system_was_left_alone(sandbox):
+    _, out, err = run(sandbox, _update_stub(compose_ok=False))
+    assert "Nothing was changed on the running system" in err
+
+
+def test_an_unchanged_config_does_not_restart_the_gateway(sandbox):
+    """The Caddyfile is bind-mounted and the admin API is off, so 'apply' means
+    'restart'. Re-applying the file Caddy already loaded is a self-inflicted
+    outage window for no change at all."""
+    rc, out, err = run(sandbox, _update_stub(config_changed=False))
+    assert "GATEWAY_TOUCHED" not in out
+    assert "leaving it alone" in out
+
+
+def test_a_changed_config_is_still_applied(sandbox):
+    """The case the apply step exists for must keep working."""
+    rc, out, err = run(sandbox, _update_stub(config_changed=True))
+    assert "GATEWAY_TOUCHED" in out, "a genuine config change was never applied"
+
+
+def test_a_hand_edited_caddyfile_counts_as_changed(sandbox, tmp_path):
+    """The decision is about the FILE and the container, not about git — an
+    operator who edits the config on the host must still get it loaded."""
+    gw = tmp_path / "gateway"
+    gw.mkdir()
+    (gw / "Caddyfile").write_text(":443 { respond 204 }\n")
+    rc, out, err = run(sandbox, f"""
+        _p_container() {{ echo gw; }}
+        _git_root() {{ echo {tmp_path}; }}
+        WD={tmp_path}
+        if _slop_caddyfile_is_newer_than_gateway; then echo NEWER; else echo SAME; fi
+    """, FAKE_STARTED="1970-01-01T00:00:00Z")
+    assert "NEWER" in out
+
+
+def test_a_config_older_than_the_gateway_is_left_alone(sandbox, tmp_path):
+    gw = tmp_path / "gateway"
+    gw.mkdir()
+    (gw / "Caddyfile").write_text(":443 { respond 204 }\n")
+    rc, out, err = run(sandbox, f"""
+        _p_container() {{ echo gw; }}
+        _git_root() {{ echo {tmp_path}; }}
+        WD={tmp_path}
+        if _slop_caddyfile_is_newer_than_gateway; then echo NEWER; else echo SAME; fi
+    """, FAKE_STARTED="2999-01-01T00:00:00Z")
+    assert "SAME" in out
+
+
+def test_an_unknowable_state_applies_rather_than_skips(sandbox, tmp_path):
+    """Failing to apply a config that DID change is the worse of the two
+    mistakes, so anything unknown answers yes."""
+    rc, out, err = run(sandbox, f"""
+        _p_container() {{ echo gw; }}
+        _git_root() {{ echo {tmp_path}; }}
+        WD={tmp_path}
+        if _slop_caddyfile_is_newer_than_gateway; then echo NEWER; else echo SAME; fi
+    """)
+    assert "NEWER" in out, "no Caddyfile at all should not silently skip the apply"
+
+
+# ---- naming the fault the operator can actually see -------------------------
+def test_a_dns_failure_is_called_a_dns_failure(sandbox):
+    """It used to answer an unreachable github.com with three checkout problems —
+    upstream, local edits, detached HEAD — none of which were wrong."""
+    rc, out, err = run(sandbox, """
+        _discover() { WD=/nope; CFG=/nope/dc.yml; CONTAINER=c; return 0; }
+        _git_root() { echo /nope; }
+        git() { case "$*" in *pull*) echo "fatal: unable to access: Could not resolve host: github.com" >&2; return 1 ;; esac; return 0; }
+        _compose() { return 1; }
+        p_update controller
+    """)
+    both = out + err
+    assert "network/DNS fault" in both
+    assert "not a" in both and "problem with the checkout" in both
+    assert "no upstream for this branch" not in both, "the misleading causes were still printed"
+
+
+def test_a_genuine_checkout_problem_still_lists_the_usual_causes(sandbox):
+    """The old advice is right when the remote IS reachable — keep it for that."""
+    rc, out, err = run(sandbox, """
+        _discover() { WD=/nope; CFG=/nope/dc.yml; CONTAINER=c; return 0; }
+        _git_root() { echo /nope; }
+        git() {
+          case "$*" in
+            *ls-remote*) return 0 ;;
+            *pull*) echo "fatal: Not possible to fast-forward, aborting." >&2; return 1 ;;
+          esac
+          return 0
+        }
+        _compose() { return 1; }
+        p_update controller
+    """)
+    both = out + err
+    assert "no upstream for this branch" in both
+    assert "network/DNS fault" not in both
+
+
+def test_the_reload_refusal_is_not_reported_as_a_surprise(sandbox):
+    """`admin off` in the Caddyfile means caddy reload can NEVER work; presenting
+    its guaranteed failure as an error sends people to debug a non-problem."""
+    rc, out, err = run(sandbox, "_slop_apply_gateway_config",
+                       FAKE_RELOAD_FAIL="1", FAKE_HTTP_CODE="302")
+    both = out + err
+    assert "admin API is off (by design)" in both
+    assert "caddy reload failed" not in both

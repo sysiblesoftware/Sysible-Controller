@@ -49,6 +49,10 @@ case "$1" in
           echo 'caddy: sending configuration to instance: Post "http://localhost:2019/load": dial tcp 127.0.0.1:2019: connect: connection refused' >&2
           exit 1
         fi
+        if [ "${FAKE_RELOAD_FAIL:-0}" = 2 ]; then
+          echo 'caddy: loading new config: http app module: start: listen tcp :443: bind: address already in use' >&2
+          exit 1
+        fi
         exit 0 ;;
     esac
     exit 0 ;;
@@ -134,15 +138,28 @@ def test_the_config_is_validated_before_the_running_server_is_touched(sandbox):
 
 
 # ---- the failure modes that used to be silent -----------------------------
-def test_a_failed_reload_falls_back_to_a_restart_and_says_why(sandbox):
+def test_a_reload_refused_because_the_admin_api_is_off_is_not_a_surprise(sandbox):
+    """gateway/Caddyfile sets `admin off`, so there is no admin API to POST a new
+    config to and `caddy reload` can never succeed. Reporting its guaranteed
+    refusal as "reload failed" plus a stack of connection-refused detail sent
+    people to debug a non-problem; the restart IS the apply path here."""
     rc, out, err = run(sandbox, "_slop_apply_gateway_config",
                        FAKE_RELOAD_FAIL="1", FAKE_HTTP_CODE="302")
     assert rc == 0, err
-    assert "caddy reload failed" in err
-    # The reload error used to go to /dev/null, leaving nothing to diagnose.
-    assert "connection refused" in err
+    assert "admin API is off (by design)" in err
     assert "gateway restarted" in out
     assert "restart" in docker_calls(sandbox)
+
+
+def test_a_GENUINE_reload_failure_still_shows_its_error(sandbox):
+    """The refusal above is expected; anything else is not, and its text is the
+    diagnosis. It used to go to /dev/null, leaving nothing to work with."""
+    rc, out, err = run(sandbox, "_slop_apply_gateway_config",
+                       FAKE_RELOAD_FAIL="2", FAKE_HTTP_CODE="302")
+    assert rc == 0, err
+    assert "caddy reload failed" in err
+    assert "address already in use" in err, "the real caddy error must be shown"
+    assert "gateway restarted" in out
 
 
 def test_reload_and_restart_both_failing_is_a_hard_error(sandbox):

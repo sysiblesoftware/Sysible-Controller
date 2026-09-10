@@ -298,6 +298,21 @@ _product_compose_dir() {
   return 1
 }
 
+# Did that git output say the remote could not be REACHED?
+#
+# Classifies the pull's OWN output rather than making a second network call: on a
+# host that has lost DNS every probe costs another timeout, and the pull already
+# said what was wrong. It turns "the code did not advance" into the one sentence
+# that is true.
+_git_says_unreachable() {
+  case "$1" in
+    *"Could not resolve host"*|*"Temporary failure in name resolution"*|\
+    *"Could not resolve proxy"*|*"Connection timed out"*|\
+    *"Network is unreachable"*|*"Failed to connect"*|*"Connection refused"*) return 0 ;;
+  esac
+  return 1
+}
+
 p_update() {
   local p="$1"
   _discover "$p" || { _warn "$(_p_pretty "$p"): not found — no container '$(_p_container "$p")' and no SYSIBLE_${p^^}_DIR set. Skipping."; return 1; }
@@ -311,7 +326,12 @@ p_update() {
   if gr="$(_git_root "$WD")" && command -v git >/dev/null 2>&1; then
     before="$(git -C "$gr" rev-parse --short HEAD 2>/dev/null || true)"
     _hdr "Pulling latest code (git) in $gr"
-    if git -C "$gr" pull --ff-only; then
+    # Captured, not streamed, so the failure can be CLASSIFIED and not just shown.
+    # Printed either way, unchanged.
+    local pull_out pull_rc=0
+    pull_out="$(git -C "$gr" pull --ff-only 2>&1)" || pull_rc=$?
+    printf '%s\n' "$pull_out"
+    if [[ $pull_rc -eq 0 ]]; then
       after="$(git -C "$gr" rev-parse --short HEAD 2>/dev/null || true)"
       if [[ -n "$before" && "$before" == "$after" ]]; then
         _ok "Already at ${after:-?} — no new commits to pull."
@@ -321,11 +341,22 @@ p_update() {
     else
       code_rc=1
       _err "git pull --ff-only FAILED in $gr — the code did NOT advance (still ${before:-?})."
-      _warn "Nothing new can be built until that checkout can fast-forward. Usual causes:"
-      _warn "  * no upstream for this branch: git -C $gr status -sb"
-      _warn "      fix: git -C $gr branch --set-upstream-to=origin/\$(git -C $gr branch --show-current)"
-      _warn "  * local edits block the fast-forward: git -C $gr status --short"
-      _warn "  * detached HEAD or a diverged branch: git -C $gr log --oneline -1"
+      # Name the cause we can actually see. Listing three checkout problems when
+      # the real fault is that the host cannot resolve github.com sends the
+      # operator to investigate upstreams, local edits and detached HEADs — none
+      # of which are wrong — while the machine simply has no DNS.
+      if _git_says_unreachable "$pull_out"; then
+        _err "  This host could not REACH github.com. That is a network/DNS fault, not a"
+        _err "  problem with the checkout — nothing here needs fixing."
+        _warn "  Check: getent hosts github.com ; cat /etc/resolv.conf ; ping -c1 1.1.1.1"
+        _warn "  Every 'docker build' below will fail the same way, for the same reason."
+      else
+        _warn "Nothing new can be built until that checkout can fast-forward. Usual causes:"
+        _warn "  * no upstream for this branch: git -C $gr status -sb"
+        _warn "      fix: git -C $gr branch --set-upstream-to=origin/\$(git -C $gr branch --show-current)"
+        _warn "  * local edits block the fast-forward: git -C $gr status --short"
+        _warn "  * detached HEAD or a diverged branch: git -C $gr log --oneline -1"
+      fi
     fi
   else
     code_rc=1
@@ -333,7 +364,16 @@ p_update() {
     _warn "Re-clone the product next to its compose file, or set SYSIBLE_${p^^}_DIR to a git checkout."
   fi
   _hdr "Rebuilding + recreating via compose ($CFG)"
-  _compose up -d --build
+  # CHECK IT. This exit status was discarded, and the cost was not theoretical: on
+  # a host that had lost DNS, every `docker build` died at its FROM line, and the
+  # command carried straight on to restart the gateway — so a failed update took
+  # down a working front door. An update that could not build anything must leave
+  # the running system exactly as it found it.
+  if ! _compose up -d --build; then
+    _err "$(_p_pretty "$p"): the build/recreate FAILED — see the output above."
+    _warn "  Nothing was changed on the running system; it is still serving what it was."
+    return 1
+  fi
   # SLOP's gateway is the stock caddy image with a BIND-MOUNTED Caddyfile + portal,
   # so `up --build` recreates the built idp but leaves the gateway container as-is
   # (its image and compose config didn't change). A Caddyfile the git pull just
@@ -342,7 +382,15 @@ p_update() {
   local gw_rc=0
   if [[ "$p" == "slop" ]]; then
     _slop_seed_cross_app_env
-    _slop_apply_gateway_config || gw_rc=1
+    # ONLY when there is something to apply. The Caddyfile is bind-mounted and the
+    # admin API is off, so "apply" means "restart the gateway" — and re-applying a
+    # file Caddy already loaded was a self-inflicted outage window on every single
+    # update, including ones that brought in nothing at all.
+    if _slop_caddyfile_is_newer_than_gateway; then
+      _slop_apply_gateway_config || gw_rc=1
+    else
+      _ok "Gateway config unchanged since the gateway started — leaving it alone."
+    fi
   fi
   _hdr "New state"
   _compose ps 2>/dev/null || docker ps -a --filter "name=^/${CONTAINER}$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
@@ -369,6 +417,27 @@ p_update() {
     return 1
   fi
   _ok "$(_p_pretty "$p") updated${after:+ to $after}. Volume '$(_p_volume "$p")' preserved."
+}
+
+# Has the Caddyfile changed since the running gateway read it?
+#
+# Asked of the FILE and the CONTAINER rather than of git, so a config edited by
+# hand on the host is applied too — but a file Caddy already loaded is not, and
+# that is the point: with `admin off` there is no reload, so every "apply" is a
+# restart. Unknown (no container, no file, no stat) answers YES, because failing
+# to apply a config that did change is the worse mistake of the two.
+_slop_caddyfile_is_newer_than_gateway() {
+  local gwc cf started_at started mtime
+  gwc="$(_p_container slop)"
+  cf="$(_git_root "$WD" 2>/dev/null || echo "$WD")/gateway/Caddyfile"
+  [[ -f "$cf" ]] || return 0
+  docker inspect "$gwc" >/dev/null 2>&1 || return 0
+  started_at="$(docker inspect -f '{{.State.StartedAt}}' "$gwc" 2>/dev/null)" || return 0
+  [[ -n "$started_at" ]] || return 0
+  started="$(date -d "$started_at" +%s 2>/dev/null)" || return 0
+  mtime="$(stat -c %Y "$cf" 2>/dev/null)" || return 0
+  [[ -n "$started" && -n "$mtime" ]] || return 0
+  (( mtime > started ))
 }
 
 # Load the on-disk Caddyfile into the running gateway, and PROVE it took.
@@ -409,8 +478,16 @@ _slop_apply_gateway_config() {
   if out="$(docker exec "$gwc" caddy reload --config /etc/caddy/Caddyfile 2>&1)"; then
     _ok "  gateway config reloaded"
   else
-    _warn "  caddy reload failed — restarting the gateway to apply changes"
-    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    # Expected, not a fault: gateway/Caddyfile sets `admin off`, so there is no
+    # admin API to POST a new config to and `caddy reload` can never succeed
+    # here. The restart IS the apply path; say so rather than presenting a
+    # guaranteed failure as a surprise.
+    if [[ "$out" == *"connect: connection refused"* ]]; then
+      _warn "  the gateway's admin API is off (by design), so applying means a restart"
+    else
+      _warn "  caddy reload failed — restarting the gateway to apply changes"
+      printf '%s\n' "$out" | sed 's/^/    /' >&2
+    fi
     if ! out="$(docker restart "$gwc" 2>&1)"; then
       _err "the gateway could not be restarted either, so the new config is NOT live —"
       _err "it is still running the previous one. docker said:"

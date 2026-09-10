@@ -181,7 +181,34 @@ _health() {
   for url in "https://localhost:${port}${path}" "http://localhost:${port}${path}"; do
     if curl -fsk --max-time 5 "$url" >/dev/null 2>&1; then _ok "  health: OK  ($url)"; return 0; fi
   done
-  _warn "  health: '' (no response on ${port} — may still be starting)"
+  return 1
+}
+
+# Wait for a product to actually answer, then SAY SO — or say why it didn't.
+#
+# A single 5s probe right after `up -d --build` is a coin flip: the images were
+# just rebuilt and the container may still be starting. The old code ran that one
+# probe, discarded the result with `|| true`, and printed "is up." regardless — so
+# "no response on 443" arrived as a shrug immediately followed by a success line,
+# and there was nothing to act on. A bring-up that cannot serve its own port is a
+# FAILED bring-up, and the container's last words are the diagnosis.
+_health_wait() {
+  local p="$1" secs="${2:-60}" i port c
+  port="$(_p_port "$p")"; c="$(_p_container "$p")"
+  for ((i = 0; i < secs; i += 2)); do
+    if _health "$p"; then return 0; fi
+    sleep 2
+  done
+  _err "$(_p_pretty "$p") is NOT answering on port ${port} after ${secs}s."
+  if docker inspect "$c" >/dev/null 2>&1; then
+    docker ps -a --filter "name=^/${c}$" \
+      --format '    {{.Names}}  {{.Status}}  {{.Ports}}' 2>/dev/null
+    _warn "  last lines from '$c':"
+    docker logs --tail 30 "$c" 2>&1 | sed 's/^/    /'
+  else
+    _err "  there is no container named '$c' — the stack did not start."
+    _warn "  check the build output above, then: $(basename "$0") $p logs"
+  fi
   return 1
 }
 
@@ -319,7 +346,8 @@ p_update() {
   fi
   _hdr "New state"
   _compose ps 2>/dev/null || docker ps -a --filter "name=^/${CONTAINER}$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
-  _health "$p" || true
+  local health_rc=0
+  _health_wait "$p" || health_rc=1
   if [[ $gw_rc -ne 0 ]]; then
     # The images were rebuilt, but the gateway is NOT running the config that was
     # just pulled. Saying "updated" here is the lie that hid this for a whole day.
@@ -331,6 +359,13 @@ p_update() {
     # Reporting "updated" here is what makes a broken checkout look like a no-op
     # update: the command goes green and the fix you pushed never ships.
     _err "$(_p_pretty "$p"): rebuilt from the code ALREADY on disk — the source never advanced, so this is not an update to newer code (see above)."
+    return 1
+  fi
+  if [[ $health_rc -ne 0 ]]; then
+    # Everything above may have succeeded and the thing still not serve. Reporting
+    # "updated" over a product that answers nothing is the same lie as reporting a
+    # bring-up that never started.
+    _err "$(_p_pretty "$p"): updated, but it is not answering (see above)."
     return 1
   fi
   _ok "$(_p_pretty "$p") updated${after:+ to $after}. Volume '$(_p_volume "$p")' preserved."
@@ -638,8 +673,30 @@ p_up() {
   fi
 
   _hdr "Building + starting $(_p_pretty "$p") from $dir"
-  ( cd "$(dirname "$cfg")"; "${DC[@]}" -f "$cfg" "${envargs[@]}" up -d --build )
-  _health "$p" || true
+  # CHECK IT. This ran in a subshell whose exit status was thrown away, so a build
+  # that failed, or a container that could not bind its port, still reached the
+  # "is up." line below — and install.sh, reading only the exit code, reported the
+  # gateway as up. That is how a dead front door gets announced as a success.
+  if ! ( cd "$(dirname "$cfg")"; "${DC[@]}" -f "$cfg" "${envargs[@]}" up -d --build ); then
+    _err "$(_p_pretty "$p"): compose failed to build or start it (see the output above)."
+    return 1
+  fi
+  # The gateway is the stock caddy image with a BIND-MOUNTED Caddyfile, so
+  # `up --build` rebuilds the other services and leaves it running its OLD config.
+  # `update` has always known this; `up` did not, so a Caddyfile that arrived with
+  # a git pull sat on disk unloaded and the front door kept serving the previous
+  # one. Same apply + prove-it path as update, for the same reason.
+  if [[ "$p" == "slop" ]]; then
+    # _slop_seed_cross_app_env reads $WD to find the SLOP checkout; p_update gets
+    # it from _discover, and p_up may not have run that.
+    WD="$(dirname "$cfg")"
+    _slop_seed_cross_app_env
+    if ! _slop_apply_gateway_config; then
+      _err "$(_p_pretty "$p"): started, but the gateway config was NOT applied (see above)."
+      return 1
+    fi
+  fi
+  _health_wait "$p" || return 1
   _ok "$(_p_pretty "$p") is up. Volume(s) '$(_p_volume "$p")' persist across rebuilds."
   [[ "$p" == "controller" && -n "$addr" ]] && cat <<EOF
   Web console : https://$addr:8800/   (first run: create your administrator)

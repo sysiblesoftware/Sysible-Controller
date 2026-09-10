@@ -807,3 +807,56 @@ def test_the_upstream_probe_also_uses_an_address_not_a_name(sandbox):
     calls = curl_calls(sandbox)
     assert "localhost" not in calls, calls
     assert "127.0.0.1" in calls, calls
+
+
+# ---- `update` must reach a product whose container is GONE -------------------
+# _discover knows a product only by its CONTAINER or by SYSIBLE_<P>_DIR, so once
+# a container had been REMOVED (a failed build, a `compose down`) `update`
+# skipped it — with its checkout sitting in /opt/sysible-src the whole time.
+#
+# For the Controller that is self-perpetuating and it bites hardest: sysible_ctl
+# ITSELF lives in the Controller's checkout, so a missing Controller container
+# meant `update all` skipped the one pull that updates the CLI. Every fix shipped
+# to this script stayed permanently out of reach of the operator who most needed
+# it — the failure in front of them could never be fixed by updating.
+def test_update_falls_back_to_the_checkout_when_the_container_is_gone(sandbox, tmp_path):
+    src = tmp_path / "src"; (src / "sysible-controller").mkdir(parents=True)
+    ck = src / "sysible-controller"
+    (ck / "docker-compose.yml").write_text("services: {}\n")
+    rc, out, err = run(sandbox, f'''
+        SYSIBLE_SRC_DIR="{src}"
+        _p_dir_override() {{ echo ""; }}
+        _health_wait() {{ return 0; }}
+        _slop_seed_cross_app_env() {{ :; }}
+        p_update controller
+    ''', FAKE_NO_CONTAINER="1")
+    both = out + err
+    assert "Skipping" not in both, both
+    assert str(ck) in both, both
+    assert "updating its checkout" in both, both
+
+
+def test_update_all_does_not_skip_a_product_whose_container_is_gone(sandbox, tmp_path):
+    """The gate in p_all was the other half: even with p_update fixed, `update
+    all` never called it for a product _present() could not see."""
+    src = tmp_path / "src2"; (src / "sysible-controller").mkdir(parents=True)
+    (src / "sysible-controller" / "docker-compose.yml").write_text("services: {}\n")
+    rc, out, err = run(sandbox, f'''
+        SYSIBLE_SRC_DIR="{src}"
+        PRODUCTS="controller"
+        _p_dir_override() {{ echo ""; }}
+        p_update() {{ echo "UPDATED:$1"; }}
+        p_all update
+    ''', FAKE_NO_CONTAINER="1")
+    assert "UPDATED:controller" in out, (out, err)
+
+
+def test_a_product_with_no_checkout_at_all_is_still_skipped(sandbox, tmp_path):
+    """The fallback must not turn 'not installed' into a confusing failure."""
+    rc, out, err = run(sandbox, f'''
+        SYSIBLE_SRC_DIR="{tmp_path}/nothing-here"
+        _p_dir_override() {{ echo ""; }}
+        p_update controller
+    ''', FAKE_NO_CONTAINER="1")
+    assert rc == 1
+    assert "Skipping" in (out + err), (out, err)

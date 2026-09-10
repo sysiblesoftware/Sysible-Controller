@@ -242,8 +242,8 @@ _health() {
 # and there was nothing to act on. A bring-up that cannot serve its own port is a
 # FAILED bring-up, and the container's last words are the diagnosis.
 _health_wait() {
-  local p="$1" secs="${2:-60}" i port c
-  port="$(_p_port "$p")"; c="$(_p_container "$p")"
+  local p="$1" secs="${2:-60}" i port c path
+  port="$(_p_port "$p")"; c="$(_p_container "$p")"; path="$(_p_health_path "$p")"
   for ((i = 0; i < secs; i += 2)); do
     if _health "$p"; then return 0; fi
     sleep 2
@@ -257,6 +257,11 @@ _health_wait() {
   else
     _err "$(_p_pretty "$p") is NOT answering on port ${port} after ${secs}s."
   fi
+  # Name what was probed. "Not answering on 443" says nothing about WHAT was
+  # asked, and the answer turned on exactly that: probing by hostname made the
+  # gateway abort the TLS handshake, so a healthy gateway reported as dead and
+  # the output gave no way to tell a stale copy of this script from a live fault.
+  _warn "  probed: https://127.0.0.1:${port}${path}  then  http://127.0.0.1:${port}${path}"
   if docker inspect "$c" >/dev/null 2>&1; then
     docker ps -a --filter "name=^/${c}$" \
       --format '    {{.Names}}  {{.Status}}  {{.Ports}}' 2>/dev/null
@@ -417,7 +422,25 @@ _git_says_unreachable() {
 
 p_update() {
   local p="$1"
-  _discover "$p" || { _warn "$(_p_pretty "$p"): not found — no container '$(_p_container "$p")' and no SYSIBLE_${p^^}_DIR set. Skipping."; return 1; }
+  # Fall back to the standard checkout location, exactly as `up` does. _discover
+  # only knows a product by its CONTAINER or by SYSIBLE_<P>_DIR, so a product
+  # whose container has been REMOVED (a failed build, a `compose down`) was
+  # skipped by `update` even with its checkout sitting in /opt/sysible-src.
+  #
+  # For the Controller that is self-perpetuating and it bites hardest: THIS SCRIPT
+  # lives in the Controller's checkout, so a missing Controller container meant
+  # `update all` skipped the one pull that updates the CLI itself — and every fix
+  # shipped to sysible_ctl stayed permanently out of reach of the operator who
+  # most needed it. Updating a product you cannot currently see is the point: the
+  # new code is usually what fixes it.
+  if ! _discover "$p"; then
+    local _ck; _ck="$(_find_checkout "$p" 2>/dev/null || true)"
+    if [[ -n "$_ck" ]]; then
+      CFG="$(_compose_file_in "$_ck")" && WD="$(dirname "$CFG")"
+      _warn "$(_p_pretty "$p"): no container '$(_p_container "$p")' — updating its checkout at $_ck anyway."
+    fi
+  fi
+  [[ -n "$CFG" ]] || { _warn "$(_p_pretty "$p"): not found — no container '$(_p_container "$p")', no SYSIBLE_${p^^}_DIR, and no checkout found. Skipping."; return 1; }
   _hdr "Updating $(_p_pretty "$p")"
   # Whether the SOURCE actually advanced. A failed pull used to be a yellow
   # warning followed by a green "updated" — so `update` rebuilt byte-identical
@@ -982,7 +1005,15 @@ p_all() {
   for p in $PRODUCTS; do
     # For a bring-up, attempt every product whose checkout we can find — not just
     # the ones already built, or `up all` could never install anything new.
-    if _present "$p" || { [[ "$cmd" == "up" ]] && _find_checkout "$p" >/dev/null 2>&1; }; then
+    #
+    # `update` needs the same reach, for a sharper reason: _present is false once a
+    # container has been REMOVED, so `update all` silently skipped any product in
+    # that state — including the Controller, whose checkout is where THIS SCRIPT
+    # lives. A removed Controller container therefore froze the CLI at whatever
+    # version was on disk, so the fix for the failure in front of the operator
+    # could never arrive. Pulling new code into a checkout is safe whether or not
+    # anything is running.
+    if _present "$p" || { [[ "$cmd" == "up" || "$cmd" == "update" ]] && _find_checkout "$p" >/dev/null 2>&1; }; then
       any=1
       "p_$cmd" "$p" "$@" || failed="$failed $p"
       echo

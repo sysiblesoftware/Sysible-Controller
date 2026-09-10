@@ -414,3 +414,14 @@ def test_nothing_listening_still_says_NOT_answering(sandbox):
     rc, out, err = run(sandbox, "_health_wait controller 4", FAKE_HEALTH_FAIL="1")
     assert rc == 1
     assert "NOT answering on port 8800" in err, err
+
+
+def test_a_failure_names_what_it_probed(sandbox):
+    """Two rounds were spent unable to tell a stale copy of this script from a
+    live fault, because "NOT answering on port 443" never said what was asked.
+    The probe target IS the diagnosis when the bug is in the probe."""
+    rc, out, err = run(sandbox, "_health_wait slop 4", FAKE_HEALTH_FAIL="1")
+    both = out + err
+    assert "probed:" in both, both
+    assert "https://127.0.0.1:443/" in both, both
+    assert "localhost" not in both, both

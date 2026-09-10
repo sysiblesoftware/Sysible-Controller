@@ -425,6 +425,91 @@ def test_seeding_is_a_no_op_when_slop_has_no_token_yet(sandbox, tmp_path):
     assert not (ctl / ".env").exists() or "FLASHBACK" not in (ctl / ".env").read_text()
 
 
+# ---- and it must repair the SSO wiring, which nothing ever rewrote ---------
+# SYSIBLE_SSO_SHARED_SECRET and each app's trust flag decide whether the app
+# accepts the gateway's asserted identity or falls back to its OWN login form.
+# install.sh wrote them once and nothing ever wrote them again, so an app that
+# lost them showed a login to an operator already signed in to SLOP, forever,
+# with no command anywhere to put them back.
+def test_update_repairs_an_app_that_lost_the_sso_wiring(sandbox, tmp_path):
+    slop = tmp_path / "s"; slop.mkdir()
+    (slop / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=s3cret\n")
+    ctl = tmp_path / "c"; ctl.mkdir()
+    (ctl / "docker-compose.yml").write_text("services: {}\n")
+    (ctl / ".env").write_text("SOMETHING_ELSE=1\n")
+    rc, out, err = run(sandbox, f'''
+        WD="{slop}"
+        _git_root() {{ echo "{slop}"; return 0; }}
+        _p_dir_override() {{ [ "$1" = controller ] && echo "{ctl}"; }}
+        _slop_seed_cross_app_env
+    ''', FAKE_NO_CONTAINER="1")
+    body = (ctl / ".env").read_text()
+    assert "SYSIBLE_SSO_SHARED_SECRET=s3cret" in body, body
+    assert "SYSIBLE_WEBGUI_TRUST_SSO=1" in body, body
+    assert "SOMETHING_ELSE=1" in body, body      # nothing else disturbed
+    assert "own login" in err.lower(), err       # and it SAYS what was wrong
+
+
+def test_a_secret_that_disagrees_is_corrected_not_left_alone(sandbox, tmp_path):
+    """A stale secret fails the constant-time compare exactly like an absent one
+    and looks identical from the browser, so 'already set' is not good enough."""
+    slop = tmp_path / "s2"; slop.mkdir()
+    (slop / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=new\n")
+    ctl = tmp_path / "c2"; ctl.mkdir()
+    (ctl / "docker-compose.yml").write_text("services: {}\n")
+    (ctl / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=stale\nSYSIBLE_WEBGUI_TRUST_SSO=1\n")
+    rc, out, err = run(sandbox, f'''
+        WD="{slop}"
+        _git_root() {{ echo "{slop}"; return 0; }}
+        _p_dir_override() {{ [ "$1" = controller ] && echo "{ctl}"; }}
+        _slop_seed_cross_app_env
+    ''', FAKE_NO_CONTAINER="1")
+    body = (ctl / ".env").read_text()
+    assert "SYSIBLE_SSO_SHARED_SECRET=new" in body, body
+    assert "stale" not in body, body
+    assert body.count("SYSIBLE_SSO_SHARED_SECRET=") == 1, body
+    assert "DIFFERENT" in err, err
+
+
+def test_an_app_with_no_env_at_all_does_not_abort_the_update(sandbox, tmp_path):
+    """Reading a value out of an app that has no .env yet exits 2 from sed, and
+    under `set -euo pipefail` that took the whole update down BEFORE it could
+    write the file it was about to create."""
+    slop = tmp_path / "s3"; slop.mkdir()
+    (slop / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=abc\nSYSIBLE_FLASHBACK_AGENT_TOKEN=tok\n")
+    ctl = tmp_path / "c3"; ctl.mkdir()
+    (ctl / "docker-compose.yml").write_text("services: {}\n")
+    assert not (ctl / ".env").exists(), "fixture: the app must start with no .env"
+    rc, out, err = run(sandbox, f'''
+        WD="{slop}"
+        _git_root() {{ echo "{slop}"; return 0; }}
+        _p_dir_override() {{ [ "$1" = controller ] && echo "{ctl}"; }}
+        _slop_seed_cross_app_env
+        echo REACHED_THE_END
+    ''', FAKE_NO_CONTAINER="1")
+    assert "REACHED_THE_END" in out, (out, err)
+    body = (ctl / ".env").read_text()
+    assert "SYSIBLE_SSO_SHARED_SECRET=abc" in body, body
+    # and the seeding that comes AFTER it still ran
+    assert "SYSIBLE_FLASHBACK_AGENT_TOKEN=tok" in body, body
+
+
+def test_slop_without_a_secret_says_so_instead_of_wiring_nothing(sandbox, tmp_path):
+    slop = tmp_path / "s4"; slop.mkdir()
+    (slop / ".env").write_text("SYSIBLE_FLASHBACK_AGENT_TOKEN=tok\n")
+    ctl = tmp_path / "c4"; ctl.mkdir()
+    (ctl / "docker-compose.yml").write_text("services: {}\n")
+    rc, out, err = run(sandbox, f'''
+        WD="{slop}"
+        _git_root() {{ echo "{slop}"; return 0; }}
+        _p_dir_override() {{ [ "$1" = controller ] && echo "{ctl}"; }}
+        _slop_seed_cross_app_env
+    ''', FAKE_NO_CONTAINER="1")
+    assert "No SYSIBLE_SSO_SHARED_SECRET" in err, err
+    body = (ctl / ".env").read_text()
+    assert "SYSIBLE_WEBGUI_TRUST_SSO" not in body, body   # not half-wired
+
+
 # ---- `slop status` must report whether config backup can actually work -----
 # `ps` said "sysible-flashback  Up 4 hours" throughout an outage in which no host
 # could back anything up: the container was fine, the CHAIN was not. Running is

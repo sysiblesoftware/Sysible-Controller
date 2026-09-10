@@ -48,12 +48,16 @@ esac
 exit 0
 """
 
-# _health probes with -f and no -w; the deny-path probe uses -w '%{http_code}'.
+# Mimics real curl closely enough to matter: with -w it prints the status and
+# exits 0 EVEN FOR 4xx/5xx, and when it never got an HTTP response at all it
+# prints 000 and exits non-zero. Every invocation is logged so a test can assert
+# what was actually probed.
 FAKE_CURL = r"""#!/bin/sh
+[ -n "$FAKE_CURL_LOG" ] && printf '%s\n' "$*" >> "$FAKE_CURL_LOG"
+if [ "${FAKE_HEALTH_FAIL:-0}" = 1 ]; then printf '000'; exit 7; fi
 case "$*" in
   *-w*) printf '%s' "${FAKE_HTTP_CODE:-302}"; exit 0 ;;
 esac
-[ "${FAKE_HEALTH_FAIL:-0}" = 1 ] && exit 7
 exit 0
 """
 
@@ -72,13 +76,15 @@ def sandbox(tmp_path):
     lib = re.sub(r'^main "\$@"\s*$', "", src, flags=re.M)
     libp = tmp_path / "ctl.lib.sh"
     libp.write_text(lib)
-    return {"bin": str(bindir), "lib": str(libp), "log": str(tmp_path / "docker.log")}
+    return {"bin": str(bindir), "lib": str(libp), "log": str(tmp_path / "docker.log"),
+            "curl_log": str(tmp_path / "curl.log")}
 
 
 def run(sandbox, snippet, **env):
     script = f'. "{sandbox["lib"]}"\n' + textwrap.dedent(snippet)
     e = {"PATH": sandbox["bin"] + ":" + os.environ.get("PATH", "/usr/bin:/bin"),
-         "FAKE_LOG": sandbox["log"], "HOME": os.environ.get("HOME", "/root")}
+         "FAKE_LOG": sandbox["log"], "HOME": os.environ.get("HOME", "/root"),
+         "FAKE_CURL_LOG": sandbox["curl_log"]}
     e.update({k: str(v) for k, v in env.items()})
     r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
                        env=e, timeout=120)
@@ -345,3 +351,66 @@ def test_the_reload_refusal_is_not_reported_as_a_surprise(sandbox):
     both = out + err
     assert "admin API is off (by design)" in both
     assert "caddy reload failed" not in both
+
+
+def curl_calls(sandbox):
+    try:
+        return open(sandbox["curl_log"], encoding="utf-8").read()
+    except FileNotFoundError:
+        return ""
+
+
+# ---- the probe must reach the gateway the way a BROWSER does ----------------
+# Found on a live server: `slop update` reported "NOT answering on port 443"
+# while the gateway was, in the same minute, serving that operator's browser and
+# logging 502s from apps behind it. The gateway has no domain — it mints one
+# self-signed cert under a fixed internal name and relies on `default_sni` to
+# serve it to clients that send NO SNI, which is what a browser hitting
+# https://<server-ip>/ does. curl DOES send SNI for a hostname, so probing
+# `https://localhost/` matched no certificate and Caddy aborted the handshake.
+# `-k` cannot help: the failure is a TLS alert from the server, not a validation
+# error at the client. Reproduced against real Caddy 2.8.4 with this exact
+# default_sni setup — localhost: curl exit 35, no HTTP at all; 127.0.0.1: 200.
+def test_the_probe_never_asks_for_a_hostname_the_gateway_cannot_serve(sandbox):
+    run(sandbox, "_health slop")
+    calls = curl_calls(sandbox)
+    assert calls.strip(), "the probe made no request at all"
+    assert "localhost" not in calls, f"probed by name, which the gateway cannot serve: {calls}"
+    assert "127.0.0.1" in calls, calls
+
+
+def test_a_redirect_to_sign_in_is_the_gateways_healthy_answer(sandbox):
+    """The apex is behind forward_auth, so an anonymous probe is SUPPOSED to be
+    bounced to /login. Treating that as a near-miss would fail every healthy
+    gateway."""
+    rc, out, err = run(sandbox, "_health_wait slop 4", FAKE_HTTP_CODE="302")
+    assert rc == 0, err
+    assert "health: OK" in out
+
+
+def test_a_gateway_that_proxies_a_dead_app_is_still_a_live_gateway(sandbox):
+    """A 502 from a REVERSE PROXY means the proxy is up and something behind it
+    is not. Reporting 'the gateway is not answering' there sends the operator to
+    restart the one component that was working."""
+    rc, out, err = run(sandbox, "_health_wait slop 4", FAKE_HTTP_CODE="502")
+    assert rc == 0, err
+    both = out + err
+    assert "is answering" in both, both
+    assert "BEHIND the gateway" in both, both
+    assert "NOT answering" not in both, both
+
+
+def test_an_app_that_answers_502_is_NOT_called_healthy(sandbox):
+    """The proxy allowance is for the gateway alone — an app's own health
+    endpoint returning 502 is a failed bring-up."""
+    rc, out, err = run(sandbox, "_health_wait controller 4", FAKE_HTTP_CODE="502")
+    assert rc == 1
+    assert "answered 502" in err, err
+    assert "not a healthy status" in err, err
+
+
+def test_nothing_listening_still_says_NOT_answering(sandbox):
+    """The two faults must stay distinguishable in the message."""
+    rc, out, err = run(sandbox, "_health_wait controller 4", FAKE_HEALTH_FAIL="1")
+    assert rc == 1
+    assert "NOT answering on port 8800" in err, err

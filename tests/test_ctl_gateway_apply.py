@@ -66,6 +66,7 @@ exit 0
 """
 
 FAKE_CURL = r"""#!/bin/sh
+[ -n "$FAKE_CURL_LOG" ] && printf '%s\n' "$*" >> "$FAKE_CURL_LOG"
 printf '%s' "${FAKE_HTTP_CODE:-000}"
 exit 0
 """
@@ -90,7 +91,8 @@ def sandbox(tmp_path):
     lib = re.sub(r'^main "\$@"\s*$', "", src, flags=re.M)
     libp = tmp_path / "ctl.lib.sh"
     libp.write_text(lib)
-    return {"bin": str(bindir), "lib": str(libp), "log": str(tmp_path / "docker.log")}
+    return {"bin": str(bindir), "lib": str(libp), "log": str(tmp_path / "docker.log"),
+            "curl_log": str(tmp_path / "curl.log")}
 
 
 def run(sandbox, snippet: str, **env):
@@ -101,6 +103,7 @@ def run(sandbox, snippet: str, **env):
         "PATH": sandbox["bin"] + ":" + os.environ.get("PATH", "/usr/bin:/bin"),
         "FAKE_LOG": sandbox["log"],
         "HOME": os.environ.get("HOME", "/root"),
+        "FAKE_CURL_LOG": sandbox["curl_log"],
     }
     e.update({k: str(v) for k, v in env.items()})
     r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=e, timeout=120)
@@ -722,3 +725,85 @@ def test_a_failed_recreate_tells_the_operator_what_to_run(sandbox, tmp_path):
     ''', FAKE_NO_CONTAINER="1")
     # No controller checkout at all: seeding is skipped entirely, nothing claimed.
     assert "Recreating" not in out
+
+
+def curl_calls(sandbox):
+    try:
+        return open(sandbox["curl_log"], encoding="utf-8").read()
+    except FileNotFoundError:
+        return ""
+
+
+# ---- the deny-path check must be ABLE to run --------------------------------
+# This check exists to catch the worst possible gateway state: forward_auth's deny
+# branch not firing, so every app behind the gateway is served to anyone. It
+# probed https://localhost/, and the gateway holds a certificate only for its
+# internal cert-holder name, served via default_sni to clients that send NO SNI.
+# curl sends SNI for a hostname, so the handshake was refused and no HTTP status
+# ever came back — the loop spun out, warned "last HTTP status: none", and
+# RETURNED 0. The security check failed open, silently, on every real install.
+# (Reproduced against real Caddy 2.8.4 with this default_sni setup: localhost ->
+# curl exit 35 and no HTTP at all; 127.0.0.1 -> a normal response.)
+def test_the_deny_check_probes_an_address_the_gateway_can_actually_serve(sandbox):
+    rc, out, err = run(sandbox, "_slop_verify_gateway_denies", FAKE_HTTP_CODE="302")
+    assert rc == 0, err
+    calls = curl_calls(sandbox)
+    assert calls.strip(), "the deny check made no request at all"
+    assert "localhost" not in calls, f"probed by name, which the gateway cannot serve: {calls}"
+    assert "127.0.0.1" in calls, calls
+
+
+def test_the_hand_check_it_prints_is_one_that_works(sandbox):
+    """It used to hand the operator the same command that cannot work, so anyone
+    following the advice saw the same silence and concluded the gateway was
+    broken rather than the check."""
+    rc, out, err = run(sandbox, "_slop_verify_gateway_denies", FAKE_HTTP_CODE="000")
+    both = out + err
+    assert "Check it by hand" in both, both
+    assert "https://127.0.0.1:443/" in both, both
+    assert "https://localhost" not in both, both
+
+
+def test_an_unauthenticated_200_is_still_caught_and_fails(sandbox):
+    """The point of the whole check — pinned so the address change did not
+    weaken it."""
+    rc, out, err = run(sandbox, "_slop_verify_gateway_denies", FAKE_HTTP_CODE="200")
+    assert rc == 1
+    assert "UNAUTHENTICATED" in err, err
+
+
+# ---- `slop status` must name the app that is down ---------------------------
+# An operator whose console is full of 502s saw "sysible-slop-gateway Up 2 hours"
+# and every SLOP container healthy, with nothing anywhere naming the app that was
+# actually refusing connections. The gateway already publishes /healthz/<app>.
+def test_status_names_an_app_the_gateway_cannot_reach(sandbox):
+    rc, out, err = run(sandbox, "_slop_upstream_status", FAKE_HTTP_CODE="502")
+    both = out + err
+    for app in ("Sysible Controller", "Sysible Linux Engineering Platform", "Sysible Connect"):
+        assert app in both, f"{app} was not reported: {both}"
+    assert "cannot reach it" in both, both
+    assert "8800" in both, both        # and says which port to look at
+    assert "up" in both                # and what to run
+
+
+def test_status_says_so_when_every_app_is_reachable(sandbox):
+    rc, out, err = run(sandbox, "_slop_upstream_status", FAKE_HTTP_CODE="200")
+    both = out + err
+    assert both.count("reachable from the gateway") == 3, both
+    assert "cannot reach" not in both, both
+
+
+def test_status_does_not_blame_the_apps_when_the_gateway_is_down(sandbox):
+    """000 means nothing answered on 443 at all. Listing three unreachable apps
+    there points at three innocent boxes."""
+    rc, out, err = run(sandbox, "_slop_upstream_status", FAKE_HTTP_CODE="000")
+    both = out + err
+    assert "the gateway is down" in both, both
+    assert "cannot reach it" not in both, both
+
+
+def test_the_upstream_probe_also_uses_an_address_not_a_name(sandbox):
+    run(sandbox, "_slop_upstream_status", FAKE_HTTP_CODE="200")
+    calls = curl_calls(sandbox)
+    assert "localhost" not in calls, calls
+    assert "127.0.0.1" in calls, calls

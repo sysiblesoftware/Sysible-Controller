@@ -174,14 +174,63 @@ _present() {
   [[ -n "$(_p_dir_override "$1")" ]]
 }
 
-# Health probe for product $1 (HTTPS first — self-signed, hence -k — then HTTP).
-_health() {
-  local p="$1" port path url
+# The HTTP status a product answers its health path with — or nothing at all.
+#
+# PROBE BY IP, NEVER BY NAME. The SLOP gateway has no domain: it mints ONE
+# self-signed cert under a fixed internal name (the cert-holder site) and leans on
+# `default_sni` to serve that cert for connections which send NO SNI — which is
+# exactly what a browser hitting https://<server-ip>/ does. curl DOES send SNI for
+# a hostname, so `https://localhost/` matches no certificate and Caddy aborts the
+# handshake; `-k` cannot rescue that, because the failure is a TLS alert from the
+# SERVER, not a validation error at the client. Probing localhost asked the gateway
+# for the one thing it is built never to serve, so every `slop update` reported a
+# perfectly healthy gateway as "NOT answering on port 443" — while the same gateway
+# was visibly serving the operator's browser. curl sends no SNI for an IP literal,
+# so 127.0.0.1 reproduces the browser's path exactly.
+#
+# -w '%{http_code}', not -f: -f collapses "nothing is listening" and "it answered,
+# with a status I did not like" into one exit code, and those need different
+# advice. curl prints 000 and exits non-zero when it never got an HTTP response.
+_health_probe() {
+  local p="$1" port path url code
   port="$(_p_port "$p")"; path="$(_p_health_path "$p")"
-  for url in "https://localhost:${port}${path}" "http://localhost:${port}${path}"; do
-    if curl -fsk --max-time 5 "$url" >/dev/null 2>&1; then _ok "  health: OK  ($url)"; return 0; fi
+  for url in "https://127.0.0.1:${port}${path}" "http://127.0.0.1:${port}${path}"; do
+    code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || true)"
+    if [[ -n "$code" && "$code" != "000" ]]; then printf '%s %s\n' "$code" "$url"; return 0; fi
   done
   return 1
+}
+
+# Does that status count as healthy for THIS product?
+_health_verdict() {
+  local p="$1" code="$2"
+  # 3xx is the healthy answer for the gateway, not a near-miss: its apex sits
+  # behind forward_auth, so an anonymous probe is redirected to /login.
+  case "$code" in 2*|3*) return 0 ;; esac
+  # The gateway is a REVERSE PROXY. A 4xx/5xx from it means the gateway itself is
+  # up and something BEHIND it is not — calling that "the gateway is not answering"
+  # sends the operator to fix the wrong box, which is the exact misdiagnosis this
+  # whole check was added to prevent.
+  [[ "$p" == "slop" ]] && return 0
+  return 1
+}
+
+# Health probe for product $1. Quiet on failure: _health_wait polls this for up to
+# a minute and does the reporting, so a line per attempt would bury the result.
+_health() {
+  local p="$1" out code url
+  out="$(_health_probe "$p")" || return 1
+  code="${out%% *}"; url="${out#* }"
+  _health_verdict "$p" "$code" || return 1
+  case "$code" in
+    2*|3*) _ok "  health: OK  ($url -> $code)" ;;
+    *)     _ok "  health: $(_p_pretty "$p") is answering ($url -> $code)"
+           # The apex proxies to the portal/IdP, so a 5xx here is that service —
+           # not one of the three fronted apps. Point at the command that says which.
+           _warn "  $code comes from BEHIND the gateway (the portal/IdP), not the gateway itself."
+           _warn "  For the fronted apps: $(basename "$0") slop status" ;;
+  esac
+  return 0
 }
 
 # Wait for a product to actually answer, then SAY SO — or say why it didn't.
@@ -199,7 +248,15 @@ _health_wait() {
     if _health "$p"; then return 0; fi
     sleep 2
   done
-  _err "$(_p_pretty "$p") is NOT answering on port ${port} after ${secs}s."
+  # "Not answering" and "answering with a status I refuse" are different faults
+  # and need different advice; saying the first when it was the second is how an
+  # operator ends up restarting a service that was never the problem.
+  local last; last="$(_health_probe "$p" || true)"
+  if [[ -n "$last" ]]; then
+    _err "$(_p_pretty "$p") answered ${last%% *} on port ${port} after ${secs}s — not a healthy status."
+  else
+    _err "$(_p_pretty "$p") is NOT answering on port ${port} after ${secs}s."
+  fi
   if docker inspect "$c" >/dev/null 2>&1; then
     docker ps -a --filter "name=^/${c}$" \
       --format '    {{.Names}}  {{.Status}}  {{.Ports}}' 2>/dev/null
@@ -562,8 +619,18 @@ _slop_verify_gateway_denies() {
   }
   # Up to ~15s: the idp is rebuilt by the same update, and while it is starting
   # forward_auth has nothing to ask, so a transient 502 here is expected.
+  #
+  # 127.0.0.1, NOT localhost — and this one matters more than the health probe.
+  # curl sends SNI for a hostname; the gateway has a cert only for its internal
+  # cert-holder name and serves it via default_sni to clients that send NONE, so a
+  # request to https://localhost/ is refused at the TLS handshake and never
+  # produces an HTTP status at all. This loop would then spin out all 15 seconds,
+  # report "could not verify the gateway's deny path (last HTTP status: none)" and
+  # RETURN 0 — so the check that exists to catch "every app behind the gateway is
+  # being served to anyone" could never once have run on a real install. It failed
+  # open, quietly, which is the worst way for a security check to fail.
   for i in $(seq 1 15); do
-    code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "https://localhost:${port}/" 2>/dev/null || true)"
+    code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 "https://127.0.0.1:${port}/" 2>/dev/null || true)"
     case "$code" in
       30[1237]) _ok "  verified: anonymous requests are redirected to sign-in ($code)"; return 0 ;;
       200)      _err "the gateway served the portal to an UNAUTHENTICATED request (HTTP 200)."
@@ -575,8 +642,34 @@ _slop_verify_gateway_denies() {
     sleep 1
   done
   _warn "  could not verify the gateway's deny path (last HTTP status: ${code:-none})."
-  _warn "  Check it by hand: curl -sk -o /dev/null -w '%{http_code}\\n' https://localhost:${port}/  (expect 302)"
+  _warn "  Check it by hand: curl -sk -o /dev/null -w '%{http_code}\\n' https://127.0.0.1:${port}/  (expect 302)"
   return 0
+}
+
+# Which apps BEHIND the gateway are actually reachable from it.
+#
+# The gateway being up says nothing about the three apps it fronts, and the
+# difference is invisible from `ps`: an operator whose console is full of 502s
+# sees "sysible-slop-gateway  Up 2 hours" and every SLOP container healthy, with
+# nothing anywhere naming the app that is down. The gateway already publishes the
+# answer at /healthz/<app> (public, up/down only) — this just asks it, from the
+# same side of the proxy the browser is on.
+_slop_upstream_status() {
+  local app port code
+  command -v curl >/dev/null 2>&1 || return 0
+  port="$(_p_port slop)"
+  _hdr "Apps behind the gateway"
+  for app in controller slep connect; do
+    code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 \
+            "https://127.0.0.1:${port}/healthz/${app}" 2>/dev/null || true)"
+    case "$code" in
+      2*)         _ok "  $(_p_pretty "$app"): reachable from the gateway ($code)" ;;
+      50[234])    _warn "  $(_p_pretty "$app"): the gateway cannot reach it ($code) — its container is"
+                  _warn "    not running or not listening on port $(_p_port "$app"). Try: $(basename "$0") $app up" ;;
+      ""|000)     _warn "  $(_p_pretty "$app"): no answer from the gateway at all — the gateway is down."; return 0 ;;
+      *)          _warn "  $(_p_pretty "$app"): the gateway answered $code for its health path" ;;
+    esac
+  done
 }
 
 p_status() {
@@ -586,7 +679,7 @@ p_status() {
   if _discover "$p"; then _compose ps 2>/dev/null || true
   else docker ps -a --filter "name=^/$(_p_container "$p")$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null | tail -n +1; fi
   _health "$p" || true
-  [[ "$p" == "slop" ]] && _flashback_status
+  [[ "$p" == "slop" ]] && { _slop_upstream_status; _flashback_status; }
   return 0
 }
 

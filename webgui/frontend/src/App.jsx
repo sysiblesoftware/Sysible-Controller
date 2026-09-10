@@ -200,11 +200,44 @@ function setSearchView(v) {
   } catch { /* ignore */ }
 }
 
+// Shown when SLOP is this console's identity authority but the request carried no
+// usable SSO session — a gateway that could not vouch for the browser, or an SSO
+// sign-in the controller could not turn into a local account. The console has no
+// login of its own in that mode, so offering the form would strand the operator
+// on a screen whose every answer is 403.
+function SsoSignIn() {
+  return (
+    <div className="login-wrap">
+      <div className="card" style={{ maxWidth: 460, padding: 24 }}>
+        <h2 style={{ marginTop: 0 }}>Sign in at Sysible Linux Operations Platform</h2>
+        <p className="faint">
+          This console has no separate login — accounts live in SLOP. Sign in at the
+          platform front door and open Controller from the portal.
+        </p>
+        <div className="row" style={{ gap: 8, marginTop: 14 }}>
+          <a className="btn" href="/login">Go to sign-in</a>
+          <button className="btn ghost" onClick={() => window.location.reload()}>Try again</button>
+        </div>
+        <p className="faint" style={{ fontSize: 12, marginTop: 14, marginBottom: 0 }}>
+          Already signed in to SLOP and still seeing this? The controller could not
+          establish a session for your account — check the web console log
+          (<span className="mono">sysible_ctl controller logs</span>) for the reason.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [role, setRole] = useState("");
   const [checking, setChecking] = useState(true);
   const [setupRequired, setSetupRequired] = useState(false);
+  // SLOP owns identity here, but this browser has no usable SSO session. The
+  // login form would be a dead end — under SSO the login POST answers 403 to
+  // every credential — so say what is actually wrong instead.
+  const [ssoBlocked, setSsoBlocked] = useState(false);
   const [mustChange, setMustChange] = useState(false);
   // True when SLOP owns identity: accounts are managed in SLOP Administration,
   // so this console must not offer a second set of them.
@@ -281,6 +314,13 @@ export default function App() {
                      setSso(!!d.sso); })
       .catch(async () => {
         setUser(null);
+        // Which kind of "not signed in" is this? Under SLOP SSO the console has no
+        // login of its own, so falling through to the form leaves the operator
+        // typing credentials at a screen that can only ever answer 403.
+        try {
+          const m = await api.authMode();
+          if (m && m.sso) { setSsoBlocked(true); return; }
+        } catch { /* fall through to the normal paths */ }
         // Not signed in — on a brand-new controller with no admin yet, show the
         // first-run create-administrator screen instead of an unusable login form.
         try {
@@ -354,6 +394,7 @@ export default function App() {
 
   if (checking) return <div className="login-wrap"><span className="spin" /></div>;
   // Fresh controller, no admin yet → first-run create-administrator screen.
+  if (!user && ssoBlocked) return <SsoSignIn />;
   if (!user && setupRequired) {
     return <Setup onDone={(username, r) => { setSetupRequired(false); onLoggedIn(username, r, false); }} />;
   }

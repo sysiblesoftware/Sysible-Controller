@@ -15,7 +15,7 @@ import os
 import pytest
 
 from conftest import key_headers, API_KEY  # noqa: F401
-from backend import db
+from backend import db, portal_auth
 
 _SECRET = "sso-shared-secret-test"
 
@@ -106,13 +106,65 @@ def test_secret_unset_fails_closed(controller, monkeypatch):
     assert r.status_code == 403
 
 
-def test_refuses_to_regrade_a_locally_managed_admin(controller, make_admin):
-    """A locally-managed admin (created_by != 'sso') must never be re-graded via the
-    SSO bridge — closes the 'promote an existing low-priv admin to superuser' path."""
-    # make_admin creates a normal (created_by=NULL) sysadmin account.
-    make_admin("local-ops", "sysadmin")
+def test_a_colliding_local_admin_is_adopted_not_refused(controller, make_admin):
+    """It used to 409, and the refusal was terminal: the console could not mint a
+    session, so the operator was shown a login form that (in SSO mode) answers 403
+    to every credential. A controller set up standalone and later put behind SLOP
+    hit this on its very first sign-in — both default to the name `admin`.
+
+    Adoption cannot escalate. Only a SLOP superuser can mint a username, and they
+    can already reach any role here with a name that is free; what they get by
+    colliding is the SAME role SLOP asserts, on an account whose local credential
+    is destroyed in the process (below)."""
+    make_admin("local-ops", "sysadmin")           # created_by is not 'sso'
     r = controller.post("/admin/sso-provision",
                         json={"username": "local-ops", "role": "superuser"},
                         headers=_gw_headers())
+    assert r.status_code == 200, r.text
+    row = db.get_administrator("local-ops")
+    assert row["created_by"] == "sso" and row["role"] == "superuser"
+
+
+def test_adoption_destroys_the_local_credential(controller, make_admin):
+    """The controller's own /admin/login is still reachable on its backend port.
+    An adopted account that kept its password would be a live credential SLOP's
+    sign-out knows nothing about."""
+    make_admin("local-ops", "sysadmin", password="Password123!")
+    before = db.get_administrator("local-ops")
+    assert portal_auth.verify_password("Password123!", before["password_salt"],
+                                       before["password_hash"])
+    controller.post("/admin/sso-provision",
+                    json={"username": "local-ops", "role": "sysadmin"},
+                    headers=_gw_headers())
+    after = db.get_administrator("local-ops")
+    ok = False
+    try:
+        ok = portal_auth.verify_password("Password123!", after["password_salt"],
+                                         after["password_hash"])
+    except Exception:
+        ok = False
+    assert not ok, "the adopted account's local password still works"
+
+
+def test_adoption_still_clamps_to_the_asserted_role(controller, make_admin):
+    """A superuser local account whom SLOP calls an auditor becomes an auditor —
+    the asserted role is a ceiling as much as a floor."""
+    make_admin("local-boss", "superuser")
+    r = controller.post("/admin/sso-provision",
+                        json={"username": "local-boss", "role": "auditor"},
+                        headers=_gw_headers())
+    assert r.status_code == 200, r.text
+    assert db.get_administrator("local-boss")["role"] == "auditor"
+
+
+def test_a_malformed_legacy_name_is_still_refused(controller):
+    """An adopted name becomes a run-as and reaches a host command, so it has to
+    pass the same policy a new one does — a legacy row that today's rules would
+    reject must not become SSO-owned just because it already exists."""
+    salt, pw = portal_auth.hash_password("x")
+    db.add_administrator("-oProxyCommand=x", pw, salt, created_by="setup", role="sysadmin")
+    r = controller.post("/admin/sso-provision",
+                        json={"username": "-oProxyCommand=x", "role": "superuser"},
+                        headers=_gw_headers())
     assert r.status_code == 409
-    assert db.get_administrator("local-ops")["role"] == "sysadmin"
+    assert db.get_administrator("-oProxyCommand=x")["role"] == "sysadmin"

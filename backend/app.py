@@ -67,6 +67,7 @@ from backend.db import (
     remove_administrator,
     set_administrator_sudo_connect,
     set_administrator_role,
+    adopt_administrator_for_sso,
     count_administrators_by_role,
     update_administrator_password,
     update_administrator_username,
@@ -1957,7 +1958,19 @@ def agent_config_poll_times():
     otherwise indistinguishable from "its next check-in hasn't come round yet",
     and that ambiguity is the whole reason "Back up now" could look like it did
     nothing."""
-    return {"hosts": get_config_poll_times()}
+    from backend import flashback
+    return {"hosts": get_config_poll_times(),
+            # Whether THIS controller can relay snapshots at all. Without it the
+            # console can only reason per-agent, so a controller with no Flashback
+            # wiring made every host look like a stale agent — and sent the
+            # operator off updating agents that were already current.
+            "config_backup_configured": flashback.configured(),
+            "config_backup_reason": (None if flashback.configured() else
+                                     "this controller has no Flashback wiring "
+                                     "(SYSIBLE_FLASHBACK_URL / "
+                                     "SYSIBLE_FLASHBACK_AGENT_TOKEN unset), so no "
+                                     "host can capture — re-run the SLOP installer "
+                                     "or set them in the controller's .env")}
 
 
 @app.post("/agents/{host_id}/request-capture", dependencies=[Depends(require_api_key)])
@@ -1984,11 +1997,17 @@ def agent_config_restores(host_id: str,
     # way the console can tell "wait for the next check-in" from "this host will
     # never capture until its agent is updated".
     mark_config_poll(host_id)
+    # Fetch FIRST, consume the capture request second. The other order dropped a
+    # "Back up now" on the floor whenever Flashback was unconfigured or briefly
+    # unreachable: the request was discarded, then the response 503'd, so the
+    # agent never learned a capture had been asked for and the operator's click
+    # simply vanished. A capture needs Flashback anyway, so leaving it queued
+    # until the poll can actually answer is both safe and what the operator meant.
+    restores = _flashback_or_503(flashback.pending_restores, host_id)
     with _CAPTURE_LOCK:
         wanted = host_id in _CAPTURE_REQUESTS
         _CAPTURE_REQUESTS.discard(host_id)     # hand it over exactly once
-    return {"restores": _flashback_or_503(flashback.pending_restores, host_id),
-            "capture_requested": wanted}
+    return {"restores": restores, "capture_requested": wanted}
 
 
 @app.get("/agents/{host_id}/config-restores/{restore_id}/payload")
@@ -3628,8 +3647,33 @@ def ensure_sso_account(username: str, role: str, origin: str = "gateway") -> Non
                         f"role={role} (via SLOP SSO, {origin})")
         return
     if (acct.get("created_by") or "") != "sso":
-        raise ValueError("An administrator with that username already exists and is "
-                         "not SSO-managed; refusing to re-grade it via SSO.")
+        # ADOPT it rather than refusing. Refusing looks safe and is actually a
+        # dead end: the console can't mint a session, so the operator lands on its
+        # own login screen — which in SSO mode answers every credential with "this
+        # console has no separate login". A controller set up standalone and later
+        # put behind SLOP hit this on the very first sign-in, because both default
+        # to the name `admin`, and no amount of retrying cleared it.
+        #
+        # Adoption escalates nothing: the role written is the one SLOP asserts, and
+        # only a SLOP superuser can mint a username at all — they can already reach
+        # any role here by choosing a name that is free. What it does do is move
+        # ownership, so it is lossy in the safe direction (see the db helper): the
+        # local password is scrubbed unusable and sudo_connect is revoked.
+        # Hold an adopted name to the SAME policy a new one must pass. The name
+        # becomes a run-as — it reaches a host command as the account a shell runs
+        # under (see remote_routes._resolve_admin_username) — so a legacy row with
+        # a name today's rules would refuse must not become SSO-owned by adoption.
+        from backend.models.portal_models import _validate_admin_name
+        _validate_admin_name(username)            # raises ValueError if malformed
+        prev_role = acct.get("role") or "superuser"
+        prev_owner = acct.get("created_by") or "unknown"
+        salt, password_hash = portal_auth.hash_password(secrets.token_urlsafe(32))
+        adopt_administrator_for_sso(username, role, password_hash, salt)
+        log_admin_audit("sso_account_adopted", username,
+                        f"local account (created_by={prev_owner}, role={prev_role}) "
+                        f"taken over by SLOP SSO at role={role}; local password "
+                        f"disabled and sudo_connect revoked ({origin})")
+        return
     if (acct.get("role") or "superuser") != role:
         # SLOP is authoritative for identity → keep the local SSO role in lockstep.
         set_administrator_role(username, role)

@@ -2184,6 +2184,41 @@ def set_administrator_role(username, role):
     return changed > 0
 
 
+def adopt_administrator_for_sso(username, role, password_hash, password_salt):
+    """Hand an existing LOCAL administrator row over to SLOP single sign-on.
+
+    WHY THIS EXISTS. SSO provisioning used to REFUSE a username already held by a
+    locally-created admin, and the refusal was terminal: the console would not mint
+    a session, so the operator got the console's own login screen — which, in SSO
+    mode, answers every credential with "this console has no separate login". A
+    Controller set up standalone and later put behind SLOP (the ordinary upgrade
+    path, and both default to the name `admin`) was simply unreachable.
+
+    Adoption cannot escalate anything: the role written here is the one SLOP
+    asserts, and only a SLOP superuser can mint a username in the first place — and
+    they can already reach any role on this controller by creating a fresh name. It
+    does move ownership, so it is deliberately lossy in the safe direction:
+
+      * the local password is replaced with an unusable random one, so the adopted
+        account cannot still be signed into at the controller's own /admin/login;
+      * sudo_connect is cleared — a grant made to the LOCAL admin must not ride
+        along to whoever now holds that name in SLOP;
+      * must_change_password is cleared, since there is no local password to rotate.
+    """
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("""
+    UPDATE administrators
+    SET created_by='sso', role=?, password_hash=?, password_salt=?,
+        must_change_password=0, sudo_connect=0
+    WHERE username=?
+    """, (role, password_hash, password_salt, username))
+    conn.commit()
+    changed = cur.rowcount
+    conn.close()
+    return changed > 0
+
+
 def set_administrator_sudo_connect(username, allowed):
     """Grant/revoke this admin's access to the Sysible Connect terminal's
     "Send sudo password" button. Superuser-gated at the route layer."""

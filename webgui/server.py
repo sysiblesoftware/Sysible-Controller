@@ -919,6 +919,17 @@ def me(request: Request):
     }
 
 
+@app.get("/api/auth-mode")
+def auth_mode():
+    """PUBLIC: which sign-in this console uses. The SPA asks this after a 401 so it
+    can tell "your session expired, here is the login form" from "SLOP owns
+    identity here" — in SSO mode the login POST answers 403 to every credential,
+    so rendering the form at all strands the operator on a screen that cannot
+    work. Says nothing beyond the mode; the reason a particular SSO sign-in failed
+    stays in the server log, where it is not readable by an anonymous caller."""
+    return {"sso": sso_only()}
+
+
 @app.get("/api/auth/verify")
 def auth_verify(request: Request, response: Response):
     """SSO auth-probe for the SLOP gateway's forward_auth (Controller as IdP).
@@ -1004,10 +1015,18 @@ def hosts(user: str = Depends(require_login)):
     # explain a host that never captures: an agent that has NEVER polled is
     # running a build without config backup, which is otherwise indistinguishable
     # from "the next check-in hasn't come round yet".
+    # NOTE THE ENVELOPE. The controller answers {"hosts": {...}} — reading the
+    # reply as the map itself made every lookup miss, so last_config_poll came out
+    # None for EVERY host. Flashback reads None as "this agent's build predates
+    # config backup" and told the operator to update agents that were perfectly
+    # current, on every row, forever. Accept a bare mapping too, so an older
+    # controller that answers without the envelope still works.
     try:
-        config_poll = api.get_config_poll_times() or {}
+        _poll = api.get_config_poll_times() or {}
+        config_poll = _poll.get("hosts") if isinstance(_poll.get("hosts"), dict) else _poll
     except Exception:
         config_poll = {}
+        _poll = {}
 
     # Merge a read-only "critical" flag from the cached posture sweep so the host
     # picker can flag hosts with an active sev-1 finding. Cache-only: we never
@@ -1079,7 +1098,13 @@ def hosts(user: str = Depends(require_login)):
             # reports them.
             "vm_names": vm_names,
         })
-    return {"hosts": out}
+    return {"hosts": out,
+            # Controller-wide config-backup wiring, so a console can say "this
+            # controller cannot capture" instead of blaming each agent in turn.
+            # Absent from an older controller, which is why the default is None
+            # (unknown) rather than False (broken).
+            "config_backup_configured": _poll.get("config_backup_configured"),
+            "config_backup_reason": _poll.get("config_backup_reason")}
 
 
 def _parse_sysmetrics(text):
@@ -2112,7 +2137,7 @@ def fleet_updates_install(body: InstallUpdatesRequest, request: Request,
         for old in sorted(_INSTALL_JOBS.values(), key=lambda j: j["started"])[:-19]:
             _INSTALL_JOBS.pop(old["id"], None)
         _INSTALL_JOBS[job_id] = {"id": job_id, "kind": body.kind, "started": _t.time(),
-                                 "done": False, "hosts": hosts}
+                                 "done": False, "finished": None, "hosts": hosts}
 
     def work():
         import concurrent.futures
@@ -2131,6 +2156,7 @@ def fleet_updates_install(body: InstallUpdatesRequest, request: Request,
             with _INSTALL_LOCK:
                 if job_id in _INSTALL_JOBS:
                     _INSTALL_JOBS[job_id]["done"] = True
+                    _INSTALL_JOBS[job_id]["finished"] = _t.time()
             _UPDATES_CACHE["ts"] = 0   # force a fresh count sweep next poll
 
     import threading
@@ -2148,6 +2174,48 @@ def fleet_updates_install_status(job_id: str, user: str = Depends(require_operat
         if not job:
             raise HTTPException(status_code=404, detail="Install job not found (it may have expired).")
         return copy.deepcopy(job)
+
+
+@app.get("/api/fleet-updates/install-jobs")
+def fleet_updates_install_jobs(user: str = Depends(require_operator)):
+    """The recent background install jobs, newest first.
+
+    WHY THIS EXISTS. An install runs on the controller, not in the operator's tab,
+    but the Update Hosts page held the job id only in component state — so leaving
+    the page and coming back lost the progress panel while the install carried
+    on running, with no way back to it. The page now asks for this on mount and
+    re-attaches: to a job still in flight, and to one that finished while the
+    operator was elsewhere, which is the only place a failed host's output lives.
+
+    Summaries only. The page pulls the single job it is going to show through
+    install-status, so a job's per-host command output never rides along twenty
+    times over.
+
+    Ages are computed HERE rather than handing out raw epochs for the browser to
+    subtract from its own clock — the two do not have to agree, and a skewed
+    workstation would otherwise decide a job that just finished was hours old.
+    """
+    import time as _t
+    now = _t.time()
+    with _INSTALL_LOCK:
+        snap = [{"id": j["id"], "kind": j.get("kind"), "started": j.get("started"),
+                 "finished": j.get("finished"), "done": bool(j.get("done")),
+                 "statuses": [h.get("status") for h in (j.get("hosts") or [])]}
+                for j in sorted(_INSTALL_JOBS.values(),
+                                key=lambda j: j["started"], reverse=True)]
+    jobs = []
+    for j in snap:
+        st = j["statuses"]
+        jobs.append({
+            "id": j["id"], "kind": j["kind"], "done": j["done"],
+            "total": len(st),
+            "complete": sum(1 for x in st if x in ("done", "failed")),
+            "failed": sum(1 for x in st if x == "failed"),
+            "age": max(0, int(now - (j["started"] or now))),
+            "finished_ago": (None if not j["finished"]
+                             else max(0, int(now - j["finished"]))),
+        })
+    return {"jobs": jobs}
 
 
 # ----------------------------------------------------------------------

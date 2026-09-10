@@ -168,13 +168,29 @@ def test_an_unknown_asserted_role_is_provisioned_read_only(sso):
     assert db.get_administrator("dave")["role"] == "auditor"
 
 
-def test_a_locally_managed_admin_of_the_same_name_is_never_regraded(sso, make_admin):
-    """SSO owns only the accounts it created. A local admin must not be silently
-    promoted (or demoted) because SLOP asserts a name that collides."""
+def test_a_colliding_local_admin_is_taken_over_on_the_asserted_terms(sso, make_admin):
+    """This used to resolve to None — no run-as — because SSO refused to touch a
+    name a local admin already held. The refusal was worse than it looked: the
+    console's sign-in refused the same collision outright, so an operator on a
+    controller that was set up standalone first could not sign in at all.
+
+    The name is now taken over, and the terms are SLOP's: the role written is the
+    asserted one, so this cannot be used to inherit a local admin's privileges —
+    only to be told, by SLOP, what they are."""
     make_admin("localadmin", "auditor")          # created_by is not 'sso'
-    assert remote_routes._resolve_admin_username(
-        _Req(sso_headers("localadmin", "superuser"))) is None
-    assert db.get_administrator("localadmin")["role"] == "auditor", "role was re-graded"
+    who = remote_routes._resolve_admin_username(_Req(sso_headers("localadmin", "operator")))
+    assert who == "localadmin"
+    row = db.get_administrator("localadmin")
+    assert row["created_by"] == "sso"
+    assert row["role"] == "sysadmin", "the asserted role must win, not the local one"
+
+
+def test_a_takeover_cannot_be_used_to_climb(sso, make_admin):
+    """The asserted role is a ceiling too: a local SUPERUSER whom SLOP calls an
+    auditor comes out an auditor, and is refused a shell."""
+    make_admin("localboss", "superuser")
+    remote_routes._resolve_admin_username(_Req(sso_headers("localboss", "auditor")))
+    assert db.get_administrator("localboss")["role"] == "auditor"
 
 
 def test_a_header_injection_attempt_cannot_become_the_run_as(sso):

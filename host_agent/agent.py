@@ -1525,11 +1525,30 @@ def _d3_ack(state, rid, ok, path=""):
         print(f"[agent] restore {rid}: could not acknowledge: {e}")
 
 
+_D3_LAST_REFUSAL = [0.0, ""]
+
+
 def _d3_poll_restores(state):
     r = _request("GET", f"/agents/{state['host_id']}/config-restores",
                  headers={"X-Agent-Secret": state["agent_secret"]}, timeout=20)
     if r.status_code >= 400:
+        # Say WHY, or the host's journal is silent about the one thing an
+        # operator staring at "Back up now did nothing" needs to know. A 503 here
+        # means the controller has no Flashback wiring — a platform fact that
+        # would otherwise repeat every poll, so log it once and then only when it
+        # changes or every 10 minutes.
+        detail = ""
+        try:
+            detail = (r.json() or {}).get("detail") or ""
+        except Exception:
+            detail = (r.text or "")[:200]
+        line = f"HTTP {r.status_code}: {detail}"
+        now = time.time()
+        if line != _D3_LAST_REFUSAL[1] or now - _D3_LAST_REFUSAL[0] > 600:
+            _D3_LAST_REFUSAL[0], _D3_LAST_REFUSAL[1] = now, line
+            print(f"[agent] config-backup poll refused ({line})")
         return
+    _D3_LAST_REFUSAL[1] = ""
     try:
         body = r.json() or {}
     except Exception:

@@ -3,6 +3,37 @@ import { api } from "../api.js";
 import HostResults from "../components/HostResults.jsx";
 
 const C = { sec: "#e06c6c", upd: "#e0a83a", ok: "#4ec07a", reboot: "#e0a83a", faint: "#7a7a7a" };
+
+// An install runs on the CONTROLLER, not in this tab, so the progress panel has
+// to be able to find its way back after a navigation — leaving the page used to
+// drop it on the floor while the install carried on running. The controller is
+// the source of truth (GET /api/fleet-updates/install-jobs); this only remembers
+// what the operator has already dealt with, so a finished install they cleared
+// does not reappear every time they open the page.
+//   "all" — cleared entirely.  "ok"  — succeeded hosts cleared by a rescan,
+//                                      failures still worth showing.
+const DISMISS_KEY = "sysible.updates.dismissedInstalls";
+const RESTORE_FINISHED_WITHIN_S = 2 * 3600;   // an install from this morning is history, not news
+
+function readDismissed() {
+  try {
+    const v = JSON.parse(localStorage.getItem(DISMISS_KEY) || "{}");
+    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  } catch { return {}; }   // private mode / disabled storage: nothing was ever dismissed
+}
+
+function markDismissed(id, how) {
+  if (!id) return;
+  try {
+    const m = readDismissed();
+    m[id] = how;
+    // Bounded: the controller only retains ~20 jobs, so older ids are dead weight.
+    const keys = Object.keys(m);
+    const keep = keys.length > 40 ? keys.slice(-40) : keys;
+    localStorage.setItem(DISMISS_KEY, JSON.stringify(
+      Object.fromEntries(keep.map((k) => [k, m[k]]))));
+  } catch { /* dismissal just doesn't persist — the panel is still clearable */ }
+}
 const ST = { queued: "#7a7a7a", running: "#e0a83a", done: "#4ec07a", failed: "#e06c6c" };
 
 // One host's install row: status dot + name + state, click to expand the
@@ -35,7 +66,7 @@ function InstallHostRow({ h }) {
   );
 }
 
-function InstallProgress({ job }) {
+function InstallProgress({ job, onDismiss }) {
   const hosts = job.hosts || [];
   const done = hosts.filter((h) => h.status === "done" || h.status === "failed").length;
   const failed = hosts.filter((h) => h.status === "failed").length;
@@ -44,9 +75,17 @@ function InstallProgress({ job }) {
     <div className="card" style={{ marginBottom: 12 }}>
       <div className="spread" style={{ marginBottom: 6 }}>
         <strong>Installing {kindLabel}</strong>
-        <span className="faint" style={{ fontSize: 12 }}>
-          {done} / {hosts.length} complete{failed ? ` · ${failed} failed` : ""}{job.done ? " · finished" : ""}
-        </span>
+        <div className="row" style={{ gap: 10, alignItems: "center" }}>
+          <span className="faint" style={{ fontSize: 12 }}>
+            {done} / {hosts.length} complete{failed ? ` · ${failed} failed` : ""}{job.done ? " · finished" : ""}
+          </span>
+          {/* The panel now survives leaving the page, so a finished install needs
+              an explicit way out — navigating away is no longer one. */}
+          {job.done && onDismiss && (
+            <button className="btn ghost sm" onClick={onDismiss}
+                    title="Clear this finished install">Dismiss</button>
+          )}
+        </div>
       </div>
       <div style={{ height: 8, borderRadius: 4, background: "var(--border)", overflow: "hidden", marginBottom: 6 }}>
         <div style={{ width: (hosts.length ? (done / hosts.length) * 100 : 0) + "%", height: "100%",
@@ -203,17 +242,74 @@ export default function Updates({ role }) {
 
   const [job, setJob] = useState(null);          // live install job {kind, done, hosts:[...]}
   const jobPoll = React.useRef(null);
-  useEffect(() => () => { if (jobPoll.current) clearInterval(jobPoll.current); }, []);
+  const stopPoll = useCallback(() => {
+    if (jobPoll.current) { clearInterval(jobPoll.current); jobPoll.current = null; }
+  }, []);
+  useEffect(() => () => stopPoll(), [stopPoll]);
+
+  // Follow a job that is already running on the controller: poll it to the end,
+  // then refresh the counts once. Used both by a fresh install and by the
+  // re-attach below, so there is one polling path rather than two that drift.
+  const follow = useCallback((jobId) => {
+    stopPoll();
+    let counted = false;
+    jobPoll.current = setInterval(async () => {
+      try {
+        const s = await api.fleetInstallStatus(jobId);
+        // Don't clobber a newer job the operator kicked off while this poll was
+        // in flight.
+        setJob((cur) => (cur && cur.id && cur.id !== jobId ? cur : s));
+        if (s.done) { stopPoll(); if (!counted) { counted = true; load(1); } }
+      } catch { stopPoll(); }
+    }, 3000);
+  }, [stopPoll, load]);
+
+  // Re-attach on mount to an install that is already in flight — or one that
+  // finished while the operator was on another page, since the panel is the only
+  // place a failed host's command output lives. Without this, "install, navigate
+  // away, come back" showed nothing at all while the install was still running.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await api.fleetInstallJobs();
+        const dismissed = readDismissed();
+        const jobs = (r.jobs || []).filter((j) => dismissed[j.id] !== "all");
+        // Newest-first from the controller: prefer anything still running, else
+        // the most recent one that finished recently enough to still be news.
+        const pick = jobs.find((j) => !j.done)
+          || jobs.find((j) => j.done && (j.finished_ago == null
+                                         || j.finished_ago <= RESTORE_FINISHED_WITHIN_S));
+        if (!pick || cancelled) return;
+        const full = await api.fleetInstallStatus(pick.id);
+        if (cancelled) return;
+        setJob(dismissed[pick.id] === "ok"
+          ? { ...full, hosts: (full.hosts || []).filter((h) => h.status !== "done") }
+          : full);
+        if (!full.done) follow(full.id);
+      } catch { /* nothing in flight, or the controller restarted — nothing to re-attach to */ }
+    })();
+    return () => { cancelled = true; };
+  }, [follow]);
+
+  const dismissJob = () => {
+    if (!job) return;
+    markDismissed(job.id, "all");
+    stopPoll();
+    setJob(null);
+  };
 
   // Rescan clears the finished-install panel of hosts that succeeded, so only
   // the ones still needing attention (failed) remain — and if every host
   // succeeded, the whole panel drops away. Only touches a FINISHED job: while an
   // install is still running the polled status would just re-add them anyway.
-  const pruneFinishedJob = () => setJob((j) => {
-    if (!j || !j.done) return j;
-    const remaining = (j.hosts || []).filter((h) => h.status !== "done");
-    return remaining.length ? { ...j, hosts: remaining } : null;
-  });
+  const pruneFinishedJob = () => {
+    if (!job || !job.done) return;
+    const remaining = (job.hosts || []).filter((h) => h.status !== "done");
+    // Remember it, or the pruned hosts walk straight back in on the next visit.
+    markDismissed(job.id, remaining.length ? "ok" : "all");
+    setJob(remaining.length ? { ...job, hosts: remaining } : null);
+  };
   const rescan = (live = 0) => { pruneFinishedJob(); load(1, live); };
 
   async function run(kind) {
@@ -230,21 +326,14 @@ export default function Updates({ role }) {
     const label = kind === "security" ? "security updates" : "all updates";
     if (!window.confirm(`Install ${label} on ${checked.length} host(s)? Runs in the background — you'll see per-host progress below.`)) return;
     setBusy(kind); setErr(""); setResults(null);
-    if (jobPoll.current) clearInterval(jobPoll.current);
+    stopPoll();
     try {
       // Resolver flags apply only to an "all" dnf/yum run (where "nothing provides…"
       // conflicts arise); the security path uses the security plugin's own resolution.
       const flags = kind === "all" ? [nobest && "nobest", skipBroken && "skip-broken"].filter(Boolean).join(" ") : "";
       const r = await api.fleetInstall(checked, kind, flags);
       setJob({ id: r.job_id, kind, done: false, hosts: r.hosts });
-      let counted = false;
-      jobPoll.current = setInterval(async () => {
-        try {
-          const s = await api.fleetInstallStatus(r.job_id);
-          setJob(s);
-          if (s.done) { clearInterval(jobPoll.current); if (!counted) { counted = true; load(1); } }
-        } catch { clearInterval(jobPoll.current); }
-      }, 3000);
+      follow(r.job_id);
     } catch (e) { setErr(e.message); }
     finally { setBusy(""); }
   }
@@ -282,7 +371,7 @@ export default function Updates({ role }) {
       </div>
 
       {err && <div className="error-box">{err}</div>}
-      {job && <InstallProgress job={job} />}
+      {job && <InstallProgress job={job} onDismiss={dismissJob} />}
 
       {canAct && (
         <div className="row" style={{ gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>

@@ -10,6 +10,7 @@
   /* Neutral graphite: warm-gray surfaces, hairline borders, color held back to
      status dots and a restrained accent on the active nav item. */
   color-scheme: dark;
+  --topo: url("/brand/topo-dark.svg");
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --bg: #17191d;
   --bg-raise: #1e2127;
@@ -98,6 +99,7 @@
    data-theme="light" is also set on <html>. */
 :root[data-theme="light"] {
   color-scheme: light;
+  --topo: url("/brand/topo-light.svg");
   --bg: #eef1f6;
   --bg-raise: #ffffff;
   --panel: #ffffff;
@@ -124,13 +126,6 @@
   --row-hover: #eef2f8;
   --shadow: rgba(20,30,50,0.14);
 }
-/* Topographic ground: the green contour is loud on a light page, so drop it right
-   down in light mode (mirrors the dark look's subtle texture, not decoration). */
-:root[data-theme="light"] body::before {
-  background-color: rgba(60, 120, 90, 0.55);
-  opacity: 0.10;
-}
-:root[data-theme="light"] body::after { opacity: 0.5; }
 /* Active nav item: the logo's green→blue trace down the left edge. */
 :root[data-skin="brand"] .rail-item.active { position: relative; border-left-color: transparent; }
 :root[data-skin="brand"] .rail-item.active::before {
@@ -166,21 +161,24 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Sysible topographic ground: the white contour overlay recoloured to brand
-   green via a CSS mask, plus a soft green glow, sitting behind the console so
-   the background always carries brand colour. Fixed cover, no tiling seams. */
+/* The platform ground: the same topographic field as the SLOP portal, the sign-in
+   page, Flashback and the Visualizer — over the two brand glows. It replaces a
+   green-only PNG recoloured through a CSS mask, which was a DIFFERENT field in a
+   different colour, so no two Sysible surfaces agreed on what the background was.
+
+   It was also broken behind SLOP: the mask was fetched from "/brand-topo-overlay.png",
+   an absolute root URL that Vite does not rewrite to the app's base, so under the
+   gateway it asked the PORTAL for a file only this app ships and got nothing. The
+   field now lives at /brand/, which the gateway serves for every app, and is
+   mirrored into this app's own public/brand/ so a standalone install still has it.
+
+   Generated once by the platform: portal/brand/make_topo.py in the SLOP repo. */
 body::before {
-  content: ""; position: fixed; inset: 0; z-index: -2; pointer-events: none;
-  background-color: rgba(99, 205, 122, 0.78);   /* brighter brand green for the contour lines */
-  -webkit-mask: url("/brand-topo-overlay.png") center / cover no-repeat;
-          mask: url("/brand-topo-overlay.png") center / cover no-repeat;
-  opacity: 0.62;
-}
-body::after {
   content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
   background:
-    radial-gradient(85% 60% at 12% -8%, rgba(70, 177, 100, 0.13), transparent 55%),
-    radial-gradient(80% 70% at 100% 112%, rgba(45, 138, 118, 0.10), transparent 55%);
+    var(--topo) center / cover no-repeat,
+    radial-gradient(70% 55% at 15% -10%, rgba(67,160,71,0.12), transparent 60%),
+    radial-gradient(70% 60% at 100% 110%, rgba(85,128,238,0.09), transparent 55%);
 }
 a { color: var(--slate); text-decoration: none; }
 button { font-family: inherit; color: inherit; }

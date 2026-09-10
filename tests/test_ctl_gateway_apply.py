@@ -860,3 +860,70 @@ def test_a_product_with_no_checkout_at_all_is_still_skipped(sandbox, tmp_path):
     ''', FAKE_NO_CONTAINER="1")
     assert rc == 1
     assert "Skipping" in (out + err), (out, err)
+
+
+# ---- a checkout is not "not installed" because of one capital letter ---------
+# `git clone` names the directory from the URL, and these repos' URL casing has
+# changed over time, so a real checkout sits at /opt/Sysible-Controller while
+# _find_checkout looked only for /opt/sysible-controller. On a case-sensitive
+# filesystem that made a present, working checkout invisible — and with the
+# update fallback above depending on it, `update` still skipped the product.
+def test_a_checkout_is_found_whatever_its_capitalisation(sandbox, tmp_path):
+    src = tmp_path / "srcA"
+    ck = src / "Sysible-Controller"          # as cloned from the current URL
+    ck.mkdir(parents=True)
+    (ck / "docker-compose.yml").write_text("services: {}\n")
+    rc, out, err = run(sandbox, f'''
+        SYSIBLE_SRC_DIR="{src}"
+        _p_dir_override() {{ echo ""; }}
+        _find_checkout controller
+    ''', FAKE_NO_CONTAINER="1")
+    assert rc == 0, err
+    assert str(ck) in out, (out, err)
+
+
+def test_the_exact_lowercase_name_still_wins(sandbox, tmp_path):
+    """The cheap exact match must stay first — the case-insensitive sweep is a
+    fallback, not the primary path."""
+    src = tmp_path / "srcB"
+    exact = src / "sysible-controller"; exact.mkdir(parents=True)
+    (exact / "docker-compose.yml").write_text("services: {}\n")
+    rc, out, err = run(sandbox, f'''
+        SYSIBLE_SRC_DIR="{src}"
+        _p_dir_override() {{ echo ""; }}
+        _find_checkout controller
+    ''', FAKE_NO_CONTAINER="1")
+    assert rc == 0, err
+    assert out.strip() == str(exact), out
+
+
+def test_a_directory_with_no_compose_file_is_not_a_checkout(sandbox, tmp_path):
+    """Case-insensitive matching must not start calling any similarly-named
+    directory a checkout."""
+    src = tmp_path / "srcC"
+    (src / "Sysible-Controller").mkdir(parents=True)   # no compose file
+    rc, out, err = run(sandbox, f'''
+        SYSIBLE_SRC_DIR="{src}"
+        _p_dir_override() {{ echo ""; }}
+        _find_checkout controller
+    ''', FAKE_NO_CONTAINER="1")
+    assert rc == 1, (out, err)
+    assert out.strip() == "", out
+
+
+def test_update_reaches_a_capitalised_checkout_too(sandbox, tmp_path):
+    """The two fixes have to work together: this is the exact shape on a real
+    server — Controller container gone, checkout present but capitalised."""
+    src = tmp_path / "srcD"
+    ck = src / "Sysible-Controller"; ck.mkdir(parents=True)
+    (ck / "docker-compose.yml").write_text("services: {}\n")
+    rc, out, err = run(sandbox, f'''
+        SYSIBLE_SRC_DIR="{src}"
+        _p_dir_override() {{ echo ""; }}
+        _health_wait() {{ return 0; }}
+        _slop_seed_cross_app_env() {{ :; }}
+        p_update controller
+    ''', FAKE_NO_CONTAINER="1")
+    both = out + err
+    assert "Skipping" not in both, both
+    assert str(ck) in both, both

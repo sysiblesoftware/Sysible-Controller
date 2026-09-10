@@ -957,13 +957,26 @@ _p_repo_dir() { case "$1" in
 esac; }
 
 _find_checkout() {  # _find_checkout <product> -> prints dir, or returns 1
-  local p="$1" repo d src="${SYSIBLE_SRC_DIR:-/opt/sysible-src}"
+  local p="$1" repo d parent src="${SYSIBLE_SRC_DIR:-/opt/sysible-src}"
   repo="$(_p_repo_dir "$p")" || return 1
   [[ -n "$repo" ]] || return 1
   for d in "$src/$repo" "/opt/$repo" "$HOME/$repo" "$(dirname "$_CTL_REPO")/$repo"; do
     [[ -n "$d" && -d "$d" ]] || continue
     # A real checkout has a compose file (at the root or under deploy/).
     if _app_compose_dir_of "$d" >/dev/null; then printf '%s\n' "$d"; return 0; fi
+  done
+  # Same name, different case. `git clone` takes the directory name straight from
+  # the URL, and these repos' URL casing has changed over time — so a real
+  # checkout can sit at /opt/Sysible-Controller while this looks for
+  # /opt/sysible-controller. On a case-sensitive filesystem that is one capital
+  # letter between "found" and "not installed", and `update` skipped the product
+  # entirely on the strength of it.
+  for parent in "$src" /opt "$HOME" "$(dirname "$_CTL_REPO")"; do
+    [[ -n "$parent" && -d "$parent" ]] || continue
+    while IFS= read -r d; do
+      [[ -n "$d" ]] || continue
+      if _app_compose_dir_of "$d" >/dev/null; then printf '%s\n' "$d"; return 0; fi
+    done < <(find "$parent" -maxdepth 1 -mindepth 1 -type d -iname "$repo" 2>/dev/null)
   done
   return 1
 }

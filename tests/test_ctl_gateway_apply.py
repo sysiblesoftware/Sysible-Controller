@@ -537,8 +537,9 @@ case "$1" in
     exit 0 ;;
   exec)
     case "$*" in
-      *urllib*) echo "${REACH:-200}"; exit 0 ;;
-      *store*)  echo "${STORE:-0 0}"; exit 0 ;;
+      *urllib*)              echo "${REACH:-200}"; exit 0 ;;
+      *get_config_poll_times*) echo "${POLLS:-0 0 }"; exit 0 ;;
+      *store*)               echo "${STORE:-0 0}"; exit 0 ;;
     esac
     exit 0 ;;
 esac
@@ -927,3 +928,60 @@ def test_update_reaches_a_capitalised_checkout_too(sandbox, tmp_path):
     both = out + err
     assert "Skipping" not in both, both
     assert str(ck) in both, both
+
+
+# ---- the agent side: the link nothing reported -------------------------------
+# Every other check in `slop status` can be green — token matched on both sides,
+# Flashback reachable, container up — and still nothing is ever captured, because
+# capture is driven BY THE AGENT: it asks the controller for config-backup work
+# on its own thread, and a host whose agent predates that feature never asks.
+# From the console both states look identical (an empty page), which is how
+# "Flashback isn't doing anything" survives a status that says everything is fine.
+def test_status_says_when_no_agent_has_ever_asked_for_backup_work(fbsandbox):
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
+                       CTL_URL="http://h:8770", POLLS="3 0 web1 web2 web3")
+    both = out + err
+    assert "0 of 3" in both, both
+    assert "before config backup" in both, both
+    assert "web1 web2 web3" in both, both
+    assert "Update Hosts" in both, both          # and what to actually do
+
+
+def test_status_names_the_stragglers_when_only_some_ask(fbsandbox):
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
+                       CTL_URL="http://h:8770", POLLS="3 2 web3")
+    both = out + err
+    assert "2 of 3" in both, both
+    assert "web3" in both, both
+
+
+def test_status_is_quiet_when_every_agent_asks(fbsandbox):
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
+                       CTL_URL="http://h:8770", POLLS="3 3 ")
+    both = out + err
+    assert "all 3" in both, both
+    assert "before config backup" not in both, both
+
+
+def test_no_agents_at_all_is_not_reported_as_stale_agents(fbsandbox):
+    """An empty fleet is "nothing enrolled", not "every agent is too old" — the
+    second sends an operator off updating agents that do not exist."""
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
+                       CTL_URL="http://h:8770", POLLS="0 0 ")
+    both = out + err
+    assert "none enrolled" in both, both
+    assert "0 of 0" not in both, both
+
+
+def test_the_poll_check_reads_the_column_that_actually_holds_the_signal(fbsandbox):
+    """A trap worth pinning: list_agents() does not SELECT last_config_poll, so
+    reading the fleet through it makes every host look like it has never polled
+    and reports a healthy fleet as entirely stale. It must use
+    get_config_poll_times()."""
+    run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
+        CTL_URL="http://h:8770", POLLS="2 2 ")
+    calls = docker_calls(fbsandbox)
+    assert "db.get_config_poll_times()" in calls, calls
+    # the CALL, not the word — the snippet's own comment names list_agents to
+    # explain why it is not used.
+    assert "db.list_agents()" not in calls, calls

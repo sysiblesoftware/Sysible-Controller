@@ -784,6 +784,51 @@ print(len(h), sum(x.get('versions') or 0 for x in h))
       _ok "  stored backups: ${1} host(s), ${2} version(s)"
     fi
   fi
+
+  # THE AGENT SIDE — the link nothing else reports, and the one that leaves an
+  # operator stuck. Everything above can be green (token matched, Flashback
+  # reachable, container up) and still nothing is ever captured, because capture
+  # is driven BY THE AGENT: it asks the controller for config-backup work on its
+  # own thread, and a host whose agent predates that feature never asks. From the
+  # console those two states look identical — an empty page either way — so say
+  # which it is, by name.
+  if docker inspect "$ctlc" >/dev/null 2>&1; then
+    local polls
+    polls="$(docker exec "$ctlc" python -c "
+import sys
+sys.path.insert(0, '/app')
+try:
+    from backend import db
+    # get_config_poll_times, NOT list_agents: list_agents does not SELECT
+    # last_config_poll, so every row would look like it had never polled and
+    # this check would cry wolf about a perfectly healthy fleet.
+    times = db.get_config_poll_times() or {}
+except Exception:
+    raise SystemExit
+never = [h for h, t in times.items() if not t]
+print(len(times), len(times) - len(never), ' '.join(sorted(never)[:6]))
+" 2>/dev/null | tail -n1)"
+    if [[ -n "$polls" ]]; then
+      local total asked
+      total="$(printf '%s' "$polls" | awk '{print $1}')"
+      asked="$(printf '%s' "$polls" | awk '{print $2}')"
+      local never_list; never_list="$(printf '%s' "$polls" | cut -d" " -f3-)"
+      if [[ "${total:-0}" == "0" ]]; then
+        _warn "  agents: none enrolled — nothing can capture until a host is enrolled."
+      elif [[ "${asked:-0}" == "0" ]]; then
+        _err "  agents: 0 of ${total} have EVER asked for config-backup work."
+        _warn "    Their agents are running a build from before config backup, so no amount"
+        _warn "    of waiting or pressing \"Back up now\" will produce anything."
+        _warn "    fix: update the agent on each host (Controller -> Update Hosts)."
+        [[ -n "$never_list" ]] && _warn "    never asked: $never_list"
+      elif [[ "$asked" != "$total" ]]; then
+        _warn "  agents: ${asked} of ${total} ask for config-backup work."
+        _warn "    these never have (agent too old): $never_list"
+      else
+        _ok "  agents: all ${total} ask for config-backup work"
+      fi
+    fi
+  fi
 }
 
 # Lifecycle: drive the whole compose stack when we can discover it (correct for a

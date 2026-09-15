@@ -1186,11 +1186,16 @@ One tool for every Sysible product. 'update' git-pulls the checkout, rebuilds fr
 source, and recreates the container IN PLACE — your data volume is never touched,
 so DBs, TLS certs, keys, users and files survive every update.
 
-${BOLD}USAGE${RESET}
-  $me ${CYAN}<product>${RESET} <command> [args]      e.g. $me controller update
-  $me <command> ${CYAN}all${RESET}                  e.g. $me update all
-  $me ${CYAN}<product>${RESET}                       (no command) → status of that product
-  $me ${CYAN}status${RESET}|${CYAN}start${RESET}|${CYAN}stop${RESET}|${CYAN}restart${RESET}|${CYAN}up${RESET}    (no product) → act on EVERY product
+${BOLD}USAGE${RESET}  —  one syntax: a ${CYAN}target${RESET} and a command, in either order.
+  $me ${CYAN}<product|all>${RESET} <command> [args]   e.g. $me controller update
+  $me <command> ${CYAN}<product|all>${RESET} [args]   e.g. $me update controller
+  $me <command>                        (no target)  → EVERY product
+  $me ${CYAN}<product|all>${RESET}                    (no command) → status
+  $me                                  → status of every product
+
+  ${BOLD}Every command works in every one of those forms.${RESET} '$me update controller',
+  '$me controller update' and '$me update all' are the same syntax, not four
+  special cases — and a target you DID name is never widened to the whole fleet.
 
   ${BOLD}Build + start EVERYTHING (what most people want):${RESET}
     ${BOLD}$me install all${RESET}   — build every product from source and start it
@@ -1212,6 +1217,9 @@ ${BOLD}COMMANDS${RESET}
               Data volume preserved. (For slop, also hot-reloads the gateway.)
   ${CYAN}status${RESET}    Container state + console health probe.
   ${CYAN}logs${RESET}      Follow logs. Default tail 200; pass a number for more/less.
+              The one command that needs a single product — a followed stream
+              can only show one, so 'logs all' is refused rather than tailing
+              one product and calling it the fleet.
   ${CYAN}start${RESET}     Start a stopped container.
   ${CYAN}stop${RESET}      Stop the container (data volume kept).
   ${CYAN}restart${RESET}   Restart the container.
@@ -1220,7 +1228,9 @@ ${BOLD}COMMANDS${RESET}
 
 ${BOLD}EXAMPLES — updating${RESET}
   $me update all                    # git pull + rebuild + recreate EVERY product
+  $me update                        # identical — no target means every product
   $me controller update             # just the Controller
+  $me update controller             # identical (either order)
   $me slep update                   # just SLEP
   $me connect update                # just Connect
   $me slop update                   # just the SLOP gateway (+ Caddy hot-reload)
@@ -1236,7 +1246,10 @@ ${BOLD}EXAMPLES — lifecycle${RESET}
   $me stop                          # stop ALL products
   $me restart                       # restart ALL products
   $me controller restart            # restart just the Controller
+  $me restart controller            # identical (either order)
   $me connect stop                  # stop just Connect (its data volume is kept)
+  $me stop connect                  # identical — naming a product NEVER stops the
+                                    # others (it silently did, before)
 
 ${BOLD}EXAMPLES — build + start
   sysible_ctl install all                   # BUILD from source + start EVERY product
@@ -1266,6 +1279,8 @@ ${BOLD}EXAMPLES — backup & restore${RESET}
 ${BOLD}EXAMPLES — teardown${RESET}
   $me connect destroy               # remove the container, KEEP the data volume
   $me connect destroy -v            # remove the container AND delete the data volume
+  $me destroy connect -v            # identical (either order)
+  $me destroy all -v                # every container AND every data volume
 
 ${BOLD}FINDING PRODUCTS${RESET}
 Each product is discovered automatically from its running container's compose
@@ -1303,72 +1318,103 @@ EOF
 # =========================================================
 # Dispatch
 # =========================================================
-_canon_cmd() { case "$1" in build) echo up ;; *) echo "$1" ;; esac; }
+# ONE syntax, two slots: a TARGET (a product id/alias, or `all`) and a COMMAND.
+# Write them in either order; leave either out and it takes its default:
+#
+#   sysible_ctl <target> <cmd> [args]     sysible_ctl controller update
+#   sysible_ctl <cmd> <target> [args]     sysible_ctl update controller
+#   sysible_ctl <cmd>                     target defaults to `all`
+#   sysible_ctl <target>                  command defaults to `status`
+#   sysible_ctl                           status all
+#
+# Every command works in every form. This used to be four overlapping ad-hoc
+# forms with different command sets, which produced two classes of bug:
+#
+#   * `update all` worked but `update controller` was rejected as "unknown or
+#     ambiguous" — as were `logs/backup/destroy <product>` — so half the verbs
+#     could only be written one way round, and the help showed only that way.
+#   * far worse, `stop controller` SILENTLY STOPPED EVERY PRODUCT. The parser
+#     checked for the literal `all` in slot 2, then fell through to a bare-command
+#     rule that ignored slot 2 entirely, so a named product became a fleet-wide
+#     action with nothing said. Same for start/restart/status/up/build.
+#
+# Anything that is not a valid (target, command) pair is now an ERROR that names
+# what was wrong. Guessing is what caused the outage-shaped bug above.
+_canon_cmd() { case "$1" in build|install) echo up ;; *) echo "$1" ;; esac; }
+_is_cmd()    { case " $KNOWN_CMDS " in *" $(_canon_cmd "$1") "*) return 0 ;; *) return 1 ;; esac; }
+_is_target() { [[ "$1" == "all" ]] || _is_product "$1"; }
 
-_run_cmd() {  # _run_cmd <cmd> <product> [args…]  — validates cmd, handles -v for destroy
-  local cmd; cmd="$(_canon_cmd "$1")"; local p="$2"; shift 2 || true
-  case " $KNOWN_CMDS " in *" $cmd "*) ;; *) _die "unknown command: $cmd (try: $(basename "$0") help)" ;; esac
+# _dispatch <cmd> <target> [args…] — the single execution path for every form.
+_dispatch() {
+  local cmd; cmd="$(_canon_cmd "$1")"; local target="$2"; shift 2 || true
   _need_docker
-  if [[ "$cmd" == "destroy" ]]; then
-    local wv=0; case "${1:-}" in -v|--volumes) wv=1 ;; esac
-    p_destroy "$p" "$wv"; return
+
+  # `logs` FOLLOWS a stream, so it can only ever show one product: `p_all logs`
+  # tailed the first product forever and never reached the rest, which reads as
+  # "the other products have no logs". Say so instead.
+  if [[ "$cmd" == "logs" && "$target" == "all" ]]; then
+    _die "logs: follow one product at a time — e.g. $(basename "$0") controller logs [lines]"
   fi
-  "p_$cmd" "$p" "$@"
+
+  # `destroy -v` wipes the data volume. Parsed HERE, once, so the flag means the
+  # same thing in every form (it used to be honoured only for a single product,
+  # and `destroy all -v` silently kept every volume).
+  if [[ "$cmd" == "destroy" ]]; then
+    local wv=0
+    case "${1:-}" in -v|--volumes) wv=1 ;; esac
+    if [[ "$target" == "all" ]]; then p_all destroy "$wv"; else p_destroy "$target" "$wv"; fi
+    return
+  fi
+
+  if [[ "$target" == "all" ]]; then p_all "$cmd" "$@"; else "p_$cmd" "$target" "$@"; fi
 }
 
 main() {
   _ARGV=("$@")   # original args, for a transparent sudo re-exec in _need_docker
-  local a1="${1:-help}" a2="${2:-}"
+  local a1="${1:-}" a2="${2:-}"
+
   case "$a1" in
-    help|-h|--help) usage; return 0 ;;
+    ""|help|-h|--help) usage; return 0 ;;
+    uninstall)         cmd_uninstall; return 0 ;;
     install)
-      # Bare `install` puts THIS CLI on PATH. `install all` (or `install <product>`)
-      # is what people reach for to build the products — route it to `up`.
-      # A target that is neither must be an ERROR: falling through to cmd_install
-      # would answer a typo ('install slpe') by silently linking the CLI, which
-      # looks like success and builds nothing.
-      if [[ -n "$a2" ]]; then
-        if [[ "$a2" == "all" ]]; then _need_docker; p_all up; return 0; fi
-        if _is_product "$a2"; then _need_docker; _run_cmd up "$(_canon "$a2")"; return 0; fi
-        _die "install: '$a2' is not a product. Use 'all', or one of: $PRODUCTS"
-      fi
-      cmd_install; return 0 ;;
-    uninstall)      cmd_uninstall; return 0 ;;
+      # The ONE deliberate exception to the grammar: bare `install`, with no
+      # target at all, puts THIS CLI on your PATH. With a target it is an alias
+      # for `up` like any other command (see _canon_cmd).
+      [[ -n "$a2" ]] || { cmd_install; return 0; } ;;
   esac
 
-  # Form:  sysible_ctl <product> <cmd> [args]   (product may be an alias, e.g. ce)
-  if _is_product "$a1"; then
-    local prod; prod="$(_canon "$a1")"
-    [[ -n "$a2" ]] || { p_status "$prod"; return 0; }
-    shift 2 || true
-    _run_cmd "$a2" "$prod" "$@"
-    return 0
+  local cmd="" target=""
+  if _is_target "$a1"; then
+    target="$(_canon "$a1")"
+    if [[ -z "$a2" ]]; then cmd="status"; shift 1
+    elif _is_cmd "$a2"; then cmd="$a2"; shift 2
+    else _die "'$a2' is not a command. Commands: $KNOWN_CMDS"
+    fi
+  elif _is_cmd "$a1"; then
+    cmd="$a1"
+    if _is_target "$a2"; then target="$(_canon "$a2")"; shift 2
+    elif [[ -z "$a2" || "$a2" == -* ]]; then
+      # Nothing but flags after the command — act on everything. (`destroy -v`.)
+      target="all"; shift 1
+    else
+      # A word that is neither a product nor a flag. It is a MISTYPED PRODUCT far
+      # more often than an argument, and guessing costs too much: `update slpe`
+      # would quietly update the whole fleet, and `up 192.168.1.50` used to drop
+      # the address silently. Name the products and show the form that works.
+      _die "'$a2' is not a product. Name the one you mean: $(basename "$0") <product> $a1 $a2
+  products: $PRODUCTS, or all"
+    fi
+  else
+    _err "unknown or ambiguous: '$a1${a2:+ $a2}'"
+    _err "Write it as: $(basename "$0") <product|all> <command>   (either order)"
+    _err "  products: $PRODUCTS all"
+    _err "  commands: $KNOWN_CMDS"
+    echo >&2
+    usage >&2
+    exit 1
   fi
 
-  # Form:  sysible_ctl all <cmd>   or   sysible_ctl <cmd> all
-  _need_docker
-  if [[ "$a1" == "all" ]]; then
-    local cmd; cmd="$(_canon_cmd "${a2:-status}")"
-    case " $KNOWN_CMDS " in *" $cmd "*) ;; *) _die "unknown command: $cmd" ;; esac
-    p_all "$cmd"; return 0
-  fi
-  if [[ "$a2" == "all" ]]; then
-    local cmd2; cmd2="$(_canon_cmd "$a1")"
-    case " $KNOWN_CMDS " in *" $cmd2 "*) ;; *) _die "unknown command: $a1" ;; esac
-    p_all "$cmd2"; return 0
-  fi
-
-  # Bare fleet-wide command with no target → apply to all (friendly default), so
-  # `sysible_ctl start` == `sysible_ctl start all`, and likewise up/stop/restart/status.
-  # (Bare `up` with nothing built runs the SLOP whole-stack installer — see p_all.)
-  case "$a1" in
-    status|start|stop|restart|up|build) p_all "$(_canon_cmd "$a1")"; return 0 ;;
-  esac
-
-  _err "unknown or ambiguous: '$a1${a2:+ $a2}'"
-  echo >&2
-  usage >&2
-  exit 1
+  _dispatch "$cmd" "$target" "$@"
 }
 
 main "$@"

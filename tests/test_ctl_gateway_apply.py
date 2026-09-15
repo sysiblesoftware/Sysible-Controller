@@ -1116,3 +1116,63 @@ def test_docker_not_answering_falls_back_rather_than_writing_nothing(sandbox, tm
         _slop_seed_cross_app_env
     ''', FAKE_NO_CONTAINER="1", FAKE_BRIDGE_GW="")
     assert "SYSIBLE_FLASHBACK_AGENT_BIND=172.17.0.1" in (slop / ".env").read_text()
+
+
+# ---- the updater must be able to find SLOP's own checkout -------------------
+# SLOP's compose bind-mounts this checkout into the updater sidecar so the platform
+# can be updated from its own Administration page, and the mount TARGET has to be the
+# path the checkout has on the host — the `docker compose` the updater runs is
+# resolved by the host daemon. install.sh passed that path as a one-shot variable on
+# a single command, so every later recreate fell back to the conventional
+# /opt/sysible-src location, which is not where anyone clones this repo. The updater
+# then found no .git there and Administration reported SLOP as "not installed on this
+# host" while it was plainly running. `slop update` knows the real path; record it.
+def test_update_records_the_slop_checkout_so_it_can_update_itself(sandbox, tmp_path):
+    slop = tmp_path / "Sysible-Linux-Operations-Platform"; slop.mkdir()
+    (slop / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=abc\n")
+    rc, out, err = run(sandbox, f'''
+        WD="{slop}"
+        _git_root() {{ echo "{slop}"; return 0; }}
+        _p_dir_override() {{ :; }}
+        _slop_seed_cross_app_env
+    ''', FAKE_NO_CONTAINER="1")
+    body = (slop / ".env").read_text()
+    assert f"SYSIBLE_SLOP_DIR={slop}" in body, body
+    assert "Administration" in out
+
+
+def test_a_stale_checkout_path_is_corrected_not_left_to_rot(sandbox, tmp_path):
+    """The failure mode in the field: an .env written before the repo was moved (or
+    by an install.sh that guessed the conventional path) points somewhere that has
+    no checkout, so the mount lands on an empty directory."""
+    slop = tmp_path / "moved-here"; slop.mkdir()
+    (slop / ".env").write_text(
+        "SYSIBLE_SLOP_DIR=/opt/sysible-src/sysible-linux-operations-platform\n")
+    run(sandbox, f'''
+        WD="{slop}"
+        _git_root() {{ echo "{slop}"; return 0; }}
+        _p_dir_override() {{ :; }}
+        _slop_seed_cross_app_env
+    ''', FAKE_NO_CONTAINER="1")
+    body = (slop / ".env").read_text()
+    assert f"SYSIBLE_SLOP_DIR={slop}" in body, body
+    assert "/opt/sysible-src/sysible-linux-operations-platform" not in body, body
+
+
+def test_a_correct_checkout_path_is_left_alone(sandbox, tmp_path):
+    """Rewriting an already-correct value on every update would churn the file and
+    make the 'recorded' line cry wolf."""
+    slop = tmp_path / "already-right"; slop.mkdir()
+    (slop / ".env").write_text(f"SYSIBLE_SLOP_DIR={slop}\n")
+    rc, out, err = run(sandbox, f'''
+        WD="{slop}"
+        _git_root() {{ echo "{slop}"; return 0; }}
+        _p_dir_override() {{ :; }}
+        _slop_seed_cross_app_env
+    ''', FAKE_NO_CONTAINER="1")
+    # (the same call also seeds the Flashback bind address, so the FILE changes —
+    # what must not change is this key, and it must not announce a repair.)
+    lines = [l for l in (slop / ".env").read_text().splitlines()
+             if l.startswith("SYSIBLE_SLOP_DIR=")]
+    assert lines == [f"SYSIBLE_SLOP_DIR={slop}"], lines
+    assert "recorded this checkout" not in out

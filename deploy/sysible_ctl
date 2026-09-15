@@ -292,6 +292,21 @@ _slop_seed_cross_app_env() {
   local envf="$slopdir/.env"
   [[ -f "$envf" ]] || return 0
 
+  # ---- the updater must be able to SEE this checkout ------------------------
+  #
+  # SLOP's own compose bind-mounts the checkout into the updater sidecar so the
+  # platform can be updated from its own Administration page, and the mount target
+  # has to be the path the checkout has ON THE HOST (the `docker compose` the
+  # updater runs is resolved by the host daemon). install.sh used to pass that path
+  # as a one-shot variable on a single command, so every later recreate fell back to
+  # the conventional /opt/sysible-src location — which is not where anyone clones
+  # this repo — and Administration reported SLOP as "not installed on this host"
+  # while it was plainly running. We know the real path here; record it.
+  if [[ "$(sed -n 's/^SYSIBLE_SLOP_DIR=//p' "$envf" 2>/dev/null | tail -n1 || true)" != "$slopdir" ]]; then
+    _env_upsert "$envf" SYSIBLE_SLOP_DIR "$slopdir"
+    _ok "  recorded this checkout ($slopdir) so Administration can update SLOP itself"
+  fi
+
   # ---- Flashback's agent port must LISTEN where the Controller dials ---------
   #
   # The Controller reaches Flashback at host.docker.internal, which resolves to

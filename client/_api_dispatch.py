@@ -491,17 +491,59 @@ def cmd_uptime() -> str:
 # ---- Fleet power / agent control (used by Sysible Connect buttons) ----
 # These are privileged; under RBAC they run as the operator's matching
 # local user and elevate via that host's sudo policy (the agent retries
-# under sudo on a privilege error). `shutdown` schedules with init and
-# returns right away, so the host can report the result before it goes
-# down.
+# under sudo on a privilege error).
+#
+# A power action must be DETACHED, for the same reason cmd_restart_agent is: it
+# kills the very process that has to report the result. `shutdown -r +0` is
+# immediate, so init started tearing the host down while the agent was still
+# inside the task - the result POST never happened, the console waited out the
+# full agent timeout and then painted a red "timed out waiting for agent" on a
+# reboot that had actually worked. (SSH hosts fared no better: the connection
+# died mid-command.) So: hand the reboot to init on a short timer, return
+# immediately, and let the agent report a real success before it goes away.
+#
+# The grace period must comfortably cover one result POST - the agent sends the
+# result the instant the command returns, so ten seconds is a wide margin even on
+# a loaded host or a slow link.
+_POWER_GRACE = 10
+
+
+def _cmd_power(systemctl_verb: str, shutdown_flag: str, word: str) -> str:
+    """Schedule `systemctl <verb>` ~_POWER_GRACE seconds out and return NOW.
+
+    systemd-run is the primary path (same mechanism as the agent restart): it
+    creates a transient timer owned by init, so nothing depends on this shell
+    surviving. Where it is missing we detach the classic `shutdown` into its own
+    session instead, with stdin/stdout/stderr on /dev/null - the agent reads the
+    command's pipes to EOF, so an inherited pipe would hold the task open until
+    the host went down and reintroduce the very hang this fixes.
+
+    Privilege: systemd-run/shutdown fail loudly on stderr for an unprivileged
+    user (polkit answers "Interactive authentication required"), which is exactly
+    what the agent's run-as-user path looks for before retrying under the host's
+    sudo. The fallback branch says "requires root privileges" for the same
+    reason. No 2>&1 anywhere on the scheduling call itself - swallowing that
+    stderr would cost us the sudo retry.
+    """
+    return (
+        f"if command -v systemd-run >/dev/null 2>&1; then "
+        f"systemd-run --collect --on-active={_POWER_GRACE} "
+        f"--unit=sysible-{systemctl_verb} --description='Sysible {word}' "
+        f"systemctl {systemctl_verb}; "
+        f'elif [ "$(id -u)" = 0 ]; then '
+        f"setsid sh -c 'sleep {_POWER_GRACE}; shutdown {shutdown_flag} +0 >/dev/null 2>&1 "
+        f"|| systemctl {systemctl_verb}' </dev/null >/dev/null 2>&1 & "
+        f"else echo '{word} requires root privileges on this host' >&2; exit 1; fi "
+        f"&& echo '{word} requested - this host goes down in about {_POWER_GRACE} seconds.'"
+    )
+
+
 def cmd_reboot_host() -> str:
-    # No 2>&1: a privilege failure must stay on stderr so the agent's
-    # run-as-user path recognizes it and retries under the host's sudo.
-    return "shutdown -r +0 || systemctl reboot"
+    return _cmd_power("reboot", "-r", "Reboot")
 
 
 def cmd_poweroff_host() -> str:
-    return "shutdown -P +0 || systemctl poweroff"
+    return _cmd_power("poweroff", "-P", "Power off")
 
 
 # ---- Quick System Actions (one-click common fixes) --------------------

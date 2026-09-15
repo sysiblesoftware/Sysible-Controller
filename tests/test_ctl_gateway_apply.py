@@ -985,3 +985,57 @@ def test_the_poll_check_reads_the_column_that_actually_holds_the_signal(fbsandbo
     # the CALL, not the word — the snippet's own comment names list_agents to
     # explain why it is not used.
     assert "db.list_agents()" not in calls, calls
+
+
+# ---- "has asked" is not "was answered" --------------------------------------
+# Straight from a real box: all three agents reported as asking for config-backup
+# work, and nothing had ever been captured. The controller records the poll
+# BEFORE it consults Flashback — deliberately, because an agent that never
+# reaches that line is the "too old to capture" signal — so a poll refused 503 a
+# millisecond later still counts as "asked". Reporting that as all-green sends
+# the operator to look at agents that are doing exactly what they should.
+def test_agents_asking_into_a_broken_relay_blames_the_relay(fbsandbox):
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="",
+                       CTL_URL="http://h:8770", POLLS="3 3 ", STORE="0 0")
+    both = out + err
+    assert "ARE asking" in both, both
+    assert "refusing every one" in both, both
+    assert "not the agents" in both, both
+    # and it must NOT read as healthy
+    assert "agents: all 3 ask for config-backup work" not in both, both
+
+
+def test_a_token_mismatch_also_counts_as_a_broken_relay(fbsandbox):
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="a", CTL_TOKEN="b",
+                       CTL_URL="http://h:8770", POLLS="2 2 ", STORE="0 0")
+    both = out + err
+    assert "ARE asking" in both, both
+    assert "refusing" in both, both
+
+
+def test_an_unreachable_flashback_also_counts_as_a_broken_relay(fbsandbox):
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
+                       CTL_URL="http://h:8770", REACH="ConnectionError",
+                       POLLS="2 2 ", STORE="0 0")
+    both = out + err
+    assert "ARE asking" in both, both
+
+
+def test_a_wired_relay_with_nothing_stored_points_at_the_host_journal(fbsandbox):
+    """Everything checks out and still nothing is captured — the only place left
+    to look is the agent's own log, so say so rather than stopping at green."""
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
+                       CTL_URL="http://h:8770", POLLS="2 2 ", STORE="0 0")
+    both = out + err
+    assert "all 2 ask for config-backup work" in both, both
+    assert "journalctl" in both, both
+
+
+def test_a_healthy_fleet_with_backups_stays_quiet(fbsandbox):
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
+                       CTL_URL="http://h:8770", POLLS="2 2 ", STORE="2 40")
+    both = out + err
+    assert "all 2 ask for config-backup work" in both, both
+    assert "2 host(s), 40 version(s)" in both, both
+    assert "journalctl" not in both, both
+    assert "ARE asking" not in both, both

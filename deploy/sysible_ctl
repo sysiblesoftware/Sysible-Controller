@@ -724,6 +724,7 @@ _flashback_status() {
   # Both halves of the token. Flashback FAILS CLOSED without one, so an unset
   # token means every snapshot is refused — silently, from the console's side.
   local fbtok ctok
+  local fb_wired=1        # cleared by any check below that fails
   fbtok="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$fbc" 2>/dev/null \
            | sed -n 's/^SYSIBLE_FLASHBACK_AGENT_TOKEN=//p' | tail -n1)"
   local ctlc; ctlc="$(_p_container controller)"
@@ -735,12 +736,15 @@ _flashback_status() {
 
   if [[ -z "$fbtok" ]]; then
     _err "  agent token: NOT SET on Flashback — it refuses every snapshot (fails closed)."
+    fb_wired=0
     _warn "    fix: add SYSIBLE_FLASHBACK_AGENT_TOKEN to the SLOP .env, then 'sysible_ctl slop update'"
   elif [[ -z "$ctok" ]]; then
     _err "  agent token: set on Flashback but MISSING on the Controller — nothing can post a backup."
+    fb_wired=0
     _warn "    fix: 'sysible_ctl slop update' seeds it, then 'sysible_ctl controller update'"
   elif [[ "$fbtok" != "$ctok" ]]; then
     _err "  agent token: the two sides DO NOT MATCH — every snapshot is rejected 401."
+    fb_wired=0
     _warn "    fix: re-run 'sysible_ctl slop update' so both take the SLOP .env value"
   else
     _ok "  agent token: matches on both sides"
@@ -764,6 +768,7 @@ except Exception as e:
       _ok "  controller -> Flashback: reachable"
     else
       _err "  controller -> Flashback: UNREACHABLE ($code) — backups cannot be delivered."
+      fb_wired=0
     fi
   fi
 
@@ -776,12 +781,17 @@ from backend import store
 h=store.list_hosts()
 print(len(h), sum(x.get('versions') or 0 for x in h))
 " 2>/dev/null | tail -n1)"
+  # Keep the counts in NAMED variables. They are read again further down to
+  # correlate with the agent side, and `set --` clobbers the function's own
+  # positional parameters, so $1 there means whatever happened to survive.
+  local stored_hosts=0 stored_versions=0
   if [[ -n "$hosts" ]]; then
-    set -- $hosts
-    if [[ "${1:-0}" == "0" ]]; then
+    stored_hosts="$(printf '%s' "$hosts" | awk '{print $1}')"
+    stored_versions="$(printf '%s' "$hosts" | awk '{print $2}')"
+    if [[ "${stored_hosts:-0}" == "0" ]]; then
       _warn "  stored backups: none yet (no host has reported a snapshot)"
     else
-      _ok "  stored backups: ${1} host(s), ${2} version(s)"
+      _ok "  stored backups: ${stored_hosts} host(s), ${stored_versions} version(s)"
     fi
   fi
 
@@ -824,8 +834,21 @@ print(len(times), len(times) - len(never), ' '.join(sorted(never)[:6]))
       elif [[ "$asked" != "$total" ]]; then
         _warn "  agents: ${asked} of ${total} ask for config-backup work."
         _warn "    these never have (agent too old): $never_list"
+      elif [[ $fb_wired -eq 0 ]]; then
+        # THE TRAP THIS EXISTS FOR. The controller records the poll BEFORE it
+        # consults Flashback (deliberately — an agent that never reaches that
+        # line is the "too old" signal), so a poll refused 503 a millisecond
+        # later still counts as "asked". Reporting that as all-green sends the
+        # operator to look at agents that are doing exactly what they should.
+        _err "  agents: all ${total} ARE asking — and the controller is refusing every one."
+        _warn "    The fault is the controller's Flashback wiring above, not the agents."
+        _warn "    fix: 'sysible_ctl slop update' to re-seed it, then 'sysible_ctl controller update'."
       else
         _ok "  agents: all ${total} ask for config-backup work"
+        if [[ "${stored_hosts:-0}" == "0" ]]; then
+          _warn "    They are asking and the relay is wired, yet nothing is stored — check a host's"
+          _warn "    own journal for snapshot errors: journalctl -u sysible-agent | grep -i config"
+        fi
       fi
     fi
   fi

@@ -188,7 +188,7 @@ class TestThroughTheConsole:
         monkeypatch.setattr(w.dispatch, "run_on_entry", run_on_entry)
         monkeypatch.setattr(w.dispatch, "poll_entry_result", lambda e, t: results.get(t))
         monkeypatch.setattr(w.api, "log_action", lambda *a, **k: None)
-        monkeypatch.setattr(w.api, "admin_login", lambda u, p: {
+        monkeypatch.setattr(w.api, "admin_login", lambda *a, **k: {
             "role": "superuser", "token": "tok", "must_change_password": False,
             "sudo_connect": False})
         monkeypatch.setattr(w.api, "whoami", lambda: {"username": "op", "role": "superuser"})

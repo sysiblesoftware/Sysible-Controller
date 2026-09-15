@@ -292,6 +292,28 @@ _slop_seed_cross_app_env() {
   local envf="$slopdir/.env"
   [[ -f "$envf" ]] || return 0
 
+  # ---- Flashback's agent port must LISTEN where the Controller dials ---------
+  #
+  # The Controller reaches Flashback at host.docker.internal, which resolves to
+  # the docker bridge gateway. Flashback's compose used to bind that port to the
+  # host's LOOPBACK instead — a different interface — so every snapshot and every
+  # restore poll was refused, and a fleet of healthy agents captured nothing while
+  # the console showed them all politely asking. Seed the real gateway address so
+  # the two ends agree, and ask docker for it rather than assuming 172.17.0.1: a
+  # host with a customised bridge subnet has a different one and fails identically.
+  local fbbind
+  fbbind="$(sed -n 's/^SYSIBLE_FLASHBACK_AGENT_BIND=//p' "$envf" 2>/dev/null | tail -n1 || true)"
+  if [[ -z "$fbbind" ]]; then
+    fbbind="$(docker network inspect bridge \
+              -f '{{ range .IPAM.Config }}{{ .Gateway }}{{ end }}' 2>/dev/null \
+              | awk '{print $1}' || true)"
+    [[ -n "$fbbind" ]] || fbbind="172.17.0.1"
+    _env_upsert "$envf" SYSIBLE_FLASHBACK_AGENT_BIND "$fbbind"
+    _warn "  Flashback's agent port had no bind address — set to $fbbind (the docker bridge"
+    _warn "  gateway), which is where the Controller dials. It was previously bound to the"
+    _warn "  host's loopback, which no container can reach, so nothing could ever be captured."
+  fi
+
   # ---- SSO: the secret and each app's trust flag ----------------------------
   #
   # These decide whether an app accepts the gateway's asserted identity or falls

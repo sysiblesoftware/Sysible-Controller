@@ -34,6 +34,10 @@ CTL = os.path.join(os.path.dirname(HERE), "deploy", "sysible_ctl")
 FAKE_DOCKER = r"""#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_LOG"
 case "$1" in
+  network)
+    # `docker network inspect bridge -f ...` — $1 is "network", not "inspect",
+    # so this needs its own arm rather than a case inside the inspect one.
+    printf '%s' "${FAKE_BRIDGE_GW-172.17.0.1}"; exit 0 ;;
   inspect)
     [ "${FAKE_NO_CONTAINER:-0}" = 1 ] && exit 1
     exit 0 ;;
@@ -1039,3 +1043,76 @@ def test_a_healthy_fleet_with_backups_stays_quiet(fbsandbox):
     assert "2 host(s), 40 version(s)" in both, both
     assert "journalctl" not in both, both
     assert "ARE asking" not in both, both
+
+
+# ---- Flashback must LISTEN where the Controller dials ------------------------
+# The Controller reaches Flashback at host.docker.internal — the docker bridge
+# gateway. Flashback's compose bound that port to the host's LOOPBACK, a
+# different interface, so every snapshot and every restore poll was refused.
+# Three agents polled faithfully for days and captured nothing, while the console
+# reported them all asking. The two halves of the codebase even disagreed in
+# comments: install.sh said "the Controller runs in a container", the compose
+# said it "runs on the host". The compose half won at runtime.
+def test_update_seeds_the_bind_address_flashback_must_listen_on(sandbox, tmp_path):
+    slop = tmp_path / "s"; slop.mkdir()
+    (slop / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=x\n")
+    ctl = tmp_path / "c"; ctl.mkdir()
+    (ctl / "docker-compose.yml").write_text("services: {}\n")
+    rc, out, err = run(sandbox, f'''
+        WD="{slop}"
+        _git_root() {{ echo "{slop}"; return 0; }}
+        _p_dir_override() {{ [ "$1" = controller ] && echo "{ctl}"; }}
+        _slop_seed_cross_app_env
+    ''', FAKE_NO_CONTAINER="1", FAKE_BRIDGE_GW="172.17.0.1")
+    body = (slop / ".env").read_text()
+    assert "SYSIBLE_FLASHBACK_AGENT_BIND=172.17.0.1" in body, body
+    assert "loopback" in (out + err).lower(), (out, err)
+
+
+def test_the_bind_address_comes_from_docker_not_a_guess(sandbox, tmp_path):
+    """A host with a customised default-bridge subnet has a different gateway,
+    and assuming 172.17.0.1 there fails exactly as silently as loopback did."""
+    slop = tmp_path / "s2"; slop.mkdir()
+    (slop / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=x\n")
+    ctl = tmp_path / "c2"; ctl.mkdir()
+    (ctl / "docker-compose.yml").write_text("services: {}\n")
+    run(sandbox, f'''
+        WD="{slop}"
+        _git_root() {{ echo "{slop}"; return 0; }}
+        _p_dir_override() {{ [ "$1" = controller ] && echo "{ctl}"; }}
+        _slop_seed_cross_app_env
+    ''', FAKE_NO_CONTAINER="1", FAKE_BRIDGE_GW="10.200.0.1")
+    assert "SYSIBLE_FLASHBACK_AGENT_BIND=10.200.0.1" in (slop / ".env").read_text()
+
+
+def test_an_operator_set_bind_address_is_left_alone(sandbox, tmp_path):
+    """Someone running the Controller genuinely on the host wants 127.0.0.1, and
+    a repair that overrides a deliberate choice is its own bug."""
+    slop = tmp_path / "s3"; slop.mkdir()
+    (slop / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=x\n"
+                               "SYSIBLE_FLASHBACK_AGENT_BIND=127.0.0.1\n")
+    ctl = tmp_path / "c3"; ctl.mkdir()
+    (ctl / "docker-compose.yml").write_text("services: {}\n")
+    run(sandbox, f'''
+        WD="{slop}"
+        _git_root() {{ echo "{slop}"; return 0; }}
+        _p_dir_override() {{ [ "$1" = controller ] && echo "{ctl}"; }}
+        _slop_seed_cross_app_env
+    ''', FAKE_NO_CONTAINER="1", FAKE_BRIDGE_GW="172.17.0.1")
+    body = (slop / ".env").read_text()
+    assert "SYSIBLE_FLASHBACK_AGENT_BIND=127.0.0.1" in body, body
+    assert body.count("SYSIBLE_FLASHBACK_AGENT_BIND=") == 1, body
+
+
+def test_docker_not_answering_falls_back_rather_than_writing_nothing(sandbox, tmp_path):
+    slop = tmp_path / "s4"; slop.mkdir()
+    (slop / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=x\n")
+    ctl = tmp_path / "c4"; ctl.mkdir()
+    (ctl / "docker-compose.yml").write_text("services: {}\n")
+    run(sandbox, f'''
+        WD="{slop}"
+        _git_root() {{ echo "{slop}"; return 0; }}
+        _p_dir_override() {{ [ "$1" = controller ] && echo "{ctl}"; }}
+        _slop_seed_cross_app_env
+    ''', FAKE_NO_CONTAINER="1", FAKE_BRIDGE_GW="")
+    assert "SYSIBLE_FLASHBACK_AGENT_BIND=172.17.0.1" in (slop / ".env").read_text()

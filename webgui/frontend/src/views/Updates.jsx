@@ -223,6 +223,12 @@ export default function Updates({ role }) {
   }, [hosts]);
 
   const actionable = hosts.filter((h) => h.online !== false && (h.total || 0) > 0).map((h) => h.id);
+  // Hosts waiting on a reboot. Deliberately independent of pending updates: a
+  // host that has finished installing sits at 0 pending and still needs the
+  // reboot, so "Select all with updates" selects NOTHING on exactly the fleet
+  // you most need to reboot — which is the state right after a patch run. Same
+  // rule as the "N need reboot" count in the header, so the two always agree.
+  const rebootable = hosts.filter((h) => h.online !== false && h.reboot).map((h) => h.id);
   const toggle = (id) => setChecked((c) => c.includes(id) ? c.filter((x) => x !== id) : [...c, id]);
 
   // Any ONLINE host is selectable — not just ones with pending updates — because
@@ -376,6 +382,12 @@ export default function Updates({ role }) {
       {canAct && (
         <div className="row" style={{ gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
           <button className="btn ghost sm" onClick={() => setChecked(actionable)}>Select all with updates</button>
+          <button className="btn ghost sm" disabled={!rebootable.length}
+                  title={rebootable.length
+                    ? `Select the ${rebootable.length} online host(s) reporting that they need a reboot`
+                    : "No host is reporting that it needs a reboot"}
+                  onClick={() => setChecked(rebootable)}>
+            Select all needing reboot{rebootable.length ? ` (${rebootable.length})` : ""}</button>
           <button className="btn ghost sm" onClick={() => setChecked([])}>Clear</button>
           <span className="faint" style={{ fontSize: 12 }}>{checked.length} selected</span>
           <div style={{ flex: 1 }} />

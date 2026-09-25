@@ -56,6 +56,20 @@ export function noteRawStatus(status) {
 // override with `timeout` (ms), or `timeout: 0` to disable.
 const DEFAULT_TIMEOUT_MS = 60000;
 
+// A FLEET SWEEP is not an ordinary request and must not inherit the ordinary
+// limit. The server budgets its probes PER HOST — 60s for a rescan, 180s for
+// "Refresh metadata & rescan" (SYSIBLE_UPDATE_PROBE_TIMEOUT) — and runs them in
+// waves of SYSIBLE_SWEEP_CONCURRENCY (32). So a live refresh is designed to take
+// up to three minutes on one wave, while the browser gave up at sixty seconds and
+// showed "Request timed out — the controller didn't respond in time" for a scan
+// that was working perfectly and would have finished. The operator's only clue
+// was a timeout blamed on the controller.
+//
+// These budgets sit comfortably past the server's own, so the only thing that can
+// still trip them is a request that really has gone nowhere.
+const SWEEP_TIMEOUT_MS = 240000;        // rescan / posture / health sweep
+const LIVE_SWEEP_TIMEOUT_MS = 600000;   // "Refresh metadata & rescan": 180s/host, several waves
+
 async function req(path, { method = "GET", body, headers, raw = false, timeout } = {}) {
   const opts = { method, credentials: "include", headers: { ...(headers || {}) } };
   if (body !== undefined) {
@@ -118,9 +132,11 @@ export const api = {
   hosts: () => req("/api/hosts"),
   environments: () => req("/api/environments"),
   tools: () => req("/api/tools"),
-  fleetHealth: (refresh) => req("/api/fleet-health" + (refresh ? "?refresh=1" : "")),
+  fleetHealth: (refresh) => req("/api/fleet-health" + (refresh ? "?refresh=1" : ""),
+    { timeout: SWEEP_TIMEOUT_MS }),
   // Posture / compliance (read-only sweep + per-host drill-down)
-  fleetPosture: (refresh = false) => req(`/api/fleet-posture${refresh ? "?refresh=1" : ""}`),
+  fleetPosture: (refresh = false) => req(`/api/fleet-posture${refresh ? "?refresh=1" : ""}`,
+    { timeout: SWEEP_TIMEOUT_MS }),
   hostPosture: (hostId) => req(`/api/host-posture/${encodeURIComponent(hostId)}`),
   pathCritical: (paths) => req("/api/path-critical", { method: "POST", body: { paths } }),
   runTool: (action, targets, params) =>
@@ -253,7 +269,8 @@ export const api = {
   fleetQuery: (qtype, arg, targets = []) =>
     req("/api/fleet-query", { method: "POST", body: { qtype, arg, targets } }),
   fleetUpdates: (refresh = 0, live = 0) =>
-    req("/api/fleet-updates" + (live ? "?refresh=1&live=1" : refresh ? "?refresh=1" : "")),
+    req("/api/fleet-updates" + (live ? "?refresh=1&live=1" : refresh ? "?refresh=1" : ""),
+      { timeout: live ? LIVE_SWEEP_TIMEOUT_MS : SWEEP_TIMEOUT_MS }),
   fleetInstall: (targets, kind, flags = "") => req("/api/fleet-updates/install", { method: "POST", body: { targets, kind, flags } }),
   fleetInstallStatus: (jobId) => req(`/api/fleet-updates/install-status/${encodeURIComponent(jobId)}`),
   fleetInstallJobs: () => req("/api/fleet-updates/install-jobs"),

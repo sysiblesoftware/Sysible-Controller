@@ -16,6 +16,7 @@ import shlex
 
 
 from client._pkgmgr import pkgmgr_dispatch as _pkgmgr_dispatch
+from client._pkgmgr import zypper_transaction
 from client._validators import validate_int_range as _validate_int_range
 from client._validators import validate_nonempty_line as _validate_nonempty_line
 
@@ -689,7 +690,9 @@ def cmd_install_security_updates() -> str:
         # auto-DECLINES (and silently skips) any security patch that needs a
         # license acceptance, so "install security updates" would report success
         # while leaving those patches uninstalled.
-        zypper_cmd="zypper --non-interactive patch --auto-agree-with-licenses --category security 2>&1",
+        zypper_cmd=zypper_transaction(
+            "zypper --non-interactive patch --auto-agree-with-licenses "
+            "--category security 2>&1", rerun_on_restart=True),
         apt_cmd=(
             "DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null 2>&1 && "
             "DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades 2>&1 && "

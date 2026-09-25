@@ -37,6 +37,59 @@ def pacman_install(pkgs: str) -> str:
     return f"pacman -Sy --needed --noconfirm {pkgs}"
 
 
+# zypper reserves exit codes 100-107 for INFORMATION; its actual errors are 1-99.
+# Two of those informational codes are ordinary outcomes of a SUCCESSFUL
+# transaction, and both were being reported to the operator as "failed · exit N"
+# beside a log that plainly shows every package installed:
+#
+#   102  ZYPPER_EXIT_INF_REBOOT_NEEDED   installed; the host wants a reboot
+#   103  ZYPPER_EXIT_INF_RESTART_NEEDED  installed; zypper updated ITSELF, and says
+#        so in as many words: "Run this command once more to install any other
+#        needed patches."
+#
+# 100/101 ("updates"/"security updates are available") belong to the query
+# commands and are likewise not failures.
+#
+# These stay failures, because they are: 104 capability not found, 105 killed by a
+# signal, 106 a repository was SKIPPED (treating that as success could hide
+# security patches that were never even considered), 107 an rpm scriptlet failed.
+ZYPPER_INFO_SUCCESS = (0, 100, 101, 102, 103)
+
+
+def zypper_transaction(cmd: str, rerun_on_restart: bool = False) -> str:
+    """Wrap a zypper transaction so its exit status means what the console thinks.
+
+    The console judges a host by `code == 0`, which is right for every other
+    package manager and wrong for zypper. This translates the informational codes
+    to success and leaves the real errors alone.
+
+    rerun_on_restart: on 103, run the command a SECOND time. That is not a retry
+    of something that failed — the first run succeeded; zypper replaced itself
+    mid-transaction and asks to be re-run so the remaining patches get applied.
+    Doing it here is the difference between an operator being told a patch run
+    failed and the patch run actually finishing.
+
+    Deliberately does NOT call `exit`: callers append further commands (the
+    per-package status readout in webgui/actions._pkg_and_status), and exiting
+    here would swallow them. `(exit N)` sets $? without leaving the script.
+    """
+    ok = "|".join(str(c) for c in ZYPPER_INFO_SUCCESS)
+    rerun = ""
+    if rerun_on_restart:
+        rerun = (
+            'if [ "$_zrc" -eq 103 ]; then '
+            "echo 'zypper updated the package manager itself (exit 103); "
+            "re-running once, as zypper instructs, to apply the rest.' >&2; "
+            f'{cmd}; _zrc=$?; fi; '
+        )
+    return (
+        f'{cmd}; _zrc=$?; '
+        f'{rerun}'
+        f'case "$_zrc" in {ok}) _zrc=0 ;; esac; '
+        f'(exit "$_zrc")'
+    )
+
+
 def pkgmgr_dispatch(rpm_cmd: str, zypper_cmd: str, apt_cmd: str,
                     pacman_cmd: str = None) -> str:
     """Wraps the detection fragment above around per-family command templates and

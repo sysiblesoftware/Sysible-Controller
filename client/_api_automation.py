@@ -10,6 +10,7 @@ import shlex
 from client._pkgmgr import (
     pkgmgr_detect_fragment as _pkgmgr_detect_fragment,
     pkgmgr_dispatch as _pkgmgr_dispatch,
+    zypper_transaction,
 )
 
 
@@ -512,7 +513,8 @@ def cmd_update_packages(names: str = "", flags: str = "") -> str:
     if pkgs:
         return _pkgmgr_dispatch(
             rpm_cmd=f'"$PKGMGR" update -y{rf} -- {pkgs}',
-            zypper_cmd=f'zypper --non-interactive update -- {pkgs}',
+            zypper_cmd=zypper_transaction(f'zypper --non-interactive update -- {pkgs}',
+                                         rerun_on_restart=True),
             apt_cmd=f'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --only-upgrade -y -- {pkgs}',
             # Arch does NOT support partial upgrades (`pacman -Sy pkg` is a documented
             # system-breaker). The only safe way to update anything is a full sync-upgrade,
@@ -523,7 +525,8 @@ def cmd_update_packages(names: str = "", flags: str = "") -> str:
         )
     return _pkgmgr_dispatch(
         rpm_cmd=f'"$PKGMGR" upgrade -y{rf}',
-        zypper_cmd='zypper --non-interactive update',
+        zypper_cmd=zypper_transaction('zypper --non-interactive update',
+                                      rerun_on_restart=True),
         apt_cmd='apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y',
         pacman_cmd='pacman -Syu --noconfirm',
     )

@@ -1224,9 +1224,14 @@ def fleet_health(refresh: int = 0, user: str = Depends(require_login)):
 
     _HEALTH_CACHE["access"] = _t.time()   # mark active use (drives background priming)
 
+    # Worked out ONCE per request: a cache that predates an enrollment does not
+    # describe this fleet, however young it is.
+    _fleet_ids = _fleet_ids_or_none()
+
     def _fresh():
         return (not refresh) and _HEALTH_CACHE["hosts"] is not None \
-            and (_t.time() - _HEALTH_CACHE["ts"]) < _HEALTH_TTL
+            and (_t.time() - _HEALTH_CACHE["ts"]) < _HEALTH_TTL \
+            and _cache_covers(_HEALTH_CACHE, _fleet_ids)
 
     if _fresh():
         return {"hosts": _HEALTH_CACHE["hosts"], "cached": True, "ts": _HEALTH_CACHE["ts"]}
@@ -1237,6 +1242,33 @@ def fleet_health(refresh: int = 0, user: str = Depends(require_login)):
         if _fresh():
             return {"hosts": _HEALTH_CACHE["hosts"], "cached": True, "ts": _HEALTH_CACHE["ts"]}
         return _fleet_health_sweep(force_live=bool(refresh))
+
+
+def _fleet_ids_or_none():
+    """Host ids enrolled RIGHT NOW, or None if the controller cannot be asked.
+
+    Cheap — an inventory read, no probing. It exists because a sweep cache keyed
+    on AGE alone silently stops describing the fleet the moment a host is
+    enrolled: the Update Hosts page went on showing the 3 hosts its last sweep
+    covered, and saying "All 3 hosts up to date", for the whole 15-minute TTL,
+    while the dashboard beside it — which reads the instant inventory — showed 16
+    enrolled. Two screens in the same process, disagreeing, with nothing to
+    suggest the newer one was merely stale. The hosts did turn up "eventually",
+    which is exactly the TTL expiring.
+    """
+    try:
+        return {e["id"] for e in dispatch.list_merged_hosts(agent_only=True)}
+    except Exception:
+        # Cannot tell. Never throw away a usable cache over a controller blip —
+        # a stale list beats a 502.
+        return None
+
+
+def _cache_covers(cache, fleet_ids):
+    """Whether a cached sweep covers exactly the hosts enrolled now."""
+    if fleet_ids is None:
+        return True
+    return {h.get("id") for h in (cache.get("hosts") or [])} == fleet_ids
 
 
 def _sweep_workers(n):
@@ -1571,9 +1603,12 @@ def fleet_posture(refresh: int = 0, user: str = Depends(require_login)):
     import concurrent.futures
     import time as _t
 
+    _fleet_ids = _fleet_ids_or_none()
+
     def _fresh():
         return (not refresh) and _POSTURE_CACHE["hosts"] is not None \
-            and (_t.time() - _POSTURE_CACHE["ts"]) < _POSTURE_TTL
+            and (_t.time() - _POSTURE_CACHE["ts"]) < _POSTURE_TTL \
+            and _cache_covers(_POSTURE_CACHE, _fleet_ids)
 
     if _fresh():
         return {"hosts": _POSTURE_CACHE["hosts"], "cached": True, "ts": _POSTURE_CACHE["ts"]}
@@ -1741,9 +1776,12 @@ def fleet_updates(refresh: int = 0, live: int = 0, user: str = Depends(require_l
     import concurrent.futures
     import time as _t
 
+    _fleet_ids = _fleet_ids_or_none()
+
     def _fresh():
         return (not refresh and not live) and _UPDATES_CACHE["hosts"] is not None \
-            and (_t.time() - _UPDATES_CACHE["ts"]) < _UPDATES_TTL
+            and (_t.time() - _UPDATES_CACHE["ts"]) < _UPDATES_TTL \
+            and _cache_covers(_UPDATES_CACHE, _fleet_ids)
 
     if _fresh():
         return {"hosts": _UPDATES_CACHE["hosts"], "cached": True, "ts": _UPDATES_CACHE["ts"]}

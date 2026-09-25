@@ -1224,9 +1224,10 @@ def fleet_health(refresh: int = 0, user: str = Depends(require_login)):
 
     _HEALTH_CACHE["access"] = _t.time()   # mark active use (drives background priming)
 
-    # Worked out ONCE per request: a cache that predates an enrollment does not
-    # describe this fleet, however young it is.
-    _fleet_ids = _fleet_ids_or_none()
+    # Worked out ONCE per request, and not at all when we are re-sweeping
+    # regardless: a cache that predates an enrollment does not describe this
+    # fleet, however young it is.
+    _fleet_ids = None if refresh else _fleet_ids_or_none()
 
     def _fresh():
         return (not refresh) and _HEALTH_CACHE["hosts"] is not None \
@@ -1244,24 +1245,44 @@ def fleet_health(refresh: int = 0, user: str = Depends(require_login)):
         return _fleet_health_sweep(force_live=bool(refresh))
 
 
+# The fleet-id lookup below is consulted on EVERY read of the three sweep caches,
+# including the cheap cached ones — and the dashboard polls fleet-health every
+# _HEALTH_TTL (15s) from every open tab. A cached read used to cost ZERO
+# controller calls; without this memo it costs one apiece, which is a steady
+# stream of inventory reads the controller does not need while it is also serving
+# every agent's poll. Measured: 20 cached polls went from 0 controller calls to
+# 20. A few seconds of memo collapses them back to one, and a host enrolled is
+# still picked up within those seconds.
+_FLEET_IDS_CACHE = {"ts": 0.0, "ids": None}
+_FLEET_IDS_TTL = float(os.getenv("SYSIBLE_FLEET_IDS_TTL", "5"))
+
+
 def _fleet_ids_or_none():
     """Host ids enrolled RIGHT NOW, or None if the controller cannot be asked.
 
-    Cheap — an inventory read, no probing. It exists because a sweep cache keyed
-    on AGE alone silently stops describing the fleet the moment a host is
-    enrolled: the Update Hosts page went on showing the 3 hosts its last sweep
+    Cheap — an inventory read, no probing, memoized for a few seconds. It exists
+    because a sweep cache keyed on AGE alone silently stops describing the fleet
+    the moment a host is enrolled: the Update Hosts page went on showing the 3 hosts its last sweep
     covered, and saying "All 3 hosts up to date", for the whole 15-minute TTL,
     while the dashboard beside it — which reads the instant inventory — showed 16
     enrolled. Two screens in the same process, disagreeing, with nothing to
     suggest the newer one was merely stale. The hosts did turn up "eventually",
     which is exactly the TTL expiring.
     """
+    import time as _t
+    now = _t.time()
+    if _FLEET_IDS_CACHE["ids"] is not None and (now - _FLEET_IDS_CACHE["ts"]) < _FLEET_IDS_TTL:
+        return _FLEET_IDS_CACHE["ids"]
     try:
-        return {e["id"] for e in dispatch.list_merged_hosts(agent_only=True)}
+        ids = {e["id"] for e in dispatch.list_merged_hosts(agent_only=True)}
     except Exception:
         # Cannot tell. Never throw away a usable cache over a controller blip —
-        # a stale list beats a 502.
+        # a stale list beats a 502. Not memoized: a blip must not pin "unknown"
+        # for the next few seconds.
         return None
+    _FLEET_IDS_CACHE["ids"] = ids
+    _FLEET_IDS_CACHE["ts"] = now
+    return ids
 
 
 def _cache_covers(cache, fleet_ids):
@@ -1603,7 +1624,7 @@ def fleet_posture(refresh: int = 0, user: str = Depends(require_login)):
     import concurrent.futures
     import time as _t
 
-    _fleet_ids = _fleet_ids_or_none()
+    _fleet_ids = None if refresh else _fleet_ids_or_none()
 
     def _fresh():
         return (not refresh) and _POSTURE_CACHE["hosts"] is not None \
@@ -1776,7 +1797,7 @@ def fleet_updates(refresh: int = 0, live: int = 0, user: str = Depends(require_l
     import concurrent.futures
     import time as _t
 
-    _fleet_ids = _fleet_ids_or_none()
+    _fleet_ids = None if (refresh or live) else _fleet_ids_or_none()
 
     def _fresh():
         return (not refresh and not live) and _UPDATES_CACHE["hosts"] is not None \

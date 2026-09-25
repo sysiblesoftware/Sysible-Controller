@@ -66,6 +66,11 @@ def _clear_caches():
     for c in (srv._UPDATES_CACHE, srv._POSTURE_CACHE):
         c["hosts"] = None
         c["ts"] = 0.0
+    # The fleet-id memo is module state too. It is short-lived in production (a
+    # few seconds), but across tests it would carry one test's fleet into the
+    # next and make a membership change look already-covered.
+    srv._FLEET_IDS_CACHE["ids"] = None
+    srv._FLEET_IDS_CACHE["ts"] = 0.0
     yield
 
 
@@ -143,3 +148,58 @@ def test_refresh_still_bypasses_the_cache(fleet):
     srv._UPDATES_CACHE["ts"] = time.time()
     r = srv.fleet_updates(refresh=1, live=0, user="admin")
     assert r["cached"] is False
+
+
+# ---- ...and the membership check must not become its own load ---------------
+def test_cached_reads_do_not_hammer_the_controller(fleet, monkeypatch):
+    """The dashboard polls fleet-health every 10 seconds, from every open tab.
+
+    A cached read used to cost ZERO controller calls. Checking fleet membership
+    on every read turned each of those polls into an inventory round-trip —
+    measured at 20 calls for 20 cached polls — which is a steady stream of work
+    the controller does not need while it is also serving every agent's poll.
+    The lookup is memoized for a few seconds so a burst of pollers costs one.
+    """
+    srv._FLEET_IDS_CACHE["ids"] = None
+    srv._FLEET_IDS_CACHE["ts"] = 0.0
+    calls = {"n": 0}
+    inner = srv.dispatch.list_merged_hosts
+
+    def counted(agent_only=True):
+        calls["n"] += 1
+        return inner(agent_only=agent_only)
+
+    monkeypatch.setattr(srv.dispatch, "list_merged_hosts", counted)
+
+    srv.fleet_updates(refresh=0, live=0, user="admin")   # prime the sweep cache
+    calls["n"] = 0
+    for _ in range(20):
+        r = srv.fleet_updates(refresh=0, live=0, user="admin")
+        assert r["cached"] is True
+    assert calls["n"] <= 1, (
+        f"{calls['n']} controller inventory reads for 20 cached polls — the "
+        f"membership check is not memoized")
+
+
+def test_a_refresh_does_not_bother_asking(fleet, monkeypatch):
+    """When we are re-sweeping regardless, the membership answer changes
+    nothing — so it is not worth a round-trip."""
+    srv._FLEET_IDS_CACHE["ids"] = None
+    srv._FLEET_IDS_CACHE["ts"] = 0.0
+    seen = {"n": 0}
+    monkeypatch.setattr(srv, "_fleet_ids_or_none",
+                        lambda: (seen.__setitem__("n", seen["n"] + 1), {"x"})[1])
+    srv.fleet_updates(refresh=1, live=0, user="admin")
+    assert seen["n"] == 0
+
+
+def test_the_memo_never_pins_an_unreachable_controller(fleet, monkeypatch):
+    """A blip returns None (unknown), and unknown must not be remembered — the
+    next read has to be free to find out the truth."""
+    srv._FLEET_IDS_CACHE["ids"] = None
+    srv._FLEET_IDS_CACHE["ts"] = 0.0
+    fleet["fail"] = True
+    assert srv._fleet_ids_or_none() is None
+    assert srv._FLEET_IDS_CACHE["ids"] is None, "a failed lookup was memoized"
+    fleet["fail"] = False
+    assert srv._fleet_ids_or_none() == set(HOSTS_16)

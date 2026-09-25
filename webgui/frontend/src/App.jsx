@@ -65,7 +65,7 @@ const NAV = [
   // Reference — open the bundled, self-contained manual as a webpage in a new
   // tab (not a view switch, not a download); available to every role.
   { key: "docs", label: "Documentation", icon: "book", su: false, aud: true,
-    external: "/api/docs/view" },
+    external: apiUrl("/api/docs/view") },
 ];
 
 const ICONS = {

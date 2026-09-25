@@ -8,10 +8,30 @@
 // back to the login screen instead of leaving the user on a dead, half-loaded UI.
 // URL prefix the console is served under. "" when standalone (served at the
 // domain root), "/controller" when behind the SLOP gateway, which path-routes
-// /controller/* to this app on one shared origin. Vite's import.meta.env.BASE_URL
-// carries the build-time `base` ("/" or "/controller/"); every request path and
-// raw asset URL is prefixed with this so the SAME code works in both layouts.
-const API_BASE = (import.meta.env.BASE_URL || "/").replace(/\/+$/, "");
+// /controller/* to this app on one shared origin.
+//
+// This used to come from the BUILD: SYSIBLE_BASE_PATH -> vite `base` ->
+// import.meta.env.BASE_URL. That cannot be right, because ONE controller is
+// reached BOTH ways — directly on its own port, and through the gateway — and a
+// baked-in prefix can only ever suit one of them. In practice nothing set the
+// variable at all (it defaults to "/" in the Dockerfile, in docker-compose and in
+// both install scripts), so the console behind SLOP asked the PORTAL for its own
+// script and API and came up blank.
+//
+// It is read from the page instead: <base href>, which the BFF writes into
+// index.html from the gateway's X-Forwarded-Prefix, and otherwise the document's
+// own directory. One build, correct at either address, nothing to configure.
+// BASE_URL is still honoured when someone did pin a base at build time.
+const API_BASE = (() => {
+  try {
+    const p = new URL(document.baseURI || window.location.href).pathname;
+    const dir = p.endsWith("/") ? p : p.slice(0, p.lastIndexOf("/") + 1);
+    return (dir || "/").replace(/\/+$/, "");
+  } catch {
+    const b = import.meta.env.BASE_URL || "/";
+    return b.replace(/\/+$/, "");
+  }
+})();
 export function apiUrl(path) { return API_BASE + path; }
 
 let _onUnauthorized = null;

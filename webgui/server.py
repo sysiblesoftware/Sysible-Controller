@@ -58,7 +58,7 @@ from fastapi import (
     FastAPI, HTTPException, Request, Depends,
     UploadFile, File, Form,
 )
-from fastapi.responses import JSONResponse, FileResponse, Response
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
@@ -4228,8 +4228,33 @@ if _FRONTEND_DIST.exists():
     # routing on every non-/api path.
     app.mount("/assets", StaticFiles(directory=_FRONTEND_DIST / "assets"), name="assets")
 
+    # The prefix a reverse proxy mounted this console under, if any. The SLOP
+    # gateway serves it at /controller/ and STRIPS that before proxying, so this
+    # app sees its own root paths and has no other way to know the browser is a
+    # directory deeper. Writing it into the page as <base href> is what pins the
+    # console's relative asset and API URLs to the mount point rather than to
+    # whatever path the request happened to arrive on.
+    #
+    # The header is client-controllable whenever this app is reachable directly,
+    # and it decides where the browser fetches the console's own SCRIPT from — so
+    # validating it is a security boundary, not tidiness. Only a plain absolute
+    # path is accepted: one leading slash (never two, which is protocol-relative
+    # and reads as a host), no scheme, no backslash, no traversal, a bounded
+    # character set. Anything else is ignored, which simply leaves the console
+    # behaving exactly as it does at a root origin.
+    _MOUNT_PREFIX_RE = re.compile(r"\A/[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*\Z")
+
+    def _mount_prefix(request: Request) -> str:
+        raw = (request.headers.get("x-forwarded-prefix") or "").strip()
+        if not raw or raw == "/":
+            return ""
+        raw = raw.rstrip("/")
+        if ".." in raw or not _MOUNT_PREFIX_RE.match(raw):
+            return ""
+        return raw
+
     @app.get("/{full_path:path}")
-    def spa(full_path: str):
+    def spa(full_path: str, request: Request):
         if full_path.startswith("api/"):
             return JSONResponse({"detail": "Not found"}, status_code=404)
         # Serve real root-level static files from dist (the logo, favicon, etc.)
@@ -4246,7 +4271,18 @@ if _FRONTEND_DIST.exists():
                 pass
         index = _FRONTEND_DIST / "index.html"
         if index.exists():
-            return FileResponse(index)
+            prefix = _mount_prefix(request)
+            if not prefix:
+                return FileResponse(index)
+            # <base> must precede the first relative URL in the head, and the
+            # built index.html uses relative asset paths, so it goes straight
+            # after <head>. With it, "./assets/x.js" resolves to
+            # "<prefix>/assets/x.js" from ANY path the proxy serves this page at,
+            # not only the one with a trailing slash.
+            html = index.read_text(encoding="utf-8")
+            if "<base " not in html:
+                html = html.replace("<head>", f'<head>\n    <base href="{prefix}/">', 1)
+            return HTMLResponse(html, headers={"Cache-Control": "no-store"})
         return JSONResponse({"detail": "frontend not built"}, status_code=404)
 else:
     @app.get("/")

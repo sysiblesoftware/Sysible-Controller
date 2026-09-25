@@ -6,12 +6,19 @@ import react from "@vitejs/plugin-react";
 // `npm run dev` proxies API + websocket calls to the BFF so the browser talks
 // to a real controller without CORS gymnastics.
 //
-// SYSIBLE_BASE_PATH is the URL prefix the console is served under. It is "/" for a
-// standalone Controller (served at the domain root) and "/controller/" when it runs
-// behind the SLOP gateway, which path-routes /controller/* to this app on one shared
-// origin. Vite rewrites every asset URL in index.html to this base, and the SPA reads
-// it back via import.meta.env.BASE_URL to prefix its API calls (see src/api.js).
-const BASE_PATH = process.env.SYSIBLE_BASE_PATH || "/";
+// Where the console's own assets are fetched from. RELATIVE by default, so one
+// build is correct wherever it is served: at the domain root on a standalone
+// Controller, and under /controller/ behind the SLOP gateway, which path-routes
+// /controller/* to this app on one shared origin.
+//
+// It used to default to "/", which bakes an absolute "/assets/index-*.js" into
+// index.html — and behind the gateway that asks the SLOP PORTAL for this
+// console's script, so the page came up blank with its script, stylesheet and
+// API all 404. A fixed prefix could not have fixed it either: the same
+// controller is reached BOTH ways, and only one of them would work.
+//
+// SYSIBLE_BASE_PATH still pins an absolute base for anyone who wants one.
+const BASE_PATH = process.env.SYSIBLE_BASE_PATH || "./";
 
 export default defineConfig({
   base: BASE_PATH,

@@ -627,7 +627,17 @@ export default function HostEnrollment() {
               <button className="btn sm ghost" disabled={portalBusy || !portal.running}
                       onClick={() => portalAct("stop", () => api.portalStop(), "Portal stopped.")}>Stop Portal</button>
             </div>
-            {portal.running && <div className="faint" style={{ marginTop: 6 }}>Reachable at: {reachable}</div>}
+            {/* "Running" only means the portal answered on THIS machine's
+                loopback. In a container that is the container's loopback, so the
+                console used to print an address the network could not reach —
+                nmap said `closed` while the badge said Running, and nothing here
+                explained the gap. When the controller can tell that the address
+                will not answer, it says so instead of printing it. */}
+            {portal.running && (portal.unreachable_reason
+              ? <div className="portal-unreachable">
+                  Running, but not reachable at {reachable} — {portal.unreachable_reason}
+                </div>
+              : <div className="faint" style={{ marginTop: 6 }}>Reachable at: {reachable}</div>)}
             <div className="row" style={{ flexWrap: "wrap", gap: 8, alignItems: "center", marginTop: 10 }}>
               <span className="faint">Port</span>
               <input type="number" style={{ maxWidth: 120 }} value={portPort} onChange={(e) => setPortPort(e.target.value)} />

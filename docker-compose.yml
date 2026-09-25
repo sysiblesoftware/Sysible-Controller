@@ -27,6 +27,14 @@ services:
     ports:
       - "8800:8800"   # web console (BFF)
       - "9000:9000"   # controller API — agents + CLI
+      # Webserver Portal — the self-service page a host operator signs in to for
+      # an agent bundle. It is a SEPARATE listener on its own port, started from
+      # the console, and it was never published: it came up inside the container,
+      # the console's health check reached it on container-loopback and reported
+      # "Running · reachable at https://<this host>:8090", and nothing on the LAN
+      # could connect (nmap: closed). Published on the same number inside and out
+      # so the address the console prints is the address that works.
+      - "${SYSIBLE_PORTAL_PORT:-8090}:${SYSIBLE_PORTAL_PORT:-8090}"   # webserver portal
     environment:
       # Cover the address(es) agents/browsers use to reach this host in the TLS
       # cert. Comma-separated DNS names and/or IPs. Example:
@@ -37,6 +45,12 @@ services:
       # docker-bridge IP (172.x) and bundles strand the fleet on an unreachable
       # address. Set it to this host's LAN IP / DNS name (sysible_ctl controller up does).
       SYSIBLE_CONTROLLER_ADDR: "${SYSIBLE_CONTROLLER_ADDR:-}"
+      # The portal port PUBLISHED above. The portal reads it to know which port
+      # can actually be reached from outside this container — a port publishing is
+      # fixed when the container is created, so a port chosen later in the console
+      # cannot be reached until the container is recreated, and the console says so
+      # instead of printing an address that silently does not work.
+      SYSIBLE_PORTAL_PORT: "${SYSIBLE_PORTAL_PORT:-8090}"
       # Optionally set the first superuser's password (else one is generated and
       # printed to the logs once on first run):
       # SYSIBLE_ADMIN_USERNAME: "admin"

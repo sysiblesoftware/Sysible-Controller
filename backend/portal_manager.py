@@ -53,6 +53,15 @@ DEFAULT_PORTAL_PORT = int(os.getenv("SYSIBLE_PORTAL_PORT", "8090"))
 # than closing an auth hole.
 DEFAULT_PORTAL_HOST = (os.getenv("SYSIBLE_PORTAL_HOST", "0.0.0.0") or "0.0.0.0").strip()
 
+# The portal port this deployment PUBLISHES, when it runs in a container. A
+# container's port publishing is fixed when the container is created, so a port
+# the operator picks later in the console cannot be reached from outside until
+# the container is recreated — and the portal binding it successfully inside the
+# container tells you nothing about that. docker-compose.yml sets this to the
+# port it maps; an image created before the portal was published leaves it unset,
+# which means nothing outside can reach the portal at all.
+PUBLISHED_PORT_ENV = "SYSIBLE_PORTAL_PORT"
+
 RUN_DIR = Path(os.getenv("SYSIBLE_RUN_DIR", str(PROJECT_ROOT / "run")))
 PORTAL_PID_FILE = RUN_DIR / "portal.pid"
 PORTAL_PORT_FILE = RUN_DIR / "portal.port"
@@ -68,6 +77,63 @@ KEY_FILE = Path(os.getenv("SYSIBLE_KEY_FILE", str(PROJECT_ROOT / "certs" / "serv
 
 STARTUP_TIMEOUT_S = 5
 STARTUP_POLL_INTERVAL_S = 0.2
+
+
+def _is_container() -> bool:
+    """Whether this controller runs in a container. The image sets
+    SYSIBLE_CONTAINER=1; /.dockerenv is the fallback (same test as
+    backend/app.py and backend/agent_bundle.py)."""
+    if os.getenv("SYSIBLE_CONTAINER") == "1":
+        return True
+    try:
+        return os.path.exists("/.dockerenv")
+    except OSError:
+        return False
+
+
+def unreachable_reason(port):
+    """Why a RUNNING portal still cannot be reached at the address the console
+    advertises — or None when there is no reason to think it can't.
+
+    The portal is a separate listener on its own port. In a container it binds
+    inside the container, and the start-up health check that proves it is alive
+    runs on container-loopback, so "Running" was reported for a portal the
+    network could never reach: the console printed
+    "Reachable at https://<controller>:8090" and an nmap of that port from the
+    LAN said `closed`. Nothing in the product said why, because nothing looked.
+
+    This is decided from what the container was CREATED with, not from a probe,
+    so it is certain rather than a guess about the network.
+    """
+    if not _is_container():
+        return None
+
+    published = (os.getenv(PUBLISHED_PORT_ENV) or "").strip()
+    if not published:
+        return (
+            "This controller runs in a container that does not publish the "
+            "portal's port, so nothing outside the container can reach it — the "
+            "portal is listening, but only inside the container. Update the "
+            "controller and recreate the container (sysible_ctl controller "
+            "update) to pick up a compose file that publishes it."
+        )
+
+    try:
+        published_port = int(published)
+    except ValueError:
+        return None
+
+    if published_port != port:
+        return (
+            f"This controller runs in a container that publishes port "
+            f"{published_port} for the portal, but the portal is set to port "
+            f"{port}. A container's published ports are fixed when it is created, "
+            f"so port {port} cannot be reached from outside. Either set the portal "
+            f"back to {published_port}, or set SYSIBLE_PORTAL_PORT={port} in the "
+            f"controller's .env and recreate the container."
+        )
+
+    return None
 
 
 def _configured_port():
@@ -159,11 +225,15 @@ def status():
         PORTAL_PORT_FILE.unlink(missing_ok=True)
         pid = None
 
+    live_port = _read_running_port() if running else None
     return {
         "running": running,
-        "port": _read_running_port() if running else None,
+        "port": live_port,
         "configured_port": _configured_port(),
         "pid": pid if running else None,
+        # Why the advertised address still will not answer, when that is knowable.
+        # None means there is no known reason it cannot be reached.
+        "unreachable_reason": unreachable_reason(live_port) if running and live_port else None,
     }
 
 
@@ -179,6 +249,7 @@ def start(port=None):
             "port": None,
             "configured_port": _configured_port(),
             "pid": None,
+            "unreachable_reason": None,
             "error": (
                 f"TLS certificate not found at {CERT_FILE} / {KEY_FILE} - "
                 "the portal requires the same cert the controller uses. "
@@ -198,6 +269,7 @@ def start(port=None):
             "port": None,
             "configured_port": _configured_port(),
             "pid": None,
+            "unreachable_reason": None,
             "error": (
                 "Controller Configuration hasn't been set yet. Open "
                 "Sysible Controller Configuration, set a Hostname or IP "
@@ -237,7 +309,11 @@ def start(port=None):
     healthy = _wait_for_health(port, deadline)
 
     if healthy:
-        return {"running": True, "port": port, "configured_port": _configured_port(), "pid": proc.pid}
+        # Healthy means it answered on THIS machine's loopback. In a container
+        # that is the container's loopback, which says nothing about whether the
+        # network the console advertises can reach it.
+        return {"running": True, "port": port, "configured_port": _configured_port(),
+                "pid": proc.pid, "unreachable_reason": unreachable_reason(port)}
 
     if proc.poll() is not None:
         # Process actually exited - this is a real failure, not just a
@@ -251,6 +327,7 @@ def start(port=None):
             "port": None,
             "configured_port": _configured_port(),
             "pid": None,
+            "unreachable_reason": None,
             "error": (
                 f"Portal process exited immediately (code {exit_code}). "
                 f"Last log lines:\n{_log_tail()}"
@@ -259,7 +336,8 @@ def start(port=None):
 
     # Still alive, just slow to answer /health (e.g. a sluggish first
     # import) - don't punish a slow-starting process by killing it.
-    return {"running": True, "port": port, "configured_port": _configured_port(), "pid": proc.pid}
+    return {"running": True, "port": port, "configured_port": _configured_port(),
+            "pid": proc.pid, "unreachable_reason": unreachable_reason(port)}
 
 
 def stop():
@@ -268,7 +346,8 @@ def stop():
     if not _is_alive(pid):
         PORTAL_PID_FILE.unlink(missing_ok=True)
         PORTAL_PORT_FILE.unlink(missing_ok=True)
-        return {"running": False, "port": None, "configured_port": _configured_port(), "pid": None}
+        return {"running": False, "port": None, "configured_port": _configured_port(),
+                "pid": None, "unreachable_reason": None}
 
     try:
         os.kill(pid, signal.SIGTERM)

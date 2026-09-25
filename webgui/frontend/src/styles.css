@@ -468,6 +468,13 @@ tr:hover td { background: var(--row-hover); }
   background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--border); }
 .badge.green { color: var(--green-bright); border-color: rgba(46,160,67,0.5); background: rgba(46,160,67,0.12); }
 .badge.amber { color: var(--ambert); border-color: rgba(227,167,47,0.5); background: rgba(227,167,47,0.12); }
+/* A portal that is RUNNING but that nothing outside can reach. It has to outrank
+   the muted "Reachable at" line it replaces: the whole failure was a green
+   "Running" badge next to an address that answered nowhere, so this must not read
+   as one more faint aside. */
+.portal-unreachable { margin-top: 6px; padding: 6px 9px; border-radius: 6px;
+  color: var(--ambert); border: 1px solid rgba(227,167,47,0.42);
+  background: rgba(227,167,47,0.10); font-size: 12.5px; line-height: 1.45; max-width: 880px; }
 
 /* ---------- Three-pane tool layout ---------- */
 .three-pane { display: grid; grid-template-columns: 250px 1fr; gap: 16px; height: 100%; }

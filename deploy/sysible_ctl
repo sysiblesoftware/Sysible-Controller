@@ -1119,7 +1119,7 @@ _slop_url() {
 # Run a command across every present product.
 p_all() {
   local cmd="$1"; shift || true
-  local any=0 p failed=""
+  local any=0 p failed="" absent=""
   for p in $PRODUCTS; do
     # For a bring-up, attempt every product whose checkout we can find — not just
     # the ones already built, or `up all` could never install anything new.
@@ -1135,8 +1135,26 @@ p_all() {
       any=1
       "p_$cmd" "$p" "$@" || failed="$failed $p"
       echo
+    else
+      # NOT silently. A product with no containers used to fall out of `<cmd> all`
+      # without a word, so `restart all` printed three healthy-looking products and
+      # never mentioned the fourth at all — the operator reads a complete list, and
+      # the one that is missing is the one they were asking about.
+      absent="$absent $p"
     fi
   done
+  if [[ $any -eq 1 && -n "$absent" ]]; then
+    _warn "Nothing to $cmd for:$absent"
+    for p in $absent; do
+      if _find_checkout "$p" >/dev/null 2>&1; then
+        _warn "  $(_p_pretty "$p"): checkout found, but none of its containers exist."
+        _warn "    create them with: $(basename "$0") $p up"
+      else
+        _warn "  $(_p_pretty "$p"): no containers and no checkout on this host."
+      fi
+    done
+    echo
+  fi
   if [[ -n "$failed" ]]; then
     _warn "Completed with problems:$failed"
     _warn "The other products above were still processed — re-run for just one with: $(basename "$0") <product> $cmd"
@@ -1165,9 +1183,17 @@ p_all() {
     return 0
   fi
   # After a successful bring-up, tell the user where the front door is.
+  #
+  # `if`, not `&&`: this was the last statement in the function, so its status WAS
+  # the function's status — and `_present slop` is false on any host where SLOP is
+  # not deployed. `sysible_ctl restart all` therefore exited 1 after printing
+  # nothing but successes, which is the worst kind of failure to debug: correct
+  # output, wrong exit code, no message. The command's status is now what actually
+  # happened to the products it ran against.
   case "$cmd" in
-    start|restart|up) _present slop && { _ok "SLOP portal: $(_slop_url)"; } ;;
+    start|restart|up) if _present slop; then _ok "SLOP portal: $(_slop_url)"; fi ;;
   esac
+  [[ -z "$failed" ]]
 }
 
 # =========================================================

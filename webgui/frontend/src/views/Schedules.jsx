@@ -14,6 +14,7 @@ export default function Schedules() {
   const [err, setErr] = useState(""); const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState("");
   const [showNew, setShowNew] = useState(false);
+  const [editing, setEditing] = useState(null);     // job id whose editor is open
   const [expanded, setExpanded] = useState(null);   // job id whose run history is open
 
   const load = useCallback(() => {
@@ -54,11 +55,13 @@ export default function Schedules() {
 
       <div className="spread" style={{ marginBottom: 12 }}>
         <span className="faint">{jobs.length} scheduled job{jobs.length === 1 ? "" : "s"}</span>
-        <button className="btn sm" onClick={() => setShowNew((v) => !v)}>{showNew ? "Cancel" : "New schedule"}</button>
+        <button className="btn sm" onClick={() => { setEditing(null); setShowNew((v) => !v); }}>
+          {showNew ? "Cancel" : "New schedule"}</button>
       </div>
 
-      {showNew && <NewSchedule meta={meta} hosts={hosts}
-                    onDone={() => { setShowNew(false); load(); }} onErr={setErr} />}
+      {showNew && <ScheduleForm meta={meta} hosts={hosts}
+                    onDone={() => { setShowNew(false); load(); }}
+                    onCancel={() => setShowNew(false)} onErr={setErr} />}
 
       {jobs.length === 0 ? (
         <div className="empty" style={{ padding: 24 }}>No schedules yet. Create one for unattended patching, scans, or reboots.</div>
@@ -74,6 +77,7 @@ export default function Schedules() {
                 const hist = (j.history || []);
                 const canExpand = hist.length > 0;
                 const open = expanded === j.id;
+                const edit = editing === j.id;
                 return (
                 <React.Fragment key={j.id}>
                 <tr style={{ borderTop: "1px solid var(--border)", opacity: j.enabled ? 1 : 0.5 }}>
@@ -93,12 +97,27 @@ export default function Schedules() {
                                : <span className="faint">never</span>}
                   </td>
                   <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>
+                    <button className="btn ghost sm"
+                            onClick={() => { setShowNew(false); setEditing(edit ? null : j.id); }}>
+                      {edit ? "Close" : "Edit"}</button>{" "}
                     <button className="btn ghost sm" disabled={busy === j.id} onClick={() => runNow(j.id)}>
                       {busy === j.id ? <span className="spin" /> : "Run now"}</button>{" "}
                     <button className="btn ghost sm" onClick={() => toggle(j)}>{j.enabled ? "Pause" : "Resume"}</button>{" "}
                     <button className="btn ghost sm danger" onClick={() => del(j.id)}>Delete</button>
                   </td>
                 </tr>
+                {edit && (
+                  <tr>
+                    <td colSpan={7} style={{ padding: "0 10px 10px 10px" }}>
+                      {/* Keyed by the job, so the form's initial state is tied to the
+                          schedule it is editing and cannot be carried over to the
+                          next one — the fields are seeded once, on mount. */}
+                      <ScheduleForm key={j.id} meta={meta} hosts={hosts} job={j}
+                                    onDone={() => { setEditing(null); load(); }}
+                                    onCancel={() => setEditing(null)} onErr={setErr} />
+                    </td>
+                  </tr>
+                )}
                 {open && (
                   <tr>
                     <td colSpan={7} style={{ padding: "0 10px 8px 24px", background: "var(--panel-2, rgba(255,255,255,0.02))" }}>
@@ -131,35 +150,62 @@ export default function Schedules() {
   );
 }
 
-function NewSchedule({ meta, hosts, onDone, onErr }) {
-  const actionKeys = Object.keys(meta.actions);
+// One form for both, because a schedule you cannot change is a schedule you have
+// to delete and rebuild from memory — every target re-ticked by hand — to move it
+// by an hour. The API has always accepted a full update (the Pause button is one);
+// only the way in was missing.
+function ScheduleForm({ meta, hosts, job, onDone, onCancel, onErr }) {
+  const editing = Boolean(job);
   const argActions = meta.arg_actions || {};
-  const [f, setF] = useState({ name: "", action: actionKeys[0] || "patch_scan",
-    arg: "", cadence: "daily", at: "02:00", weekday: 0 });
-  const [targets, setTargets] = useState([]);
+  const [f, setF] = useState({
+    name: job?.name || "",
+    action: job?.action || Object.keys(meta.actions)[0] || "patch_scan",
+    arg: job?.arg || "",
+    cadence: job?.cadence || "daily",
+    at: job?.at || "02:00",
+    weekday: job?.weekday ?? 0,
+  });
+  const [targets, setTargets] = useState(job?.targets || []);
   const [saving, setSaving] = useState(false);
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
   const argLabel = argActions[f.action];
+  // A job whose action this build no longer advertises must still be listed, or
+  // opening its editor would silently retarget it to whatever sorts first.
+  const actionKeys = useMemo(() => {
+    const keys = Object.keys(meta.actions);
+    return keys.includes(f.action) ? keys : [f.action, ...keys];
+  }, [meta.actions, f.action]);
 
   async function save() {
     setSaving(true); onErr("");
+    const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const body = {
+      name: f.name, action: f.action, arg: f.arg, targets,
+      cadence: f.cadence, at: f.at, weekday: Number(f.weekday),
+      // An edit must not resume a paused job, and must not re-stamp the
+      // schedule's timezone with the editor's browser one: 02:00 was set in the
+      // zone it fires in, and an operator elsewhere opening the form would
+      // otherwise move the run by the difference between them without touching
+      // the time field.
+      enabled: editing ? job.enabled !== false : true,
+      tz: editing ? (job.tz || browserTz) : browserTz,
+    };
     try {
-      await api.scheduleCreate({ name: f.name, action: f.action, arg: f.arg, targets, cadence: f.cadence,
-        at: f.at, weekday: Number(f.weekday), enabled: true,
-        tz: Intl.DateTimeFormat().resolvedOptions().timeZone });
+      if (editing) await api.scheduleUpdate(job.id, body);
+      else await api.scheduleCreate(body);
       onDone();
     } catch (e) { onErr(e.message); } finally { setSaving(false); }
   }
 
   return (
     <div className="card" style={{ marginBottom: 14 }}>
-      <strong>New schedule</strong>
+      <strong>{editing ? `Edit ${job.name || "schedule"}` : "New schedule"}</strong>
       <div className="row" style={{ gap: 12, flexWrap: "wrap", marginTop: 10, alignItems: "flex-end" }}>
         <label className="field" style={{ minWidth: 200 }}><span>Name (optional)</span>
           <input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Weekly Prod security patch" /></label>
         <label className="field"><span>Action</span>
           <select value={f.action} onChange={(e) => set("action", e.target.value)}>
-            {actionKeys.map((k) => <option key={k} value={k}>{meta.actions[k]}</option>)}
+            {actionKeys.map((k) => <option key={k} value={k}>{meta.actions[k] || k}</option>)}
           </select></label>
         {argLabel && (
           <label className="field" style={{ minWidth: 200 }}><span>{argLabel}</span>
@@ -177,7 +223,10 @@ function NewSchedule({ meta, hosts, onDone, onErr }) {
             </select></label>
         )}
         <label className="field"><span>{f.cadence === "hourly" ? "Minute (:MM)" : "Time (HH:MM)"}</span>
-          <input type="time" value={f.at} onChange={(e) => set("at", e.target.value)} /></label>
+          <input type="time" value={f.at} onChange={(e) => set("at", e.target.value)} />
+          {editing && job.tz && (
+            <span className="faint" style={{ fontSize: 11 }}>fires in {job.tz}</span>
+          )}</label>
       </div>
       <div style={{ marginTop: 10 }}>
         <div className="faint" style={{ fontSize: 12, marginBottom: 4 }}>
@@ -185,8 +234,11 @@ function NewSchedule({ meta, hosts, onDone, onErr }) {
         </div>
         <HostTree hosts={hosts} value={targets} onChange={setTargets} resizable={false} />
       </div>
-      <button className="btn" style={{ marginTop: 12 }} disabled={saving} onClick={save}>
-        {saving ? <span className="spin" /> : "Create schedule"}</button>
+      <div className="row" style={{ gap: 8, marginTop: 12 }}>
+        <button className="btn" disabled={saving} onClick={save}>
+          {saving ? <span className="spin" /> : editing ? "Save changes" : "Create schedule"}</button>
+        <button className="btn ghost" disabled={saving} onClick={onCancel}>Cancel</button>
+      </div>
     </div>
   );
 }

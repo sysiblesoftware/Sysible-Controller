@@ -392,7 +392,12 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 .main-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 26px 32px; }
 
 /* ---------- Fleet overview (dashboard home) ---------- */
-.metric-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 22px; }
+/* auto-fit, not repeat(4): the strip holds five cards now, and a fixed four
+   columns left the fifth alone on a row of its own — a full-width card for one
+   number, directly under four that share a line. auto-fit lays out as many as
+   fit and shares the leftover, so adding or removing a card cannot orphan one. */
+.metric-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+              gap: 12px; margin-bottom: 22px; }
 @media (max-width: 900px) { .metric-row { grid-template-columns: repeat(2, 1fr); } }
 .metric { background: var(--bg-raise); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
 .metric .label { font-size: 12px; color: var(--text-dim); }

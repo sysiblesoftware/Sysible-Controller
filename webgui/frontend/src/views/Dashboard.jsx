@@ -361,6 +361,58 @@ function SuppressedPanel({ items, canAct, onOpenHost, onRemove }) {
 // clickable and drops down links to those specific hosts (e.g. click
 // "Offline / stale 1" to see which host, "Online 3" for the three, etc.).
 // Each host link opens that host's detail page.
+// Whether anything on the fleet is waiting to be patched, in one number.
+//
+// It always renders. The version before this one was hidden until the sweep had
+// returned at least one host, which took it off the dashboard in exactly the two
+// states where it matters: before the fleet has ever been swept (a fresh
+// controller, or any time the 15-minute cache has expired), and when the sweep
+// errored — and `.catch(() => {})` meant those two were indistinguishable from
+// "nothing needs patching". An indicator that disappears when it has nothing to
+// say cannot be trusted when it says nothing.
+function PatchCard({ patch, err, onOpen }) {
+  const { state, withUpd, sec, reboot } = patch;
+  const clear = state === "ready" && withUpd === 0;
+  const title = state === "error"
+    ? `Patch status could not be read: ${err}. Click to open Update Hosts.`
+    : state !== "ready"
+      ? "Scanning the fleet for pending updates… click to open Update Hosts"
+      : withUpd === 0
+        ? "Every host reports no pending updates. Click to open Update Hosts."
+        : `${withUpd} host(s) have updates pending. Click to open Update Hosts.`;
+  return (
+    <div className="metric" style={{ cursor: "pointer" }} onClick={onOpen} title={title}>
+      <div className="label">Needs patching</div>
+      <div className="value" style={clear ? { color: VERDICT_COLOR.OK } : undefined}>
+        {state === "error" ? (
+          <span style={{ color: VERDICT_COLOR.WARNING }}>—</span>
+        ) : state !== "ready" ? (
+          <span className="faint" style={{ fontSize: 15, fontWeight: 400 }}>
+            <span className="spin" style={{ marginRight: 6 }} />scanning…
+          </span>
+        ) : (
+          <>
+            {withUpd}
+            {sec > 0 && (
+              <span style={{ fontSize: 14, fontWeight: 400, color: VERDICT_COLOR.CRITICAL }}>
+                {" "}· {sec} sec
+              </span>
+            )}
+            {reboot > 0 && (
+              <span style={{ fontSize: 14, fontWeight: 400, color: VERDICT_COLOR.WARNING }}>
+                {" "}· {reboot} reboot
+              </span>
+            )}
+          </>
+        )}
+      </div>
+      {state === "error" && (
+        <div className="faint" style={{ fontSize: 11 }}>couldn’t read patch status</div>
+      )}
+    </div>
+  );
+}
+
 function MetricCard({ label, value, extra, hosts, onOpenHost, accent }) {
   const [open, setOpen] = useState(false);
   const ref = React.useRef(null);
@@ -453,7 +505,25 @@ export default function Dashboard({ role, edition, onOpen }) {
   const [fleetErr, setFleetErr] = useState("");
   const [fleetAuto, setFleetAuto] = useState(true);   // on by default; refreshes every 10s
   const [updates, setUpdates] = useState([]);         // cached patch status for the summary tile
-  const loadUpdates = useCallback(() => { api.fleetUpdates(0, 0).then((d) => setUpdates(d.hosts || [])).catch(() => {}); }, []);
+  // "scanning" until the first answer arrives. The tile used to be hidden until
+  // `updates` was non-empty, which meant it was missing in exactly the two cases
+  // an operator needs it most: before the fleet has ever been swept, and when the
+  // sweep failed. A patch indicator that vanishes when it has nothing to say is
+  // indistinguishable from one that says "nothing to patch".
+  const [updState, setUpdState] = useState("scanning");   // scanning | ready | error
+  const [updErr, setUpdErr] = useState("");
+  // A cold cache makes this a full fleet sweep, which can outlast the 30s poll
+  // below. Without this guard the second poll starts another one on top of the
+  // first, and on a 16-host fleet they stack up faster than they finish.
+  const updInFlight = React.useRef(false);
+  const loadUpdates = useCallback(() => {
+    if (updInFlight.current) return;
+    updInFlight.current = true;
+    api.fleetUpdates(0, 0)
+      .then((d) => { setUpdates(d.hosts || []); setUpdState("ready"); setUpdErr(""); })
+      .catch((e) => { setUpdState("error"); setUpdErr(e.message || String(e)); })
+      .finally(() => { updInFlight.current = false; });
+  }, []);
   useEffect(() => { loadUpdates(); }, [loadUpdates]);
   // Refresh the "Needs patching" tile on the same cadence as the rest of the
   // dashboard — it used to fetch once on mount and then freeze, so after hosts
@@ -777,10 +847,17 @@ export default function Dashboard({ role, edition, onOpen }) {
   }, [filteredFleet, analysis]);
 
   const patch = useMemo(() => {
-    let withUpd = 0, sec = 0;
-    for (const h of updates) { if ((h.total || 0) > 0) withUpd++; sec += h.security || 0; }
-    return { withUpd, sec, loaded: updates.length > 0 };
-  }, [updates]);
+    let withUpd = 0, sec = 0, reboot = 0;
+    for (const h of updates) {
+      if ((h.total || 0) > 0) withUpd++;
+      sec += h.security || 0;
+      if (h.reboot) reboot++;
+    }
+    // `scanned` is what the tile shows a NUMBER for. It is not "updates.length > 0":
+    // a fleet that is fully patched reports every host with total 0, and a sweep
+    // that has not run yet reports nothing at all — those must not look the same.
+    return { withUpd, sec, reboot, scanned: updState === "ready", state: updState };
+  }, [updates, updState]);
 
   // Ranked triage list: every host with something wrong, worst first, each with
   // its specific reasons. Built from the health + posture data already loaded —
@@ -948,15 +1025,7 @@ export default function Dashboard({ role, edition, onOpen }) {
         <MetricCard label="Offline / stale" value={m.offline}
           extra={m.offline > 0 ? <span className="dot bad" /> : null}
           hosts={hostLists.offline} onOpenHost={openHost} />
-        {patch.loaded && (
-          <div className="metric" style={{ cursor: "pointer" }} onClick={() => onOpen("updates")}
-               title="Open Update Hosts">
-            <div className="label">Needs patching</div>
-            <div className="value">{patch.withUpd}
-              {patch.sec > 0 && <span style={{ fontSize: 14, fontWeight: 400, color: VERDICT_COLOR.CRITICAL }}> · {patch.sec} sec</span>}
-            </div>
-          </div>
-        )}
+        <PatchCard patch={patch} err={updErr} onOpen={() => onOpen("updates")} />
         <div className="metric">
           <div className="label">Environments</div>
           <div className="value">{m.envs}</div>

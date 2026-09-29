@@ -445,7 +445,16 @@ function MetricCard({ label, value, extra, hosts, onOpenHost, accent }) {
                     disabled={!h.id}
                     onClick={() => { if (h.id && onOpenHost) onOpenHost(h); setOpen(false); }}
                     title={h.id ? "View host detail" : ""}>
-              <span>{h.host}{h.ctrl && <span style={CTRL_BADGE} title="This host is the Sysible controller">controller</span>}</span>
+              <span>
+                {/* The combined online/offline list holds both, so each row has to
+                    say which it is — otherwise the drill-down is a list of hosts
+                    with no way to tell the ones you opened it for. */}
+                {h.off !== undefined && (
+                  <span className={`dot ${h.off ? "bad" : "ok"}`}
+                        style={{ marginRight: 6, display: "inline-block" }}
+                        title={h.off ? "offline / stale" : "online"} />
+                )}
+                {h.host}{h.ctrl && <span style={CTRL_BADGE} title="This host is the Sysible controller">controller</span>}</span>
               {h.env ? <span className="faint" style={{ fontSize: 11 }}>{h.env}</span> : null}
             </button>
           ))}
@@ -638,7 +647,11 @@ export default function Dashboard({ role, edition, onOpen }) {
       if (a.last_seen && (now - a.last_seen) <= STALE) online.push(mk(a));
       else offline.push(mk(a));
     }
-    return { all: inv.map(mk), online, offline };
+    // Offline FIRST in the combined drill-down: the tile's big number is how many
+    // are up, but the reason anyone opens it is to find the ones that are not.
+    const combined = [...offline.map((h) => ({ ...h, off: true })),
+                      ...online.map((h) => ({ ...h, off: false }))];
+    return { all: inv.map(mk), online, offline, combined };
   }, [inventory]);
 
   const openHost = useCallback((h) => onOpen("host", { id: h.id, label: h.host }), [onOpen]);
@@ -1018,13 +1031,21 @@ export default function Dashboard({ role, edition, onOpen }) {
             lingered as "1 enrolled" while Online/Offline correctly showed 0.) */}
         <MetricCard label="Hosts enrolled" value={m.total}
           hosts={hostLists.all} onOpenHost={openHost} />
+        {/* Online and Offline/stale were two cards for one fact: every host is in
+            exactly one of them, and they always summed to Hosts enrolled beside
+            them. Two panels, three numbers, one piece of information. Combined,
+            with offline as the suffix rather than a card of its own — it is the
+            exception, and it reads as one on a strip where 0 is the good answer. */}
         <MetricCard label="Online" value={m.online}
           accent={m.total > 0 && m.online === 0 ? VERDICT_COLOR.CRITICAL : undefined}
-          extra={<span className={`dot ${m.total > 0 && m.online === 0 ? "bad" : "ok"}`} />}
-          hosts={hostLists.online} onOpenHost={openHost} />
-        <MetricCard label="Offline / stale" value={m.offline}
-          extra={m.offline > 0 ? <span className="dot bad" /> : null}
-          hosts={hostLists.offline} onOpenHost={openHost} />
+          extra={<>
+            <span className={`dot ${m.total > 0 && m.online === 0 ? "bad" : "ok"}`} />
+            <span style={{ fontSize: 14, fontWeight: 400,
+                           color: m.offline > 0 ? VERDICT_COLOR.CRITICAL : "var(--text-dim)" }}>
+              · {m.offline} offline
+            </span>
+          </>}
+          hosts={hostLists.combined} onOpenHost={openHost} />
         <PatchCard patch={patch} err={updErr} onOpen={() => onOpen("updates")} />
         <div className="metric">
           <div className="label">Environments</div>

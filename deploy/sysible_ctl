@@ -174,6 +174,35 @@ _present() {
   [[ -n "$(_p_dir_override "$1")" ]]
 }
 
+# Containers left under compose's TEMPORARY name, e.g. 7ffb46fbf6d4_sysible-slop-gateway.
+#
+# `docker compose up` replaces a container by creating the new one under
+# <old-container-id>_<name>, then removing the old one, then renaming the new over
+# it. Kill the compose process between the create and the rename — which is what
+# happened every time SLOP updated ITSELF, because the client ran inside a
+# container the same run was replacing — and the stack is left running under names
+# nothing looks for. The service is up; `docker inspect sysible-slop-gateway`
+# fails; every tool that addresses a product by container name concludes it is not
+# installed. That is a baffling state to be in, so name it.
+_orphan_recreates() {
+  local want; want="$(_p_container "$1")"
+  docker ps -a --format '{{.Names}}' 2>/dev/null \
+    | grep -E "^[0-9a-f]{8,}_${want}$" || true
+}
+
+# Print the diagnosis, if this product is in that state. Returns 0 when it is.
+_warn_half_recreated() {
+  local p="$1" orphans; orphans="$(_orphan_recreates "$p")"
+  [[ -n "$orphans" ]] || return 1
+  _warn "  $(_p_pretty "$p") is HALF-RECREATED: an update was interrupted part way."
+  _warn "  Its containers are running under compose's temporary names:"
+  local n; while IFS= read -r n; do [[ -n "$n" ]] && _warn "    $n"; done <<< "$orphans"
+  _warn "  Nothing that addresses them by name can see them, and the swap was never"
+  _warn "  finished. Complete it from the HOST (never from inside the stack):"
+  _warn "    $(basename "$0") $p up"
+  return 0
+}
+
 # The HTTP status a product answers its health path with — or nothing at all.
 #
 # PROBE BY IP, NEVER BY NAME. The SLOP gateway has no domain: it mints ONE
@@ -738,6 +767,7 @@ p_status() {
   # A multi-service stack: list every service via compose; otherwise the one container.
   if _discover "$p"; then _compose ps 2>/dev/null || true
   else docker ps -a --filter "name=^/$(_p_container "$p")$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null | tail -n +1; fi
+  _warn_half_recreated "$p" || true
   _health "$p" || true
   [[ "$p" == "slop" ]] && { _slop_upstream_status; _flashback_status; }
   return 0
@@ -1146,7 +1176,9 @@ p_all() {
   if [[ $any -eq 1 && -n "$absent" ]]; then
     _warn "Nothing to $cmd for:$absent"
     for p in $absent; do
-      if _find_checkout "$p" >/dev/null 2>&1; then
+      if _warn_half_recreated "$p"; then
+        : # already explained, in more detail than "no containers exist"
+      elif _find_checkout "$p" >/dev/null 2>&1; then
         _warn "  $(_p_pretty "$p"): checkout found, but none of its containers exist."
         _warn "    create them with: $(basename "$0") $p up"
       else

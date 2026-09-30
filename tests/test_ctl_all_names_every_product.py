@@ -45,6 +45,11 @@ case "$1" in
     _named "$2" "${FAKE_FAIL:-}" && { echo "Error: no such container: $2" >&2; exit 1; }
     exit 0 ;;
   compose) exit 0 ;;
+  ps)
+    # `docker ps -a --format {{.Names}}` — the half-recreate probe. FAKE_ORPHANS
+    # holds the names compose left under its temporary <oldid>_<name> form.
+    for n in ${FAKE_ORPHANS:-}; do echo "$n"; done
+    exit 0 ;;
 esac
 exit 0
 """
@@ -132,3 +137,67 @@ def test_stop_all_is_accounted_for_the_same_way(ctl):
     rc, out = ctl("stop", "all", FAKE_MISSING="sysible-slop-gateway")
     assert rc == 0
     assert "Nothing to stop for:" in out
+
+
+# ---- the state that looks like "not installed" but is not -------------------
+#
+# Reported as "why is this up but not available", with a `docker ps` showing the
+# SLOP stack running under names like 7ffb46fbf6d4_sysible-slop-gateway while
+# `sysible_ctl restart all` never mentioned SLOP at all.
+#
+# `docker compose up` replaces a container by creating the new one as
+# <old-container-id>_<name>, removing the old one, then renaming the new over it.
+# Kill the compose process between the create and the rename — which is what
+# happened every time SLOP updated ITSELF, because the client ran inside a
+# container that same run was replacing — and the stack is left RUNNING under a
+# name nothing looks for. Every tool that addresses a product by container name
+# then reports it as not installed, on a host where it is plainly running.
+ORPHAN = "7ffb46fbf6d4_sysible-slop-gateway"
+
+
+def test_a_half_recreated_stack_is_named_as_such(ctl):
+    rc, out = ctl("restart", "all", FAKE_MISSING="sysible-slop-gateway",
+                  FAKE_ORPHANS=ORPHAN)
+    assert "HALF-RECREATED" in out, (
+        "a stack left under compose's temporary names still reports as simply "
+        "absent — which is what made this baffling in the first place")
+    assert ORPHAN in out, "the container actually holding the service is not named"
+
+
+def test_it_does_not_call_a_running_stack_uninstalled(ctl):
+    """The misleading half. Saying 'no containers and no checkout' about a stack
+    whose containers are up sends the operator looking for the wrong thing."""
+    rc, out = ctl("restart", "all", FAKE_MISSING="sysible-slop-gateway",
+                  FAKE_ORPHANS=ORPHAN)
+    assert "no containers and no checkout" not in out
+    assert "none of its containers exist" not in out
+
+
+def test_it_says_how_to_finish_the_swap(ctl):
+    rc, out = ctl("restart", "all", FAKE_MISSING="sysible-slop-gateway",
+                  FAKE_ORPHANS=ORPHAN)
+    assert "sysible_ctl slop up" in out, "no way forward was offered"
+    assert "from the HOST" in out, (
+        "the fix has to say where to run it — running it from inside the stack is "
+        "what produced this state")
+
+
+def test_only_the_temporary_name_pattern_counts(ctl):
+    """`sysible-slop-gateway-2` or a hand-named copy is not a half-recreate, and
+    calling one an interrupted update sends someone chasing a problem that is not
+    there."""
+    rc, out = ctl("restart", "all", FAKE_MISSING="sysible-slop-gateway",
+                  FAKE_ORPHANS="my_sysible-slop-gateway sysible-slop-gateway-old")
+    assert "HALF-RECREATED" not in out
+
+
+def test_a_healthy_host_says_nothing_about_it(ctl):
+    rc, out = ctl("restart", "all")
+    assert "HALF-RECREATED" not in out
+
+
+def test_status_reports_it_too(ctl):
+    """The other place someone goes when the front door is dark."""
+    rc, out = ctl("slop", "status", FAKE_MISSING="sysible-slop-gateway",
+                  FAKE_ORPHANS=ORPHAN)
+    assert "HALF-RECREATED" in out

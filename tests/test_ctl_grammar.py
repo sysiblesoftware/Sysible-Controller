@@ -1,4 +1,4 @@
-"""sysible_ctl speaks ONE syntax, and never widens a target you named.
+"""sysiblectl speaks ONE syntax, and never widens a target you named.
 
 The CLI grew four overlapping ad-hoc forms with different command sets, and the
 seams between them produced two classes of bug:
@@ -27,14 +27,17 @@ import textwrap
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CTL = os.path.join(os.path.dirname(HERE), "deploy", "sysible_ctl")
+CTL = os.path.join(os.path.dirname(HERE), "deploy", "sysiblectl")
 
 PRODUCTS = ["controller", "slep", "connect", "slop"]
 # Every command an operator can type, with the action it must resolve to.
-# build/install are documented aliases of up.
-COMMANDS = {"update": "update", "up": "up", "build": "up", "install": "up",
-            "status": "status", "restart": "restart", "start": "start",
-            "stop": "stop", "backup": "backup", "destroy": "destroy"}
+COMMANDS = {"update": "update", "rebuild": "rebuild", "status": "status",
+            "restart": "restart", "start": "start", "stop": "stop",
+            "backup": "backup", "destroy": "destroy"}
+# Accepted for old scripts, not advertised. They must keep routing, in both
+# orders, or a rename becomes an outage for whoever automated against the old
+# vocabulary.
+LEGACY = {"up": "rebuild", "build": "rebuild"}
 
 
 @pytest.fixture(scope="module")
@@ -52,7 +55,7 @@ def ctl_lib(tmp_path_factory):
 _STUBS = r"""
 _need_docker() { :; }
 _route() { local action="$1" target="$2"; shift 2; echo "ROUTE $action $target $*"; }
-p_up()      { _route up      "$@"; }
+p_rebuild() { _route rebuild "$@"; }
 p_update()  { _route update  "$@"; }
 p_status()  { _route status  "$@"; }
 p_logs()    { _route logs    "$@"; }
@@ -69,7 +72,7 @@ usage()         { echo "ROUTE usage"; }
 
 
 def route(ctl_lib, *argv):
-    """Run `sysible_ctl <argv…>` and return its routing decision, or ERROR:<msg>."""
+    """Run `sysiblectl <argv…>` and return its routing decision, or ERROR:<msg>."""
     script = f'. "{ctl_lib}"\n' + textwrap.dedent(_STUBS) + "\nmain " + " ".join(
         f"'{a}'" for a in argv)
     r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
@@ -84,6 +87,17 @@ def route(ctl_lib, *argv):
         if line.startswith("ROUTE "):
             return line[len("ROUTE "):].strip()
     return "ERROR:" + (r.stderr.strip() or r.stdout.strip())
+
+
+def run_raw(ctl_lib, *argv):
+    """Everything the command printed, not just its routing decision — for the
+    notices that go to stderr alongside a successful run."""
+    script = f'. "{ctl_lib}"\n' + textwrap.dedent(_STUBS) + "\nmain " + " ".join(
+        f"'{a}'" for a in argv)
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                       env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                            "HOME": os.environ.get("HOME", "/root")}, timeout=60)
+    return r.stdout + r.stderr
 
 
 @pytest.mark.parametrize("typed,action", sorted(COMMANDS.items()))
@@ -114,8 +128,6 @@ class TestFleetWide:
 
     def test_no_target_means_every_product(self, ctl_lib, typed, action):
         """`update` alone was rejected while `status` alone worked."""
-        if typed == "install":
-            pytest.skip("bare `install` is the documented exception — it links the CLI")
         assert route(ctl_lib, typed).split()[:2] == [action, "ALL"]
 
 
@@ -123,7 +135,7 @@ class TestANamedProductIsNeverWidened:
     """The outage-shaped bug: `stop controller` stopped SLEP, Connect and the SLOP
     gateway too, and said nothing about it."""
 
-    @pytest.mark.parametrize("typed", ["stop", "start", "restart", "status", "up", "build"])
+    @pytest.mark.parametrize("typed", ["stop", "start", "restart", "status", "rebuild", "update"])
     @pytest.mark.parametrize("product", PRODUCTS)
     def test_it_acts_on_that_product_alone(self, ctl_lib, typed, product):
         assert route(ctl_lib, typed, product).split()[1] == product
@@ -143,14 +155,17 @@ class TestDefaults:
     def test_no_arguments_at_all_prints_the_help(self, ctl_lib):
         assert route(ctl_lib) == "usage"
 
-    def test_bare_install_still_links_the_cli(self, ctl_lib):
-        """Documented, and install.sh/docs depend on it — the ONE exception."""
+    def test_bare_install_links_the_cli(self, ctl_lib):
         assert route(ctl_lib, "install") == "link-cli"
 
-    def test_install_with_a_target_builds_it(self, ctl_lib):
-        assert route(ctl_lib, "install", "slep") == "up slep"
-        assert route(ctl_lib, "slep", "install") == "up slep"
-        assert route(ctl_lib, "install", "all") == "up ALL"
+    def test_install_with_a_target_is_refused_and_redirected(self, ctl_lib):
+        """It used to mean 'link the CLI' with no argument and 'build this
+        product' with one — the same word doing two unrelated jobs depending on
+        how many words followed it. Now it means one thing and names the verb
+        that does the other."""
+        out = route(ctl_lib, "install", "slep")
+        assert out.startswith("ERROR:"), out
+        assert "slep start" in out and "slep rebuild" in out
 
 
 class TestArgumentsSurviveBothOrders:
@@ -166,9 +181,12 @@ class TestArgumentsSurviveBothOrders:
         assert route(ctl_lib, "controller", "destroy") == "destroy controller 0"
         assert route(ctl_lib, "destroy", "all") == "destroy ALL 0"
 
-    def test_the_controller_address_reaches_up_either_way(self, ctl_lib):
-        assert route(ctl_lib, "controller", "up", "192.168.1.50") == "up controller 192.168.1.50"
-        assert route(ctl_lib, "up", "controller", "192.168.1.50") == "up controller 192.168.1.50"
+    def test_the_controller_address_reaches_start_either_way(self, ctl_lib):
+        for verb in ("start", "rebuild"):
+            assert route(ctl_lib, "controller", verb, "192.168.1.50") == \
+                f"{verb} controller 192.168.1.50"
+            assert route(ctl_lib, verb, "controller", "192.168.1.50") == \
+                f"{verb} controller 192.168.1.50"
 
     def test_the_log_tail_reaches_logs_either_way(self, ctl_lib):
         assert route(ctl_lib, "controller", "logs", "1000") == "logs controller 1000"
@@ -220,3 +238,49 @@ class TestTheHelpDescribesWhatTheParserDoes:
                            capture_output=True, text=True, timeout=60)
         for cmd in r.stdout.split():
             assert cmd in help_text, f"'{cmd}' is a real command but the help never names it"
+
+
+class TestTheOldVocabularyStillRoutes:
+    """`up` and `build` are on every host's shell history, in old runbooks and in
+    whatever anyone automated. They are no longer advertised, but a rename that
+    breaks a cron job at 02:00 is not a simplification."""
+
+    @pytest.mark.parametrize("typed,action", sorted(LEGACY.items()))
+    @pytest.mark.parametrize("product", PRODUCTS)
+    def test_it_still_reaches_the_verb_that_replaced_it(self, ctl_lib, typed, action, product):
+        assert route(ctl_lib, product, typed).split()[:2] == [action, product]
+        assert route(ctl_lib, typed, product).split()[:2] == [action, product]
+
+    @pytest.mark.parametrize("typed,action", sorted(LEGACY.items()))
+    def test_it_still_works_fleet_wide(self, ctl_lib, typed, action):
+        assert route(ctl_lib, typed).split()[:2] == [action, "ALL"]
+
+    @pytest.mark.parametrize("typed", sorted(LEGACY))
+    def test_it_says_what_to_type_instead(self, ctl_lib, typed):
+        out = run_raw(ctl_lib, "controller", typed)
+        assert "no longer advertised" in out, \
+            f"'{typed}' works but never tells anyone it has been renamed"
+        assert "start" in out, "the notice does not name the verb most people want"
+
+    @pytest.mark.parametrize("typed", sorted(LEGACY))
+    def test_it_is_kept_out_of_the_help(self, ctl_lib, typed):
+        """Accepted is not the same as advertised — listing them would undo the
+        point of cutting the vocabulary down."""
+        r = subprocess.run(["bash", "-c", f'. "{ctl_lib}"\nprintf %s "$KNOWN_CMDS"'],
+                           capture_output=True, text=True, timeout=60)
+        assert typed not in r.stdout.split()
+
+
+class TestTheVocabularyIsSmall:
+    def test_there_is_exactly_one_way_to_say_each_thing(self, ctl_lib):
+        """`up`, `build` and `install <product>` were three spellings of one
+        operation. Whatever else changes, the advertised list must not grow a
+        second name for something it already has."""
+        r = subprocess.run(["bash", "-c", f'. "{ctl_lib}"\nprintf %s "$KNOWN_CMDS"'],
+                           capture_output=True, text=True, timeout=60)
+        cmds = r.stdout.split()
+        assert len(cmds) == len(set(cmds))
+        # COMMANDS is every verb that takes a target in both orders; `logs` is the
+        # one that refuses `all`, so it is exercised separately but still counts.
+        assert set(cmds) == set(COMMANDS) | {"logs"}, \
+            f"the advertised commands changed: {cmds}"

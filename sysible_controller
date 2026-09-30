@@ -1168,7 +1168,7 @@ if [[ "$IN_CONTAINER" == "1" ]]; then
       echo "'$1' controls the CONTAINER and must run on the HOST, not inside it." >&2
       echo >&2
       echo "Use the host-side manager (works by container name — no repo needed):" >&2
-      echo "  sysible_ctl $1        # after: sudo ./deploy/sysible_ctl install" >&2
+      echo "  sysiblectl $1        # after: sudo ./deploy/sysiblectl install" >&2
       echo >&2
       echo "Or with plain docker on the host:" >&2
       case "$1" in

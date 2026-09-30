@@ -1,6 +1,6 @@
 """A bring-up that cannot serve its own port is a FAILED bring-up.
 
-`sysible_ctl <p> up` ran compose in a subshell whose exit status was discarded,
+`sysiblectl <p> start` ran compose in a subshell whose exit status was discarded,
 probed the port once with a 5-second timeout, threw that result away with
 `|| true`, and then printed "is up." no matter what. install.sh reads only the
 exit code, so it printed "SLOP gateway is up." over a dead front door.
@@ -23,7 +23,7 @@ import textwrap
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CTL = os.path.join(os.path.dirname(HERE), "deploy", "sysible_ctl")
+CTL = os.path.join(os.path.dirname(HERE), "deploy", "sysiblectl")
 
 FAKE_DOCKER = r"""#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_LOG"
@@ -148,7 +148,7 @@ def test_up_refuses_to_announce_a_product_that_is_not_answering(sandbox):
         _slop_secret_present() { return 0; }
         _slop_seed_cross_app_env() { :; }
         _slop_apply_gateway_config() { return 0; }
-        p_up slop
+        p_rebuild slop
     """, FAKE_HEALTH_FAIL="1")
     assert rc != 0, "a dead gateway was reported as a successful bring-up"
     assert "is up." not in out
@@ -161,7 +161,7 @@ def test_up_fails_when_compose_itself_fails(sandbox):
         _compose_file_in() { echo /nope/docker-compose.yml; }
         _detect_compose() { DC=(false); }
         _slop_secret_present() { return 0; }
-        p_up slop
+        p_rebuild slop
     """)
     assert rc != 0
     assert "compose failed to build or start it" in err
@@ -179,7 +179,7 @@ def test_up_applies_the_gateway_config_like_update_does(sandbox):
         _slop_secret_present() { return 0; }
         _slop_seed_cross_app_env() { echo SEEDED; }
         _slop_apply_gateway_config() { echo APPLIED; return 0; }
-        p_up slop
+        p_rebuild slop
     """)
     assert rc == 0, err
     assert "SEEDED" in out and "APPLIED" in out
@@ -193,7 +193,7 @@ def test_up_fails_loudly_when_the_gateway_config_will_not_apply(sandbox):
         _slop_secret_present() { return 0; }
         _slop_seed_cross_app_env() { :; }
         _slop_apply_gateway_config() { return 1; }
-        p_up slop
+        p_rebuild slop
     """)
     assert rc != 0
     assert "gateway config was NOT applied" in err
@@ -206,7 +206,7 @@ def test_a_non_slop_product_is_untouched_by_the_gateway_step(sandbox):
         _compose_file_in() { echo /nope/docker-compose.yml; }
         _detect_compose() { DC=(true); }
         _slop_apply_gateway_config() { echo SHOULD_NOT_RUN; return 1; }
-        p_up connect
+        p_rebuild connect
     """)
     assert "SHOULD_NOT_RUN" not in out
     assert rc == 0, err

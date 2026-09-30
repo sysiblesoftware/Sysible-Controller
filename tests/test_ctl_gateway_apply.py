@@ -1,4 +1,4 @@
-"""`sysible_ctl slop update` must not claim success when the gateway config never loaded.
+"""`sysiblectl slop update` must not claim success when the gateway config never loaded.
 
 The gateway's Caddyfile IS the authentication boundary — forward_auth plus the
 401 -> /login deny path — and it is bind-mounted, so `compose up -d --build`
@@ -29,7 +29,7 @@ import textwrap
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CTL = os.path.join(os.path.dirname(HERE), "deploy", "sysible_ctl")
+CTL = os.path.join(os.path.dirname(HERE), "deploy", "sysiblectl")
 
 FAKE_DOCKER = r"""#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_LOG"
@@ -600,7 +600,7 @@ def test_status_reports_real_stored_backups(fbsandbox):
 
 # ---- `slop up` must not run a compose that cannot possibly work ------------
 # Reported: the "Install Sysible SLOP" desktop icon does not install SLOP.
-# install-sysible ends by calling `sysible_ctl slop up`, which ran a bare
+# install-sysible ends by calling `sysiblectl slop start`, which ran a bare
 # `docker compose up`. SLOP's compose declares the SSO secret as ${VAR:?...} in
 # five services, so compose ABORTS when it is unset — and on a first bring-up
 # nothing has minted it yet. install.sh is what mints it.
@@ -623,7 +623,7 @@ def test_first_slop_bring_up_hands_off_to_install_sh(sandbox, tmp_path):
     rc, out, err = run(sandbox, f'''
         _health() {{ :; }}
         _p_dir_override() {{ [ "$1" = slop ] && echo "{d}"; }}
-        p_up slop
+        p_rebuild slop
     ''', FAKE_NO_CONTAINER="1")
     assert rc == 0, err
     assert "INSTALL-SH RAN: gateway" in out, out
@@ -637,7 +637,7 @@ def test_a_configured_slop_uses_plain_compose(sandbox, tmp_path):
     rc, out, err = run(sandbox, f'''
         _health() {{ :; }}
         _p_dir_override() {{ [ "$1" = slop ] && echo "{d}"; }}
-        p_up slop
+        p_rebuild slop
     ''', FAKE_NO_CONTAINER="1")
     assert rc == 0, err
     assert "INSTALL-SH RAN" not in out
@@ -651,7 +651,7 @@ def test_slop_with_no_secret_and_no_installer_fails_with_the_reason(sandbox, tmp
     rc, out, err = run(sandbox, f'''
         _health() {{ :; }}
         _p_dir_override() {{ [ "$1" = slop ] && echo "{d}"; }}
-        p_up slop
+        p_rebuild slop
     ''', FAKE_NO_CONTAINER="1")
     assert rc != 0
     assert "SYSIBLE_SSO_SHARED_SECRET" in err
@@ -665,7 +665,7 @@ def test_a_non_slop_product_is_unaffected(sandbox, tmp_path):
         _health() {{ :; }}
         _env_upsert() {{ :; }}
         _p_dir_override() {{ [ "$1" = connect ] && echo "{d}"; }}
-        p_up connect
+        p_rebuild connect
     ''', FAKE_NO_CONTAINER="1")
     assert rc == 0, err
     assert "up -d --build" in docker_calls(sandbox)
@@ -788,7 +788,7 @@ def test_status_names_an_app_the_gateway_cannot_reach(sandbox):
         assert app in both, f"{app} was not reported: {both}"
     assert "cannot reach it" in both, both
     assert "8800" in both, both        # and says which port to look at
-    assert "up" in both                # and what to run
+    assert "start" in both             # and what to run
 
 
 def test_status_says_so_when_every_app_is_reachable(sandbox):
@@ -819,7 +819,7 @@ def test_the_upstream_probe_also_uses_an_address_not_a_name(sandbox):
 # a container had been REMOVED (a failed build, a `compose down`) `update`
 # skipped it — with its checkout sitting in /opt/sysible-src the whole time.
 #
-# For the Controller that is self-perpetuating and it bites hardest: sysible_ctl
+# For the Controller that is self-perpetuating and it bites hardest: sysiblectl
 # ITSELF lives in the Controller's checkout, so a missing Controller container
 # meant `update all` skipped the one pull that updates the CLI. Every fix shipped
 # to this script stayed permanently out of reach of the operator who most needed

@@ -114,7 +114,7 @@ def unreachable_reason(port):
             "This controller runs in a container that does not publish the "
             "portal's port, so nothing outside the container can reach it — the "
             "portal is listening, but only inside the container. Update the "
-            "controller and recreate the container (sysible_ctl controller "
+            "controller and recreate the container (sysiblectl controller "
             "update) to pick up a compose file that publishes it."
         )
 

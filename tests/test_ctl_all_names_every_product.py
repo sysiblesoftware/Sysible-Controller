@@ -27,7 +27,7 @@ import subprocess
 import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CTL = os.path.join(os.path.dirname(HERE), "deploy", "sysible_ctl")
+CTL = os.path.join(os.path.dirname(HERE), "deploy", "sysiblectl")
 
 # Every container exists except the ones named in FAKE_MISSING, and every
 # lifecycle verb succeeds unless the container is in FAKE_FAIL.
@@ -101,13 +101,13 @@ def test_it_says_what_to_do_about_it(ctl, tmp_path):
     _checkout(tmp_path, "sysible-linux-operations-platform")
     rc, out = ctl("restart", "all", FAKE_MISSING="sysible-slop-gateway")
     assert "none of its containers exist" in out
-    assert "sysible_ctl slop up" in out, "no way forward was offered"
+    assert "sysiblectl slop start" in out, "no way forward was offered"
 
 
 def test_a_product_that_is_not_installed_says_so_instead(ctl):
     rc, out = ctl("restart", "all", FAKE_MISSING="sysible-slop-gateway")
     assert "no containers and no checkout" in out
-    assert "sysible_ctl slop up" not in out, \
+    assert "sysiblectl slop start" not in out, \
         "offering 'up' for a product with no checkout sends the operator in a circle"
 
 
@@ -143,7 +143,7 @@ def test_stop_all_is_accounted_for_the_same_way(ctl):
 #
 # Reported as "why is this up but not available", with a `docker ps` showing the
 # SLOP stack running under names like 7ffb46fbf6d4_sysible-slop-gateway while
-# `sysible_ctl restart all` never mentioned SLOP at all.
+# `sysiblectl restart all` never mentioned SLOP at all.
 #
 # `docker compose up` replaces a container by creating the new one as
 # <old-container-id>_<name>, removing the old one, then renaming the new over it.
@@ -176,7 +176,7 @@ def test_it_does_not_call_a_running_stack_uninstalled(ctl):
 def test_it_says_how_to_finish_the_swap(ctl):
     rc, out = ctl("restart", "all", FAKE_MISSING="sysible-slop-gateway",
                   FAKE_ORPHANS=ORPHAN)
-    assert "sysible_ctl slop up" in out, "no way forward was offered"
+    assert "sysiblectl slop start" in out, "no way forward was offered"
     assert "from the HOST" in out, (
         "the fix has to say where to run it — running it from inside the stack is "
         "what produced this state")

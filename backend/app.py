@@ -1582,15 +1582,15 @@ def _container_update_hint():
     update`, which is the NATIVE install's self-update: it lives in
     /usr/local/bin only after install_sysible.sh has run, and it works by
     rsyncing a git checkout into /opt/sysible — neither of which is true of a
-    container deployment. A containerized host has `sysible_ctl` (linked by the
-    platform installer), and `sysible_ctl controller update` is the rebuild +
+    container deployment. A containerized host has `sysiblectl` (linked by the
+    platform installer), and `sysiblectl controller update` is the rebuild +
     recreate this message is describing. `sysible_controller` DOES exist inside
     the image, which made the wrong name doubly confusing: it is there, and its
     `update` is the one subcommand that cannot work there."""
     return ("A containerized controller updates on the DOCKER HOST, not from the browser.\n"
             "The reference stack builds the image from source, so update = rebuild:\n"
-            "  sudo sysible_ctl controller update   # git pull + rebuild + recreate\n"
-            "  sudo sysible_ctl update all          # ... or every Sysible product at once\n"
+            "  sudo sysiblectl controller update   # git pull + rebuild + recreate\n"
+            "  sudo sysiblectl update all          # ... or every Sysible product at once\n"
             "or manually from the repo checkout:\n"
             "  git pull --ff-only\n"
             "  docker compose up -d --build\n"
@@ -1617,7 +1617,7 @@ def _controller_update_available():
             ver = None
         return {"checked": False, "container": True, "current": ver,
                 "reason": "Running from a container image — update on the Docker host "
-                          "(`sysible_ctl controller update`, i.e. rebuild + recreate), "
+                          "(`sysiblectl controller update`, i.e. rebuild + recreate), "
                           "not in place."}
     base = _os.getenv("SYSIBLE_HOME", "/opt/sysible")
     try:

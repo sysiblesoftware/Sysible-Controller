@@ -43,7 +43,7 @@ services:
       # The address AGENTS reach this controller at, baked into agent enrollment
       # bundles. REQUIRED in a container: without it the controller advertises its
       # docker-bridge IP (172.x) and bundles strand the fleet on an unreachable
-      # address. Set it to this host's LAN IP / DNS name (sysible_ctl controller up does).
+      # address. Set it to this host's LAN IP / DNS name (sysiblectl controller start does).
       SYSIBLE_CONTROLLER_ADDR: "${SYSIBLE_CONTROLLER_ADDR:-}"
       # The portal port PUBLISHED above. The portal reads it to know which port
       # can actually be reached from outside this container — a port publishing is

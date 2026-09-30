@@ -221,7 +221,7 @@ function SsoSignIn() {
         <p className="faint" style={{ fontSize: 12, marginTop: 14, marginBottom: 0 }}>
           Already signed in to SLOP and still seeing this? The controller could not
           establish a session for your account — check the web console log
-          (<span className="mono">sysible_ctl controller logs</span>) for the reason.
+          (<span className="mono">sysiblectl controller logs</span>) for the reason.
         </p>
       </div>
     </div>

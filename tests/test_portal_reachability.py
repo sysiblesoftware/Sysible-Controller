@@ -113,7 +113,7 @@ def test_a_running_portal_in_an_unpublished_container_reports_it(monkeypatch, tm
 
 # ---- ...and the port is actually published ---------------------------------
 def test_the_compose_file_publishes_the_portal_port():
-    """The fix that makes it work at all. `sysible_ctl controller up` brings the
+    """The fix that makes it work at all. `sysiblectl controller start` brings the
     container up with this file, so it is the only place the mapping exists."""
     compose = (REPO / "docker-compose.yml").read_text()
     ports = re.findall(r'^\s*-\s*"([^"]+)"', compose, re.M)

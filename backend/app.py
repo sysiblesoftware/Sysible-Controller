@@ -11,6 +11,7 @@ import threading
 import time
 
 from backend.agent_bundle import mint_agent_bundle, detect_local_ips, resolve_controller_addresses, bundle_addresses
+from backend import self_address
 from backend.auth import require_api_key, require_superuser, require_activity_viewer, acting_admin_name
 from backend.db import (
     create_enroll_token,
@@ -329,6 +330,83 @@ async def _security_headers(request, call_next):
     response.headers["Cache-Control"] = "no-store"
     response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
     return response
+
+
+# ---------------------------------------------------------- address self-repair
+#
+# Why this is not just "ask the box what its IP is": inside a container
+# detect_local_ips() returns only SYSIBLE_CONTROLLER_ADDR, which was baked in when
+# the container was created. When the host's network changed under it, that value
+# — and therefore everything derived from it — stayed on the dead address, and
+# db.get_controller_config's ip_stale check could not fire because the saved IP
+# always equalled "detected". So instead we watch the address the world actually
+# reaches us at, which needs nothing from the container's own NICs.
+#
+# The tally is in memory on the request path and persisted by the loop below;
+# backend/self_address.py holds the policy and what it takes to move.
+_addr_sightings: dict = {}
+_addr_last_heal: dict = {}
+
+
+@app.middleware("http")
+async def _observe_own_address(request, call_next):
+    try:
+        addr, peer = self_address.from_request(request.headers, 
+                                               request.client.host if request.client else "")
+        self_address.observe(_addr_sightings, addr, peer)
+    except Exception:  # noqa: BLE001
+        pass          # never let bookkeeping fail a request
+    return await call_next(request)
+
+
+_ADDR_CHECK_SECONDS = int(os.getenv("SYSIBLE_ADDRESS_CHECK_SECONDS", "60"))
+# Off by default is the wrong default here: the whole point is that nobody is
+# watching when the lease changes. Set SYSIBLE_ADDRESS_SELF_REPAIR=0 to opt out —
+# e.g. a controller deliberately advertised at an address it is never dialled on.
+_ADDR_SELF_REPAIR = os.getenv("SYSIBLE_ADDRESS_SELF_REPAIR", "1") != "0"
+
+
+def _address_watch_loop():
+    import time as _t
+    from backend import db as _db, tls_manager as _tls
+    try:
+        _addr_sightings.update(self_address.load(_db))
+    except Exception:  # noqa: BLE001
+        pass
+    while True:
+        _t.sleep(_ADDR_CHECK_SECONDS)
+        try:
+            self_address.prune(_addr_sightings)
+            self_address.save(_db, _addr_sightings)
+            cfg = _db.get_controller_config()
+            if cfg.get("address_mode") != "ip":
+                continue          # "all" mode re-resolves on every bundle already
+            verdict = self_address.assess(_addr_sightings, cfg.get("ip") or "")
+            if not verdict["candidate"]:
+                continue
+            if not _ADDR_SELF_REPAIR:
+                print("[controller] address drift: " + verdict["reason"]
+                      + " (self-repair is off)")
+                _addr_last_heal.clear()
+                _addr_last_heal.update({"at": _t.time(), "healed": False,
+                                        "old": cfg.get("ip") or "",
+                                        "new": verdict["candidate"],
+                                        "note": "self-repair is off"})
+                continue
+            out = self_address.heal(_db, _tls, cfg, verdict["candidate"])
+            out["at"] = _t.time()
+            out["reason"] = verdict["reason"]
+            _addr_last_heal.clear()
+            _addr_last_heal.update(out)
+            print("[controller] " + ("moved from " if out["healed"] else "could not move from ")
+                  + f"{out['old']} to {out['new']}: {verdict['reason']}"
+                  + (f" — {out['note']}" if out["note"] else ""))
+        except Exception as _exc:  # noqa: BLE001
+            print(f"[controller] address watch: {_exc}")
+
+
+threading.Thread(target=_address_watch_loop, name="sysible-address-watch",
+                 daemon=True).start()
 
 
 app.include_router(remote_router, dependencies=[Depends(require_api_key_or_gateway)])
@@ -2662,7 +2740,18 @@ def version_route():
 @app.get("/controller-config", dependencies=[Depends(require_api_key)])
 def get_controller_config_route():
 
-    return get_controller_config()
+    cfg = get_controller_config()
+    # What the address watch last did, so the console can say "we moved you from
+    # 192.168.1.22 to 192.168.1.40, and here is what the certificate needs" rather
+    # than leaving the operator to find it in the service log.
+    cfg["address_repair"] = dict(_addr_last_heal) if _addr_last_heal else None
+    # The addresses the fleet is actually reaching us at, newest first — useful on
+    # its own when nothing has moved yet.
+    cfg["observed_addresses"] = [
+        {"address": a, "count": e["count"], "sources": len(e["peers"]), "last": e["last"]}
+        for a, e in sorted(_addr_sightings.items(), key=lambda kv: -kv[1]["last"])
+    ][:8]
+    return cfg
 
 
 @app.post("/controller-config", dependencies=[Depends(require_api_key), Depends(require_superuser)])

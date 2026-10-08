@@ -1,0 +1,43 @@
+# Every manifest here pins exactly — requirements.txt, package-lock.json, the
+# base images — which is right, and is also how a pin goes quietly stale. Nothing
+# was refreshing them, so a CVE in fastapi, uvicorn, cryptography or a bundled
+# front-end package would sit in a pinned file indefinitely with nobody looking.
+#
+# Weekly, grouped per ecosystem, so three requirements files that pin the same
+# versions produce one pull request rather than nine.
+version: 2
+updates:
+  # The API, the console's backend and the agent that ships to managed hosts.
+  - package-ecosystem: pip
+    directories:
+      - /
+      - /webgui
+      - /host_agent
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /webgui/frontend
+    schedule:
+      interval: weekly
+    groups:
+      frontend:
+        patterns: ["*"]
+
+  # The image the controller builds on, and the images its compose file pins.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      images:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

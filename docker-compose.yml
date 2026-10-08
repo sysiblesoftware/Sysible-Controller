@@ -25,7 +25,15 @@ services:
     container_name: sysible-controller
     restart: unless-stopped
     ports:
-      - "8800:8800"   # web console (BFF)
+      # The console. Defaults to every interface so a STANDALONE Controller keeps
+      # working unchanged; behind SLOP the installer sets this to the docker bridge
+      # gateway, so the console is reachable from this host and its containers (the
+      # Caddy gateway) but not from the network — the gateway's security headers and
+      # the platform's central login throttle then cannot be skipped by going
+      # straight to :8800.
+      - "${SYSIBLE_CONTROLLER_CONSOLE_BIND:-0.0.0.0}:8800:8800"
+      # NOT restricted: this is the agent + CLI API, and managed hosts across the
+      # network dial it. Binding it would strand the fleet.
       - "9000:9000"   # controller API — agents + CLI
       # Webserver Portal — the self-service page a host operator signs in to for
       # an agent bundle. It is a SEPARATE listener on its own port, started from

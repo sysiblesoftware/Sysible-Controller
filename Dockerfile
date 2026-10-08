@@ -14,7 +14,7 @@
 ###############################################################################
 
 # ---- stage 1: build the React web console into static files ----------------
-FROM node:20-slim AS frontend
+FROM node:25-slim AS frontend
 WORKDIR /src/webgui/frontend
 # URL prefix the console is served under: "/" standalone (served at the domain
 # root), "/controller/" behind the SLOP gateway (which path-routes /controller/*

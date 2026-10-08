@@ -8,15 +8,15 @@
 # install time — non-reproducible and hard to attest for change control).
 
 # Backend
-fastapi==0.139.0
-uvicorn[standard]==0.50.2
-pydantic==2.13.4
+fastapi==0.142.2
+uvicorn[standard]==0.54.0
+pydantic==2.13.5
 psutil==7.2.2
 paramiko==5.0.0
 python-multipart==0.0.32   # multipart/form-data (file upload endpoints)
 itsdangerous==2.2.0        # Starlette SessionMiddleware (web console login cookie)
-cryptography==49.0.0
-tzdata==2026.3             # IANA tz database for zoneinfo — schedule times fire in the
+cryptography==50.0.2
+tzdata==2026.5             # IANA tz database for zoneinfo — schedule times fire in the
                            # operator's timezone even on a slim container with no system tzdb
 
 # Agent

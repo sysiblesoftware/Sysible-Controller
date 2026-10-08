@@ -4,7 +4,7 @@
 # importable - run this service in the same environment as the controller,
 # or `pip install -r ../requirements.txt` as well.
 # Pinned for reproducible builds — keep in step with ../requirements.txt.
-fastapi==0.139.0
-uvicorn[standard]==0.50.2
+fastapi==0.142.2
+uvicorn[standard]==0.54.0
 itsdangerous==2.2.0          # required by Starlette SessionMiddleware
 python-multipart==0.0.32     # form/file uploads

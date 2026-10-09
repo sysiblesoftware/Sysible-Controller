@@ -209,12 +209,23 @@ def test_service_enable_propagates_exit_code(cmd, tool):
     _bash_n(cmd)
 
 
-def test_firewalld_enable_refusal_is_not_masked():
-    """Simulate the enable being refused: the whole command must exit non-zero."""
+def test_firewalld_enable_refusal_is_not_masked(tmp_path):
+    """Simulate the enable being refused: the whole command must exit non-zero.
+
+    The command now refuses up front on a host with no firewalld, so this needs a
+    PATH where firewall-cmd exists — otherwise it stops at that guard and never
+    reaches the refusal it means to simulate. (It used to run against this
+    machine's own PATH, where firewall-cmd is usually absent.)"""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "firewall-cmd").write_text("#!/bin/sh\nexit 0\n")
+    (bindir / "firewall-cmd").chmod(0o755)
+
     cmd = FW.cmd_set_firewalld_enabled(True)
     stub = "sh -c 'echo \"Failed to enable unit: Interactive authentication required.\" >&2; exit 1'"
     sim = cmd.replace("systemctl enable --now firewalld", stub, 1)
-    r = subprocess.run(["bash", "-c", sim], capture_output=True, text=True)
+    r = subprocess.run(["bash", "-c", sim], capture_output=True, text=True,
+                       env={"PATH": f"{bindir}:/usr/bin:/bin"})
     assert r.returncode != 0, "refused enable was masked as success"
     assert "authentication required" in (r.stdout + r.stderr).lower()
 

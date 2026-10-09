@@ -97,6 +97,17 @@ _FIREWALLD_MISSING = (
     "echo 'Install them - openSUSE/SUSE: sudo zypper install python3-gobject; "
     "Fedora/RHEL: sudo dnf install python3-gobject; Debian/Ubuntu: sudo apt install python3-gi' >&2; exit 1; fi; "
 )
+# The service-state actions need only the PACKAGE, not a working firewall-cmd:
+# _FIREWALLD_MISSING above also probes the GObject bindings, which matters for
+# `firewall-cmd` calls and not at all for starting the unit. Refusing to enable a
+# perfectly good service because its Python bindings are missing would be a worse
+# answer than the one this replaces.
+_FIREWALLD_NOT_INSTALLED = (
+    "if ! command -v firewall-cmd >/dev/null 2>&1; then "
+    "echo 'firewalld is not installed on this host (package: firewalld). "
+    "Use \"Install firewalld\" first - or, on Debian/Ubuntu, use the ufw tab.' >&2; "
+    "exit 1; fi; "
+)
 _NFT_MISSING = (
     "if ! command -v nft >/dev/null 2>&1; then "
     "echo 'nftables is not installed on this host (package: nftables).' >&2; exit 1; fi; "
@@ -122,29 +133,44 @@ def cmd_firewalld_status() -> str:
 
 def cmd_set_firewalld_enabled(enabled: bool) -> str:
     """Starts/enables or stops/disables the firewalld service (both
-    the running state and whether it comes up at boot)."""
+    the running state and whether it comes up at boot).
+
+    Two things this must get right, both learned the hard way:
+
+    RC IS LOAD-BEARING. Gate on systemctl's REAL exit code before the is-active
+    diagnostic. This was once `systemctl enable ...; <is-active diag>`, so when
+    the enable was refused by polkit but firewalld happened to be running
+    already, is-active passed, the whole command exited 0, and the failure was
+    masked - which ALSO stopped the agent escalating, since it only retries under
+    sudo on a non-zero exit that looks like a privilege error.
+
+    OUR OWN TEXT MUST NOT LOOK LIKE A PRIVILEGE ERROR. That agent check is a
+    substring match over the combined output, and the message here used to quote
+    the phrases "authentication required" and "access denied" while explaining
+    them. So EVERY failure of this command matched - firewalld not installed, the
+    unit masked, a dependency failing - and each one was re-run pointlessly under
+    sudo and then reported to the operator as a sudo problem. systemd's own
+    wording is printed either way and is what the agent should be reading, so the
+    advice here is now phrased to carry none of those phrases itself.
+    """
     if enabled:
-        # Gate on systemctl's REAL exit code before the is-active diagnostic.
-        # Previously this was `systemctl enable ...; <is-active diag>`, so when the
-        # enable was refused by polkit (non-root RBAC path: "Interactive
-        # authentication required" / "Access denied") but firewalld happened to be
-        # running already, the is-active check passed and the whole command exited
-        # 0 - masking the failure, reporting false success, AND stopping the agent
-        # from escalating to sudo (it only escalates on a NON-zero exit that also
-        # looks like a privilege error). Propagating rc lets the agent retry the
-        # command under sudo, so the enable actually succeeds.
         return (
+            _FIREWALLD_NOT_INSTALLED +
             "systemctl enable --now firewalld 2>&1; rc=$?; "
             "if [ \"$rc\" -ne 0 ]; then "
-            "echo 'firewalld could not be enabled. An \"authentication required\" or "
-            "\"access denied\" message above means this action needs root - mark this "
-            "host \"password sudo\" or grant the console user NOPASSWD sudo.' >&2; "
+            "echo 'firewalld could not be enabled - see the message above. If it mentions "
+            "needing to authenticate, this host needs elevated rights: mark it "
+            "\"password sudo\" in Sysible, or grant the console user NOPASSWD sudo.' >&2; "
             "exit \"$rc\"; fi; "
             + _FW_START_DIAG
         )
     return (
-        "systemctl disable --now firewalld 2>&1 "
-        "&& echo 'firewalld stopped and disabled.'"
+        _FIREWALLD_NOT_INSTALLED +
+        "systemctl disable --now firewalld 2>&1; rc=$?; "
+        "if [ \"$rc\" -ne 0 ]; then "
+        "echo 'firewalld could not be stopped - see the message above.' >&2; "
+        "exit \"$rc\"; fi; "
+        "echo 'firewalld stopped and disabled.'"
     )
 
 
@@ -672,7 +698,18 @@ def cmd_set_ufw_enabled(enabled: bool) -> str:
             "if [ \"$rc\" -ne 0 ]; then "
             "echo 'ufw could not be enabled. If this needs root, mark this host "
             "\"password sudo\" or grant the console user NOPASSWD sudo.' >&2; exit \"$rc\"; fi; "
-            "systemctl enable ufw >/dev/null 2>&1; "
+            # NOT silenced. This is the half that makes ufw survive a reboot, and
+            # with its output and exit code thrown away a host could come back
+            # from a restart with no firewall while the console had reported
+            # plain success. It is also the only way the agent can learn that the
+            # boot half needs elevating: a swallowed privilege error is one it
+            # cannot see, so it never retries under sudo. `ufw --force enable` is
+            # idempotent, so that retry is safe.
+            "_boot=$(systemctl enable ufw 2>&1); _brc=$?; "
+            "if [ \"$_brc\" -ne 0 ]; then "
+            "printf '%s\\n' \"$_boot\" >&2; "
+            "echo 'ufw is running, but it was NOT set to start at boot - see above. "
+            "It will be off after a reboot.' >&2; exit \"$_brc\"; fi; "
             "echo; ufw status verbose 2>&1"
         )
     return (

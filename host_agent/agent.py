@@ -186,6 +186,103 @@ CONN_BACKOFF_MAX = float(os.getenv("SYSIBLE_CONN_BACKOFF_MAX", "60"))
 _conn_fail_count = 0
 
 
+# ---- saying WHY the controller is unreachable ------------------------------
+# All three loops (tasks, heartbeat, config backup) used to print the raw
+# requests exception, which is a wall of urllib3 text whose only useful part —
+# the errno, or the words "certificate verify failed" — sits at the very end.
+# journalctl truncates the line at terminal width, so an operator reading the
+# journal saw `HTTPSConnectionPool(host=...` and nothing else, identically for
+# three completely different problems:
+#
+#   * the controller moved address, or is down          (refused / no route)
+#   * a firewall is swallowing the connection           (timed out)
+#   * the PINNED cert no longer matches the controller  (certificate verify failed)
+#
+# That last one is easy to land in: renumber the controller, regenerate its cert
+# for the new address, and every agent's pinned copy is stale. requests models
+# SSLError as a subclass of ConnectionError, so it reads exactly like "host is
+# down" unless something looks closer.
+# {pin} is filled in at call time, not here: _CA_CERT_FILE is defined further
+# down this file, so building these strings at import time is a NameError.
+_CONN_HINTS = (
+    ("certificate verify failed",
+     "TLS verification failed against the pinned controller cert at {pin}"
+     " - the controller's certificate has changed, or does not cover this address. "
+     "Re-copy certs/server.crt from the controller to that path."),
+    ("hostname mismatch",
+     "the controller's certificate does not name this address. Dial the controller "
+     "by a name/IP its cert covers, or re-issue the cert for it."),
+    ("name or service not known",
+     "that name does not resolve from this host."),
+    ("temporary failure in name resolution",
+     "DNS is not answering on this host."),
+    ("connection refused",
+     "nothing is listening there - the controller is down, or on a different port."),
+    ("no route to host",
+     "no route from this host - the controller has probably changed address."),
+    ("network is unreachable",
+     "this host has no route to that network."),
+    ("timed out",
+     "the connection timed out - usually a firewall between this host and the "
+     "controller, rather than the controller being down."),
+    # Something answered and then dropped the connection: a proxy in the way, a
+    # firewall that resets rather than drops, or the controller restarting
+    # mid-request. Distinct from "nothing is listening".
+    ("connection reset",
+     "something accepted the connection and then dropped it - a proxy or firewall "
+     "in the path, or the controller restarting."),
+)
+
+
+def _why_unreachable(exc) -> str:
+    """One short, actionable sentence for a failed controller call."""
+    text = " ".join(str(a) for a in (exc,) + tuple(getattr(exc, "args", ()))).lower()
+    for needle, why in _CONN_HINTS:
+        if needle in text:
+            return why.format(pin=_CA_CERT_FILE)
+    if isinstance(exc, requests.exceptions.SSLError):
+        return f"the TLS handshake failed against the pinned cert at {_CA_CERT_FILE}."
+    return "the connection failed: " + str(exc)[:200]
+
+
+# How long to stay quiet about an unchanged, ongoing outage before saying it
+# again. The loops retry every few seconds, and three threads hit the same dead
+# controller, so without this the journal is three identical lines a minute for
+# as long as the outage lasts - which is what buries the one line that mattered.
+CONN_REPEAT_S = float(os.getenv("SYSIBLE_CONN_REPEAT_S", "600"))
+_conn_report_lock = threading.Lock()
+_conn_report = {"why": None, "at": 0.0, "suppressed": 0}
+
+
+def _report_unreachable(exc):
+    """Report an unreachable controller once, not once per loop per cycle. Says it
+    again when the REASON changes (that is news) or every CONN_REPEAT_S."""
+    why = _why_unreachable(exc)
+    tried = (CONTROLLER if len(_CONTROLLER_CANDIDATES) == 1
+             else f"{len(_CONTROLLER_CANDIDATES)} candidates, last {CONTROLLER}")
+    now = time.monotonic()
+    with _conn_report_lock:
+        changed = why != _conn_report["why"]
+        due = (now - _conn_report["at"]) >= CONN_REPEAT_S
+        if not (changed or due):
+            _conn_report["suppressed"] += 1
+            return
+        n = _conn_report["suppressed"]
+        _conn_report.update(why=why, at=now, suppressed=0)
+    again = f" [{n} identical since the last line]" if n and not changed else ""
+    print(f"[agent] cannot reach the controller ({tried}): {why}{again}", flush=True)
+
+
+def _report_reachable():
+    with _conn_report_lock:
+        if _conn_report["why"] is None:
+            return
+        n = _conn_report["suppressed"]
+        _conn_report.update(why=None, at=0.0, suppressed=0)
+    print(f"[agent] controller reachable again at {CONTROLLER}"
+          + (f" (suppressed {n} repeat(s) while it was down)" if n else ""), flush=True)
+
+
 def _note_conn_result(ok):
     """Record whether a controller request actually reached the controller, so the
     poll/heartbeat loops can back off while it's unreachable and recover instantly."""
@@ -318,9 +415,14 @@ def _request(method, path, **kwargs):
             CONTROLLER = candidate
 
         _note_conn_result(True)   # a candidate answered — reset reconnect backoff
+        _report_reachable()
         return r
 
     _note_conn_result(False)      # every candidate was unreachable — back off
+    # Reported HERE, at the one place that knows every candidate failed, rather
+    # than in each caller: the three loops hit the same dead controller and would
+    # each print the same thing.
+    _report_unreachable(last_exc)
     raise last_exc
 
 
@@ -564,7 +666,11 @@ def fetch_tasks(state):
         _raise_with_detail(r)
         return r.json().get("tasks", [])
     except requests.RequestException as e:
-        print("[agent] could not fetch tasks:", e)
+        # A connection failure has already been reported, with a reason, by
+        # _request(). Anything else (an HTTP 4xx/5xx from _raise_with_detail) is
+        # a different problem and still worth a line of its own.
+        if not isinstance(e, (requests.ConnectionError, requests.Timeout)):
+            print("[agent] could not fetch tasks:", e)
         return []
 
 
@@ -1326,7 +1432,8 @@ def heartbeat(state):
         r = _request("POST", "/agents/heartbeat", json=body, timeout=10)
         _raise_with_detail(r)
     except requests.RequestException as e:
-        print("[agent] heartbeat failed:", e)
+        if not isinstance(e, (requests.ConnectionError, requests.Timeout)):
+            print("[agent] heartbeat failed:", e)
 
 
 def _heartbeat_loop(state):
@@ -1644,7 +1751,8 @@ def _d3_loop(state):
                 next_capture = now + D3_INTERVAL
             _d3_poll_restores(state)
         except Exception as e:
-            print("[agent] config backup thread:", e)
+            if not isinstance(e, (requests.ConnectionError, requests.Timeout)):
+                print("[agent] config backup thread:", e)
         time.sleep(max(5.0, D3_RESTORE_POLL))
 
 

@@ -102,6 +102,38 @@ _FIREWALLD_MISSING = (
 # `firewall-cmd` calls and not at all for starting the unit. Refusing to enable a
 # perfectly good service because its Python bindings are missing would be a worse
 # answer than the one this replaces.
+# Turning on a default-deny firewall cuts every inbound port that is not already
+# allowed - including the one you are managing the host through. The installer
+# has opened 9000/8800 since the day a fresh install came up silently
+# unreachable, but it only runs at install time and only when a firewall was
+# ALREADY active. Enable one afterwards from this console and nothing reopens
+# them: on the controller that drops the agent API and the whole fleet goes
+# offline, and on a host managed over SSH, ufw's default-deny takes SSH with it -
+# which is exactly what its interactive "may disrupt existing ssh connections"
+# prompt warns about, and we pass --force to skip that prompt.
+#
+# So the enable actions keep open what is ALREADY serving on this host, and say
+# which. Deliberately not "every listening port", which would make the firewall
+# pointless: only sshd (the management channel) and Sysible's own control plane,
+# and only where something is actually listening. Nothing is opened that was not
+# already reachable a moment ago, so this widens nothing - it stops the button
+# from cutting the cord it is being pressed over.
+_KEEP_OPEN_FN = (
+    "_sysible_keep_open() { { "
+    # sshd's own view first - authoritative, and it knows a non-default Port.
+    "sshd -T 2>/dev/null | awk '/^port /{print $2}'; "
+    # ...then whatever sshd is actually bound to, for a host where sshd -T is
+    # unavailable (not root yet, sshd not on PATH).
+    "{ ss -lntpH 2>/dev/null || true; } | grep -i sshd "
+    "| awk '{print $4}' | sed 's/.*://'; "
+    # Sysible's control plane, ONLY where this host is really serving it: 9000 is
+    # the agent + CLI API, 8800 the web console. A managed host listens on
+    # neither, so this adds nothing there.
+    "{ ss -lntH 2>/dev/null || netstat -lnt 2>/dev/null || true; } "
+    "| awk '{print $4}' | sed 's/.*://' | awk '$1==\"9000\" || $1==\"8800\"'; "
+    "} | grep -E '^[0-9]+$' | sort -un; }; "
+)
+
 _FIREWALLD_NOT_INSTALLED = (
     "if ! command -v firewall-cmd >/dev/null 2>&1; then "
     "echo 'firewalld is not installed on this host (package: firewalld). "
@@ -156,12 +188,20 @@ def cmd_set_firewalld_enabled(enabled: bool) -> str:
     if enabled:
         return (
             _FIREWALLD_NOT_INSTALLED +
+            _KEEP_OPEN_FN +
             "systemctl enable --now firewalld 2>&1; rc=$?; "
             "if [ \"$rc\" -ne 0 ]; then "
             "echo 'firewalld could not be enabled - see the message above. If it mentions "
             "needing to authenticate, this host needs elevated rights: mark it "
             "\"password sudo\" in Sysible, or grant the console user NOPASSWD sudo.' >&2; "
             "exit \"$rc\"; fi; "
+            # AFTER enabling, unlike ufw: firewall-cmd needs the daemon running
+            # to talk to. The gap is seconds and the agents retry through it;
+            # leaving the ports shut is permanent.
+            "for _p in $(_sysible_keep_open); do "
+            "echo \"keeping ${_p}/tcp open (in use on this host)\"; "
+            "firewall-cmd --permanent --add-port=\"${_p}\"/tcp >/dev/null 2>&1 || true; done; "
+            "firewall-cmd --reload >/dev/null 2>&1 || true; "
             + _FW_START_DIAG
         )
     return (
@@ -694,6 +734,14 @@ def cmd_set_ufw_enabled(enabled: bool) -> str:
         # sudo escalation - see cmd_set_firewalld_enabled).
         return (
             _UFW_MISSING +
+            _KEEP_OPEN_FN +
+            # BEFORE enabling. `ufw allow` on an inactive ufw stages the rule and
+            # it is in force the moment ufw comes up, so there is no window in
+            # which the port is dropped. Doing it afterwards would mean cutting
+            # SSH and then trying to reach the host to repair it.
+            "for _p in $(_sysible_keep_open); do "
+            "echo \"keeping ${_p}/tcp open (in use on this host)\"; "
+            "ufw allow \"${_p}\"/tcp >/dev/null 2>&1 || true; done; "
             "ufw --force enable 2>&1; rc=$?; "
             "if [ \"$rc\" -ne 0 ]; then "
             "echo 'ufw could not be enabled. If this needs root, mark this host "

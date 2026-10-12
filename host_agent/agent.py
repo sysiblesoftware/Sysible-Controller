@@ -222,9 +222,17 @@ _CONN_HINTS = (
      "no route from this host - the controller has probably changed address."),
     ("network is unreachable",
      "this host has no route to that network."),
+    # Deliberately does NOT name a single cause. A silent drop is a firewall
+    # dropping rather than rejecting, OR the controller host not answering at
+    # all - wedged, still booting, or its VM paused. Written the other way round
+    # once ("usually a firewall"), which sent an operator looking at firewall
+    # rules while the real answer was that the VM needed a reboot.
     ("timed out",
-     "the connection timed out - usually a firewall between this host and the "
-     "controller, rather than the controller being down."),
+     "the connection timed out - nothing answered. Either something between here "
+     "and the controller is dropping (not rejecting) the packets, or the "
+     "controller host is not answering at all: wedged, rebooting, or powered off. "
+     "A host that is up with the port closed would refuse the connection, not "
+     "time out."),
     # Something answered and then dropped the connection: a proxy in the way, a
     # firewall that resets rather than drops, or the controller restarting
     # mid-request. Distinct from "nothing is listening".

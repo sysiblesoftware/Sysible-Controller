@@ -64,10 +64,11 @@ def test_a_name_that_does_not_resolve_says_so():
     assert "does not resolve" in why
 
 
-def test_a_stalled_handshake_is_called_a_timeout_not_an_outage():
-    """A listener that never completes the handshake is what a firewall looks
-    like. Reporting it as 'the controller is down' sends the operator to the
-    wrong machine."""
+def test_a_timeout_does_not_pick_one_cause_over_the_other():
+    """A silent drop has two very different causes — something in the path
+    dropping, or the controller host not answering at all — and the text must
+    not send the operator to one of them. It said "usually a firewall" once, on
+    an outage whose real answer was that the VM needed a reboot."""
     lsock = socket.socket(); lsock.bind(("127.0.0.1", 0)); lsock.listen(1)
     try:
         why = agent._why_unreachable(
@@ -75,7 +76,10 @@ def test_a_stalled_handshake_is_called_a_timeout_not_an_outage():
     finally:
         lsock.close()
     assert "timed out" in why
-    assert "firewall" in why
+    assert "dropping" in why, "it does not offer the in-path cause"
+    assert "not answering at all" in why, "it does not offer the far-end cause"
+    assert "refuse the connection, not" in why, \
+        "it does not say what distinguishes this from a closed port"
 
 
 def test_a_stale_pinned_cert_is_distinguished_from_an_unreachable_host(tls_server):

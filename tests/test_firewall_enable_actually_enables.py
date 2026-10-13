@@ -57,6 +57,10 @@ def host(tmp_path):
 
 
 POLKIT = 'echo "Failed to enable unit: Interactive authentication required." >&2; exit 1'
+# Prefix for a systemctl fake: this host has no OTHER firewall in charge. Without
+# it a fake that exits 0 for everything answers yes to `is-enabled firewalld`, and
+# the one-firewall-per-host guard refuses before the thing under test ever runs.
+NO_RIVAL = 'case "$1" in is-active|is-enabled) exit 1;; esac; '
 
 
 # ---- the regression that caused the report ---------------------------------
@@ -123,7 +127,7 @@ def test_a_real_privilege_refusal_still_makes_the_agent_escalate(host):
 ])
 def test_ufw_refusing_a_non_root_caller_makes_the_agent_escalate(host, refusal):
     host.has("ufw", refusal)
-    host.has("systemctl")
+    host.has("systemctl", NO_RIVAL + "exit 0")
 
     p = host.run(fw.cmd_set_ufw_enabled(True))
 
@@ -156,7 +160,7 @@ def test_ufw_enable_is_noninteractive_and_persists(host, tmp_path):
     # here recorded only the status call — the assertion below then failed for a
     # reason that had nothing to do with the command under test.
     host.has("ufw", f'printf "%s\\n" "$@" >> {tmp_path}/ufwargv; echo "Firewall is active"; exit 0')
-    host.has("systemctl", f'printf "%s\\n" "$@" > {tmp_path}/scargv; exit 0')
+    host.has("systemctl", NO_RIVAL + f'printf "%s\\n" "$@" > {tmp_path}/scargv; exit 0')
 
     p = host.run(fw.cmd_set_ufw_enabled(True))
 

@@ -118,6 +118,41 @@ _FIREWALLD_MISSING = (
 # and only where something is actually listening. Nothing is opened that was not
 # already reachable a moment ago, so this widens nothing - it stops the button
 # from cutting the cord it is being pressed over.
+# Two firewall front-ends on one host is not twice the firewall, it is neither.
+# ufw and firewalld both own the kernel's netfilter tables, and with both of them
+# enabled they overwrite each other: firewalld's start crawls or times out
+# outright, rules appear and vanish, and the host can end up unable to talk to
+# itself. Seen for real on an openSUSE host, where firewalld is the native
+# firewall: ufw was installed and enabled from this console beside it, firewalld
+# went from a one-second start to 48s, 62s and then a 90-second timeout, and the
+# host stopped passing traffic.
+#
+# This console offered both on every host with nothing to say about it. So each
+# enable action now refuses while the other one is in charge, and names the way
+# out. Enabled-at-boot counts as in charge: the collision otherwise waits until
+# the next reboot, which is a far worse time to find it.
+_NOT_WHILE_FIREWALLD = (
+    "if systemctl is-active --quiet firewalld 2>/dev/null "
+    "|| systemctl is-enabled --quiet firewalld 2>/dev/null; then "
+    "echo 'firewalld is already managing this host - it is running, or set to "
+    "start at boot. Enabling ufw beside it makes both write the same netfilter "
+    "tables and overwrite each other: firewalld starts slowly or times out, rules "
+    "come and go, and the host can lose connectivity. Pick one. To switch to ufw, "
+    "use \"Disable firewalld\" on the Firewalld tab first; otherwise manage this "
+    "host from that tab.' >&2; exit 1; fi; "
+)
+_NOT_WHILE_UFW = (
+    "if command -v ufw >/dev/null 2>&1 "
+    "&& { ufw status 2>/dev/null | grep -qi 'Status: active' "
+    "|| systemctl is-enabled --quiet ufw 2>/dev/null; }; then "
+    "echo 'ufw is already managing this host - it is active, or set to start at "
+    "boot. Enabling firewalld beside it makes both write the same netfilter "
+    "tables and overwrite each other: starts slow down or time out, rules come and "
+    "go, and the host can lose connectivity. Pick one. To switch to firewalld, use "
+    "\"Disable ufw\" on the ufw tab first; otherwise manage this host from that "
+    "tab.' >&2; exit 1; fi; "
+)
+
 _KEEP_OPEN_FN = (
     "_sysible_keep_open() { { "
     # sshd's own view first - authoritative, and it knows a non-default Port.
@@ -188,6 +223,7 @@ def cmd_set_firewalld_enabled(enabled: bool) -> str:
     if enabled:
         return (
             _FIREWALLD_NOT_INSTALLED +
+            _NOT_WHILE_UFW +
             _KEEP_OPEN_FN +
             "systemctl enable --now firewalld 2>&1; rc=$?; "
             "if [ \"$rc\" -ne 0 ]; then "
@@ -734,6 +770,7 @@ def cmd_set_ufw_enabled(enabled: bool) -> str:
         # sudo escalation - see cmd_set_firewalld_enabled).
         return (
             _UFW_MISSING +
+            _NOT_WHILE_FIREWALLD +
             _KEEP_OPEN_FN +
             # BEFORE enabling. `ufw allow` on an inactive ufw stages the rule and
             # it is in force the moment ufw comes up, so there is no window in

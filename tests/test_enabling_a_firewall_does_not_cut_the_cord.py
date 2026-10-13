@@ -66,7 +66,23 @@ def box(tmp_path):
             self._put("firewall-cmd",
                       'case "$*" in *--add-port=*) echo "$*" '
                       '| sed "s/.*--add-port=//;s/ .*//" >> %s;; esac; exit 0' % rules)
-            self._put("systemctl", "exit 0")
+            # Stateful, and reporting NO other firewall in charge — which is
+            # what these tests are about. A flat `exit 0` answered yes to
+            # `is-enabled firewalld`, so the one-firewall-per-host guard
+            # correctly refused and every assertion here failed for an unrelated
+            # reason. A unit becomes active only once something enables it, so
+            # the enable's own success check still works.
+            running = tmp_path / "running"
+            running.write_text("")
+            self._put("systemctl", f"""
+unit=""
+for a in "$@"; do case "$a" in -*|is-*|enable|disable|start|stop) ;; *) unit="$a";; esac; done
+case "$1" in
+  is-enabled) exit 1 ;;
+  is-active)  case " $(cat {running}) " in *" $unit "*) exit 0;; esac; exit 3 ;;
+  enable)     printf '%s %s' "$(cat {running})" "$unit" > {running}; exit 0 ;;
+esac
+exit 0""")
 
         def run(self, command):
             return subprocess.run(["/bin/bash", "-c", _with_sbin_path(command)],

@@ -428,6 +428,34 @@ _register(Action(name="stor_swap_list", tool="Storage Administration",
     label="List swap", params=[], build=lambda p: api.cmd_list_swap()))
 
 # ---- Tool: Firewall Administration -----------------------------------
+# The default tab, and the one an operator should be able to live in. Every other
+# tab here names a BACKEND, which asks them to know whether each selected host
+# runs firewalld or ufw before they can do anything — and to be right about all
+# of them at once when a mixed fleet is selected together. These ask the host.
+_register(Action(name="fw_any_status", tool="Firewall Administration",
+    label="Firewall status", params=[],
+    build=lambda p: api.cmd_fw_status()))
+_register(Action(name="fw_any_on", tool="Firewall Administration",
+    label="Turn the firewall on", params=[],
+    build=lambda p: api.cmd_fw_turn_on()))
+_register(Action(name="fw_any_off", tool="Firewall Administration",
+    label="Turn the firewall off", danger=True, params=[],
+    build=lambda p: api.cmd_fw_turn_off()))
+_register(Action(name="fw_any_allow", tool="Firewall Administration",
+    label="Allow a port",
+    params=[Param("port", "Port", help="a single port, or a range like 8000-9000",
+                  placeholder="e.g. 443"),
+            Param("protocol", "Protocol", type="select", options=["tcp", "udp"], default="tcp")],
+    build=lambda p: api.cmd_fw_allow_port(_s(p, "port"), _s(p, "protocol", "tcp"))))
+# Danger: closing the port you are managing the host through locks you out of it,
+# and this one cannot tell which that is the way "turn the firewall on" can.
+_register(Action(name="fw_any_close", tool="Firewall Administration",
+    label="Close a port", danger=True,
+    params=[Param("port", "Port", help="a single port, or a range like 8000-9000",
+                  placeholder="e.g. 443"),
+            Param("protocol", "Protocol", type="select", options=["tcp", "udp"], default="tcp")],
+    build=lambda p: api.cmd_fw_close_port(_s(p, "port"), _s(p, "protocol", "tcp"))))
+
 _register(Action(name="fw_status", tool="Firewall Administration",
     label="firewalld status", params=[], build=lambda p: api.cmd_firewalld_status()))
 _register(Action(name="fw_list_all_ports", tool="Firewall Administration",
@@ -1551,6 +1579,12 @@ _register(Action(name="sub_suse_deregister", tool="Distro Subscription & Licensi
 # ----------------------------------------------------------------------
 _LAYOUT: dict[str, list] = {
     "Firewall Administration": [
+        # FIRST, so it is the tab the tool opens on: it works on any host without
+        # the operator having to know which backend that host runs. The
+        # backend-specific tabs that follow are for the things only one of them
+        # can express — zones, rich rules, raw nft/iptables.
+        ("Firewall", "This host's firewall", ["fw_any_status", "fw_any_on", "fw_any_off"]),
+        ("Firewall", "Ports", ["fw_any_allow", "fw_any_close"]),
         # Each backend's installer lives with that backend's service controls, so
         # "install firewalld" sits under Firewalld and "install ufw" under ufw —
         # not lumped into one out-of-place "install a firewall" group.

@@ -185,6 +185,154 @@ _IPTABLES_MISSING = (
 )
 
 
+# =========================================================
+# The host's own firewall - backend-agnostic
+# =========================================================
+# Everything after this section is per-backend: a firewalld tab, a ufw tab, an
+# nftables tab, an iptables tab. That asks the operator to know which one each
+# host runs before they can do anything, and on a mixed fleet selected together
+# it asks them to be right about all of them at once. Being wrong is not a
+# harmless mis-click - enabling the rival firewall is what left three openSUSE
+# hosts unable to pass traffic.
+#
+# An operator wants "open 443 on these hosts". WHICH of firewalld or ufw carries
+# that out is the host's business, and the host already knows. So ask it.
+_FW_PICK = (
+    "_fw_pick() { "
+    # What is ENFORCING right now wins - that is where a rule has to go.
+    "if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; "
+    "then echo firewalld; return; fi; "
+    "if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; "
+    "then echo ufw; return; fi; "
+    # Nothing running: whichever is set to come up owns this host, even today.
+    "for _u in firewalld ufw; do "
+    "if systemctl is-enabled --quiet \"$_u\" 2>/dev/null; then echo \"$_u\"; return; fi; done; "
+    # Nothing enabled either: whatever is installed. firewalld first, because a
+    # host carrying both is RHEL/SUSE-shaped, where firewalld is the native one.
+    "if command -v firewall-cmd >/dev/null 2>&1; then echo firewalld; return; fi; "
+    "if command -v ufw >/dev/null 2>&1; then echo ufw; return; fi; "
+    "echo none; }; "
+)
+
+_NO_FIREWALL = (
+    "echo 'No firewall is installed on this host. Install one from the Firewalld "
+    "or ufw tab - firewalld on RHEL/Rocky/Fedora/SUSE, ufw on Debian/Ubuntu.' >&2; "
+    "exit 1"
+)
+
+
+def _port_both_ways(value: str, label: str = "Port"):
+    """A single port or a range, written either way, as (firewalld, ufw) forms.
+
+    firewalld writes a range 8000-9000 and ufw writes 8000:9000. That is a detail
+    of the two tools, not something an operator should have to carry around, so
+    either separator is accepted here and each backend is handed the one it
+    wants."""
+    raw = (value or "").strip()
+    if not raw:
+        raise ValueError(label + " is required.")
+    normalised = raw.replace(":", "-")
+    _validate_port_spec(normalised, label)        # one set of range/bounds rules
+    return normalised, normalised.replace("-", ":")
+
+
+def cmd_fw_status() -> str:
+    """What this host's firewall is, and what it is doing."""
+    return (
+        _FW_PICK +
+        '_b=$(_fw_pick); echo "Backend: $_b"; case "$_b" in '
+        "firewalld) printf 'Running: '; firewall-cmd --state 2>&1; "
+        "printf 'Starts at boot: '; systemctl is-enabled firewalld 2>&1; "
+        "echo; echo '-- open ports --'; firewall-cmd --list-ports 2>&1; "
+        "echo; echo '-- services --'; firewall-cmd --list-services 2>&1 ;; "
+        "ufw) ufw status verbose 2>&1; "
+        "echo; printf 'Starts at boot: '; systemctl is-enabled ufw 2>&1 ;; "
+        "*) " + _NO_FIREWALL + " ;; esac"
+    )
+
+
+def cmd_fw_turn_on() -> str:
+    """Turn ON whichever firewall this host already uses.
+
+    Never introduces the other one - that is the point. A firewalld host gets
+    firewalld, a ufw host gets ufw, and neither ends up running both."""
+    return (
+        _FW_PICK + _KEEP_OPEN_FN +
+        '_b=$(_fw_pick); case "$_b" in '
+        # firewalld opens its ports AFTER starting, because firewall-cmd needs the
+        # daemon to talk to; ufw before, because an inactive ufw stages them.
+        "firewalld) echo 'This host uses firewalld.'; "
+        "systemctl enable --now firewalld 2>&1; rc=$?; "
+        'if [ "$rc" -ne 0 ]; then '
+        "echo 'firewalld could not be started - see the message above.' >&2; "
+        'exit "$rc"; fi; '
+        "for _p in $(_sysible_keep_open); do "
+        'echo "keeping ${_p}/tcp open (in use on this host)"; '
+        'firewall-cmd --permanent --add-port="${_p}"/tcp >/dev/null 2>&1 || true; done; '
+        "firewall-cmd --reload >/dev/null 2>&1 || true; "
+        "echo 'firewalld is on.' ;; "
+        "ufw) echo 'This host uses ufw.'; "
+        "for _p in $(_sysible_keep_open); do "
+        'echo "keeping ${_p}/tcp open (in use on this host)"; '
+        'ufw allow "${_p}"/tcp >/dev/null 2>&1 || true; done; '
+        "ufw --force enable 2>&1; rc=$?; "
+        'if [ "$rc" -ne 0 ]; then '
+        "echo 'ufw could not be started - see the message above.' >&2; "
+        'exit "$rc"; fi; '
+        "systemctl enable ufw >/dev/null 2>&1 || true; "
+        "echo 'ufw is on.' ;; "
+        "*) " + _NO_FIREWALL + " ;; esac"
+    )
+
+
+def cmd_fw_turn_off() -> str:
+    """Turn OFF whichever firewall this host uses."""
+    return (
+        _FW_PICK +
+        '_b=$(_fw_pick); case "$_b" in '
+        "firewalld) systemctl disable --now firewalld 2>&1; rc=$?; "
+        'if [ "$rc" -ne 0 ]; then echo "firewalld could not be stopped." >&2; exit "$rc"; fi; '
+        "echo 'firewalld is off.' ;; "
+        "ufw) ufw disable 2>&1; rc=$?; "
+        'if [ "$rc" -ne 0 ]; then echo "ufw could not be stopped." >&2; exit "$rc"; fi; '
+        "systemctl disable ufw >/dev/null 2>&1 || true; "
+        "echo 'ufw is off (rules kept).' ;; "
+        "*) echo 'No firewall is installed here, so there is nothing to turn off.'; exit 0 ;; esac"
+    )
+
+
+def cmd_fw_allow_port(port: str, protocol: str) -> str:
+    """Open a port on whichever firewall this host uses, permanently."""
+    fwd, ufw = _port_both_ways(port)
+    proto = _validate_protocol(protocol)
+    return (
+        _FW_PICK +
+        '_b=$(_fw_pick); case "$_b" in '
+        "firewalld) firewall-cmd --permanent --add-port=" + fwd + "/" + proto + " 2>&1 && "
+        "firewall-cmd --reload >/dev/null 2>&1 && "
+        "echo 'Opened " + fwd + "/" + proto + " (firewalld, permanent).' ;; "
+        "ufw) ufw allow " + ufw + "/" + proto + " 2>&1 && "
+        "echo 'Opened " + ufw + "/" + proto + " (ufw).' ;; "
+        "*) " + _NO_FIREWALL + " ;; esac"
+    )
+
+
+def cmd_fw_close_port(port: str, protocol: str) -> str:
+    """Close a port on whichever firewall this host uses."""
+    fwd, ufw = _port_both_ways(port)
+    proto = _validate_protocol(protocol)
+    return (
+        _FW_PICK +
+        '_b=$(_fw_pick); case "$_b" in '
+        "firewalld) firewall-cmd --permanent --remove-port=" + fwd + "/" + proto + " 2>&1 && "
+        "firewall-cmd --reload >/dev/null 2>&1 && "
+        "echo 'Closed " + fwd + "/" + proto + " (firewalld, permanent).' ;; "
+        "ufw) ufw delete allow " + ufw + "/" + proto + " 2>&1 && "
+        "echo 'Closed " + ufw + "/" + proto + " (ufw).' ;; "
+        "*) " + _NO_FIREWALL + " ;; esac"
+    )
+
+
 # ---------------------------------------------------------
 # Configure firewalld
 # ---------------------------------------------------------

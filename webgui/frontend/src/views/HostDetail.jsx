@@ -9,7 +9,7 @@ import { hypervisorBadge, hypervisorActionWarning, isHypervisor } from "../hyper
 // strip. Rows without a mapping suppress under their own posture key.
 const SUPP_KEY = {
   "ssh.permit_root_login": "ssh_root_login",
-  "fw.active": "firewall_disabled",
+  "fw.active": "firewall_disabled", "fw.failed_to_start": "firewall_disabled",
   "mac.selinux": "mac_not_enforcing", "mac.apparmor": "mac_not_enforcing",
   "reboot.required": "reboot_required",
   "time.synced": "time_unsynced",
@@ -39,7 +39,8 @@ const SECTIONS = [
     "mac.selinux": "SELinux", "mac.apparmor": "AppArmor", "sec.fips": "FIPS mode",
     "sec.aslr": "ASLR (randomize_va_space)", "sec.secureboot": "Secure Boot",
     "sec.auditd": "auditd", "sec.fail2ban": "fail2ban", "sec.usb_storage": "USB storage",
-    "fw.backend": "Firewall backend", "fw.active": "Firewall active" } },
+    "fw.backend": "Firewall backend", "fw.active": "Firewall active",
+    "fw.enabled_at_boot": "Firewall enabled at boot" } },
   { title: "Users & Accounts", cats: ["users"], labels: {
     "users.uid0": "UID-0 accounts", "users.uid0_count": "UID-0 count",
     "users.empty_pw": "Empty-password accounts", "users.empty_pw_count": "Empty-password count",
@@ -211,6 +212,14 @@ const EXPLAIN = {
   "fw.active": {
     why: "No host firewall is active, so every listening service is reachable from anywhere the network permits.",
     fix: "Enable ufw/firewalld and allow only the ports this host needs — open Firewall Administration." },
+  // The same reading — nothing running — but a COMPLETELY different problem when
+  // the host has a firewall configured to come up at boot. One is "nobody set one
+  // up"; the other is "the one you set up did not start", which no amount of
+  // pressing Enable fixes and which reads from the console as if someone had
+  // turned the firewall off.
+  "fw.failed_to_start": {
+    why: "A firewall is enabled to start at boot on this host, but it is not running — so the host is currently unprotected even though it is configured.",
+    fix: "This is not a missing firewall, so enabling it again will not help: find out why it did not start with `journalctl -u <service>`. A systemd ordering cycle (commonly involving cloud-init) can make systemd drop the job entirely." },
   "mac.selinux": {
     why: "SELinux isn't enforcing, so its mandatory-access-control confinement of a compromised service is switched off.",
     fix: "Once you've confirmed no policy denials break the workload, set enforcing: `setenforce 1` and SELINUX=enforcing in /etc/selinux/config." },
@@ -325,6 +334,15 @@ function RowAction({ action, hostId, posture, hyp, onOpen, onRefreshSoon }) {
 
 function Row({ fullKey, label, value, hostId, posture, hyp, host, env, boot, supps, onOpen, canAct, onRefreshSoon, onSuppressed, onChanged }) {
   const st = evalStatus(fullKey, value);
+  // "No firewall is running" has two causes that read identically in the probe
+  // and need opposite responses. A host with a firewall ENABLED AT BOOT that is
+  // not running did not have it turned off — it failed to start — and telling
+  // that operator to "enable ufw/firewalld" sends them to press a button that
+  // will not help. evalStatus only sees one key at a time, so the distinction is
+  // drawn here, where the whole posture map is in hand.
+  const fwDown = fullKey === "fw.active" && st === "bad" &&
+    !["", "none", undefined, null].includes(posture && posture["fw.enabled_at_boot"]);
+  const explainKey = fwDown ? "fw.failed_to_start" : fullKey;
   const flagged = st === "bad" || st === "warn";
   const suppKey = SUPP_KEY[fullKey] || fullKey;
   // Is this (still-alerting) finding suppressed? Then show it muted/gray rather
@@ -356,15 +374,15 @@ function Row({ fullKey, label, value, hostId, posture, hyp, host, env, boot, sup
           </span>
         </span>
       </div>
-      {flagged && !supp && EXPLAIN[fullKey] && (
+      {flagged && !supp && EXPLAIN[explainKey] && (
         <div style={{ marginTop: 5, fontSize: 12, lineHeight: 1.45, color: "var(--text)", opacity: 0.85 }}>
           <div>
             <span style={{ color: st === "bad" ? C.bad : C.warn, fontWeight: 600 }}>Why it matters: </span>
-            {EXPLAIN[fullKey].why}
+            {EXPLAIN[explainKey].why}
           </div>
           <div style={{ marginTop: 2 }}>
             <span style={{ color: C.good, fontWeight: 600 }}>How to fix: </span>
-            {EXPLAIN[fullKey].fix}
+            {EXPLAIN[explainKey].fix}
           </div>
         </div>
       )}

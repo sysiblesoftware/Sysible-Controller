@@ -887,7 +887,18 @@ elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status
 elif command -v nft >/dev/null 2>&1 && [ -n "$(nft list ruleset 2>/dev/null)" ]; then fw=nftables; fwa=1
 elif command -v iptables >/dev/null 2>&1 && iptables -S 2>/dev/null | grep -qE '^-A'; then fw=iptables; fwa=1
 fi
-p fw.backend "$fw"; p fw.active "$fwa"
+# Which firewall is set to come up at boot, REGARDLESS of whether it is running.
+# Without this, a host whose firewalld is enabled but failed to start this boot
+# reports backend=none/active=0 — identical to a host nobody ever configured.
+# Those are different problems with different fixes, and collapsing them reads as
+# "someone turned the firewall off" when nobody did. Seen for real: systemd broke
+# an ordering cycle involving cloud-init by deleting firewalld's job, so the
+# service never started and the console called it a missing firewall.
+fwe=none
+for _u in firewalld ufw nftables; do
+  if systemctl is-enabled "$_u" >/dev/null 2>&1; then fwe="$_u"; break; fi
+done
+p fw.backend "$fw"; p fw.active "$fwa"; p fw.enabled_at_boot "$fwe"
 
 # --- Users / accounts -------------------------------------------------------
 p users.uid0 "$(awk -F: '$3==0{print $1}' /etc/passwd 2>/dev/null | paste -sd, -)"

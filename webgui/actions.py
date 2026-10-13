@@ -459,9 +459,18 @@ _register(Action(name="fw_install_ufw", tool="Firewall Administration",
     label="Install ufw", params=[], build=lambda p: api.cmd_install_ufw()))
 _register(Action(name="fw_ufw_status", tool="Firewall Administration",
     label="ufw status", params=[], build=lambda p: api.cmd_ufw_status()))
-_register(Action(name="fw_ufw_set_enabled", tool="Firewall Administration", label="Enable/disable ufw",
-    params=[Param("enabled", "Enabled", type="checkbox", default=True, required=False)],
-    build=lambda p: api.cmd_set_ufw_enabled(_b(p, "enabled", True))))
+# TWO buttons, not one toggle. "Enable/disable ufw" was a single button whose
+# direction came from a checkbox above it, in a group shared with other actions:
+# the label read the same either way, and with the box clear it turned the
+# firewall OFF with no confirmation and no second look. A control that disables a
+# host's firewall must say so on its own face. Disabling is marked danger, so it
+# asks first, like every other destructive action here.
+_register(Action(name="fw_ufw_enable", tool="Firewall Administration",
+    label="Enable ufw", params=[],
+    build=lambda p: api.cmd_set_ufw_enabled(True)))
+_register(Action(name="fw_ufw_disable", tool="Firewall Administration",
+    label="Disable ufw", danger=True, params=[],
+    build=lambda p: api.cmd_set_ufw_enabled(False)))
 _register(Action(name="fw_ufw_add_rule", tool="Firewall Administration", label="ufw: add rule",
     params=[Param("action", "Action", type="select", options=["allow", "deny", "reject", "limit"], default="allow"),
             Param("port", "Port", help="single port or range like 6000:6010"),
@@ -1073,9 +1082,13 @@ _register(Action(name="stor_swap_disable", tool="Storage Administration", label=
     build=lambda p: api.cmd_disable_swap(_s(p, "target"), _b(p, "remove_fstab"))))
 
 # ---- Firewall Administration (advanced) ------------------------------
-_register(Action(name="fw_set_enabled", tool="Firewall Administration", label="Enable/disable firewalld",
-    params=[Param("enabled", "Enabled", type="checkbox", default=True, required=False)],
-    build=lambda p: api.cmd_set_firewalld_enabled(_b(p, "enabled", True))))
+# Two buttons rather than a checkbox-driven toggle — see fw_ufw_enable above.
+_register(Action(name="fw_enable", tool="Firewall Administration",
+    label="Enable firewalld", params=[],
+    build=lambda p: api.cmd_set_firewalld_enabled(True)))
+_register(Action(name="fw_disable", tool="Firewall Administration",
+    label="Disable firewalld", danger=True, params=[],
+    build=lambda p: api.cmd_set_firewalld_enabled(False)))
 _register(Action(name="fw_set_default_zone", tool="Firewall Administration", label="Set default zone",
     params=[Param("zone", "Zone")], build=lambda p: api.cmd_set_default_zone(_s(p, "zone")),
 ))
@@ -1541,13 +1554,13 @@ _LAYOUT: dict[str, list] = {
         # Each backend's installer lives with that backend's service controls, so
         # "install firewalld" sits under Firewalld and "install ufw" under ufw —
         # not lumped into one out-of-place "install a firewall" group.
-        ("Firewalld", "Service State", ["fw_status", "fw_install_firewalld", "fw_set_enabled", "fw_reload"]),
+        ("Firewalld", "Service State", ["fw_status", "fw_install_firewalld", "fw_enable", "fw_reload", "fw_disable"]),
         ("Firewalld", "Default Zone", ["fw_set_default_zone"]),
         ("Ports", "List Ports", ["fw_list_ports", "fw_list_all_ports"]),
         ("Ports", "Open / Close Ports", ["fw_open_port", "fw_close_port"]),
         ("Zones", "Zones", ["fw_list_zones", "fw_create_zone", "fw_delete_zone"]),
         ("Rich Rules", "Rich Rules", ["fw_list_rich", "fw_add_rich", "fw_remove_rich"]),
-        ("ufw", "Service State", ["fw_install_ufw", "fw_ufw_status", "fw_ufw_set_enabled"]),
+        ("ufw", "Service State", ["fw_install_ufw", "fw_ufw_status", "fw_ufw_enable", "fw_ufw_disable"]),
         ("ufw", "Rules", ["fw_ufw_add_rule", "fw_ufw_delete_rule"]),
         ("ufw", "Defaults & Reset", ["fw_ufw_default", "fw_ufw_reset"]),
         ("nftables", "Ruleset", ["fw_nft_ruleset", "fw_nft_persist", "fw_nft_flush"]),

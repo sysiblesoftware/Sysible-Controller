@@ -167,3 +167,57 @@ def tls_server(tmp_path):
         yield f"https://127.0.0.1:{httpd.server_address[1]}/x", stale_pin
     finally:
         httpd.shutdown()
+
+
+# ---- which network this host is actually on --------------------------------
+# A fleet lost three hosts for days because the controller was at 192.168.8.139
+# and those hosts were on 192.168.100.44 — different networks, no route between
+# them — while thirteen other hosts reached it fine. Every log line named only
+# the address being dialled, so from the host with the problem the mismatch was
+# invisible, and the investigation went to firewalls, certificates and the
+# controller instead.
+def test_the_message_says_which_address_this_host_would_use():
+    """Printing both addresses is what makes a wrong-network obvious."""
+    note = agent._route_note("https://192.168.8.139:9000")
+    assert "would reach it from" in note
+    import re
+    assert re.search(r"from \d+\.\d+\.\d+\.\d+\.", note), note
+
+
+def test_no_route_at_all_is_said_outright(monkeypatch):
+    """When the kernel has nothing for that network, say so — it is a stronger
+    statement than showing two addresses and leaving the reader to compare."""
+    import errno as _errno
+    import socket as _socket
+
+    class NoRoute(_socket.socket):
+        def connect(self, addr):
+            raise OSError(_errno.ENETUNREACH, "Network is unreachable")
+
+    monkeypatch.setattr(agent.socket, "socket", NoRoute)
+    note = agent._route_note("https://192.168.8.139:9000")
+    assert "NO ROUTE to 192.168.8.139" in note
+    assert "nothing routes" in note
+
+
+def test_a_hostname_gets_no_route_note():
+    """A name that does not resolve is a DNS failure, already named by the
+    classifier; a route note there would be noise or a lie."""
+    assert agent._route_note("https://controller.lan:9000") == ""
+
+
+def test_the_route_note_reaches_the_reported_line(quiet_reporter, monkeypatch):
+    monkeypatch.setattr(agent, "CONTROLLER", "https://192.168.8.139:9000")
+    agent._report_unreachable(requests.ConnectionError("Connection refused"))
+    assert len(quiet_reporter) == 1
+    assert "192.168.8.139" in quiet_reporter[0]
+    assert "would reach it from" in quiet_reporter[0] or "NO ROUTE" in quiet_reporter[0]
+
+
+def test_a_route_note_never_breaks_the_report(quiet_reporter, monkeypatch):
+    """Diagnostics must not be able to take out the thing they are diagnosing."""
+    monkeypatch.setattr(agent, "_route_note", lambda _u: 1 / 0)
+    try:
+        agent._report_unreachable(requests.ConnectionError("Connection refused"))
+    except ZeroDivisionError:
+        pytest.fail("a failure inside the route note silenced the outage report")

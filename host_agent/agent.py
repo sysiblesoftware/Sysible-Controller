@@ -30,6 +30,8 @@ import os
 import platform
 import re
 import shlex
+import errno
+import ipaddress
 import socket
 import subprocess
 import sys
@@ -278,7 +280,15 @@ def _report_unreachable(exc):
         n = _conn_report["suppressed"]
         _conn_report.update(why=why, at=now, suppressed=0)
     again = f" [{n} identical since the last line]" if n and not changed else ""
-    print(f"[agent] cannot reach the controller ({tried}): {why}{again}", flush=True)
+    # Guarded: this is a nicety attached to the message that reports an outage,
+    # and a nicety must never be able to take out the report. Anything it raises
+    # costs the extra sentence and nothing else.
+    try:
+        where = _route_note(CONTROLLER)
+    except Exception:
+        where = ""
+    print(f"[agent] cannot reach the controller ({tried}): {why}{where}{again}",
+          flush=True)
 
 
 def _report_reachable():
@@ -432,6 +442,38 @@ def _request(method, path, **kwargs):
     # each print the same thing.
     _report_unreachable(last_exc)
     raise last_exc
+
+
+def _route_note(url: str) -> str:
+    """Which local address this host would use to reach the controller, or that
+    it has no route to it at all.
+
+    This is the line that ends an argument. A fleet lost three hosts for days
+    because the controller was at 192.168.8.139 and those hosts were on
+    192.168.100.44 — a different network, no route between them — while the other
+    thirteen hosts reached it fine. Every log line named only the address being
+    dialled, so the mismatch was invisible from the host that had the problem.
+    Printing BOTH makes it obvious at a glance.
+
+    A UDP connect() sends no packets; it only asks the routing table which source
+    address would be used, so this costs nothing and works with no network up."""
+    host = url.split("//", 1)[-1].split("/", 1)[0].split(":")[0]
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return ""          # a name, not an address — DNS owns that failure
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect((host, 9))
+        return " This host would reach it from " + s.getsockname()[0] + "."
+    except OSError as e:
+        if e.errno in (errno.ENETUNREACH, errno.EHOSTUNREACH):
+            mine = _local_ip() or "an unknown address"
+            return (" This host has NO ROUTE to " + host + " - it is on " + mine
+                    + ", and nothing routes from there to " + host + ".")
+        return ""
+    finally:
+        s.close()
 
 
 def _local_ip():

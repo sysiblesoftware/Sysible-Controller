@@ -78,3 +78,44 @@ def test_the_public_manual_card_was_updated():
     card = html[i:i + 700]
     assert "without you knowing its backend" in card
     assert "nftables" in card, "it dropped the backend tabs entirely"
+
+
+# ---- the port rules --------------------------------------------------------
+# Opening 9000 is not one rule: inbound on the controller, outbound on a managed
+# host. Documentation that says only "allow 9000" invites the wrong one, which on
+# fifteen managed hosts means an inbound agent-API port none of them needs.
+def test_the_readme_separates_the_two_port_rules():
+    i = README.index("--restrict-firewall")
+    passage = README[i:i + 2400]
+    assert "On the controller" in passage and "inbound" in passage
+    assert "On a managed host" in passage
+    assert "dials **out**" in passage, "it does not say the agent is outbound-only"
+    assert "no inbound port is opened" in passage
+
+
+def test_the_readme_says_the_installer_only_covers_install_time():
+    """That gap — install-time only — is what left a fleet unreachable."""
+    i = README.index("--restrict-firewall")
+    passage = README[i:i + 2400]
+    assert "only if a firewall was already active" in passage
+    assert "afterwards" in passage
+
+
+def test_the_readme_covers_the_stopped_service_case():
+    i = README.index("--restrict-firewall")
+    passage = README[i:i + 2400]
+    assert "stopped at that moment" in passage
+
+
+def test_the_manual_documents_the_port_rules_where_the_ports_are_introduced():
+    manual = Path("/home/user/sysible-website/controller-manual.html")
+    if not manual.exists():
+        pytest.skip("the website checkout is not present")
+    html = manual.read_text(encoding="utf-8")
+    assert 'Port 9000 and your host firewalls' in html
+    note = html[html.index("Port 9000 and your host firewalls"):][:2200]
+    assert "On the controller" in note and "On a managed host" in note
+    assert "nothing ever dials in" in note
+    # and it sits in the Installation section, not stranded elsewhere
+    start, end = html.index('id="install"'), html.index('id="first-login"')
+    assert start < html.index("Port 9000 and your host firewalls") < end

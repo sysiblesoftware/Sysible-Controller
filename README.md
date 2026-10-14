@@ -193,6 +193,13 @@ sudo ./install_sysible.sh --restrict-firewall \
 
 Both CIDR flags accept a comma-separated list and IPv4 or IPv6. A port whose CIDR list is empty in restrict mode is left open (with a warning) rather than silently locked down, so you can never fence yourself out of the console.
 
+That runs **at install time, and only if a firewall was already active**. Turning a firewall on *afterwards* from **Firewall Administration** preserves the same access, and the rule written differs by role because the traffic does:
+
+- **On the controller** — `9000` and `8800` are kept open **inbound**, and this holds even if the service happens to be stopped at that moment, so a container that was down during the change cannot leave the fleet locked out.
+- **On a managed host** — the agent dials **out** to the controller and nothing ever dials in, so no inbound port is opened. What is preserved is the outbound path to the controller's address, which matters because `ufw` can be set to deny outgoing; every address in a comma-separated `SYSIBLE_CONTROLLER` candidate list is allowed.
+
+sshd's port is kept open on both, asked of `sshd` rather than assumed to be 22. A host that runs no agent gets neither rule.
+
 ### Updating
 
 The controller runs out of `/opt/sysible`, which the installer **syncs** from your source checkout — so a bare `git pull` in the checkout doesn't change what's running. To pull the latest code and redeploy in one step:

@@ -39,8 +39,16 @@ export const REGISTRY = [
     keywords: ["file system", "directory", "permissions", "chmod", "chown", "acl", "mount", "unmount", "nfs", "cifs", "smb", "fstab", "quota", "archive", "compress", "symlink", "copy file", "move file"] },
   { title: "Storage Administration", section: "sysadmin", tool: "Storage Administration",
     keywords: ["disk", "partition", "format", "lvm", "volume group", "logical volume", "physical volume", "raid", "swap", "mount disk", "smart", "resize volume"] },
+  // The plain-language entries point at the Firewall tab, which works on any host
+  // without the operator knowing its backend. Searching "firewalld" or "ufw" by
+  // name still goes to that backend's own tab, because somebody who typed the
+  // name means that tool.
+  { title: "Open a firewall port", section: "sysadmin", tool: "Firewall Administration", tab: "Firewall",
+    keywords: ["open port", "allow port", "close port", "block port", "firewall port", "port 443", "unblock"] },
+  { title: "Turn a host's firewall on or off", section: "sysadmin", tool: "Firewall Administration", tab: "Firewall",
+    keywords: ["firewall", "enable firewall", "disable firewall", "turn off firewall", "firewall status", "is the firewall on"] },
   { title: "Firewall Administration", section: "sysadmin", tool: "Firewall Administration",
-    keywords: ["firewall", "firewalld", "open port", "close port", "zone", "rich rule", "nftables", "iptables", "ufw", "default zone"] },
+    keywords: ["firewalld", "zone", "rich rule", "nftables", "iptables", "ufw", "default zone"] },
   { title: "Security Administration", section: "sysadmin", tool: "Security Administration",
     keywords: ["selinux", "ssh hardening", "harden ssh", "audit", "failed logins", "security updates", "harden", "vulnerability scan", "lynis", "rkhunter", "rotate keys", "authorized keys", "pubkey", "sysctl"] },
   { title: "Backup & Recovery", section: "sysadmin", tool: "Backup & Recovery",

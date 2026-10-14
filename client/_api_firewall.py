@@ -153,7 +153,45 @@ _NOT_WHILE_UFW = (
     "tab.' >&2; exit 1; fi; "
 )
 
+# Where this host's agent says the controller is. The agent's own env file is the
+# authority — guessing an address would be worse than doing nothing.
+#
+# Two opposite rules come out of it, and conflating them would be a mistake:
+#
+#   * On a MANAGED host, the agent dials OUT to the controller on 9000 and
+#     nothing ever dials in. ufw can be set to deny outgoing, and when it is,
+#     enabling it cuts every agent on the fleet at once. So the outbound path to
+#     the controller is allowed explicitly.
+#   * On the CONTROLLER, 9000 must be allowed INBOUND. The listening-port scan
+#     above catches that whenever the service is up — but not if its container
+#     happened to be down at the moment the firewall was enabled, which leaves
+#     the fleet locked out until someone notices. If the configured controller
+#     address is one of THIS host's own addresses, the port is kept open
+#     regardless of what is listening right now.
+#
+# Nothing is opened on a host that is neither, which is why this reads the
+# configuration rather than opening 9000 everywhere: fifteen managed hosts do not
+# need an inbound agent-API port, and giving them one would be a step backwards.
+_CONTROLLER_ADDR_FN = (
+    "_sysible_controller_addr() { "
+    "_f=/opt/sysible-agent/sysible_agent.env; [ -r \"$_f\" ] || return 0; "
+    "sed -n 's/^SYSIBLE_CONTROLLER=//p' \"$_f\" | head -1 | tr ',' '\\n' | "
+    "while read -r _u; do "
+    "_u=${_u##*://}; _u=${_u%%/*}; "
+    "_h=${_u%:*}; _p=${_u##*:}; "
+    # A bare host with no :port means the agent-API default.
+    "[ \"$_h\" = \"$_p\" ] && _p=9000; "
+    "case \"$_p\" in ''|*[!0-9]*) _p=9000 ;; esac; "
+    "[ -n \"$_h\" ] && printf '%s %s\\n' \"$_h\" \"$_p\"; "
+    "done; }; "
+    # Is that address one of ours? Then this host IS the controller.
+    "_sysible_is_local_addr() { "
+    "{ ip -o addr show 2>/dev/null || true; } "
+    "| awk '{print $4}' | sed 's#/.*##' | grep -qx \"$1\"; }; "
+)
+
 _KEEP_OPEN_FN = (
+    _CONTROLLER_ADDR_FN +
     "_sysible_keep_open() { { "
     # sshd's own view first - authoritative, and it knows a non-default Port.
     "sshd -T 2>/dev/null | awk '/^port /{print $2}'; "
@@ -166,6 +204,12 @@ _KEEP_OPEN_FN = (
     # neither, so this adds nothing there.
     "{ ss -lntH 2>/dev/null || netstat -lnt 2>/dev/null || true; } "
     "| awk '{print $4}' | sed 's/.*://' | awk '$1==\"9000\" || $1==\"8800\"'; "
+    # ...and the agent-API port even when nothing is listening on it right now,
+    # but ONLY on the host the agent is configured to call, i.e. the controller
+    # itself. A container that was down during the enable must not cost the
+    # fleet its way back in.
+    "_sysible_controller_addr | while read -r _h _p; do "
+    "if _sysible_is_local_addr \"$_h\"; then echo \"$_p\"; fi; done; "
     "} | grep -E '^[0-9]+$' | sort -un; }; "
 )
 
@@ -275,6 +319,13 @@ def cmd_fw_turn_on() -> str:
         "for _p in $(_sysible_keep_open); do "
         'echo "keeping ${_p}/tcp open (in use on this host)"; '
         'ufw allow "${_p}"/tcp >/dev/null 2>&1 || true; done; '
+        # ufw can be set to deny outgoing, and then enabling it cuts this
+        # host's agent off from the controller. Allow that one path
+        # explicitly. Harmless under the default allow-outgoing policy.
+        "_sysible_controller_addr | while read -r _h _p; do "
+        "echo \"keeping the controller reachable: out to ${_h}:${_p}\"; "
+        "ufw allow out to \"$_h\" port \"$_p\" proto tcp >/dev/null 2>&1 || true; "
+        "done; "
         "ufw --force enable 2>&1; rc=$?; "
         'if [ "$rc" -ne 0 ]; then '
         "echo 'ufw could not be started - see the message above.' >&2; "
@@ -927,7 +978,21 @@ def cmd_set_ufw_enabled(enabled: bool) -> str:
             "for _p in $(_sysible_keep_open); do "
             "echo \"keeping ${_p}/tcp open (in use on this host)\"; "
             "ufw allow \"${_p}\"/tcp >/dev/null 2>&1 || true; done; "
-            "ufw --force enable 2>&1; rc=$?; "
+            # ufw can be set to deny outgoing, and then enabling it cuts this
+            # host's agent off from the controller. Allow that one path
+            # explicitly. Harmless under the default allow-outgoing policy.
+            "_sysible_controller_addr | while read -r _h _p; do "
+            "echo \"keeping the controller reachable: out to ${_h}:${_p}\"; "
+            "ufw allow out to \"$_h\" port \"$_p\" proto tcp >/dev/null 2>&1 || true; "
+            "done; "
+            # ufw can be set to deny outgoing, and then enabling it cuts this
+        # host's agent off from the controller. Allow that one path
+        # explicitly. Harmless under the default allow-outgoing policy.
+        "_sysible_controller_addr | while read -r _h _p; do "
+        "echo \"keeping the controller reachable: out to ${_h}:${_p}\"; "
+        "ufw allow out to \"$_h\" port \"$_p\" proto tcp >/dev/null 2>&1 || true; "
+        "done; "
+        "ufw --force enable 2>&1; rc=$?; "
             "if [ \"$rc\" -ne 0 ]; then "
             "echo 'ufw could not be enabled. If this needs root, mark this host "
             "\"password sudo\" or grant the console user NOPASSWD sudo.' >&2; exit \"$rc\"; fi; "

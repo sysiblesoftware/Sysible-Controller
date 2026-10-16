@@ -1490,6 +1490,15 @@ def _posture_flags(p):
     mac_off = (not se_enf and not aa_enf) if (se or aa) else None
 
     fw = g("fw", "active")
+    # "Nothing is running" has two causes that need opposite responses, and
+    # reporting both as "Firewall disabled" is how an operator who HAS turned the
+    # firewall on is told, every morning, that they have not. A host configured to
+    # bring a firewall up at boot and then found without one did not have it
+    # switched off — it failed to start, and pressing Enable again will not fix
+    # that. (Absent from an older agent that predates the probe key, in which case
+    # this reads exactly as it did before.)
+    fw_boot = (g("fw", "enabled_at_boot") or "").strip().lower()
+    fw_configured = fw_boot not in ("", "none")
     sync = (g("time", "synced") or "").strip().lower()
     uid0 = as_int(g("users", "uid0_count"))
     emptypw = as_int(g("users", "empty_pw_count"))
@@ -1499,7 +1508,8 @@ def _posture_flags(p):
     return {
         "reboot_required": (g("reboot", "required") == "1") if g("reboot", "required") is not None else None,
         "ssh_root_login": ssh_root,
-        "firewall_disabled": (fw == "0") if fw is not None else None,
+        "firewall_disabled": (fw == "0" and not fw_configured) if fw is not None else None,
+        "firewall_failed_to_start": (fw == "0" and fw_configured) if fw is not None else None,
         "mac_not_enforcing": mac_off,
         "eol_os": eol,
         "risky_accounts": ((uid0 or 0) > 1 or (emptypw or 0) > 0)
@@ -1514,7 +1524,10 @@ def _posture_flags(p):
 # keys in the SPA's SIGNAL_SEV; disk_critical is a health signal (not a posture
 # flag) so it isn't included here.
 _CRITICAL_POSTURE_LABELS = {
-    "firewall_disabled": "Firewall disabled",
+    "firewall_disabled": "No firewall configured",
+    # Just as critical — the host is unprotected either way — but a different
+    # thing to go and do about it.
+    "firewall_failed_to_start": "Firewall enabled but not running",
     "ssh_root_login": "SSH root login enabled",
     "risky_accounts": "UID-0 / empty-password accounts",
     "eol_os": "EOL / unsupported OS",
@@ -2323,7 +2336,8 @@ def _alerts_gather_hosts():
         h["security"], h["reboot"], h["total"] = u.get("security"), u.get("reboot"), u.get("total")
         p = pos.get(h["id"]) or {}
         flags = p.get("flags") or {}
-        for fl in ("firewall_disabled", "mac_not_enforcing", "ssh_root_login", "time_unsynced"):
+        for fl in ("firewall_disabled", "firewall_failed_to_start",
+                   "mac_not_enforcing", "ssh_root_login", "time_unsynced"):
             h[fl] = flags.get(fl) is True
         cd = ((p.get("posture") or {}).get("cert") or {}).get("nearest_days")
         try:

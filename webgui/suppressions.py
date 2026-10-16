@@ -43,7 +43,8 @@ TYPES = ("env_necessity", "acknowledged", "snooze", "reboot")
 # health signals in the SPA. Validation is lenient on unknown keys (bounded
 # string) so the front end can evolve without a lockstep backend change.
 KNOWN_KEYS = {
-    "reboot_required", "ssh_root_login", "firewall_disabled", "mac_not_enforcing",
+    "reboot_required", "ssh_root_login", "firewall_disabled",
+    "firewall_failed_to_start", "mac_not_enforcing",
     "eol_os", "risky_accounts", "cert_expiring", "time_unsynced",
     "disk_critical", "failed_units",
 }

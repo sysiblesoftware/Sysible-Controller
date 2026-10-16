@@ -249,7 +249,12 @@ function EnvFleetCard({ group, postureLoaded, onOpenHost }) {
 const POSTURE_SIGNALS = [
   { key: "reboot_required", label: "Reboot required" },
   { key: "ssh_root_login", label: "SSH root login enabled" },
-  { key: "firewall_disabled", label: "Firewall disabled" },
+  { key: "firewall_disabled", label: "No firewall configured" },
+  // Separate signal, not a softer wording of the one above: this host HAS a
+  // firewall set to come up and it did not. Telling that operator "firewall
+  // disabled" tells them their own change did not take, which is the opposite
+  // of what happened.
+  { key: "firewall_failed_to_start", label: "Firewall enabled but not running" },
   { key: "mac_not_enforcing", label: "SELinux/AppArmor not enforcing" },
   { key: "eol_os", label: "EOL / unsupported OS" },
   { key: "risky_accounts", label: "UID-0 / empty-password accounts" },
@@ -272,7 +277,8 @@ const SIGNAL_SEV = {
   disk_critical: 1,      // ≥90% — imminent outage
   risky_accounts: 1,     // UID-0 dupes / empty-password accounts
   ssh_root_login: 1,     // root login exposed over SSH
-  firewall_disabled: 1,  // host has no active firewall
+  firewall_disabled: 1,  // host has no firewall configured at all
+  firewall_failed_to_start: 1,  // it has one, and the host is still unprotected
   eol_os: 1,             // unsupported OS = unpatched CVEs
 };   // everything else defaults to 2 (warning)
 const isCriticalSignal = (key) => SIGNAL_SEV[key] === 1;

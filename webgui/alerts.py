@@ -36,7 +36,8 @@ RULES = {
     "security_updates": ("Security updates pending", False, None),
     "reboot_required": ("Reboot required", False, None),
     "cert_expiring":   ("TLS cert expiring < threshold days", True, 30),
-    "firewall_disabled": ("Firewall disabled", False, None),
+    "firewall_disabled": ("No firewall configured", False, None),
+    "firewall_failed_to_start": ("Firewall enabled but not running", False, None),
     "mac_not_enforcing": ("SELinux/AppArmor not enforcing", False, None),
     "ssh_root_login":  ("SSH root login enabled", False, None),
     "time_unsynced":   ("Clock not synchronized", False, None),
@@ -244,7 +245,9 @@ def evaluate_rules(cfg, hosts):
             t = thr("cert_expiring", 30)
             if h["cert_days"] < t:
                 add(h, "cert_expiring", f"{name} TLS cert expires in {h['cert_days']} day(s)")
-        for flag, label in (("firewall_disabled", "firewall disabled"),
+        for flag, label in (("firewall_disabled", "no firewall configured"),
+                            ("firewall_failed_to_start",
+                             "firewall is enabled at boot but is not running"),
                             ("mac_not_enforcing", "SELinux/AppArmor not enforcing"),
                             ("ssh_root_login", "SSH root login enabled"),
                             ("time_unsynced", "clock not synchronized")):

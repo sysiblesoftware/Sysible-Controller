@@ -1959,6 +1959,7 @@ def _run_scheduled_job(job):
     label = schedules.ACTIONS.get(action, action)
     desc = f"[scheduled by {job.get('created_by') or '?'}] {label}"
     ok = 0
+    offline, failed = [], []
     for e in entries:
         # Tokenless (unattended root) + needs_sudo=False: no operator/become needed.
         # The creator is named in the description so the activity log still
@@ -1966,8 +1967,40 @@ def _run_scheduled_job(job):
         r = _dispatch_one(e, cmd, "command", None, None, desc, needs_sudo=False)
         if r.get("ok") or r.get("code") == 0 or (action == "reboot" and not r.get("error")):
             ok += 1
-    status = "ok" if ok == len(entries) else "error"
-    return status, f"{ok}/{len(entries)} host(s) succeeded" + _unresolved
+            continue
+        # WHICH host, and WHY. A bare count cannot be acted on: it cannot say
+        # whether the same two hosts fail every night or a different two, and it
+        # cannot tell "these were switched off" from "patching is broken here".
+        name = r.get("host") or e.get("label") or e.get("id") or "?"
+        why = (r.get("error") or r.get("stderr") or "").strip().splitlines()
+        why = why[0][:80] if why else f"exit {r.get('code')}"
+        (offline if "offline" in why.lower() else failed).append(f"{name} ({why})")
+
+    # THREE outcomes, not two. This was `"ok" if ok == len(entries) else "error"`,
+    # so a nightly fleet patch with one host switched off reported exactly the
+    # same red "error" as one where nothing patched at all — every morning, for
+    # weeks. An operator reading that concludes the schedule is broken, and the
+    # run that IS broken looks no different from the fourteen that worked.
+    done = len(entries)
+    if ok == done:
+        status = "ok"
+    elif ok:
+        status = "partial"
+    else:
+        status = "error"
+
+    detail = f"{ok}/{done} host(s) succeeded"
+    # Offline first: it is the common, boring reason, and naming it keeps a
+    # genuine failure visible instead of buried among switched-off machines.
+    if offline:
+        detail += f" · {len(offline)} offline: " + ", ".join(offline[:4])
+        if len(offline) > 4:
+            detail += f" +{len(offline) - 4}"
+    if failed:
+        detail += f" · {len(failed)} failed: " + ", ".join(failed[:4])
+        if len(failed) > 4:
+            detail += f" +{len(failed) - 4}"
+    return status, detail + _unresolved
 
 
 _SCHED_STARTED = False

@@ -10,7 +10,10 @@ Jobs are a JSON list at run/webgui_schedules.json, mirroring sudo_store's model.
 A job:
   {id, name, action, targets:[host_id]|[]=all, cadence:hourly|daily|weekly,
    at:"HH:MM", weekday:0-6 (weekly), enabled, created_by, created_ts,
-   last_run, last_status:ok|error|running, last_detail, next_run}
+   last_run, last_status:ok|partial|error|running, last_detail, next_run}
+   (partial = some hosts succeeded and some did not; it is NOT a failure of
+    the schedule, and reporting it as one is how a working nightly patch job
+    reads as broken for weeks.)
 """
 import datetime
 import json

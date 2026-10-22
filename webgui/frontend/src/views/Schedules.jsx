@@ -7,6 +7,15 @@ const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 // Recurring fleet maintenance: patch scans, security/all updates, posture scans,
 // reboots — set once, run unattended (dispatched as root on agent hosts). The
 // runner lives on the controller; this is the CRUD + run-now UI.
+// A run where some hosts were offline is not the same as one where nothing ran.
+// Red for both is what made a nightly patch job that reached 14 of 16 hosts look
+// broken every morning; amber says "look, but it mostly worked".
+function runColor(status) {
+  if (status === "ok") return "#4ec07a";
+  if (status === "partial") return "#e0a83a";
+  return "#e06c6c";
+}
+
 export default function Schedules() {
   const [jobs, setJobs] = useState([]);
   const [meta, setMeta] = useState({ actions: {}, cadences: [] });
@@ -91,7 +100,7 @@ export default function Schedules() {
                   <td style={{ padding: "7px 10px", cursor: canExpand ? "pointer" : "default" }}
                       onClick={() => canExpand && setExpanded(open ? null : j.id)}
                       title={canExpand ? "Show run history" : ""}>
-                    {j.last_run ? <span style={{ color: j.last_status === "ok" ? "#4ec07a" : "#e06c6c" }}
+                    {j.last_run ? <span style={{ color: runColor(j.last_status) }}
                                         title={j.last_detail}>{j.last_status} · {fmt(j.last_run, j.tz)}
                                     {canExpand && <span className="faint" style={{ marginLeft: 4 }}>{open ? "▾" : `▸ ${hist.length}`}</span>}</span>
                                : <span className="faint">never</span>}
@@ -125,7 +134,7 @@ export default function Schedules() {
                         {[...hist].reverse().map((h, i) => (
                           <div key={i} className="row" style={{ gap: 10, alignItems: "baseline" }}>
                             <span className="faint" style={{ minWidth: 150 }}>{fmt(h.ts, j.tz)}</span>
-                            <span style={{ color: h.status === "ok" ? "#4ec07a" : "#e06c6c", fontWeight: 600, minWidth: 44 }}>{h.status}</span>
+                            <span style={{ color: runColor(h.status), fontWeight: 600, minWidth: 60 }}>{h.status}</span>
                             <span className="faint">{h.detail}</span>
                           </div>
                         ))}

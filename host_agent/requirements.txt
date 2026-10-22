@@ -9,4 +9,4 @@
 # a compatible range (not an exact pin like the controller's) — pip resolves the
 # newest `requests` the host's interpreter supports — while bounding the major
 # version so an unforeseen 3.x can't land silently.
-requests>=2.31,<3
+requests>=2.34.2,<3

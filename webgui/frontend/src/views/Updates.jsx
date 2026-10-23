@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
+import { hasUpdates, hostsWithUpdates } from "../updates.js";
 import HostResults from "../components/HostResults.jsx";
 
 const C = { sec: "#e06c6c", upd: "#e0a83a", ok: "#4ec07a", reboot: "#e0a83a", faint: "#7a7a7a" };
@@ -209,7 +210,7 @@ export default function Updates({ role }) {
     let withUpd = 0, sec = 0, reboot = 0, offline = 0;
     for (const h of hosts) {
       if (h.online === false) { offline++; continue; }
-      if ((h.total || 0) > 0) withUpd++;
+      if (hasUpdates(h)) withUpd++;
       sec += h.security || 0;
       if (h.reboot) reboot++;
     }
@@ -222,7 +223,11 @@ export default function Updates({ role }) {
     return Object.entries(g).sort(([a], [b]) => (a === "Unassigned" ? 1 : b === "Unassigned" ? -1 : a.localeCompare(b)));
   }, [hosts]);
 
-  const actionable = hosts.filter((h) => h.online !== false && (h.total || 0) > 0).map((h) => h.id);
+  // hasUpdates, not h.total: on SUSE a host can sit at PENDING 0 with a needed
+  // SECURITY patch, because the two columns come from two different zypper
+  // commands. Keying on total alone left exactly the hosts with outstanding
+  // security work unselectable. See src/updates.js.
+  const actionable = hostsWithUpdates(hosts).map((h) => h.id);
   // Hosts waiting on a reboot. Deliberately independent of pending updates: a
   // host that has finished installing sits at 0 pending and still needs the
   // reboot, so "Select all with updates" selects NOTHING on exactly the fleet

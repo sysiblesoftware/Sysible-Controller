@@ -1499,6 +1499,18 @@ def _posture_flags(p):
     # this reads exactly as it did before.)
     fw_boot = (g("fw", "enabled_at_boot") or "").strip().lower()
     fw_configured = fw_boot not in ("", "none")
+    # Did the host actually MANAGE to look? active=0 used to mean both "no
+    # firewall is running" and "every way of asking failed", and because
+    # enabled_at_boot comes from systemd while active comes from the firewall's
+    # own CLI, a CLI that could not answer produced active=0 next to a perfectly
+    # good enabled_at_boot — which read as "Firewall enabled but not running",
+    # in red, on hosts whose firewall was up the whole time.
+    #
+    # An older agent sends no fw.determined at all. Treat that as determined, so
+    # this behaves exactly as before until the agent is updated; the new key is
+    # what lets a host say "I could not tell" rather than "it is off".
+    fw_det = g("fw", "determined")
+    fw_known = True if fw_det is None else str(fw_det).strip() == "1"
     sync = (g("time", "synced") or "").strip().lower()
     uid0 = as_int(g("users", "uid0_count"))
     emptypw = as_int(g("users", "empty_pw_count"))
@@ -1508,8 +1520,13 @@ def _posture_flags(p):
     return {
         "reboot_required": (g("reboot", "required") == "1") if g("reboot", "required") is not None else None,
         "ssh_root_login": ssh_root,
-        "firewall_disabled": (fw == "0" and not fw_configured) if fw is not None else None,
-        "firewall_failed_to_start": (fw == "0" and fw_configured) if fw is not None else None,
+        # None, not False, when the host could not determine its own state: the
+        # dashboard counts only True, and "unknown" must not be reported as
+        # either a problem or an all-clear.
+        "firewall_disabled": ((fw == "0" and not fw_configured)
+                              if (fw is not None and fw_known) else None),
+        "firewall_failed_to_start": ((fw == "0" and fw_configured)
+                                     if (fw is not None and fw_known) else None),
         "mac_not_enforcing": mac_off,
         "eol_os": eol,
         "risky_accounts": ((uid0 or 0) > 1 or (emptypw or 0) > 0)

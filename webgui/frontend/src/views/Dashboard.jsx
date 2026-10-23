@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { searchTasks } from "../featureSearch.js";
+import { hasUpdates } from "../updates.js";
 import SuppressMenu from "../components/SuppressMenu.jsx";
 import { findSupp, describeSupp } from "../suppress.js";
 import { isAutomationActor } from "./LiveActivity.jsx";
@@ -868,7 +869,7 @@ export default function Dashboard({ role, edition, onOpen }) {
   const patch = useMemo(() => {
     let withUpd = 0, sec = 0, reboot = 0;
     for (const h of updates) {
-      if ((h.total || 0) > 0) withUpd++;
+      if (hasUpdates(h)) withUpd++;
       sec += h.security || 0;
       if (h.reboot) reboot++;
     }

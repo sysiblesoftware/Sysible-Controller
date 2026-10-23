@@ -119,7 +119,16 @@ def test_it_counts_hosts_with_updates_not_updates(src):
     m = re.search(r"const patch = useMemo\(\(\) => \{(.+?)\n  \}, ", src, re.S)
     assert m, "the patch summary is gone"
     body = m.group(1)
-    assert "if ((h.total || 0) > 0) withUpd++" in body
+    # PER HOST (withUpd++), not a sum of updates — that is what this test is
+    # for. It used to pin the literal `if ((h.total || 0) > 0) withUpd++`, which
+    # also froze WHICH hosts count, and that was a second decision hiding inside
+    # a test about arithmetic: keying on `total` alone skips a SUSE host sitting
+    # at 0 pending with a needed security patch. The rule now lives in
+    # src/updates.js and is tested in test_select_all_with_updates_includes_suse.
+    assert "withUpd++" in body and "withUpd +=" not in body, \
+        "the tile is summing updates again instead of counting hosts"
+    assert "hasUpdates(h)" in body, \
+        "the tile decides 'has updates' for itself instead of using the shared rule"
     assert "sec += h.security || 0" in body, "the security count changed shape"
     assert "if (h.reboot) reboot++" in body, \
         "hosts waiting on a reboot are no longer counted"

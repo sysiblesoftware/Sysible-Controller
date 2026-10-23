@@ -881,12 +881,58 @@ if [ -d /etc/modprobe.d ] && grep -rqsiE 'install[[:space:]]+usb-storage[[:space
   p sec.usb_storage blocked; else p sec.usb_storage allowed; fi
 
 # --- Firewall ---------------------------------------------------------------
-fw=none; fwa=0
-if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then fw=firewalld; fwa=1
-elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; then fw=ufw; fwa=1
-elif command -v nft >/dev/null 2>&1 && [ -n "$(nft list ruleset 2>/dev/null)" ]; then fw=nftables; fwa=1
-elif command -v iptables >/dev/null 2>&1 && iptables -S 2>/dev/null | grep -qE '^-A'; then fw=iptables; fwa=1
+# active=0 USED TO MEAN TWO THINGS, and the console could not tell them apart:
+# "no firewall is running" and "every way of asking failed". The probe asks the
+# firewall's own CLI, while enabled_at_boot asks systemd — two different
+# mechanisms — so any CLI that could not answer (missing from PATH, D-Bus
+# unreachable, polkit refusing, the binary timing out) produced active=0 beside
+# enabled_at_boot=firewalld, and the dashboard called a perfectly healthy host
+# "Firewall enabled but not running", in red, as a critical finding.
+#
+# So each probe now records WHY it said no, and a definite negative is kept
+# apart from a failure to look. fw.determined=0 means this host's firewall state
+# is UNKNOWN and nothing downstream may claim it is off.
+#
+# Note on ufw specifically: `systemctl is-active ufw` is NOT a substitute for
+# `ufw status`. ufw's unit is a RemainAfterExit oneshot, so it reads active long
+# after `ufw disable` has flushed the rules — using systemd there would report
+# protection that does not exist, which is the one error worse than this one.
+fw=none; fwa=0; fwdet=0; fwwhy=""
+_fwnote(){ fwwhy="${fwwhy:+$fwwhy; }$1"; }
+
+if command -v firewall-cmd >/dev/null 2>&1; then
+  _o=$($TMO firewall-cmd --state 2>&1); _rc=$?
+  if [ "$_rc" = 0 ]; then fw=firewalld; fwa=1; fwdet=1
+  elif [ "$_rc" = 252 ] || printf '%s' "$_o" | grep -qi 'not running'; then
+    fwdet=1; _fwnote "firewalld:stopped"          # a real, trustworthy negative
+  else
+    _fwnote "firewall-cmd:rc=$_rc:$(printf '%s' "$_o" | tr -d '\n' | cut -c1-80)"
+  fi
 fi
+if [ "$fwa" = 0 ] && command -v ufw >/dev/null 2>&1; then
+  _o=$($TMO ufw status 2>&1); _rc=$?
+  if [ "$_rc" = 0 ] && printf '%s' "$_o" | grep -qi 'Status: active'; then fw=ufw; fwa=1; fwdet=1
+  elif [ "$_rc" = 0 ] && printf '%s' "$_o" | grep -qi 'Status: inactive'; then
+    fwdet=1; _fwnote "ufw:inactive"
+  else
+    _fwnote "ufw:rc=$_rc:$(printf '%s' "$_o" | tr -d '\n' | cut -c1-80)"
+  fi
+fi
+if [ "$fwa" = 0 ] && command -v nft >/dev/null 2>&1; then
+  _o=$($TMO nft list ruleset 2>&1); _rc=$?
+  if [ "$_rc" = 0 ] && [ -n "$_o" ]; then fw=nftables; fwa=1; fwdet=1
+  elif [ "$_rc" = 0 ]; then fwdet=1; _fwnote "nft:empty"
+  else _fwnote "nft:rc=$_rc"; fi
+fi
+if [ "$fwa" = 0 ] && command -v iptables >/dev/null 2>&1; then
+  _o=$($TMO iptables -S 2>&1); _rc=$?
+  if [ "$_rc" = 0 ] && printf '%s' "$_o" | grep -qE '^-A'; then fw=iptables; fwa=1; fwdet=1
+  elif [ "$_rc" = 0 ]; then fwdet=1; _fwnote "iptables:no-rules"
+  else _fwnote "iptables:rc=$_rc"; fi
+fi
+# Nothing installed at all is a definite answer too: a host with no firewall
+# tooling genuinely has no firewall, and that is "disabled", not "unknown".
+if [ "$fwa" = 0 ] && [ "$fwdet" = 0 ] && [ -z "$fwwhy" ]; then fwdet=1; _fwnote "none-installed"; fi
 # Which firewall is set to come up at boot, REGARDLESS of whether it is running.
 # Without this, a host whose firewalld is enabled but failed to start this boot
 # reports backend=none/active=0 — identical to a host nobody ever configured.
@@ -899,6 +945,7 @@ for _u in firewalld ufw nftables; do
   if systemctl is-enabled "$_u" >/dev/null 2>&1; then fwe="$_u"; break; fi
 done
 p fw.backend "$fw"; p fw.active "$fwa"; p fw.enabled_at_boot "$fwe"
+p fw.determined "$fwdet"; p fw.why "$fwwhy"
 
 # --- Users / accounts -------------------------------------------------------
 p users.uid0 "$(awk -F: '$3==0{print $1}' /etc/passwd 2>/dev/null | paste -sd, -)"

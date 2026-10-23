@@ -810,14 +810,33 @@ def _exec(argv, shell=False, input_data=None, timeout=None):
         return {"stdout": "", "stderr": str(e), "returncode": -1}
 
 
-def _run_as_user(user, cmd, become_password=None):
+def _run_as_user(user, cmd, become_password=None, want_root=False):
     """RBAC: run `cmd` as local user `user`. Tried as that user first, so
     read-only commands work even for a user with no sudo; on a privilege
     error it's retried under that user's own sudo. Elevation uses `sudo -n`
     (passwordless) unless a `become_password` was supplied for this task, in
     which case it uses `sudo -S` and feeds the password on STDIN (never on
     argv/env), for hosts that forbid NOPASSWD. runuser needs root; if the
-    agent isn't root it prefixes its own sudo."""
+    agent isn't root it prefixes its own sudo.
+
+    want_root inverts the order, and exists because "escalate if it looks like
+    it failed" cannot work for a script somebody else wrote. The escalation
+    test is `returncode != 0 and the output looks like a privilege error`, and
+    an operator's script routinely satisfies neither while still having had
+    every privileged line inside it refused: it captures its own failures into
+    variables, prints them, and exits 0. The console's "Run a script" box says
+    "runs as root on each checked host"; it ran as the operator, came back
+    exit 0, and the output looked authoritative. That is how a firewall audit
+    reported "Not Authorized" on every host and was read as a finding about the
+    hosts rather than about the probe.
+
+    So when root is PROMISED, go to root first — still via this user's own
+    sudo, so the host's policy decides exactly as before, and with no second
+    execution of a script that may not be idempotent. If that user genuinely
+    cannot sudo here, fall back to running unprivileged rather than refusing
+    (a read-only script from a no-sudo operator still works) and say so loudly
+    in the output, because the one outcome that must not happen is unprivileged
+    results presented as if they were root's."""
     if not _local_user_exists(user):
         return {
             "stdout": "",
@@ -830,15 +849,8 @@ def _run_as_user(user, cmd, become_password=None):
     root = os.geteuid() == 0
     plain = (["runuser", "-u", user, "--", "bash", "-c", cmd] if root
              else ["sudo", "-n", "runuser", "-u", user, "--", "bash", "-c", cmd])
-    first = _exec(plain)
-    # Look for the privilege error in BOTH streams: some commands redirect
-    # their stderr into stdout (e.g. `... 2>&1`), which would otherwise hide a
-    # "Permission denied" from this check and stop us from escalating.
-    combined = (first["stderr"] or "") + "\n" + (first["stdout"] or "")
-    if first["returncode"] == 0 or not _looks_like_privilege_error(combined):
-        return first
 
-    # Escalate. With a become-password use `sudo -S` (read password from
+    # Escalated form. With a become-password use `sudo -S` (read password from
     # stdin, empty prompt); otherwise `sudo -n` (passwordless).
     if become_password:
         inner = ["sudo", "-S", "-p", "", "bash", "-c", cmd]
@@ -848,6 +860,38 @@ def _run_as_user(user, cmd, become_password=None):
         stdin = None
     elevated = (["runuser", "-u", user, "--"] + inner if root
                 else ["sudo", "-n", "runuser", "-u", user, "--"] + inner)
+
+    if want_root:
+        res = _exec(elevated, input_data=stdin)
+        if res["returncode"] == 0:
+            return res
+        # Only a SUDO POLICY refusal justifies dropping back; a script that ran
+        # as root and failed on its own merits must report its own failure, not
+        # be silently re-run with fewer privileges.
+        low = (res["stderr"] or "").lower()
+        policy = any(h in low for h in (
+            "password is required", "a terminal is required", "no tty present",
+            "not allowed to execute", "not in the sudoers", "incorrect password",
+            "sorry, try again", "authentication failure"))
+        if not policy:
+            return res
+        fallback = _exec(plain)
+        note = (f"\n[sysible] NOT RUN AS ROOT. '{user}' cannot sudo on this host, so "
+                f"this ran unprivileged and anything needing root inside it will have "
+                f"been refused — read the output with that in mind. Grant '{user}' "
+                f"sudo here, or mark this host as 'password sudo' and supply the "
+                f"password, to run it as root.")
+        fallback["stderr"] = (fallback["stderr"] or "").rstrip() + note
+        return fallback
+
+    first = _exec(plain)
+    # Look for the privilege error in BOTH streams: some commands redirect
+    # their stderr into stdout (e.g. `... 2>&1`), which would otherwise hide a
+    # "Permission denied" from this check and stop us from escalating.
+    combined = (first["stderr"] or "") + "\n" + (first["stdout"] or "")
+    if first["returncode"] == 0 or not _looks_like_privilege_error(combined):
+        return first
+
     res = _exec(elevated, input_data=stdin)
 
     if res["returncode"] != 0:
@@ -885,14 +929,15 @@ def _run_as_user(user, cmd, become_password=None):
     return res
 
 
-def run_command(cmd, run_as=None, become_password=None):
+def run_command(cmd, run_as=None, become_password=None, want_root=False):
     # RBAC path: a task tagged with an initiating admin username runs as the
     # matching local user, gated by that host's sudo policy (see
     # _run_as_user). Without run_as it's an internal/controller task: a root
     # agent runs it directly; an unprivileged agent escalates via sudo -n
     # (the pre-RBAC behaviour, unchanged).
     if run_as:
-        return _run_as_user(run_as, cmd, become_password=become_password)
+        return _run_as_user(run_as, cmd, become_password=become_password,
+                            want_root=want_root)
     if os.geteuid() != 0:
         cmd = "sudo -n bash -c " + shlex.quote(cmd)
     return _exec(cmd, shell=True)
@@ -2136,8 +2181,12 @@ def loop(state):
                         send_result(state, task_id,
                                     {"stdout": "pty session started", "stderr": "", "returncode": 0})
                         continue
+                    # want_root: the controller sets it for actions whose UI
+                    # promises root. Absent on an older controller, which then
+                    # behaves exactly as it did before.
                     result = run_command(task["command"], task.get("run_as"),
-                                         task.get("become_password"))
+                                         task.get("become_password"),
+                                         want_root=bool(task.get("want_root")))
                     send_result(state, task_id, result)
                 except UnknownHostError:
                     raise

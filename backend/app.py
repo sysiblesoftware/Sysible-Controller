@@ -1184,6 +1184,13 @@ _PENDING_BECOME = {}            # task_id -> {"password": str, "expiry": float}
 _PENDING_BECOME_LOCK = threading.Lock()
 _BECOME_TTL_S = 300
 
+# task_id -> expiry, for tasks whose caller promised root. Same RAM-only,
+# take-once delivery as the become-password beside it, and for the same reason:
+# it is per-dispatch, worthless after the agent has collected it, and not worth
+# a schema migration on every existing install to carry.
+_PENDING_WANT_ROOT = {}
+_PENDING_WANT_ROOT_LOCK = threading.Lock()
+
 # Serializes the agent-enrollment critical section. Enrollment validates a
 # single-use token, then (separately) consumes it; without this lock two
 # concurrent requests carrying the SAME token can both pass validation before
@@ -1261,6 +1268,24 @@ def _take_become(task_id):
     with _PENDING_BECOME_LOCK:
         rec = _PENDING_BECOME.pop(task_id, None)
     return rec["password"] if rec else None
+
+
+def _sweep_want_root(now=None):
+    now = now or time.time()
+    with _PENDING_WANT_ROOT_LOCK:
+        for tid in [t for t, e in _PENDING_WANT_ROOT.items() if e < now]:
+            _PENDING_WANT_ROOT.pop(tid, None)
+
+
+def _store_want_root(task_id):
+    _sweep_want_root()
+    with _PENDING_WANT_ROOT_LOCK:
+        _PENDING_WANT_ROOT[task_id] = time.time() + _BECOME_TTL_S
+
+
+def _take_want_root(task_id):
+    with _PENDING_WANT_ROOT_LOCK:
+        return _PENDING_WANT_ROOT.pop(task_id, None) is not None
 
 
 _AGENT_ENV_FILE = "/opt/sysible-agent/sysible_agent.env"
@@ -1403,6 +1428,10 @@ def queue_agent_task(host_id: str, body: TaskCreateRequest, request: Request):
     # delivered to the agent on its next poll. Never stored in the DB/log.
     if run_as and body.become_password:
         _store_become(task_id, body.become_password)
+    # Only meaningful on the RBAC path: without run_as the agent is already
+    # running the task in its own root context, so there is nothing to elevate.
+    if run_as and body.want_root:
+        _store_want_root(task_id)
 
     # Activity feed: record who did what, where — UNCONDITIONALLY of run_as, so a
     # key-only (no admin token) dispatch, which the agent runs as ROOT, can no
@@ -1912,6 +1941,8 @@ def poll_agent_tasks(host_id: str, agent_secret: str = "",
         pw = _take_become(t.get("id"))
         if pw is not None:
             t["become_password"] = pw
+        if _take_want_root(t.get("id")):
+            t["want_root"] = True
 
     return {"tasks": tasks}
 

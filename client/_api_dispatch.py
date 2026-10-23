@@ -277,7 +277,8 @@ def _sudo_hint(entry):
 
 
 def run_on_entry(entry, command: str, kind: str = "command", description: str = None,
-                 become_password: str = None, needs_sudo: bool = True, log: bool = True):
+                 become_password: str = None, needs_sudo: bool = True, log: bool = True,
+                 want_root: bool = False):
     """Run `command` on one merged-host entry (as produced by
     list_merged_hosts()). SSH executes synchronously over exec_remote()
     - the result is ready immediately. Agent dispatch is async - only a
@@ -318,6 +319,10 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
             return {"sync": True, "stdout": "", "stderr": msg, "code": None, "error": msg}
 
     if entry["kind"] == "ssh":
+        # want_root is not forwarded: the SSH path already elevates through
+        # exec_remote's own become handling, so there is nothing here that runs
+        # unprivileged-first. The flag exists for the AGENT path, where the
+        # run-as user's shell is the default.
         try:
             result = exec_remote(entry["id"], command, description=description,
                                  become_password=become_password, log=log)
@@ -334,7 +339,7 @@ def run_on_entry(entry, command: str, kind: str = "command", description: str = 
 
     task_ids = queue_command_on_hosts([entry["id"]], command, kind=kind,
                                       description=description, become_password=become_password,
-                                      log=log)
+                                      log=log, want_root=want_root)
     task_id = task_ids.get(entry["id"])
     return {
         "sync": False,
@@ -884,52 +889,72 @@ if [ -d /etc/modprobe.d ] && grep -rqsiE 'install[[:space:]]+usb-storage[[:space
 # active=0 USED TO MEAN TWO THINGS, and the console could not tell them apart:
 # "no firewall is running" and "every way of asking failed". The probe asks the
 # firewall's own CLI, while enabled_at_boot asks systemd — two different
-# mechanisms — so any CLI that could not answer (missing from PATH, D-Bus
-# unreachable, polkit refusing, the binary timing out) produced active=0 beside
+# mechanisms — so any CLI that could not answer (D-Bus unreachable, polkit
+# refusing, not root, the binary timing out) produced active=0 beside
 # enabled_at_boot=firewalld, and the dashboard called a perfectly healthy host
 # "Firewall enabled but not running", in red, as a critical finding.
 #
-# So each probe now records WHY it said no, and a definite negative is kept
-# apart from a failure to look. fw.determined=0 means this host's firewall state
-# is UNKNOWN and nothing downstream may claim it is off.
+# So each probe records WHY it said no, and a definite negative is kept apart
+# from a failure to look. fw.determined=0 means this host's firewall state is
+# UNKNOWN and nothing downstream may claim it is on OR off.
+#
+# STDOUT AND STDERR ARE KEPT APART, which is the whole correctness of this
+# block. Seen on a real host: as a non-root user `nft list ruleset` prints
+#   netlink: Error: cache initialization failed: Operation not permitted
+# and `iptables -S` prints
+#   Could not fetch rule set generation id: Permission denied (you must be root)
+# Capture those with 2>&1 and the "is there a ruleset?" test sees a non-empty
+# string and reports A FIREWALL THAT IS NOT THERE. Claiming protection that
+# does not exist is far worse than the false alarm this block was written to
+# fix, so the decision reads stdout only and a privilege-flavoured stderr forces
+# UNKNOWN whatever the exit code says.
 #
 # Note on ufw specifically: `systemctl is-active ufw` is NOT a substitute for
 # `ufw status`. ufw's unit is a RemainAfterExit oneshot, so it reads active long
-# after `ufw disable` has flushed the rules — using systemd there would report
-# protection that does not exist, which is the one error worse than this one.
+# after `ufw disable` has flushed the rules — same error, other direction.
 fw=none; fwa=0; fwdet=0; fwwhy=""
 _fwnote(){ fwwhy="${fwwhy:+$fwwhy; }$1"; }
+_fwerr="${TMPDIR:-/tmp}/.sysible-fw.$$"
+# Does this stderr mean "I was not allowed to look"? Then the answer is UNKNOWN,
+# not "no firewall" — and not "firewall present" either.
+_fwdenied(){ printf '%s' "$1" | grep -qiE 'not authoriz|not permitted|permission denied|must be root|operation not permitted|authentication|polkit|refus'; }
+_fwtrim(){ printf '%s' "$1" | tr '\n' ' ' | cut -c1-90; }
 
 if command -v firewall-cmd >/dev/null 2>&1; then
-  _o=$($TMO firewall-cmd --state 2>&1); _rc=$?
-  if [ "$_rc" = 0 ]; then fw=firewalld; fwa=1; fwdet=1
-  elif [ "$_rc" = 252 ] || printf '%s' "$_o" | grep -qi 'not running'; then
+  _o=$($TMO firewall-cmd --state 2>"$_fwerr"); _rc=$?; _e=$(cat "$_fwerr" 2>/dev/null)
+  if [ "$_rc" = 0 ] && ! _fwdenied "$_e"; then fw=firewalld; fwa=1; fwdet=1
+  elif _fwdenied "$_e"; then _fwnote "firewall-cmd:denied:$(_fwtrim "$_e")"
+  elif [ "$_rc" = 252 ] || printf '%s%s' "$_o" "$_e" | grep -qi 'not running'; then
     fwdet=1; _fwnote "firewalld:stopped"          # a real, trustworthy negative
   else
-    _fwnote "firewall-cmd:rc=$_rc:$(printf '%s' "$_o" | tr -d '\n' | cut -c1-80)"
+    _fwnote "firewall-cmd:rc=$_rc:$(_fwtrim "$_e")"
   fi
 fi
 if [ "$fwa" = 0 ] && command -v ufw >/dev/null 2>&1; then
-  _o=$($TMO ufw status 2>&1); _rc=$?
-  if [ "$_rc" = 0 ] && printf '%s' "$_o" | grep -qi 'Status: active'; then fw=ufw; fwa=1; fwdet=1
+  _o=$($TMO ufw status 2>"$_fwerr"); _rc=$?; _e=$(cat "$_fwerr" 2>/dev/null)
+  if _fwdenied "$_e$_o"; then _fwnote "ufw:denied:$(_fwtrim "$_e$_o")"
+  elif [ "$_rc" = 0 ] && printf '%s' "$_o" | grep -qi 'Status: active'; then fw=ufw; fwa=1; fwdet=1
   elif [ "$_rc" = 0 ] && printf '%s' "$_o" | grep -qi 'Status: inactive'; then
     fwdet=1; _fwnote "ufw:inactive"
   else
-    _fwnote "ufw:rc=$_rc:$(printf '%s' "$_o" | tr -d '\n' | cut -c1-80)"
+    _fwnote "ufw:rc=$_rc:$(_fwtrim "$_e")"
   fi
 fi
 if [ "$fwa" = 0 ] && command -v nft >/dev/null 2>&1; then
-  _o=$($TMO nft list ruleset 2>&1); _rc=$?
-  if [ "$_rc" = 0 ] && [ -n "$_o" ]; then fw=nftables; fwa=1; fwdet=1
+  _o=$($TMO nft list ruleset 2>"$_fwerr"); _rc=$?; _e=$(cat "$_fwerr" 2>/dev/null)
+  if _fwdenied "$_e"; then _fwnote "nft:denied:$(_fwtrim "$_e")"
+  elif [ "$_rc" = 0 ] && [ -n "$_o" ]; then fw=nftables; fwa=1; fwdet=1
   elif [ "$_rc" = 0 ]; then fwdet=1; _fwnote "nft:empty"
-  else _fwnote "nft:rc=$_rc"; fi
+  else _fwnote "nft:rc=$_rc:$(_fwtrim "$_e")"; fi
 fi
 if [ "$fwa" = 0 ] && command -v iptables >/dev/null 2>&1; then
-  _o=$($TMO iptables -S 2>&1); _rc=$?
-  if [ "$_rc" = 0 ] && printf '%s' "$_o" | grep -qE '^-A'; then fw=iptables; fwa=1; fwdet=1
+  _o=$($TMO iptables -S 2>"$_fwerr"); _rc=$?; _e=$(cat "$_fwerr" 2>/dev/null)
+  if _fwdenied "$_e"; then _fwnote "iptables:denied:$(_fwtrim "$_e")"
+  elif [ "$_rc" = 0 ] && printf '%s' "$_o" | grep -qE '^-A'; then fw=iptables; fwa=1; fwdet=1
   elif [ "$_rc" = 0 ]; then fwdet=1; _fwnote "iptables:no-rules"
-  else _fwnote "iptables:rc=$_rc"; fi
+  else _fwnote "iptables:rc=$_rc:$(_fwtrim "$_e")"; fi
 fi
+rm -f "$_fwerr"
 # Nothing installed at all is a definite answer too: a host with no firewall
 # tooling genuinely has no firewall, and that is "disabled", not "unknown".
 if [ "$fwa" = 0 ] && [ "$fwdet" = 0 ] && [ -z "$fwwhy" ]; then fwdet=1; _fwnote "none-installed"; fi
@@ -946,6 +971,10 @@ for _u in firewalld ufw nftables; do
 done
 p fw.backend "$fw"; p fw.active "$fwa"; p fw.enabled_at_boot "$fwe"
 p fw.determined "$fwdet"; p fw.why "$fwwhy"
+# The uid this ran under. Every CLI above needs root on most distros, so this is
+# the first thing worth knowing when a host's firewall state looks wrong — and
+# not having it cost a full round trip of guessing the first time.
+p fw.probe_uid "$(id -u 2>/dev/null)"
 
 # --- Users / accounts -------------------------------------------------------
 p users.uid0 "$(awk -F: '$3==0{print $1}' /etc/passwd 2>/dev/null | paste -sd, -)"

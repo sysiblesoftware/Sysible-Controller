@@ -191,8 +191,10 @@ def poll_agent_download(host_id: str, task_id, save_path):
 
 def queue_command_on_hosts(host_ids, command: str, kind: str = "command",
                            description: str = None, become_password: str = None,
-                           log: bool = True):
+                           log: bool = True, want_root: bool = False):
     body_base = {"command": command, "kind": kind}
+    if want_root:
+        body_base["want_root"] = True
     if description:
         body_base["description"] = description
     if become_password:

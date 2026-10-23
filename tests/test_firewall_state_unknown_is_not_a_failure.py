@@ -179,3 +179,115 @@ def test_every_probe_failure_is_distinguishable_from_a_negative(probe):
     for tool in ("firewall-cmd", "ufw", "nft", "iptables"):
         assert f"{tool}:rc=" in probe or f'_fwnote "{tool}' in probe, \
             f"{tool} cannot report that it failed, so its failure reads as 'off'"
+
+
+# ---- run the probe for real against a host that refuses to answer ---------
+#
+# Everything above reads the probe. These RUN it, against fakes that reproduce
+# verbatim what three real hosts printed when the probe was denied:
+#
+#   firewall-cmd  NotAuthorizedException ... Make sure polkit agent is running
+#   nft           netlink: Error: cache initialization failed: Operation not permitted
+#   iptables      Could not fetch rule set generation id: Permission denied
+#
+# The first version of this fix captured each tool with 2>&1 and then asked "is
+# the output non-empty?" to decide whether a ruleset exists. Against that nft
+# message it answered yes, and reported backend=nftables active=1 determined=1 —
+# a firewall that is not running, stated with confidence, on a host with no
+# firewall at all. Claiming protection that does not exist is worse than the
+# false alarm this whole change set out to fix, so these tests exist to keep
+# stdout and stderr apart.
+
+import subprocess as _sp
+import textwrap as _tw
+
+DENIED = {
+    "firewall-cmd": (253,
+                     "ERROR:dbus.proxies:Introspect error on :1.6:/org/fedoraproject/FirewallD1: "
+                     "dbus.exceptions.DBusException: org.fedoraproject.FirewallD1."
+                     "NotAuthorizedException: Not Authorized(uid)\n"
+                     "Authorization failed.\n"
+                     "    Make sure polkit agent is running or run the application as superuser."),
+    "nft": (0, "netlink: Error: cache initialization failed: Operation not permitted"),
+    "iptables": (0, "iptables v1.8.13 (nf_tables): Could not fetch rule set generation id: "
+                    "Permission denied (you must be root)"),
+}
+
+
+def _fw_block():
+    from client import _api_dispatch as d
+    sh = d.cmd_posture_snapshot()
+    i = sh.index("# --- Firewall ---")
+    return sh[i:sh.index("# --- Users / accounts ---", i)]
+
+
+def _run_probe(tmp_path, tools, enabled_at_boot="firewalld"):
+    """The shipping firewall block, run with these fakes on PATH."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for name, (rc, err) in tools.items():
+        f = bindir / name
+        f.write_text("#!/bin/sh\ncat >&2 <<'SYSEOF'\n" + err + "\nSYSEOF\nexit %d\n" % rc)
+        f.chmod(0o755)
+    sc = bindir / "systemctl"
+    sc.write_text(_tw.dedent(f"""\
+        #!/bin/sh
+        case "$*" in *is-enabled*{enabled_at_boot}*) echo enabled; exit 0;; esac
+        exit 1
+        """))
+    sc.chmod(0o755)
+    script = 'p(){ printf "POSTURE|%s=%s\\n" "$1" "$2"; }\nTMO=""\n' + _fw_block()
+    r = _sp.run(["sh", "-s"], input=script, capture_output=True, text=True,
+                env={"PATH": f"{bindir}:/usr/bin:/bin"}, timeout=60)
+    assert r.returncode == 0, r.stderr
+    out = {}
+    for line in r.stdout.splitlines():
+        if line.startswith("POSTURE|"):
+            k, _, v = line[len("POSTURE|"):].partition("=")
+            out[k] = v
+    return out
+
+
+def test_a_denied_probe_never_invents_a_firewall(tmp_path):
+    """The regression that matters most. nft's permission error on stderr must
+    not be mistaken for a ruleset."""
+    out = _run_probe(tmp_path, DENIED)
+    assert out["fw.active"] == "0", (
+        f"the probe reported a firewall as RUNNING on a host that refused every "
+        f"query (backend={out['fw.backend']}) — that is protection claimed and "
+        f"not present")
+    assert out["fw.backend"] == "none"
+
+
+def test_a_denied_probe_reports_unknown_not_broken(tmp_path):
+    out = _run_probe(tmp_path, DENIED)
+    assert out["fw.determined"] == "0", \
+        "a host that refused every query is being reported as a definite answer"
+
+
+@pytest.mark.parametrize("tool", list(DENIED))
+def test_each_denial_is_named_in_the_reason(tmp_path, tool):
+    """fw.why is what stops the next report of this starting from zero. The
+    first round of this bug cost a full round trip precisely because the console
+    said nothing about WHY it thought the firewall was down."""
+    out = _run_probe(tmp_path, DENIED)
+    assert tool in out["fw.why"], f"{tool}'s refusal is not recorded"
+    assert "denied" in out["fw.why"]
+
+
+def test_the_probe_records_the_uid_it_ran_as(tmp_path):
+    """Every one of these CLIs needs root on most distros, so this is the first
+    thing worth knowing when a host's firewall state looks wrong."""
+    out = _run_probe(tmp_path, DENIED)
+    assert out.get("fw.probe_uid") not in (None, ""), \
+        "the probe does not say what uid it ran as"
+
+
+def test_a_real_empty_ruleset_is_still_a_definite_no(tmp_path):
+    """The opposite direction: nft answering cleanly with nothing is a real
+    answer and must stay determined, or the panel goes quiet on hosts that
+    genuinely have no firewall."""
+    out = _run_probe(tmp_path, {"nft": (0, "")}, enabled_at_boot="nothing")
+    assert out["fw.active"] == "0"
+    assert out["fw.determined"] == "1", "an empty ruleset is being called unknown"
+    assert "nft:empty" in out["fw.why"]

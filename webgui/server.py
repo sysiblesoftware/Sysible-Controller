@@ -2653,7 +2653,14 @@ def fleet(body: FleetRequest, request: Request, user: str = Depends(require_oper
         # An inline password supplied for this run wins; otherwise fall back to
         # this admin's stored password (host scope over fleet default).
         become = body.sudo_password or sudo_store.resolve(user, entry.get("label", ""))
-        results.append(_dispatch_one(entry, command, "command", become, token, desc))
+        # want_root for "script": the box this comes from says "runs as root on
+        # each checked host", and the confirm dialog repeats it. Honour that by
+        # elevating first, rather than running as the operator and escalating
+        # only if the result happens to look like it failed — an operator's
+        # script passes that test while every privileged line inside it was
+        # refused, and comes back exit 0 with authoritative-looking output.
+        results.append(_dispatch_one(entry, command, "command", become, token, desc,
+                                     want_root=(body.action == "script")))
     return {"action": body.action, "command": command, "results": results}
 
 
@@ -4084,7 +4091,8 @@ def _host_bounded(command, secs):
 
 
 def _dispatch_one(entry, command, kind, become_password=None, token=None, description=None,
-                  needs_sudo=True, log=True, poll_timeout=None, exec_timeout=None):
+                  needs_sudo=True, log=True, poll_timeout=None, exec_timeout=None,
+                  want_root=False):
     """Run one command on one host and return a normalized result,
     polling agent tasks to completion (bounded) so the response is
     synchronous from the browser's point of view.
@@ -4111,7 +4119,7 @@ def _dispatch_one(entry, command, kind, become_password=None, token=None, descri
     try:
         outcome = _with_token(token, lambda: dispatch.run_on_entry(
             entry, command, kind=kind, become_password=become_password, description=description,
-            needs_sudo=needs_sudo, log=log))
+            needs_sudo=needs_sudo, log=log, want_root=want_root))
     except Exception as e:
         return {"host": label, "environment": env, "ok": False, "error": str(e),
                 "stdout": "", "stderr": "", "code": None}

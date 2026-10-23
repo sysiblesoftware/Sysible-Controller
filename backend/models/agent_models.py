@@ -148,6 +148,12 @@ class TaskCreateRequest(BaseModel):
     # this for multi-host tool runs so it can log ONE grouped summary entry
     # instead of N near-identical rows ("List disks · dev1", "· prod1", ...).
     log: bool = True
+    # The caller promises this runs as root (the console's "Run a script" box
+    # says so on its face). The agent then elevates FIRST via the run-as user's
+    # own sudo, instead of running unprivileged and escalating only if the
+    # result looks like it failed — a test an operator's script passes while
+    # every privileged line inside it was refused.
+    want_root: bool = False
 
 
 class ActivityLogRequest(BaseModel):

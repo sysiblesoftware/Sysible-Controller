@@ -8,10 +8,10 @@ every row, "agent doesn't do config backup — update this host's agent" — and
      map, so every last_config_poll lookup missed and every host looked like a
      build from before config backup existed.
   2. Nothing reported whether the CONTROLLER could relay a snapshot at all. On a
-     controller with no Flashback wiring no agent ever polls, so the per-agent
+     controller with no Baseline wiring no agent ever polls, so the per-agent
      signal says "stale agent" about a fleet whose agents are fine.
   3. The agent poll consumed the queued capture request BEFORE fetching the
-     restores that might 503 — so a Flashback that was unconfigured or briefly
+     restores that might 503 — so a Baseline that was unconfigured or briefly
      unreachable ate the operator's click silently.
 """
 import time
@@ -54,37 +54,37 @@ def test_an_older_controller_without_the_envelope_still_works(monkeypatch):
 # --- 2. the controller's own wiring -----------------------------------------
 def test_the_controller_says_whether_it_can_relay_at_all(controller, superuser_headers,
                                                          monkeypatch):
-    from backend import flashback
-    monkeypatch.setattr(flashback, "configured", lambda: False)
+    from backend import baseline
+    monkeypatch.setattr(baseline, "configured", lambda: False)
     d = controller.get("/agents/config-poll-times", headers=superuser_headers).json()
     assert d["config_backup_configured"] is False
-    assert "SYSIBLE_FLASHBACK_URL" in (d["config_backup_reason"] or "")
+    assert "SYSIBLE_BASELINE_URL" in (d["config_backup_reason"] or "")
 
-    monkeypatch.setattr(flashback, "configured", lambda: True)
+    monkeypatch.setattr(baseline, "configured", lambda: True)
     d = controller.get("/agents/config-poll-times", headers=superuser_headers).json()
     assert d["config_backup_configured"] is True and d["config_backup_reason"] is None
 
 
 def test_the_reason_never_carries_the_token(controller, superuser_headers, monkeypatch):
-    from backend import flashback
-    monkeypatch.setattr(flashback, "AGENT_TOKEN", "s3cr3t-agent-token")
-    monkeypatch.setattr(flashback, "configured", lambda: False)
+    from backend import baseline
+    monkeypatch.setattr(baseline, "AGENT_TOKEN", "s3cr3t-agent-token")
+    monkeypatch.setattr(baseline, "configured", lambda: False)
     body = controller.get("/agents/config-poll-times", headers=superuser_headers).text
     assert "s3cr3t-agent-token" not in body
 
 
 # --- 3. the click that vanished ---------------------------------------------
-def test_a_queued_capture_survives_an_unreachable_flashback(controller, agent, monkeypatch):
+def test_a_queued_capture_survives_an_unreachable_baseline(controller, agent, monkeypatch):
     """The request must still be there when the poll can finally answer. Consuming
     it before the 503 is what made "Back up now" a no-op."""
-    from backend import flashback
+    from backend import baseline
     hid, sec = agent()
     with A._CAPTURE_LOCK:
         A._CAPTURE_REQUESTS.add(hid)
 
     def _down(_host_id):
-        raise flashback.FlashbackUnavailable("Flashback is unreachable.", 503)
-    monkeypatch.setattr(flashback, "pending_restores", _down)
+        raise baseline.BaselineUnavailable("Baseline is unreachable.", 503)
+    monkeypatch.setattr(baseline, "pending_restores", _down)
 
     r = controller.get(f"/agents/{hid}/config-restores", headers={"X-Agent-Secret": sec})
     assert r.status_code == 503
@@ -92,15 +92,15 @@ def test_a_queued_capture_survives_an_unreachable_flashback(controller, agent, m
         assert hid in A._CAPTURE_REQUESTS, "the capture request was eaten by the 503"
 
     # ...and it is handed over as soon as the poll can be answered.
-    monkeypatch.setattr(flashback, "pending_restores", lambda _h: [])
+    monkeypatch.setattr(baseline, "pending_restores", lambda _h: [])
     r = controller.get(f"/agents/{hid}/config-restores", headers={"X-Agent-Secret": sec})
     assert r.status_code == 200 and r.json()["capture_requested"] is True
 
 
 def test_a_capture_is_still_handed_over_exactly_once(controller, agent, monkeypatch):
-    from backend import flashback
+    from backend import baseline
     hid, sec = agent()
-    monkeypatch.setattr(flashback, "pending_restores", lambda _h: [])
+    monkeypatch.setattr(baseline, "pending_restores", lambda _h: [])
     with A._CAPTURE_LOCK:
         A._CAPTURE_REQUESTS.add(hid)
     h = {"X-Agent-Secret": sec}
@@ -108,14 +108,14 @@ def test_a_capture_is_still_handed_over_exactly_once(controller, agent, monkeypa
     assert not controller.get(f"/agents/{hid}/config-restores", headers=h).json()["capture_requested"]
 
 
-def test_polling_is_recorded_even_when_flashback_is_down(controller, agent, monkeypatch):
+def test_polling_is_recorded_even_when_baseline_is_down(controller, agent, monkeypatch):
     """The poll itself proves the agent's build supports config backup. Losing
-    that to an unrelated Flashback outage would put the wrong diagnosis back."""
-    from backend import flashback
+    that to an unrelated Baseline outage would put the wrong diagnosis back."""
+    from backend import baseline
     hid, sec = agent()
 
     def _down(_host_id):
-        raise flashback.FlashbackUnavailable("nope", 503)
-    monkeypatch.setattr(flashback, "pending_restores", _down)
+        raise baseline.BaselineUnavailable("nope", 503)
+    monkeypatch.setattr(baseline, "pending_restores", _down)
     controller.get(f"/agents/{hid}/config-restores", headers={"X-Agent-Secret": sec})
     assert db.get_config_poll_times().get(hid)

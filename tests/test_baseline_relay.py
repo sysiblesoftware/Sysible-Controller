@@ -1,18 +1,18 @@
-"""Config backup (Sysible Flashback): the agent -> controller -> Flashback path.
+"""Config backup (Sysible Baseline): the agent -> controller -> Baseline path.
 
-Flashback shipped with a complete server and console and NO producer: nothing
+Baseline shipped with a complete server and console and NO producer: nothing
 anywhere ever POSTed a snapshot, so every install sat on "No host has reported a
 config backup yet". These tests cover the relay that fills that gap, and in
 particular the reason it is a relay at all.
 
-THE TRUST PROPERTY. Flashback's agent API is guarded by ONE bearer token and its
+THE TRUST PROPERTY. Baseline's agent API is guarded by ONE bearer token and its
 endpoints take host_id from the caller. Handing that token to every managed host
 would let any single compromised host read every other host's stored config and
 queue a restore that overwrites a file on it. So hosts talk to the CONTROLLER,
 which authenticates them and stamps the host_id itself. test_a_host_cannot_
 snapshot_as_another_host is the whole point of the design.
 
-Most tests here run against a REAL Flashback app in-process (not a mock), so the
+Most tests here run against a REAL Baseline app in-process (not a mock), so the
 request shapes are pinned against the actual server rather than my belief about
 it — the same reason the relay client was written from its routes.
 """
@@ -23,14 +23,14 @@ import sys
 
 import pytest
 
-FB_DIR = "/home/user/sysible-linux-operations-platform/flashback"
-TOKEN = "test-flashback-agent-token"
+FB_DIR = "/home/user/sysible-linux-operations-platform/baseline"
+TOKEN = "test-baseline-agent-token"
 
 
-def _real_flashback(tmp_path):
-    """The actual Flashback app, on its own store, with an agent token set.
+def _real_baseline(tmp_path):
+    """The actual Baseline app, on its own store, with an agent token set.
 
-    NAME COLLISION, handled carefully: Flashback's package is ALSO called
+    NAME COLLISION, handled carefully: Baseline's package is ALSO called
     `backend`, exactly like this controller's. Importing it means displacing
     `backend.*` in sys.modules, and the first cut of this helper simply deleted
     those entries afterwards — so a later `from backend import db` in a test
@@ -41,8 +41,8 @@ def _real_flashback(tmp_path):
     """
     if not os.path.isdir(FB_DIR):
         pytest.skip("the SLOP checkout is not next to this repo")
-    os.environ["SYSIBLE_FLASHBACK_DATA"] = str(tmp_path / "fbdata")
-    os.environ["SYSIBLE_FLASHBACK_AGENT_TOKEN"] = TOKEN
+    os.environ["SYSIBLE_BASELINE_DATA"] = str(tmp_path / "fbdata")
+    os.environ["SYSIBLE_BASELINE_AGENT_TOKEN"] = TOKEN
     saved = {k: v for k, v in sys.modules.items() if k == "backend" or k.startswith("backend.")}
     for k in saved:
         del sys.modules[k]
@@ -64,17 +64,17 @@ def _real_flashback(tmp_path):
 
 
 @pytest.fixture
-def flashback(tmp_path, monkeypatch):
-    """Point the controller's relay client at a real in-process Flashback."""
-    fb_client, store = _real_flashback(tmp_path)
-    from backend import flashback as fbmod
+def baseline(tmp_path, monkeypatch):
+    """Point the controller's relay client at a real in-process Baseline."""
+    fb_client, store = _real_baseline(tmp_path)
+    from backend import baseline as fbmod
 
     def fake_request(method, url, headers=None, timeout=None, **kw):
         assert (headers or {}).get("Authorization") == f"Bearer {TOKEN}", "token not forwarded"
-        path = url.replace("http://flashback.test", "")
+        path = url.replace("http://baseline.test", "")
         return fb_client.request(method, path, headers=headers, **kw)
 
-    monkeypatch.setattr(fbmod, "FLASHBACK_URL", "http://flashback.test")
+    monkeypatch.setattr(fbmod, "BASELINE_URL", "http://baseline.test")
     monkeypatch.setattr(fbmod, "AGENT_TOKEN", TOKEN)
     monkeypatch.setattr(fbmod.requests, "request", fake_request)
     return store
@@ -89,8 +89,8 @@ def files(*pairs):
 
 
 # ---- the trust property ----------------------------------------------------
-def test_a_host_cannot_snapshot_as_another_host(controller, agent, flashback):
-    """The reason hosts never hold Flashback's token. host_id comes from the URL
+def test_a_host_cannot_snapshot_as_another_host(controller, agent, baseline):
+    """The reason hosts never hold Baseline's token. host_id comes from the URL
     the controller just authenticated, so a body field naming another host is
     ignored rather than obeyed."""
     h1, s1 = agent("host-1", "secret-1", "web1")
@@ -98,26 +98,26 @@ def test_a_host_cannot_snapshot_as_another_host(controller, agent, flashback):
     r = controller.post(f"/agents/{h1}/config-snapshot", headers=hdr(s1),
                         json={"host_id": "host-2", "files": files(("/etc/hosts", "a"))})
     assert r.status_code == 200, r.text
-    hosts = {h["host_id"] for h in flashback.list_hosts()}
+    hosts = {h["host_id"] for h in baseline.list_hosts()}
     assert hosts == {"host-1"}, "a host wrote into another host's history"
 
 
-def test_a_wrong_agent_secret_is_refused(controller, agent, flashback):
+def test_a_wrong_agent_secret_is_refused(controller, agent, baseline):
     h1, _ = agent("host-1", "secret-1", "web1")
     r = controller.post(f"/agents/{h1}/config-snapshot", headers=hdr("wrong"),
                         json={"files": files(("/etc/hosts", "a"))})
     assert r.status_code == 401
-    assert flashback.list_hosts() == []
+    assert baseline.list_hosts() == []
 
 
-def test_an_unknown_host_is_refused(controller, flashback):
+def test_an_unknown_host_is_refused(controller, baseline):
     r = controller.post("/agents/nope/config-snapshot", headers=hdr("x"),
                         json={"files": files(("/etc/hosts", "a"))})
     assert r.status_code == 404
 
 
 # ---- capture ---------------------------------------------------------------
-def test_a_snapshot_reaches_flashback_and_shows_up_as_a_host(controller, agent, flashback):
+def test_a_snapshot_reaches_baseline_and_shows_up_as_a_host(controller, agent, baseline):
     """The end the operator sees: after this, the console is no longer empty."""
     h1, s1 = agent("host-1", "secret-1", "web1")
     r = controller.post(f"/agents/{h1}/config-snapshot", headers=hdr(s1),
@@ -125,14 +125,14 @@ def test_a_snapshot_reaches_flashback_and_shows_up_as_a_host(controller, agent, 
                                              ("/etc/hostname", "web1"))})
     assert r.status_code == 200, r.text
     assert r.json()["changed"] == 2
-    hosts = flashback.list_hosts()
+    hosts = baseline.list_hosts()
     assert len(hosts) == 1 and hosts[0]["host_id"] == "host-1"
     assert hosts[0]["files"] == 2
     # The console labels the host by its hostname, not its opaque id.
     assert hosts[0]["label"] == "web1"
 
 
-def test_unchanged_files_do_not_pile_up_versions(controller, agent, flashback):
+def test_unchanged_files_do_not_pile_up_versions(controller, agent, baseline):
     """Capture runs hourly; without content-addressing that is 24 identical
     versions a day and the real history is unreadable."""
     h1, s1 = agent("host-1", "secret-1", "web1")
@@ -141,7 +141,7 @@ def test_unchanged_files_do_not_pile_up_versions(controller, agent, flashback):
     assert controller.post(f"/agents/{h1}/config-snapshot", headers=hdr(s1), json=body).json()["changed"] == 0
     body2 = {"files": files(("/etc/hosts", "different"))}
     assert controller.post(f"/agents/{h1}/config-snapshot", headers=hdr(s1), json=body2).json()["changed"] == 1
-    assert len(flashback.list_versions("host-1", "/etc/hosts")) == 2
+    assert len(baseline.list_versions("host-1", "/etc/hosts")) == 2
 
 
 def test_the_relay_cap_sits_below_the_global_request_ceiling(controller):
@@ -150,29 +150,29 @@ def test_the_relay_cap_sits_below_the_global_request_ceiling(controller):
     large." When the two caps were equal that generic message always won, and an
     operator whose /etc had outgrown the cap got no hint which knob to turn."""
     from backend.app import _max_request_bytes
-    from backend import flashback as fbmod
+    from backend import baseline as fbmod
     assert fbmod.MAX_SNAPSHOT_BYTES < _max_request_bytes()
 
 
-def test_an_oversized_snapshot_is_refused_with_a_usable_message(controller, agent, flashback):
-    from backend import flashback as fbmod
+def test_an_oversized_snapshot_is_refused_with_a_usable_message(controller, agent, baseline):
+    from backend import baseline as fbmod
     h1, s1 = agent("host-1", "secret-1", "web1")
     # Over the relay cap but under the global ceiling, so the useful one answers.
     payload = "x" * (fbmod.MAX_SNAPSHOT_BYTES + 1000)
     r = controller.post(f"/agents/{h1}/config-snapshot", headers=hdr(s1),
                         json={"files": [{"path": "/etc/big", "content_b64": payload}]})
     assert r.status_code == 413
-    assert "SYSIBLE_D3LOREAN_PATHS" in r.json()["detail"]     # says what to do
+    assert "SYSIBLE_BASELINE_PATHS" in r.json()["detail"]     # says what to do
 
 
 # ---- restore ---------------------------------------------------------------
-def test_a_queued_restore_is_offered_to_that_host_only(controller, agent, flashback):
+def test_a_queued_restore_is_offered_to_that_host_only(controller, agent, baseline):
     h1, s1 = agent("host-1", "secret-1", "web1")
     h2, s2 = agent("host-2", "secret-2", "web2")
     controller.post(f"/agents/{h1}/config-snapshot", headers=hdr(s1),
                     json={"files": files(("/etc/hosts", "v1"))})
-    sha = flashback.list_versions("host-1", "/etc/hosts")[0]["sha256"]
-    flashback.queue_restore("host-1", "/etc/hosts", sha, "alice")
+    sha = baseline.list_versions("host-1", "/etc/hosts")[0]["sha256"]
+    baseline.queue_restore("host-1", "/etc/hosts", sha, "alice")
 
     mine = controller.get(f"/agents/{h1}/config-restores", headers=hdr(s1)).json()["restores"]
     theirs = controller.get(f"/agents/{h2}/config-restores", headers=hdr(s2)).json()["restores"]
@@ -180,32 +180,32 @@ def test_a_queued_restore_is_offered_to_that_host_only(controller, agent, flashb
     assert theirs == [], "a restore leaked to a host it was not queued for"
 
 
-def test_the_payload_carries_the_digest_the_agent_verifies(controller, agent, flashback):
+def test_the_payload_carries_the_digest_the_agent_verifies(controller, agent, baseline):
     """The agent refuses to write bytes whose sha256 does not match, so the
     digest has to survive the relay."""
     import hashlib
     h1, s1 = agent("host-1", "secret-1", "web1")
     controller.post(f"/agents/{h1}/config-snapshot", headers=hdr(s1),
                     json={"files": files(("/etc/hosts", "v1-content"))})
-    sha = flashback.list_versions("host-1", "/etc/hosts")[0]["sha256"]
-    rid = flashback.queue_restore("host-1", "/etc/hosts", sha, "alice")["id"]
+    sha = baseline.list_versions("host-1", "/etc/hosts")[0]["sha256"]
+    rid = baseline.queue_restore("host-1", "/etc/hosts", sha, "alice")["id"]
 
     r = controller.get(f"/agents/{h1}/config-restores/{rid}/payload", headers=hdr(s1))
     assert r.status_code == 200
     assert r.content == b"v1-content"
-    assert r.headers["X-Flashback-Path"] == "/etc/hosts"
-    assert r.headers["X-Flashback-Sha256"] == sha
+    assert r.headers["X-Baseline-Path"] == "/etc/hosts"
+    assert r.headers["X-Baseline-Sha256"] == sha
     assert hashlib.sha256(r.content).hexdigest() == sha
 
 
-def test_acking_clears_the_restore_and_is_recorded_in_the_activity_feed(controller, agent, flashback):
+def test_acking_clears_the_restore_and_is_recorded_in_the_activity_feed(controller, agent, baseline):
     """A restore CHANGED a file on a host — unlike a snapshot, it is attributed."""
     from backend import db
     h1, s1 = agent("host-1", "secret-1", "web1")
     controller.post(f"/agents/{h1}/config-snapshot", headers=hdr(s1),
                     json={"files": files(("/etc/hosts", "v1"))})
-    sha = flashback.list_versions("host-1", "/etc/hosts")[0]["sha256"]
-    rid = flashback.queue_restore("host-1", "/etc/hosts", sha, "alice")["id"]
+    sha = baseline.list_versions("host-1", "/etc/hosts")[0]["sha256"]
+    rid = baseline.queue_restore("host-1", "/etc/hosts", sha, "alice")["id"]
 
     r = controller.post(f"/agents/{h1}/config-restores/{rid}/ack", headers=hdr(s1),
                         json={"ok": True, "path": "/etc/hosts"})
@@ -215,13 +215,13 @@ def test_acking_clears_the_restore_and_is_recorded_in_the_activity_feed(controll
     assert any("restored a config file" in d for d in descs), descs
 
 
-def test_a_failed_restore_is_recorded_as_a_failure(controller, agent, flashback):
+def test_a_failed_restore_is_recorded_as_a_failure(controller, agent, baseline):
     from backend import db
     h1, s1 = agent("host-1", "secret-1", "web1")
     controller.post(f"/agents/{h1}/config-snapshot", headers=hdr(s1),
                     json={"files": files(("/etc/hosts", "v1"))})
-    sha = flashback.list_versions("host-1", "/etc/hosts")[0]["sha256"]
-    rid = flashback.queue_restore("host-1", "/etc/hosts", sha, "alice")["id"]
+    sha = baseline.list_versions("host-1", "/etc/hosts")[0]["sha256"]
+    rid = baseline.queue_restore("host-1", "/etc/hosts", sha, "alice")["id"]
     controller.post(f"/agents/{h1}/config-restores/{rid}/ack", headers=hdr(s1),
                     json={"ok": False, "path": "/etc/hosts"})
     descs = [e["description"] for e in db.get_activity_log(limit=20)]
@@ -230,23 +230,23 @@ def test_a_failed_restore_is_recorded_as_a_failure(controller, agent, flashback)
 
 # ---- degradation -----------------------------------------------------------
 def test_an_unconfigured_controller_says_so_instead_of_failing_obscurely(controller, agent, monkeypatch):
-    """A standalone Controller has no Flashback. The agent must get a reason it
+    """A standalone Controller has no Baseline. The agent must get a reason it
     can log, not a 500 — and config backup being off must never break check-ins."""
-    from backend import flashback as fbmod
-    monkeypatch.setattr(fbmod, "FLASHBACK_URL", "")
+    from backend import baseline as fbmod
+    monkeypatch.setattr(fbmod, "BASELINE_URL", "")
     monkeypatch.setattr(fbmod, "AGENT_TOKEN", "")
     h1, s1 = agent("host-1", "secret-1", "web1")
     r = controller.post(f"/agents/{h1}/config-snapshot", headers=hdr(s1),
                         json={"files": files(("/etc/hosts", "a"))})
     assert r.status_code == 503
     d = r.json()["detail"]
-    assert "SYSIBLE_FLASHBACK_URL" in d and "SYSIBLE_FLASHBACK_AGENT_TOKEN" in d
+    assert "SYSIBLE_BASELINE_URL" in d and "SYSIBLE_BASELINE_AGENT_TOKEN" in d
 
 
-def test_an_unreachable_flashback_is_reported_without_leaking_the_token(controller, agent, monkeypatch):
+def test_an_unreachable_baseline_is_reported_without_leaking_the_token(controller, agent, monkeypatch):
     import requests as _rq
-    from backend import flashback as fbmod
-    monkeypatch.setattr(fbmod, "FLASHBACK_URL", "http://flashback.invalid")
+    from backend import baseline as fbmod
+    monkeypatch.setattr(fbmod, "BASELINE_URL", "http://baseline.invalid")
     monkeypatch.setattr(fbmod, "AGENT_TOKEN", "super-secret-token")
 
     def boom(*a, **kw):
@@ -262,8 +262,8 @@ def test_an_unreachable_flashback_is_reported_without_leaking_the_token(controll
 
 # ---- the wiring that makes any of this reach the process -------------------
 # Both of these were missing on the first cut, and the symptom was silence: the
-# installer wrote SYSIBLE_FLASHBACK_* into the controller's .env, compose never
-# passed them in, so flashback.configured() was False forever and every snapshot
+# installer wrote SYSIBLE_BASELINE_* into the controller's .env, compose never
+# passed them in, so baseline.configured() was False forever and every snapshot
 # got a 503 that nothing surfaced. A feature that is inert by omission needs a
 # test that reads the deployment file, not just the code.
 def _controller_compose():
@@ -274,14 +274,14 @@ def _controller_compose():
         return yaml.safe_load(fh)["services"]["controller"]
 
 
-def test_compose_passes_the_flashback_settings_into_the_container():
+def test_compose_passes_the_baseline_settings_into_the_container():
     env = _controller_compose()["environment"]
-    for var in ("SYSIBLE_FLASHBACK_URL", "SYSIBLE_FLASHBACK_AGENT_TOKEN"):
+    for var in ("SYSIBLE_BASELINE_URL", "SYSIBLE_BASELINE_AGENT_TOKEN"):
         assert var in env, f"{var} never reaches the controller process"
 
 
-def test_compose_can_actually_reach_the_host_where_flashback_listens():
-    """Flashback publishes its agent API on the SLOP host's LOOPBACK. Inside a
+def test_compose_can_actually_reach_the_host_where_baseline_listens():
+    """Baseline publishes its agent API on the SLOP host's LOOPBACK. Inside a
     container 127.0.0.1 is the container, so the controller needs the host
     gateway mapped or every snapshot dies in connection-refused."""
     hosts = _controller_compose().get("extra_hosts") or []

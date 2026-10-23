@@ -1011,13 +1011,13 @@ def hosts(user: str = Depends(require_login)):
     except Exception:
         last_seen = {}
 
-    # When each agent last asked for config-backup work. Flashback reads this to
+    # When each agent last asked for config-backup work. Baseline reads this to
     # explain a host that never captures: an agent that has NEVER polled is
     # running a build without config backup, which is otherwise indistinguishable
     # from "the next check-in hasn't come round yet".
     # NOTE THE ENVELOPE. The controller answers {"hosts": {...}} — reading the
     # reply as the map itself made every lookup miss, so last_config_poll came out
-    # None for EVERY host. Flashback reads None as "this agent's build predates
+    # None for EVERY host. Baseline reads None as "this agent's build predates
     # config backup" and told the operator to update agents that were perfectly
     # current, on every row, forever. Accept a bare mapping too, so an older
     # controller that answers without the envelope still works.
@@ -2903,7 +2903,7 @@ def set_relay_route(body: RelayConfigBody, request: Request,
 @app.post("/api/host/{host_id}/backup-now")
 def host_backup_now(host_id: str, request: Request,
                     user: str = Depends(require_login)):
-    """Ask one host to capture its config now. Flashback's console calls this;
+    """Ask one host to capture its config now. Baseline's console calls this;
     the host picks the request up on its next config-backup poll."""
     return _wrap(lambda: _as_admin(request, lambda: api.request_config_capture(host_id)))
 

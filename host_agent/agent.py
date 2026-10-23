@@ -322,25 +322,43 @@ def _current_poll_delay():
 # Performance graphs usable resolution. Set <=0 to disable reporting entirely.
 METRICS_INTERVAL = float(os.getenv("SYSIBLE_METRICS_INTERVAL", "60"))
 
-# ---- config backup (Sysible Flashback) ------------------------------------
+# ---- config backup (Sysible Baseline) -------------------------------------
+# These are read under SYSIBLE_BASELINE_* and, failing that, SYSIBLE_D3LOREAN_*.
+#
+# D3lorean is what this feature's product was called TWO names ago — it became
+# Sysible Baseline, and Baseline is now Sysible Baseline. The first rename
+# changed the product name and left the variables alone, which is why an agent
+# shipping today still answers to a name no documentation has mentioned for
+# years. The names move this time; the old ones keep working, because an agent
+# reads its environment from /etc/sysible/agent.env on a host that may not have
+# been touched since it was enrolled, and an operator who narrowed the captured
+# paths to keep a snapshot under the cap would silently get /etc back in full.
+def _bl_env(suffix: str, default: str) -> str:
+    for name in (f"SYSIBLE_BASELINE_{suffix}", f"SYSIBLE_D3LOREAN_{suffix}"):
+        val = os.getenv(name)
+        if val is not None:
+            return val
+    return default
+
+
 # Seconds between config snapshots; 0 disables capture entirely on this host.
-D3_INTERVAL = float(os.getenv("SYSIBLE_D3LOREAN_INTERVAL", "3600"))
+BL_INTERVAL = float(_bl_env("INTERVAL", "3600"))
 # Roots to track. Colon-separated, files or directories.
-D3_PATHS = os.getenv("SYSIBLE_D3LOREAN_PATHS", "/etc:/boot/grub/grub.cfg:/var/spool/cron")
+BL_PATHS = _bl_env("PATHS", "/etc:/boot/grub/grub.cfg:/var/spool/cron")
 # How often to look for a restore an operator queued in the console. Restores
 # should land promptly, so this is much shorter than the capture interval.
-D3_RESTORE_POLL = float(os.getenv("SYSIBLE_D3LOREAN_RESTORE_POLL", "60"))
-D3_MAX_FILE = int(os.getenv("SYSIBLE_D3LOREAN_MAX_FILE_BYTES", str(256 * 1024)))
+BL_RESTORE_POLL = float(_bl_env("RESTORE_POLL", "60"))
+BL_MAX_FILE = int(_bl_env("MAX_FILE_BYTES", str(256 * 1024)))
 # Below the controller's per-snapshot cap (12 MiB), which is itself below its
 # global 16 MiB request ceiling — so a host that outgrows this trims itself and
 # says so, rather than being cut off by a middleware with a generic message.
-D3_MAX_TOTAL = int(os.getenv("SYSIBLE_D3LOREAN_MAX_TOTAL_BYTES", str(8 * 1024 * 1024)))
+BL_MAX_TOTAL = int(_bl_env("MAX_TOTAL_BYTES", str(8 * 1024 * 1024)))
 # Paths NEVER captured, even under a tracked root. Config backup is not a secret
 # store: these are credentials and private keys, and copying them into a
 # fleet-wide version store — readable by anyone with console access, kept for 50
 # versions — would turn a config-history feature into a credential archive.
 # fnmatch patterns against the absolute path; override to extend or replace.
-D3_EXCLUDE = os.getenv("SYSIBLE_D3LOREAN_EXCLUDE", ":".join([
+BL_EXCLUDE = _bl_env("EXCLUDE", ":".join([
     "/etc/shadow", "/etc/shadow-", "/etc/gshadow", "/etc/gshadow-",
     "/etc/ssh/ssh_host_*_key", "/etc/ssl/private/*", "/etc/ssl/private/**",
     "/etc/sysible/*secret*", "/etc/sysible/api_key.txt",
@@ -1509,20 +1527,20 @@ def _heartbeat_loop(state):
 
 
 # =========================================================
-# CONFIG BACKUP (Sysible Flashback): snapshot the tracked config paths on a
+# CONFIG BACKUP (Sysible Baseline): snapshot the tracked config paths on a
 # schedule, and apply restores an operator queued in the console.
 #
-# Everything goes through the CONTROLLER, not Flashback directly. The controller
+# Everything goes through the CONTROLLER, not Baseline directly. The controller
 # authenticates this agent and stamps our host_id downstream, so no host holds
-# Flashback's token and no host can read or write another host's backups. It also
+# Baseline's token and no host can read or write another host's backups. It also
 # means this works on an outbound-only host exactly like every other agent call.
 # =========================================================
-def _d3_excluded(path, patterns):
+def _bl_excluded(path, patterns):
     import fnmatch
     return any(fnmatch.fnmatch(path, pat) for pat in patterns if pat)
 
 
-def _d3_collect():
+def _bl_collect():
     """Read the tracked config files. Returns (files, skipped, truncated).
 
     Best-effort by design: an unreadable file, a dangling symlink or a path that
@@ -1531,32 +1549,32 @@ def _d3_collect():
     import base64
     import stat as statmod
 
-    patterns = [p for p in D3_EXCLUDE.split(":") if p]
-    roots = [p for p in D3_PATHS.split(":") if p]
+    patterns = [p for p in BL_EXCLUDE.split(":") if p]
+    roots = [p for p in BL_PATHS.split(":") if p]
     files, skipped, total = [], 0, 0
     truncated = False
 
     def add(fp):
         nonlocal total, skipped, truncated
-        if truncated or _d3_excluded(fp, patterns):
+        if truncated or _bl_excluded(fp, patterns):
             return
         try:
             st = os.stat(fp)                     # follows symlinks on purpose:
             if not statmod.S_ISREG(st.st_mode):  # /etc/resolv.conf is often one
                 return
-            if st.st_size > D3_MAX_FILE:
+            if st.st_size > BL_MAX_FILE:
                 skipped += 1
                 return
             with open(fp, "rb") as fh:
-                data = fh.read(D3_MAX_FILE + 1)
+                data = fh.read(BL_MAX_FILE + 1)
         except OSError:
             skipped += 1
             return
-        if len(data) > D3_MAX_FILE:
+        if len(data) > BL_MAX_FILE:
             skipped += 1
             return
         b64 = base64.b64encode(data).decode("ascii")
-        if total + len(b64) > D3_MAX_TOTAL:
+        if total + len(b64) > BL_MAX_TOTAL:
             truncated = True
             return
         total += len(b64)
@@ -1569,7 +1587,7 @@ def _d3_collect():
         for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
             # Prune whole excluded subtrees rather than walking into them.
             dirnames[:] = [d for d in dirnames
-                           if not _d3_excluded(os.path.join(dirpath, d) + "/", patterns)]
+                           if not _bl_excluded(os.path.join(dirpath, d) + "/", patterns)]
             for name in filenames:
                 add(os.path.join(dirpath, name))
             if truncated:
@@ -1577,8 +1595,8 @@ def _d3_collect():
     return files, skipped, truncated
 
 
-def _d3_send_snapshot(state):
-    files, skipped, truncated = _d3_collect()
+def _bl_send_snapshot(state):
+    files, skipped, truncated = _bl_collect()
     if not files:
         return
     r = _request(
@@ -1588,7 +1606,7 @@ def _d3_send_snapshot(state):
         timeout=60,
     )
     if r.status_code >= 400:
-        # 503 = this controller has no Flashback configured. Say it once per tick
+        # 503 = this controller has no Baseline configured. Say it once per tick
         # at most; it is a platform wiring fact, not a per-host fault.
         detail = ""
         try:
@@ -1603,13 +1621,13 @@ def _d3_send_snapshot(state):
         out = {}
     note = f"[agent] config snapshot: {len(files)} file(s), {out.get('changed', '?')} changed"
     if skipped:
-        note += f", {skipped} skipped (unreadable or over {D3_MAX_FILE} bytes)"
+        note += f", {skipped} skipped (unreadable or over {BL_MAX_FILE} bytes)"
     if truncated:
-        note += f" — TRUNCATED at {D3_MAX_TOTAL} bytes; narrow SYSIBLE_D3LOREAN_PATHS"
+        note += f" — TRUNCATED at {BL_MAX_TOTAL} bytes; narrow SYSIBLE_BASELINE_PATHS"
     print(note)
 
 
-def _d3_restorable(path):
+def _bl_restorable(path):
     """(ok, reason) — is this a path a restore may actually be written to?
 
     THE AGENT RUNS AS ROOT ON THE HOST. Until this existed, a restore wrote
@@ -1634,10 +1652,10 @@ def _d3_restorable(path):
     norm = posixpath.normpath(path)
     if norm != path:
         return False, "path is not in normal form (.. or redundant separators)"
-    if _d3_excluded(norm, [p for p in D3_EXCLUDE.split(":") if p]):
+    if _bl_excluded(norm, [p for p in BL_EXCLUDE.split(":") if p]):
         return False, "on the never-captured exclude list"
 
-    roots = [r.rstrip("/") or "/" for r in D3_PATHS.split(":") if r]
+    roots = [r.rstrip("/") or "/" for r in BL_PATHS.split(":") if r]
     if not roots:
         return False, "this host tracks no config paths"
     # Compare against the literal roots AND their resolved forms: a distro where
@@ -1664,7 +1682,7 @@ def _d3_restorable(path):
     return True, ""
 
 
-def _d3_apply_restore(state, item):
+def _bl_apply_restore(state, item):
     """Write one queued version back, keeping what it replaced."""
     import hashlib
     import shutil
@@ -1676,22 +1694,28 @@ def _d3_apply_restore(state, item):
     if r.status_code >= 400:
         print(f"[agent] restore {rid}: controller returned HTTP {r.status_code}")
         return
-    path = r.headers.get("X-Flashback-Path") or item.get("path") or ""
-    want = (r.headers.get("X-Flashback-Sha256") or "").lower()
+    # Either spelling. The Controller sends both, but an agent updates on its
+    # own heartbeat and may be talking to a Controller on either side of the
+    # rebrand; losing these does not fail loudly, it hands us a restore we
+    # cannot verify.
+    path = (r.headers.get("X-Baseline-Path") or r.headers.get("X-Flashback-Path")
+            or item.get("path") or "")
+    want = (r.headers.get("X-Baseline-Sha256")
+            or r.headers.get("X-Flashback-Sha256") or "").lower()
     content = r.content
-    allowed, why = _d3_restorable(path)
+    allowed, why = _bl_restorable(path)
     if not allowed:
         # Ack as FAILED, not silence: a refusal the console never sees leaves the
         # restore pending forever and tells nobody the host said no.
         print(f"[agent] restore {rid}: REFUSING to write {path!r} — {why}")
-        _d3_ack(state, rid, False, path)
+        _bl_ack(state, rid, False, path)
         return
     got = hashlib.sha256(content).hexdigest()
     if want and got != want:
         # Never write bytes that don't match the digest the store recorded. Ack as
         # FAILED so the console shows it rather than leaving it pending forever.
         print(f"[agent] restore {rid}: digest mismatch for {path} — not writing")
-        _d3_ack(state, rid, False, path)
+        _bl_ack(state, rid, False, path)
         return
     ok = True
     try:
@@ -1729,10 +1753,10 @@ def _d3_apply_restore(state, item):
             os.unlink(f"{path}.sysible-restore.tmp")
         except OSError:
             pass
-    _d3_ack(state, rid, ok, path)
+    _bl_ack(state, rid, ok, path)
 
 
-def _d3_ack(state, rid, ok, path=""):
+def _bl_ack(state, rid, ok, path=""):
     try:
         _request("POST", f"/agents/{state['host_id']}/config-restores/{rid}/ack",
                  headers={"X-Agent-Secret": state["agent_secret"]},
@@ -1741,16 +1765,16 @@ def _d3_ack(state, rid, ok, path=""):
         print(f"[agent] restore {rid}: could not acknowledge: {e}")
 
 
-_D3_LAST_REFUSAL = [0.0, ""]
+_BL_LAST_REFUSAL = [0.0, ""]
 
 
-def _d3_poll_restores(state):
+def _bl_poll_restores(state):
     r = _request("GET", f"/agents/{state['host_id']}/config-restores",
                  headers={"X-Agent-Secret": state["agent_secret"]}, timeout=20)
     if r.status_code >= 400:
         # Say WHY, or the host's journal is silent about the one thing an
         # operator staring at "Back up now did nothing" needs to know. A 503 here
-        # means the controller has no Flashback wiring — a platform fact that
+        # means the controller has no Baseline wiring — a platform fact that
         # would otherwise repeat every poll, so log it once and then only when it
         # changes or every 10 minutes.
         detail = ""
@@ -1760,18 +1784,18 @@ def _d3_poll_restores(state):
             detail = (r.text or "")[:200]
         line = f"HTTP {r.status_code}: {detail}"
         now = time.time()
-        if line != _D3_LAST_REFUSAL[1] or now - _D3_LAST_REFUSAL[0] > 600:
-            _D3_LAST_REFUSAL[0], _D3_LAST_REFUSAL[1] = now, line
+        if line != _BL_LAST_REFUSAL[1] or now - _BL_LAST_REFUSAL[0] > 600:
+            _BL_LAST_REFUSAL[0], _BL_LAST_REFUSAL[1] = now, line
             print(f"[agent] config-backup poll refused ({line})")
         return
-    _D3_LAST_REFUSAL[1] = ""
+    _BL_LAST_REFUSAL[1] = ""
     try:
         body = r.json() or {}
     except Exception:
         return
     for item in body.get("restores") or []:
         try:
-            _d3_apply_restore(state, item)
+            _bl_apply_restore(state, item)
         except Exception as e:
             print(f"[agent] restore {item.get('id')}: {e}")
     # "Back up now" from the console. It rides this poll rather than a new
@@ -1779,31 +1803,31 @@ def _d3_poll_restores(state):
     if body.get("capture_requested"):
         print("[agent] config snapshot requested from the console — capturing now")
         try:
-            _d3_send_snapshot(state)
+            _bl_send_snapshot(state)
         except Exception as e:
             print("[agent] requested snapshot failed:", e)
 
 
-def _d3_loop(state):
-    """Capture on D3_INTERVAL, check for restores on the shorter D3_RESTORE_POLL.
+def _bl_loop(state):
+    """Capture on BL_INTERVAL, check for restores on the shorter BL_RESTORE_POLL.
     Its own thread, like metrics: a big /etc walk must never delay a heartbeat.
     Every error is caught and retried — config backup is best-effort and must not
     be able to stop an agent doing its real work."""
-    if D3_INTERVAL <= 0:
-        print("[agent] config backup disabled (SYSIBLE_D3LOREAN_INTERVAL=0)")
+    if BL_INTERVAL <= 0:
+        print("[agent] config backup disabled (SYSIBLE_BASELINE_INTERVAL=0)")
         return
     next_capture = 0.0
     while True:
         try:
             now = time.time()
             if now >= next_capture:
-                _d3_send_snapshot(state)
-                next_capture = now + D3_INTERVAL
-            _d3_poll_restores(state)
+                _bl_send_snapshot(state)
+                next_capture = now + BL_INTERVAL
+            _bl_poll_restores(state)
         except Exception as e:
             if not isinstance(e, (requests.ConnectionError, requests.Timeout)):
                 print("[agent] config backup thread:", e)
-        time.sleep(max(5.0, D3_RESTORE_POLL))
+        time.sleep(max(5.0, BL_RESTORE_POLL))
 
 
 # =========================================================
@@ -2072,11 +2096,11 @@ def loop(state):
         threading.Thread(target=_metrics_loop, args=(state,), daemon=True,
                          name="sysible-metrics").start()
 
-    # Config backup (Flashback): snapshot /etc on its own cadence and apply any
+    # Config backup (Baseline): snapshot /etc on its own cadence and apply any
     # restore queued in the console. Daemon, and entirely best-effort — a host
-    # whose controller has no Flashback configured just logs it and carries on.
-    if D3_INTERVAL > 0:
-        threading.Thread(target=_d3_loop, args=(state,), daemon=True,
+    # whose controller has no Baseline configured just logs it and carries on.
+    if BL_INTERVAL > 0:
+        threading.Thread(target=_bl_loop, args=(state,), daemon=True,
                          name="sysible-config-backup").start()
 
     while True:

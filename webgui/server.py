@@ -2932,6 +2932,185 @@ def host_backup_now(host_id: str, request: Request,
     return _wrap(lambda: _as_admin(request, lambda: api.request_config_capture(host_id)))
 
 
+class BaselineApplyRequest(BaseModel):
+    preview: bool = False
+
+
+@app.post("/api/host/{host_id}/baseline-apply")
+def host_baseline_apply(host_id: str, body: BaselineApplyRequest, request: Request,
+                        user: str = Depends(require_operator)):
+    """Apply this host's desired state. Sysible Baseline's console calls this.
+
+    Baseline never talks to hosts — it holds the declaration and the rules, the
+    Controller holds the channel. So the whole cycle runs here: ask Baseline
+    what this host must look like, run each salt-call over the agent channel,
+    hand the output back, and carry out whatever the rules fired.
+
+    OPERATOR+, enforced here on the real human whose identity the gateway
+    asserted. Baseline proves who is asking; it does not vouch for them.
+    """
+    return _wrap(lambda: _as_admin(request, lambda: _run_baseline_cycle(
+        host_id, preview=body.preview, actor=user, request=request)))
+
+
+def _run_baseline_cycle(host_id: str, preview: bool, actor: str, request: Request):
+    from backend import baseline
+
+    entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
+    entry = entries.get(host_id)
+    # An env: target is a whole environment, not a host.
+    targets = ([e for e in entries.values()
+                if (e.get("environment") or "") == host_id.split(":", 1)[1]]
+               if host_id.startswith("env:") else ([entry] if entry else []))
+    if not targets:
+        raise HTTPException(status_code=404, detail=f"No host or environment {host_id!r}.")
+
+    token = _session_token(request)
+    applied, failed, skipped = 0, 0, 0
+    notes = []
+    for e in targets:
+        try:
+            todo = baseline.desired(e["id"], environment=e.get("environment") or "",
+                                    preview=preview)
+        except baseline.BaselineUnavailable as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.reason)
+        if not todo:
+            # NOT compliant — nothing was ever declared for it. Saying "ok" here
+            # would report an unmanaged fleet as a successful run.
+            skipped += 1
+            continue
+        for item in todo:
+            desc = (f"Baseline {'preview' if preview else 'apply'}: "
+                    f"{item['state']} v{item['version']}")
+            r = _dispatch_one(e, item["command"], "command", None, token, desc,
+                              needs_sudo=True, want_root=True)
+            out = (r.get("stdout") or "") + (r.get("stderr") or "")
+            try:
+                res = baseline.report(item["run_id"], out, preview=preview)
+            except baseline.BaselineUnavailable as exc:
+                failed += 1
+                notes.append(f"{e['label']}: {exc.reason}")
+                continue
+            if res.get("ok"):
+                applied += 1
+            else:
+                failed += 1
+                if res.get("error"):
+                    notes.append(f"{e['label']}: {res['error']}")
+            unknown = baseline.unknown_actions(res.get("actions") or [])
+            if unknown:
+                # Loudly, rather than dropped: a rule the operator believes is
+                # protecting them, doing nothing, is worse than no rule.
+                notes.append(f"{e['label']}: this controller cannot carry out "
+                             f"{', '.join(unknown)} — update it.")
+            notes.extend(_carry_out_baseline_actions(
+                e, res.get("actions") or [], token, actor, item=item,
+                preview=preview))
+
+    verb = "Previewed" if preview else "Applied"
+    bits = [f"{verb} on {applied} host(s)"]
+    if failed:
+        bits.append(f"{failed} failed")
+    if skipped:
+        bits.append(f"{skipped} had nothing declared")
+    detail = "; ".join(bits) + ("." if not notes else ". " + " ".join(notes[:3]))
+    return {"host": host_id, "preview": preview, "applied": applied,
+            "failed": failed, "skipped": skipped, "detail": detail}
+
+
+def _carry_out_baseline_actions(entry, actions, token, actor, item=None,
+                                preview=False):
+    """Do what the rules asked, and return any notes for the operator.
+
+    Deliberately NARROW — see backend/baseline.py. `command` is a shell string
+    an operator typed into a rule and it runs as root, so it goes through the
+    same attributed, logged dispatch as any other operator-initiated command
+    rather than a quiet side channel.
+
+    Every member of baseline.KNOWN_ACTIONS must have a branch below. An action
+    that is "known" and silently falls off the end is the exact failure
+    unknown_actions() exists to prevent, except invisible: the warning does not
+    fire, because the action IS known. A guard test asserts the two agree.
+    """
+    from backend import baseline, flashback
+    notes, reapplied = [], False
+    for a in actions:
+        kind = (a.get("action") or "").strip().lower()
+        if kind not in baseline.KNOWN_ACTIONS:
+            continue
+        if kind == "command" and a.get("argument"):
+            _dispatch_one(entry, a["argument"], "command", None, token,
+                          f"Baseline rule '{a.get('rule')}': {a['argument']}"[:200],
+                          needs_sudo=True, want_root=True)
+        elif kind == "capture" and flashback.configured():
+            # The seam with Flashback: Baseline has just put the host into a
+            # declared state, so record what it actually looks like now.
+            try:
+                api.request_config_capture(entry["id"])
+            except Exception:
+                pass
+        elif kind == "notify":
+            # api.log_action, not a direct DB write: this BFF talks to the
+            # controller over its API like everything else here, and the entry
+            # is attributed to the admin whose token is already in scope.
+            try:
+                api.log_action(entry.get("label") or entry["id"],
+                               f"Baseline rule '{a.get('rule')}': "
+                               f"{a.get('why', '')}"[:400])
+            except Exception:
+                pass
+        elif kind == "reapply":
+            # Run the state once more. ONCE per host per cycle however many
+            # rules ask for it, and its own actions are deliberately NOT carried
+            # out — two rules that each reapply on change would otherwise take
+            # turns forever on a state that never converges.
+            if preview or item is None or reapplied:
+                continue
+            reapplied = True
+            label = entry.get("label") or entry["id"]
+            # A FRESH run_id from Baseline rather than reusing the one that just
+            # reported: this Controller holds no salt parser, and a second
+            # attempt belongs in Recent runs as its own run — which is where an
+            # operator looks to find out whether it helped.
+            try:
+                again = [t for t in baseline.desired(
+                    entry["id"], environment=entry.get("environment") or "",
+                    preview=False) if t.get("state") == item["state"]]
+            except baseline.BaselineUnavailable as exc:
+                notes.append(f"{label}: could not reapply {item['state']} — {exc.reason}")
+                continue
+            if not again:
+                notes.append(f"{label}: {item['state']} was unassigned between the "
+                             f"run and its reapply — nothing was run.")
+                continue
+            t2 = again[0]
+            r2 = _dispatch_one(entry, t2["command"], "command", None, token,
+                               f"Baseline rule '{a.get('rule')}': reapply "
+                               f"{item['state']} v{t2['version']}"[:200],
+                               needs_sudo=True, want_root=True)
+            try:
+                res2 = baseline.report(
+                    t2["run_id"], (r2.get("stdout") or "") + (r2.get("stderr") or ""),
+                    preview=False)
+            except baseline.BaselineUnavailable as exc:
+                notes.append(f"{label}: reapplied {item['state']} but could not "
+                             f"record it — {exc.reason}")
+                continue
+            if res2.get("ok"):
+                notes.append(f"{label}: reapplied {item['state']} — clean.")
+            else:
+                # A state that needs applying twice and still is not clean has
+                # an ordering problem, and saying so is the whole point.
+                notes.append(f"{label}: reapplied {item['state']} and it is "
+                             f"STILL not clean"
+                             + (f" ({res2['error']})" if res2.get("error") else "")
+                             + ".")
+            # res2's own actions are deliberately NOT carried out: two rules that
+            # each reapply on change would take turns forever on a state that
+            # never converges.
+    return notes
+
+
 @app.get("/api/environment-sudo-defaults")
 def env_sudo_defaults(user: str = Depends(require_login)):
     return _wrap(lambda: api.get_environment_sudo_defaults())

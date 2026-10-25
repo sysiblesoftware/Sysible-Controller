@@ -217,3 +217,129 @@ def test_a_bad_token_is_refused_by_the_real_service(real, monkeypatch):
     with pytest.raises(client_mod.BaselineUnavailable) as e:
         client_mod.desired("h1")
     assert "token" in e.value.reason.lower()
+
+
+# ---- every KNOWN action must actually be carried out ------------------------
+# unknown_actions() catches a rule using an action this Controller has never
+# heard of. It cannot catch the opposite: an action that IS in KNOWN_ACTIONS and
+# has no branch in _carry_out_baseline_actions. That one is worse, because the
+# warning deliberately does not fire — the action is known — so the rule reads
+# as active in both consoles and does nothing in either. `reapply` was exactly
+# that for one commit.
+def _carry_out_source():
+    import ast
+    src = (REPO / "webgui" / "server.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_carry_out_baseline_actions":
+            return node
+    raise AssertionError("_carry_out_baseline_actions is gone")
+
+
+def _handled_actions() -> set:
+    """Which action names the function actually branches on.
+
+    Read from the AST, not the text: a name in a docstring, a comment or a log
+    message is not a branch, and four assertions in this repo have already been
+    satisfied by prose rather than code.
+    """
+    import ast
+    handled = set()
+    for node in ast.walk(_carry_out_source()):
+        if not isinstance(node, ast.Compare):
+            continue
+        left = node.left
+        if not (isinstance(left, ast.Name) and left.id == "kind"):
+            continue
+        for op, cmp in zip(node.ops, node.comparators):
+            if isinstance(op, ast.Eq) and isinstance(cmp, ast.Constant) \
+                    and isinstance(cmp.value, str):
+                handled.add(cmp.value)
+    return handled
+
+
+def test_every_known_action_has_a_branch_that_carries_it_out():
+    from backend import baseline
+    handled = _handled_actions()
+    missing = set(baseline.KNOWN_ACTIONS) - handled
+    assert not missing, (
+        f"{sorted(missing)} are in KNOWN_ACTIONS, so unknown_actions() stays "
+        f"silent about them, but nothing in _carry_out_baseline_actions acts on "
+        f"them. A rule using one reads as active and does nothing. Handled: "
+        f"{sorted(handled)}")
+
+
+def test_no_branch_claims_an_action_that_is_not_known():
+    """The other direction: a branch for an action unknown_actions() would warn
+    about is dead code that also makes the warning a lie."""
+    from backend import baseline
+    extra = _handled_actions() - set(baseline.KNOWN_ACTIONS)
+    assert not extra, (
+        f"{sorted(extra)} are carried out but are not in KNOWN_ACTIONS, so "
+        f"unknown_actions() reports them as unsupported while they run")
+
+
+def test_reapply_cannot_reapply_forever():
+    """Two rules that each reapply on change would otherwise take turns on a
+    state that never converges. The guard is a once-per-cycle flag, and the
+    second run's own actions are deliberately not carried out."""
+    import ast
+    node = _carry_out_source()
+    src = ast.unparse(node)
+    assert "reapplied" in src, "the once-per-cycle reapply guard is gone"
+    # The flag must be CHECKED before the dispatch, not merely assigned.
+    assert "or reapplied" in src or "if reapplied" in src, \
+        "reapplied is set but never tested — the guard does not guard"
+    # The reapply must not recurse into carrying out its own result's actions.
+    # Checked as a CALL in the AST: ast.unparse(node) includes the def line, so
+    # a substring search for the name matches the function's own signature and
+    # can never fail. (It did not, which is how this comment exists.)
+    calls = [n for n in ast.walk(node)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "_carry_out_baseline_actions"]
+    assert not calls, \
+        "_carry_out_baseline_actions calls itself — a reapply loop has no floor"
+
+
+def _branch_for(action: str):
+    """The body of the `kind == "<action>"` branch, as AST statements."""
+    import ast
+    for node in ast.walk(_carry_out_source()):
+        if not isinstance(node, ast.If):
+            continue
+        t = node.test
+        if isinstance(t, ast.Compare) and isinstance(t.left, ast.Name) \
+                and t.left.id == "kind" and len(t.comparators) == 1 \
+                and isinstance(t.comparators[0], ast.Constant) \
+                and t.comparators[0].value == action:
+            return node.body
+    raise AssertionError(f"there is no `kind == {action!r}` branch")
+
+
+def test_a_preview_never_reapplies_to_a_host():
+    """Preview is the one mode an operator runs to find out what WOULD happen.
+    A reapply firing during it would make that a lie — and it runs salt for
+    real, as root.
+
+    Asserted on the GUARD, not on the word: `"preview" in source` is satisfied
+    by the docstring above it, which is how two assertions in this repo passed
+    while checking nothing.
+    """
+    import ast
+    body = _branch_for("reapply")
+    guards = [n for n in body
+              if isinstance(n, ast.If)
+              and any(isinstance(x, ast.Name) and x.id == "preview"
+                      for x in ast.walk(n.test))
+              and any(isinstance(x, ast.Continue) for x in ast.walk(n))]
+    assert guards, (
+        "nothing in the reapply branch tests `preview` and skips — a dry run "
+        "would apply the state for real, as root")
+    # And the guard must come BEFORE anything is dispatched.
+    first_dispatch = next(
+        (i for i, n in enumerate(body)
+         if any(isinstance(x, ast.Call) and isinstance(x.func, ast.Name)
+                and x.func.id == "_dispatch_one" for x in ast.walk(n))), None)
+    assert first_dispatch is not None, "the reapply branch dispatches nothing at all"
+    assert body.index(guards[0]) < first_dispatch, \
+        "the preview guard sits after the dispatch it is supposed to prevent"

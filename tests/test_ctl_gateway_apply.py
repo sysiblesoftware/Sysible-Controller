@@ -293,7 +293,7 @@ def _git(*args, cwd):
 def _compose_dir(tmp_path, name="slopsrc"):
     d = tmp_path / name
     d.mkdir()
-    (d / "docker-compose.yml").write_text("services:\n  baseline:\n    build: ./baseline\n")
+    (d / "docker-compose.yml").write_text("services:\n  flashback:\n    build: ./flashback\n")
     return d
 
 
@@ -305,7 +305,7 @@ def _origin_with_a_commit(tmp_path):
     seed = tmp_path / "seed"
     seed.mkdir()
     _git("init", "-q", "-b", "main", cwd=str(seed))
-    (seed / "docker-compose.yml").write_text("services:\n  baseline:\n    build: ./baseline\n")
+    (seed / "docker-compose.yml").write_text("services:\n  flashback:\n    build: ./flashback\n")
     _git("add", "-A", cwd=str(seed)); _git("commit", "-qm", "one", cwd=str(seed))
     _git("remote", "add", "origin", str(bare), cwd=str(seed))
     _git("push", "-q", "-u", "origin", "main", cwd=str(seed))
@@ -378,11 +378,11 @@ def test_update_is_happy_and_explicit_when_already_current(sandbox, tmp_path):
 # install.sh seeded cross-product settings on a FIRST run and nothing did it
 # afterwards, so a setting a later SLOP release introduced never reached the app
 # that consumes it — and update went green having wired up nothing. That is how
-# config backup shipped inert: Baseline held its token, the Controller never got
+# config backup shipped inert: Flashback held its token, the Controller never got
 # it, and the console stayed empty with no error anywhere.
-def test_update_seeds_the_baseline_token_into_the_controller_env(sandbox, tmp_path):
+def test_update_seeds_the_flashback_token_into_the_controller_env(sandbox, tmp_path):
     slop = tmp_path / "slop"; slop.mkdir()
-    (slop / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=abc\nSYSIBLE_BASELINE_AGENT_TOKEN=tok123\n")
+    (slop / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=abc\nSYSIBLE_FLASHBACK_AGENT_TOKEN=tok123\n")
     ctl = tmp_path / "controller"; ctl.mkdir()
     (ctl / "docker-compose.yml").write_text("services: {}\n")
     rc, out, err = run(sandbox, f'''
@@ -392,19 +392,19 @@ def test_update_seeds_the_baseline_token_into_the_controller_env(sandbox, tmp_pa
         _slop_seed_cross_app_env
     ''', FAKE_NO_CONTAINER="1")
     body = (ctl / ".env").read_text()
-    assert "SYSIBLE_BASELINE_AGENT_TOKEN=tok123" in body, body
+    assert "SYSIBLE_FLASHBACK_AGENT_TOKEN=tok123" in body, body
     # host.docker.internal, not loopback: the controller is containerised and
-    # Baseline publishes on the HOST.
-    assert "SYSIBLE_BASELINE_URL=http://host.docker.internal:8770" in body, body
+    # Flashback publishes on the HOST.
+    assert "SYSIBLE_FLASHBACK_URL=http://host.docker.internal:8770" in body, body
     assert "Seeded" in out
 
 
 def test_seeding_never_overwrites_a_value_an_operator_set(sandbox, tmp_path):
     slop = tmp_path / "slop2"; slop.mkdir()
-    (slop / ".env").write_text("SYSIBLE_BASELINE_AGENT_TOKEN=tok123\n")
+    (slop / ".env").write_text("SYSIBLE_FLASHBACK_AGENT_TOKEN=tok123\n")
     ctl = tmp_path / "controller2"; ctl.mkdir()
     (ctl / "docker-compose.yml").write_text("services: {}\n")
-    (ctl / ".env").write_text("SYSIBLE_BASELINE_URL=http://elsewhere:9999\n")
+    (ctl / ".env").write_text("SYSIBLE_FLASHBACK_URL=http://elsewhere:9999\n")
     run(sandbox, f'''
         WD="{slop}"
         _git_root() {{ echo "{slop}"; return 0; }}
@@ -413,8 +413,8 @@ def test_seeding_never_overwrites_a_value_an_operator_set(sandbox, tmp_path):
     ''', FAKE_NO_CONTAINER="1")
     body = (ctl / ".env").read_text()
     assert "http://elsewhere:9999" in body            # kept
-    assert body.count("SYSIBLE_BASELINE_URL=") == 1  # not duplicated
-    assert "SYSIBLE_BASELINE_AGENT_TOKEN=tok123" in body  # the missing one added
+    assert body.count("SYSIBLE_FLASHBACK_URL=") == 1  # not duplicated
+    assert "SYSIBLE_FLASHBACK_AGENT_TOKEN=tok123" in body  # the missing one added
 
 
 def test_seeding_is_a_no_op_when_slop_has_no_token_yet(sandbox, tmp_path):
@@ -432,7 +432,7 @@ def test_seeding_is_a_no_op_when_slop_has_no_token_yet(sandbox, tmp_path):
     # Neither spelling. Seeding under either name would half-wire the app, and
     # the fallback means the old one is just as live as the new one.
     written = (ctl / ".env").read_text() if (ctl / ".env").exists() else ""
-    assert "BASELINE" not in written and "FLASHBACK" not in written
+    assert "FLASHBACK" not in written and "FLASHBACK" not in written
 
 
 # ---- and it must repair the SSO wiring, which nothing ever rewrote ---------
@@ -486,7 +486,7 @@ def test_an_app_with_no_env_at_all_does_not_abort_the_update(sandbox, tmp_path):
     under `set -euo pipefail` that took the whole update down BEFORE it could
     write the file it was about to create."""
     slop = tmp_path / "s3"; slop.mkdir()
-    (slop / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=abc\nSYSIBLE_BASELINE_AGENT_TOKEN=tok\n")
+    (slop / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=abc\nSYSIBLE_FLASHBACK_AGENT_TOKEN=tok\n")
     ctl = tmp_path / "c3"; ctl.mkdir()
     (ctl / "docker-compose.yml").write_text("services: {}\n")
     assert not (ctl / ".env").exists(), "fixture: the app must start with no .env"
@@ -501,12 +501,12 @@ def test_an_app_with_no_env_at_all_does_not_abort_the_update(sandbox, tmp_path):
     body = (ctl / ".env").read_text()
     assert "SYSIBLE_SSO_SHARED_SECRET=abc" in body, body
     # and the seeding that comes AFTER it still ran
-    assert "SYSIBLE_BASELINE_AGENT_TOKEN=tok" in body, body
+    assert "SYSIBLE_FLASHBACK_AGENT_TOKEN=tok" in body, body
 
 
 def test_slop_without_a_secret_says_so_instead_of_wiring_nothing(sandbox, tmp_path):
     slop = tmp_path / "s4"; slop.mkdir()
-    (slop / ".env").write_text("SYSIBLE_BASELINE_AGENT_TOKEN=tok\n")
+    (slop / ".env").write_text("SYSIBLE_FLASHBACK_AGENT_TOKEN=tok\n")
     ctl = tmp_path / "c4"; ctl.mkdir()
     (ctl / "docker-compose.yml").write_text("services: {}\n")
     rc, out, err = run(sandbox, f'''
@@ -521,10 +521,10 @@ def test_slop_without_a_secret_says_so_instead_of_wiring_nothing(sandbox, tmp_pa
 
 
 # ---- `slop status` must report whether config backup can actually work -----
-# `ps` said "sysible-baseline  Up 4 hours" throughout an outage in which no host
+# `ps` said "sysible-flashback  Up 4 hours" throughout an outage in which no host
 # could back anything up: the container was fine, the CHAIN was not. Running is
 # not working here — capture needs the token on both sides and the controller
-# able to reach Baseline over the host.
+# able to reach Flashback over the host.
 FAKE_DOCKER_FB = r"""#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_LOG"
 case "$1" in
@@ -533,10 +533,10 @@ case "$1" in
       *State.Status*) echo running; exit 0 ;;
       *Config.Env*)
         case "$*" in
-          *baseline*) [ -n "${FB_TOKEN:-}" ] && echo "SYSIBLE_BASELINE_AGENT_TOKEN=$FB_TOKEN"; exit 0 ;;
+          *flashback*) [ -n "${FB_TOKEN:-}" ] && echo "SYSIBLE_FLASHBACK_AGENT_TOKEN=$FB_TOKEN"; exit 0 ;;
           *)
-            [ -n "${CTL_TOKEN:-}" ] && echo "SYSIBLE_BASELINE_AGENT_TOKEN=$CTL_TOKEN"
-            [ -n "${CTL_URL:-}" ] && echo "SYSIBLE_BASELINE_URL=$CTL_URL"
+            [ -n "${CTL_TOKEN:-}" ] && echo "SYSIBLE_FLASHBACK_AGENT_TOKEN=$CTL_TOKEN"
+            [ -n "${CTL_URL:-}" ] && echo "SYSIBLE_FLASHBACK_URL=$CTL_URL"
             exit 0 ;;
         esac ;;
     esac
@@ -562,33 +562,33 @@ def fbsandbox(sandbox, tmp_path):
     return sandbox
 
 
-def test_status_flags_a_token_missing_on_baseline(fbsandbox):
-    rc, out, err = run(fbsandbox, "_baseline_status", FB_TOKEN="", CTL_TOKEN="t", CTL_URL="http://h:8770")
-    assert "NOT SET on Baseline" in err
+def test_status_flags_a_token_missing_on_flashback(fbsandbox):
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="", CTL_TOKEN="t", CTL_URL="http://h:8770")
+    assert "NOT SET on Flashback" in err
     assert "fails closed" in err
 
 
 def test_status_flags_a_token_the_controller_never_got(fbsandbox):
-    rc, out, err = run(fbsandbox, "_baseline_status", FB_TOKEN="t", CTL_TOKEN="", CTL_URL="")
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="", CTL_URL="")
     assert "MISSING on the Controller" in err
     assert "slop update" in err          # and says how to fix it
 
 
 def test_status_flags_two_halves_that_do_not_match(fbsandbox):
-    rc, out, err = run(fbsandbox, "_baseline_status", FB_TOKEN="a", CTL_TOKEN="b", CTL_URL="http://h:8770")
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="a", CTL_TOKEN="b", CTL_URL="http://h:8770")
     assert "DO NOT MATCH" in err
 
 
-def test_status_flags_a_controller_that_cannot_reach_baseline(fbsandbox):
+def test_status_flags_a_controller_that_cannot_reach_flashback(fbsandbox):
     """The wiring can be perfect and the URL still point at the container's own
     loopback instead of the host — which is exactly what shipped."""
-    rc, out, err = run(fbsandbox, "_baseline_status", FB_TOKEN="t", CTL_TOKEN="t",
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
                        CTL_URL="http://127.0.0.1:8770", REACH="URLError")
     assert "UNREACHABLE" in err
 
 
 def test_status_reports_a_healthy_chain_with_no_backups_yet(fbsandbox):
-    rc, out, err = run(fbsandbox, "_baseline_status", FB_TOKEN="t", CTL_TOKEN="t",
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
                        CTL_URL="http://h:8770", REACH="200", STORE="0 0")
     assert "matches on both sides" in out
     assert "reachable" in out
@@ -596,7 +596,7 @@ def test_status_reports_a_healthy_chain_with_no_backups_yet(fbsandbox):
 
 
 def test_status_reports_real_stored_backups(fbsandbox):
-    rc, out, err = run(fbsandbox, "_baseline_status", FB_TOKEN="t", CTL_TOKEN="t",
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
                        CTL_URL="http://h:8770", REACH="200", STORE="3 47")
     assert "3 host(s), 47 version(s)" in out
 
@@ -682,7 +682,7 @@ def test_a_non_slop_product_is_unaffected(sandbox, tmp_path):
 # things up. Same lie as every other step in this feature's history.
 def test_seeding_recreates_the_controller_so_it_reads_the_new_env(sandbox, tmp_path):
     slop = tmp_path / "s1"; slop.mkdir()
-    (slop / ".env").write_text("SYSIBLE_BASELINE_AGENT_TOKEN=tok123\n")
+    (slop / ".env").write_text("SYSIBLE_FLASHBACK_AGENT_TOKEN=tok123\n")
     ctl = tmp_path / "c1"; ctl.mkdir()
     (ctl / "docker-compose.yml").write_text("services: {}\n")
     rc, out, err = run(sandbox, f'''
@@ -704,12 +704,12 @@ def test_nothing_is_recreated_when_there_was_nothing_to_seed(sandbox, tmp_path):
     """An already-configured host must not have its Controller bounced on every
     single update."""
     slop = tmp_path / "s2"; slop.mkdir()
-    (slop / ".env").write_text("SYSIBLE_BASELINE_AGENT_TOKEN=tok123\n")
+    (slop / ".env").write_text("SYSIBLE_FLASHBACK_AGENT_TOKEN=tok123\n")
     ctl = tmp_path / "c2"; ctl.mkdir()
     (ctl / "docker-compose.yml").write_text("services: {}\n")
     (ctl / ".env").write_text(
-        "SYSIBLE_BASELINE_URL=http://host.docker.internal:8770\n"
-        "SYSIBLE_BASELINE_AGENT_TOKEN=tok123\n")
+        "SYSIBLE_FLASHBACK_URL=http://host.docker.internal:8770\n"
+        "SYSIBLE_FLASHBACK_AGENT_TOKEN=tok123\n")
     rc, out, err = run(sandbox, f'''
         WD="{slop}"
         _git_root() {{ echo "{slop}"; return 0; }}
@@ -724,7 +724,7 @@ def test_a_failed_recreate_tells_the_operator_what_to_run(sandbox, tmp_path):
     """If the recreate cannot happen, the seeded value is still inert — say so
     and name the command, rather than reporting success."""
     slop = tmp_path / "s3"; slop.mkdir()
-    (slop / ".env").write_text("SYSIBLE_BASELINE_AGENT_TOKEN=tok123\n")
+    (slop / ".env").write_text("SYSIBLE_FLASHBACK_AGENT_TOKEN=tok123\n")
     rc, out, err = run(sandbox, f'''
         WD="{slop}"
         _git_root() {{ echo "{slop}"; return 0; }}
@@ -939,13 +939,13 @@ def test_update_reaches_a_capitalised_checkout_too(sandbox, tmp_path):
 
 # ---- the agent side: the link nothing reported -------------------------------
 # Every other check in `slop status` can be green — token matched on both sides,
-# Baseline reachable, container up — and still nothing is ever captured, because
+# Flashback reachable, container up — and still nothing is ever captured, because
 # capture is driven BY THE AGENT: it asks the controller for config-backup work
 # on its own thread, and a host whose agent predates that feature never asks.
 # From the console both states look identical (an empty page), which is how
-# "Baseline isn't doing anything" survives a status that says everything is fine.
+# "Flashback isn't doing anything" survives a status that says everything is fine.
 def test_status_says_when_no_agent_has_ever_asked_for_backup_work(fbsandbox):
-    rc, out, err = run(fbsandbox, "_baseline_status", FB_TOKEN="t", CTL_TOKEN="t",
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
                        CTL_URL="http://h:8770", POLLS="3 0 web1 web2 web3")
     both = out + err
     assert "0 of 3" in both, both
@@ -955,7 +955,7 @@ def test_status_says_when_no_agent_has_ever_asked_for_backup_work(fbsandbox):
 
 
 def test_status_names_the_stragglers_when_only_some_ask(fbsandbox):
-    rc, out, err = run(fbsandbox, "_baseline_status", FB_TOKEN="t", CTL_TOKEN="t",
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
                        CTL_URL="http://h:8770", POLLS="3 2 web3")
     both = out + err
     assert "2 of 3" in both, both
@@ -963,7 +963,7 @@ def test_status_names_the_stragglers_when_only_some_ask(fbsandbox):
 
 
 def test_status_is_quiet_when_every_agent_asks(fbsandbox):
-    rc, out, err = run(fbsandbox, "_baseline_status", FB_TOKEN="t", CTL_TOKEN="t",
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
                        CTL_URL="http://h:8770", POLLS="3 3 ")
     both = out + err
     assert "all 3" in both, both
@@ -973,7 +973,7 @@ def test_status_is_quiet_when_every_agent_asks(fbsandbox):
 def test_no_agents_at_all_is_not_reported_as_stale_agents(fbsandbox):
     """An empty fleet is "nothing enrolled", not "every agent is too old" — the
     second sends an operator off updating agents that do not exist."""
-    rc, out, err = run(fbsandbox, "_baseline_status", FB_TOKEN="t", CTL_TOKEN="t",
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
                        CTL_URL="http://h:8770", POLLS="0 0 ")
     both = out + err
     assert "none enrolled" in both, both
@@ -985,7 +985,7 @@ def test_the_poll_check_reads_the_column_that_actually_holds_the_signal(fbsandbo
     reading the fleet through it makes every host look like it has never polled
     and reports a healthy fleet as entirely stale. It must use
     get_config_poll_times()."""
-    run(fbsandbox, "_baseline_status", FB_TOKEN="t", CTL_TOKEN="t",
+    run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
         CTL_URL="http://h:8770", POLLS="2 2 ")
     calls = docker_calls(fbsandbox)
     assert "db.get_config_poll_times()" in calls, calls
@@ -997,12 +997,12 @@ def test_the_poll_check_reads_the_column_that_actually_holds_the_signal(fbsandbo
 # ---- "has asked" is not "was answered" --------------------------------------
 # Straight from a real box: all three agents reported as asking for config-backup
 # work, and nothing had ever been captured. The controller records the poll
-# BEFORE it consults Baseline — deliberately, because an agent that never
+# BEFORE it consults Flashback — deliberately, because an agent that never
 # reaches that line is the "too old to capture" signal — so a poll refused 503 a
 # millisecond later still counts as "asked". Reporting that as all-green sends
 # the operator to look at agents that are doing exactly what they should.
 def test_agents_asking_into_a_broken_relay_blames_the_relay(fbsandbox):
-    rc, out, err = run(fbsandbox, "_baseline_status", FB_TOKEN="t", CTL_TOKEN="",
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="",
                        CTL_URL="http://h:8770", POLLS="3 3 ", STORE="0 0")
     both = out + err
     assert "ARE asking" in both, both
@@ -1013,15 +1013,15 @@ def test_agents_asking_into_a_broken_relay_blames_the_relay(fbsandbox):
 
 
 def test_a_token_mismatch_also_counts_as_a_broken_relay(fbsandbox):
-    rc, out, err = run(fbsandbox, "_baseline_status", FB_TOKEN="a", CTL_TOKEN="b",
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="a", CTL_TOKEN="b",
                        CTL_URL="http://h:8770", POLLS="2 2 ", STORE="0 0")
     both = out + err
     assert "ARE asking" in both, both
     assert "refusing" in both, both
 
 
-def test_an_unreachable_baseline_also_counts_as_a_broken_relay(fbsandbox):
-    rc, out, err = run(fbsandbox, "_baseline_status", FB_TOKEN="t", CTL_TOKEN="t",
+def test_an_unreachable_flashback_also_counts_as_a_broken_relay(fbsandbox):
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
                        CTL_URL="http://h:8770", REACH="ConnectionError",
                        POLLS="2 2 ", STORE="0 0")
     both = out + err
@@ -1031,7 +1031,7 @@ def test_an_unreachable_baseline_also_counts_as_a_broken_relay(fbsandbox):
 def test_a_wired_relay_with_nothing_stored_points_at_the_host_journal(fbsandbox):
     """Everything checks out and still nothing is captured — the only place left
     to look is the agent's own log, so say so rather than stopping at green."""
-    rc, out, err = run(fbsandbox, "_baseline_status", FB_TOKEN="t", CTL_TOKEN="t",
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
                        CTL_URL="http://h:8770", POLLS="2 2 ", STORE="0 0")
     both = out + err
     assert "all 2 ask for config-backup work" in both, both
@@ -1039,7 +1039,7 @@ def test_a_wired_relay_with_nothing_stored_points_at_the_host_journal(fbsandbox)
 
 
 def test_a_healthy_fleet_with_backups_stays_quiet(fbsandbox):
-    rc, out, err = run(fbsandbox, "_baseline_status", FB_TOKEN="t", CTL_TOKEN="t",
+    rc, out, err = run(fbsandbox, "_flashback_status", FB_TOKEN="t", CTL_TOKEN="t",
                        CTL_URL="http://h:8770", POLLS="2 2 ", STORE="2 40")
     both = out + err
     assert "all 2 ask for config-backup work" in both, both
@@ -1048,15 +1048,15 @@ def test_a_healthy_fleet_with_backups_stays_quiet(fbsandbox):
     assert "ARE asking" not in both, both
 
 
-# ---- Baseline must LISTEN where the Controller dials ------------------------
-# The Controller reaches Baseline at host.docker.internal — the docker bridge
-# gateway. Baseline's compose bound that port to the host's LOOPBACK, a
+# ---- Flashback must LISTEN where the Controller dials ------------------------
+# The Controller reaches Flashback at host.docker.internal — the docker bridge
+# gateway. Flashback's compose bound that port to the host's LOOPBACK, a
 # different interface, so every snapshot and every restore poll was refused.
 # Three agents polled faithfully for days and captured nothing, while the console
 # reported them all asking. The two halves of the codebase even disagreed in
 # comments: install.sh said "the Controller runs in a container", the compose
 # said it "runs on the host". The compose half won at runtime.
-def test_update_seeds_the_bind_address_baseline_must_listen_on(sandbox, tmp_path):
+def test_update_seeds_the_bind_address_flashback_must_listen_on(sandbox, tmp_path):
     slop = tmp_path / "s"; slop.mkdir()
     (slop / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=x\n")
     ctl = tmp_path / "c"; ctl.mkdir()
@@ -1068,7 +1068,7 @@ def test_update_seeds_the_bind_address_baseline_must_listen_on(sandbox, tmp_path
         _slop_seed_cross_app_env
     ''', FAKE_NO_CONTAINER="1", FAKE_BRIDGE_GW="172.17.0.1")
     body = (slop / ".env").read_text()
-    assert "SYSIBLE_BASELINE_AGENT_BIND=172.17.0.1" in body, body
+    assert "SYSIBLE_FLASHBACK_AGENT_BIND=172.17.0.1" in body, body
     assert "loopback" in (out + err).lower(), (out, err)
 
 
@@ -1085,7 +1085,7 @@ def test_the_bind_address_comes_from_docker_not_a_guess(sandbox, tmp_path):
         _p_dir_override() {{ [ "$1" = controller ] && echo "{ctl}"; }}
         _slop_seed_cross_app_env
     ''', FAKE_NO_CONTAINER="1", FAKE_BRIDGE_GW="10.200.0.1")
-    assert "SYSIBLE_BASELINE_AGENT_BIND=10.200.0.1" in (slop / ".env").read_text()
+    assert "SYSIBLE_FLASHBACK_AGENT_BIND=10.200.0.1" in (slop / ".env").read_text()
 
 
 def test_an_operator_set_bind_address_is_left_alone(sandbox, tmp_path):
@@ -1093,7 +1093,7 @@ def test_an_operator_set_bind_address_is_left_alone(sandbox, tmp_path):
     a repair that overrides a deliberate choice is its own bug."""
     slop = tmp_path / "s3"; slop.mkdir()
     (slop / ".env").write_text("SYSIBLE_SSO_SHARED_SECRET=x\n"
-                               "SYSIBLE_BASELINE_AGENT_BIND=127.0.0.1\n")
+                               "SYSIBLE_FLASHBACK_AGENT_BIND=127.0.0.1\n")
     ctl = tmp_path / "c3"; ctl.mkdir()
     (ctl / "docker-compose.yml").write_text("services: {}\n")
     run(sandbox, f'''
@@ -1103,8 +1103,8 @@ def test_an_operator_set_bind_address_is_left_alone(sandbox, tmp_path):
         _slop_seed_cross_app_env
     ''', FAKE_NO_CONTAINER="1", FAKE_BRIDGE_GW="172.17.0.1")
     body = (slop / ".env").read_text()
-    assert "SYSIBLE_BASELINE_AGENT_BIND=127.0.0.1" in body, body
-    assert body.count("SYSIBLE_BASELINE_AGENT_BIND=") == 1, body
+    assert "SYSIBLE_FLASHBACK_AGENT_BIND=127.0.0.1" in body, body
+    assert body.count("SYSIBLE_FLASHBACK_AGENT_BIND=") == 1, body
 
 
 def test_docker_not_answering_falls_back_rather_than_writing_nothing(sandbox, tmp_path):
@@ -1118,7 +1118,7 @@ def test_docker_not_answering_falls_back_rather_than_writing_nothing(sandbox, tm
         _p_dir_override() {{ [ "$1" = controller ] && echo "{ctl}"; }}
         _slop_seed_cross_app_env
     ''', FAKE_NO_CONTAINER="1", FAKE_BRIDGE_GW="")
-    assert "SYSIBLE_BASELINE_AGENT_BIND=172.17.0.1" in (slop / ".env").read_text()
+    assert "SYSIBLE_FLASHBACK_AGENT_BIND=172.17.0.1" in (slop / ".env").read_text()
 
 
 # ---- the updater must be able to find SLOP's own checkout -------------------
@@ -1173,7 +1173,7 @@ def test_a_correct_checkout_path_is_left_alone(sandbox, tmp_path):
         _p_dir_override() {{ :; }}
         _slop_seed_cross_app_env
     ''', FAKE_NO_CONTAINER="1")
-    # (the same call also seeds the Baseline bind address, so the FILE changes —
+    # (the same call also seeds the Flashback bind address, so the FILE changes —
     # what must not change is this key, and it must not announce a repair.)
     lines = [l for l in (slop / ".env").read_text().splitlines()
              if l.startswith("SYSIBLE_SLOP_DIR=")]

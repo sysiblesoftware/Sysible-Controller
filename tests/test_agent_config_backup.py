@@ -45,13 +45,13 @@ def _tree(root, files):
 
 
 def _collect(ag, root, **over):
-    ag.BL_PATHS = root
-    ag.BL_EXCLUDE = over.get("exclude", ":".join([
+    ag.FB_PATHS = root
+    ag.FB_EXCLUDE = over.get("exclude", ":".join([
         f"{root}/shadow", f"{root}/ssh/ssh_host_*_key", f"{root}/ssl/private/*",
     ]))
-    ag.BL_MAX_FILE = over.get("max_file", 256 * 1024)
-    ag.BL_MAX_TOTAL = over.get("max_total", 8 * 1024 * 1024)
-    return ag._bl_collect()
+    ag.FB_MAX_FILE = over.get("max_file", 256 * 1024)
+    ag.FB_MAX_TOTAL = over.get("max_total", 8 * 1024 * 1024)
+    return ag._fb_collect()
 
 
 def _paths(files):
@@ -92,7 +92,7 @@ def test_the_default_exclusions_really_are_the_shipped_ones(ag):
     """The list above is the test's own; assert the DEFAULT the agent ships with
     covers the same ground, so a host that sets nothing is still safe."""
     for pat in ("/etc/shadow", "/etc/gshadow", "/etc/ssh/ssh_host_*_key", "/etc/ssl/private/*"):
-        assert pat in ag.BL_EXCLUDE
+        assert pat in ag.FB_EXCLUDE
 
 
 def test_an_oversized_file_is_skipped_not_truncated(ag, tmp_path):
@@ -147,7 +147,7 @@ class _Resp:
 
 
 def _restore_harness(ag, target, content, sha=None, monkeypatch=None, tracked=True):
-    """Drive _bl_apply_restore with a canned payload; record the ack.
+    """Drive _fb_apply_restore with a canned payload; record the ack.
 
     `tracked` points this agent's config roots AT the target's directory, because
     a restore is only ever a rollback of something the host itself captured and
@@ -157,19 +157,19 @@ def _restore_harness(ag, target, content, sha=None, monkeypatch=None, tracked=Tr
     acked = {}
     digest = sha if sha is not None else hashlib.sha256(content).hexdigest()
     if tracked:
-        ag.BL_PATHS = os.path.dirname(target) or "/"
-        ag.BL_EXCLUDE = ""
+        ag.FB_PATHS = os.path.dirname(target) or "/"
+        ag.FB_EXCLUDE = ""
 
     def fake_request(method, path, **kw):
         if "/payload" in path:
-            return _Resp(content, {"X-Baseline-Path": target, "X-Baseline-Sha256": digest})
+            return _Resp(content, {"X-Flashback-Path": target, "X-Flashback-Sha256": digest})
         if "/ack" in path:
             acked.update(kw.get("json") or {})
             return _Resp(b"{}")
         return _Resp(b"{}")
 
     ag._request = fake_request
-    ag._bl_apply_restore({"host_id": "h", "agent_secret": "s"}, {"id": 7})
+    ag._fb_apply_restore({"host_id": "h", "agent_secret": "s"}, {"id": 7})
     return acked
 
 
@@ -218,8 +218,8 @@ def test_the_file_mode_survives_a_restore(ag, tmp_path):
 def test_a_non_absolute_path_is_refused(ag, tmp_path, monkeypatch):
     """The path comes from the server; treat it as untrusted anyway."""
     monkeypatch.chdir(tmp_path)
-    ag.BL_PATHS = str(tmp_path)
-    ag.BL_EXCLUDE = ""
+    ag.FB_PATHS = str(tmp_path)
+    ag.FB_EXCLUDE = ""
     acked = _restore_harness(ag, "relative/evil", b"x", tracked=False)
     assert not os.path.exists(tmp_path / "relative/evil")
     # Acked FAILED rather than silently dropped: a refusal nobody can see leaves
@@ -230,8 +230,8 @@ def test_a_non_absolute_path_is_refused(ag, tmp_path, monkeypatch):
 def test_a_target_outside_the_tracked_config_is_refused(ag, tmp_path):
     """The kill chain: the agent runs as root, so a restore that could name any
     absolute path is a root write on every managed host at once."""
-    ag.BL_PATHS = str(tmp_path / "etc")
-    ag.BL_EXCLUDE = ""
+    ag.FB_PATHS = str(tmp_path / "etc")
+    ag.FB_EXCLUDE = ""
     (tmp_path / "etc").mkdir()
     target = str(tmp_path / "root" / "authorized_keys")
     acked = _restore_harness(ag, target, b"ssh-rsa AAAA attacker", tracked=False)

@@ -1,24 +1,24 @@
 """The whole capture chain, from the operator's click to a version they can diff.
 
-test_baseline_relay.py covers the middle hop (agent -> controller -> Baseline).
+test_flashback_relay.py covers the middle hop (agent -> controller -> Flashback).
 Nothing covered the chain an operator actually drives, and that is where it kept
 breaking:
 
-    Baseline console "Back up now"
-      -> Baseline asks the CONTROLLER to park a capture request
+    Flashback console "Back up now"
+      -> Flashback asks the CONTROLLER to park a capture request
       -> the agent's next config-backup poll is told a capture was asked for
       -> the agent reads the real files off disk and posts a snapshot
-      -> the controller relays it to Baseline
+      -> the controller relays it to Flashback
       -> a version appears in the console
 
-Every piece here is the real code: the real Baseline app on a real store, the
-real controller app and its BFF, and the agent's own _bl_collect /
-_bl_send_snapshot reading actual files from disk. Only the two HTTP hops are
+Every piece here is the real code: the real Flashback app on a real store, the
+real controller app and its BFF, and the agent's own _fb_collect /
+_fb_send_snapshot reading actual files from disk. Only the two HTTP hops are
 bridged in-process, so the request and response SHAPES are pinned against the
 real servers rather than against my belief about them.
 
-"Baseline isn't backing things up" has been reported more than once, and every
-time the fault was somewhere in this chain rather than in Baseline itself.
+"Flashback isn't backing things up" has been reported more than once, and every
+time the fault was somewhere in this chain rather than in Flashback itself.
 """
 import importlib
 import os
@@ -27,15 +27,15 @@ import sys
 import pytest
 
 from tests.conftest import key_headers as _key
-from tests.test_baseline_relay import TOKEN
+from tests.test_flashback_relay import TOKEN
 
-FB_DIR = "/home/user/sysible-linux-operations-platform/baseline"
+FB_DIR = "/home/user/sysible-linux-operations-platform/flashback"
 AGENT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "host_agent")
 
 
 @pytest.fixture
 def chain(tmp_path, monkeypatch, controller, agent):
-    """Wire Baseline -> controller -> Baseline, and give the agent real files.
+    """Wire Flashback -> controller -> Flashback, and give the agent real files.
 
     Returns an object with the three ends plus the temp directory the agent is
     told to back up, so a test can change a file on disk and capture again.
@@ -43,20 +43,20 @@ def chain(tmp_path, monkeypatch, controller, agent):
     if not os.path.isdir(FB_DIR):
         pytest.skip("the SLOP checkout is not next to this repo")
 
-    fb_client, fb_store, fb_ctrl = _load_baseline(tmp_path)
+    fb_client, fb_store, fb_ctrl = _load_flashback(tmp_path)
 
-    # --- controller -> Baseline (the relay the agent's snapshot rides)
-    from backend import baseline as fbmod
+    # --- controller -> Flashback (the relay the agent's snapshot rides)
+    from backend import flashback as fbmod
     def relay(method, url, headers=None, timeout=None, **kw):
-        return fb_client.request(method, url.replace("http://baseline.test", ""),
+        return fb_client.request(method, url.replace("http://flashback.test", ""),
                                  headers=headers, **kw)
-    monkeypatch.setattr(fbmod, "BASELINE_URL", "http://baseline.test")
+    monkeypatch.setattr(fbmod, "FLASHBACK_URL", "http://flashback.test")
     monkeypatch.setattr(fbmod, "AGENT_TOKEN", TOKEN)
     monkeypatch.setattr(fbmod.requests, "request", relay)
 
-    # --- Baseline -> the CONTROLLER'S BFF (the "Back up now" request)
+    # --- Flashback -> the CONTROLLER'S BFF (the "Back up now" request)
     #
-    # Baseline talks to :8800, which is the web console's BFF — not the backend
+    # Flashback talks to :8800, which is the web console's BFF — not the backend
     # API. That distinction matters: the route it calls
     # (/api/host/{id}/backup-now) exists only there, and the BFF is what turns it
     # into the backend's /agents/{id}/request-capture. Getting this wrong is
@@ -90,7 +90,7 @@ def chain(tmp_path, monkeypatch, controller, agent):
     etc = tmp_path / "etc"; etc.mkdir()
     (etc / "hosts").write_text("127.0.0.1 localhost\n")
     (etc / "resolv.conf").write_text("nameserver 1.1.1.1\n")
-    monkeypatch.setattr(agt, "BL_PATHS", str(etc))
+    monkeypatch.setattr(agt, "FB_PATHS", str(etc))
     def agent_request(method, path, **kw):
         kw.pop("timeout", None)
         return controller.request(method, path, **kw)
@@ -117,12 +117,12 @@ def _ctrl_path(url: str) -> str:
     return url
 
 
-def _load_baseline(tmp_path):
-    """The real Baseline app, its store, AND the controller-client module the
+def _load_flashback(tmp_path):
+    """The real Flashback app, its store, AND the controller-client module the
     RUNNING APP holds.
 
     That last one is the whole reason this doesn't just reuse the relay test's
-    helper. Baseline's package is also called `backend`, so loading it means
+    helper. Flashback's package is also called `backend`, so loading it means
     displacing ours and putting them back afterwards — which leaves the app
     holding module objects that are no longer in sys.modules. Importing
     `backend.controller` a second time therefore yields a DIFFERENT object, and
@@ -132,8 +132,8 @@ def _load_baseline(tmp_path):
     """
     if not os.path.isdir(FB_DIR):
         pytest.skip("the SLOP checkout is not next to this repo")
-    os.environ["SYSIBLE_BASELINE_DATA"] = str(tmp_path / "fbdata")
-    os.environ["SYSIBLE_BASELINE_AGENT_TOKEN"] = TOKEN
+    os.environ["SYSIBLE_FLASHBACK_DATA"] = str(tmp_path / "fbdata")
+    os.environ["SYSIBLE_FLASHBACK_AGENT_TOKEN"] = TOKEN
     saved = {k: v for k, v in sys.modules.items() if k == "backend" or k.startswith("backend.")}
     for k in saved:
         del sys.modules[k]
@@ -172,7 +172,7 @@ def test_back_up_now_in_the_console_ends_as_a_version_in_the_console(chain):
     a stored version of a real file — with nothing else touched in between."""
     assert chain.fb_store.list_hosts() == [], "fixture: nothing captured yet"
 
-    # 1. the operator presses "Back up now" in Baseline
+    # 1. the operator presses "Back up now" in Flashback
     r = chain.fb.post(f"/api/hosts/{chain.host_id}/backup-now", headers=GOOD_FB)
     assert r.status_code == 200, r.text
     assert "next check-in" in r.json()["message"]
@@ -185,7 +185,7 @@ def test_back_up_now_in_the_console_ends_as_a_version_in_the_console(chain):
     assert poll.json()["capture_requested"] is True, "the request never reached the agent"
 
     # 3. the agent reads the real files and posts them (its own code path)
-    agt._bl_send_snapshot(chain.state)
+    agt._fb_send_snapshot(chain.state)
 
     # 4. the console now has this host, its files, and a version of each
     hosts = chain.fb_store.list_hosts()
@@ -213,9 +213,9 @@ def test_a_changed_file_becomes_a_second_version_and_a_real_diff(chain):
     captures around an edit must leave two versions and a diff that names the
     change."""
     agt = chain.agent_mod
-    agt._bl_send_snapshot(chain.state)
+    agt._fb_send_snapshot(chain.state)
     (chain.etc / "hosts").write_text("127.0.0.1 localhost\n10.0.0.5 db\n")
-    agt._bl_send_snapshot(chain.state)
+    agt._fb_send_snapshot(chain.state)
 
     path = str(chain.etc / "hosts")
     versions = chain.fb_store.list_versions(chain.host_id, path)
@@ -229,8 +229,8 @@ def test_an_unchanged_file_does_not_make_a_second_version(chain):
     """Capture is periodic. Without content addressing the history is 24
     identical entries a day and unreadable."""
     agt = chain.agent_mod
-    agt._bl_send_snapshot(chain.state)
-    agt._bl_send_snapshot(chain.state)
+    agt._fb_send_snapshot(chain.state)
+    agt._fb_send_snapshot(chain.state)
     path = str(chain.etc / "hosts")
     assert len(chain.fb_store.list_versions(chain.host_id, path)) == 1
 

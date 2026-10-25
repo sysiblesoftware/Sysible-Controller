@@ -3,8 +3,8 @@
 #
 # Products: controller (Sysible Controller), slep (Sysible Linux Engineering
 # Platform), connect (Sysible Connect), slop (the SLOP gateway/portal — the single
-# front door; its compose also bundles the Baseline config-time-machine module, so
-# `slop start/status/logs` covers it — there is no separate baseline product). Each
+# front door; its compose also bundles the Flashback config-time-machine module, so
+# `slop start/status/logs` covers it — there is no separate flashback product). Each
 # runs as a docker-compose service
 # from its own checkout; this tool drives them all with a single, consistent set
 # of commands so you don't have to remember per-product invocations or cd around.
@@ -54,9 +54,9 @@ _p_volume() { case "$1" in
   controller)    echo sysible-data ;;
   slep)          echo slep-data ;;
   connect)       echo connect-data ;;
-  # The slop stack keeps the IdP user store, Caddy's certs/config, AND the Baseline
-  # version store (Baseline is a service in the slop compose, not a separate stack).
-  # flashback-data is Baseline's version store and KEEPS ITS PRE-REBRAND NAME.
+  # The slop stack keeps the IdP user store, Caddy's certs/config, AND the Flashback
+  # version store (Flashback is a service in the slop compose, not a separate stack).
+  # flashback-data is Flashback's version store and KEEPS ITS PRE-REBRAND NAME.
   # It holds every version of every config file on every host and is the only
   # thing in the stack that cannot be rebuilt from anything else, so it was not
   # renamed with the product — see the SLOP compose file.
@@ -127,7 +127,7 @@ _need_docker() {
 
 # --- compose plumbing ------------------------------------------------------
 DC=()
-# One Baseline setting out of a KEY=VALUE blob, CURRENT NAME FIRST.
+# One Flashback setting out of a KEY=VALUE blob, CURRENT NAME FIRST.
 #
 # Not `sed -n 's/^NEW=//p; s/^OLD=//p' | tail -1`: that prints both spellings in
 # FILE order, so tail takes whichever happens to appear later — which, on the
@@ -136,8 +136,7 @@ DC=()
 # stale line sitting below it in the same file.
 _bl_pick() {
   local suffix="$1" text="$2" val
-  val="$(printf '%s\n' "$text" | sed -n "s/^SYSIBLE_BASELINE_${suffix}=//p" | tail -n1)"
-  [[ -n "$val" ]] || val="$(printf '%s\n' "$text" | sed -n "s/^SYSIBLE_FLASHBACK_${suffix}=//p" | tail -n1)"
+  val="$(printf '%s\n' "$text" | sed -n "s/^SYSIBLE_FLASHBACK_${suffix}=//p" | tail -n1)"
   printf '%s' "$val"
 }
 
@@ -329,7 +328,7 @@ _health_wait() {
 # install.sh does this on a first run, and nothing did it afterwards — so a
 # setting introduced by a later SLOP release never reached the app that consumes
 # it, and `slop update` reported success having wired up nothing. That is exactly
-# how config backup shipped inert: Baseline had its token, the Controller never
+# how config backup shipped inert: Flashback had its token, the Controller never
 # got it, and the console stayed empty with no error anywhere.
 #
 # Idempotent and additive: a value already present is left alone, so an operator
@@ -354,10 +353,10 @@ _slop_seed_cross_app_env() {
     _ok "  recorded this checkout ($slopdir) so Administration can update SLOP itself"
   fi
 
-  # ---- Baseline's agent port must LISTEN where the Controller dials ---------
+  # ---- Flashback's agent port must LISTEN where the Controller dials ---------
   #
-  # The Controller reaches Baseline at host.docker.internal, which resolves to
-  # the docker bridge gateway. Baseline's compose used to bind that port to the
+  # The Controller reaches Flashback at host.docker.internal, which resolves to
+  # the docker bridge gateway. Flashback's compose used to bind that port to the
   # host's LOOPBACK instead — a different interface — so every snapshot and every
   # restore poll was refused, and a fleet of healthy agents captured nothing while
   # the console showed them all politely asking. Seed the real gateway address so
@@ -370,8 +369,8 @@ _slop_seed_cross_app_env() {
               -f '{{ range .IPAM.Config }}{{ .Gateway }}{{ end }}' 2>/dev/null \
               | awk '{print $1}' || true)"
     [[ -n "$fbbind" ]] || fbbind="172.17.0.1"
-    _env_upsert "$envf" SYSIBLE_BASELINE_AGENT_BIND "$fbbind"
-    _warn "  Baseline's agent port had no bind address — set to $fbbind (the docker bridge"
+    _env_upsert "$envf" SYSIBLE_FLASHBACK_AGENT_BIND "$fbbind"
+    _warn "  Flashback's agent port had no bind address — set to $fbbind (the docker bridge"
     _warn "  gateway), which is where the Controller dials. It was previously bound to the"
     _warn "  host's loopback, which no container can reach, so nothing could ever be captured."
   fi
@@ -421,8 +420,8 @@ _slop_seed_cross_app_env() {
     _warn "  app will show its own login. Re-run the SLOP installer to mint one."
   fi
 
-  # Baseline's agent token: minted by the SLOP installer, consumed by the
-  # Controller, which is the only thing that talks to Baseline's agent API.
+  # Flashback's agent token: minted by the SLOP installer, consumed by the
+  # Controller, which is the only thing that talks to Flashback's agent API.
   local tok; tok="$(_bl_pick AGENT_TOKEN "$(cat "$envf" 2>/dev/null || true)")"
   [[ -n "$tok" ]] || return 0
 
@@ -431,12 +430,12 @@ _slop_seed_cross_app_env() {
   local port; port="$(_bl_pick AGENT_PORT "$(cat "$envf" 2>/dev/null || true)")"
   [[ -n "$port" ]] || port=8770
   # host.docker.internal, not loopback: the Controller runs in a container and
-  # Baseline publishes on the HOST. Its compose maps that name to the gateway.
+  # Flashback publishes on the HOST. Its compose maps that name to the gateway.
   local changed=0
-  _seed_kv "$cenv" SYSIBLE_BASELINE_URL "http://host.docker.internal:$port" \
-    && { changed=1; _ok "Seeded SYSIBLE_BASELINE_URL into $cenv"; }
-  _seed_kv "$cenv" SYSIBLE_BASELINE_AGENT_TOKEN "$tok" \
-    && { changed=1; _ok "Seeded the Baseline agent token into $cenv"; }
+  _seed_kv "$cenv" SYSIBLE_FLASHBACK_URL "http://host.docker.internal:$port" \
+    && { changed=1; _ok "Seeded SYSIBLE_FLASHBACK_URL into $cenv"; }
+  _seed_kv "$cenv" SYSIBLE_FLASHBACK_AGENT_TOKEN "$tok" \
+    && { changed=1; _ok "Seeded the Flashback agent token into $cenv"; }
 
   # A value written to .env is not a value the app HAS: docker reads .env when it
   # creates a container, so the Controller keeps running with the old environment
@@ -572,29 +571,33 @@ p_update() {
     _err "compose dir '$WD' is not a git checkout — an 'update' has no source to pull from, so it cannot bring in anything newer."
     _warn "Re-clone the product next to its compose file, or set SYSIBLE_${p^^}_DIR to a git checkout."
   fi
-  # ---- the pre-rebrand container has to go FIRST --------------------------
+  # ---- the container the two-day rename left behind has to go FIRST -------
   #
-  # Baseline was the `flashback` service until the rebrand. Renaming a compose
-  # service does not rename its container: `sysible-flashback` keeps running,
-  # unmanaged, and it still holds the agent port on the docker bridge. The new
-  # `sysible-baseline` then cannot bind that port and dies on startup, so an
-  # update that changed nothing but a name takes config backup down.
+  # Flashback was briefly renamed Sysible Baseline, and a stack brought up in
+  # that window is running `sysible-baseline` built from this same service.
+  # Renaming a compose service does not rename its container, so it keeps
+  # running unmanaged and still holds the agent port on the docker bridge —
+  # `sysible-flashback` then cannot bind it and dies on startup.
   #
-  # --remove-orphans is compose's own answer: the stale container carries this
-  # project's labels with a service name the file no longer defines, which is
-  # exactly what an orphan is. Scoped to slop, and announced, because it removes
-  # containers — anything an operator attached to this project by hand would go
-  # with it, and they should see that coming rather than find out.
+  # --remove-orphans is compose's own answer: that container carries this
+  # project's labels under a service name the file no longer defines. Scoped to
+  # slop and announced, because it removes containers.
+  #
+  # NOTE: `sysible-baseline` may ALSO be the config manager's container, which
+  # is a legitimate service in this stack. Compose only removes orphans — a
+  # container whose service still exists in the file is never touched — so a
+  # configured config manager survives this, and only the stranded one goes.
   local up_extra=()
   if [[ "$p" == "slop" ]]; then
     up_extra+=(--remove-orphans)
     local _stale
-    _stale="$(docker ps -a --filter "name=^/sysible-flashback$" --format '{{.Names}}' 2>/dev/null || true)"
+    _stale="$(docker ps -a --filter "name=^/sysible-baseline$" --format '{{.Names}}' 2>/dev/null || true)"
     if [[ -n "$_stale" ]]; then
-      _warn "  Found $_stale from before the Baseline rebrand. It holds the agent"
-      _warn "  port, so the new container cannot start while it exists; removing it"
-      _warn "  with --remove-orphans. The version store is a NAMED VOLUME"
-      _warn "  (flashback-data) and is not touched by this."
+      _warn "  Found $_stale. If this is left over from the two-day Baseline"
+      _warn "  rename it holds Flashback's agent port and is removed as an orphan;"
+      _warn "  if it is the Baseline config manager it is a real service and is"
+      _warn "  kept. The version store is a NAMED VOLUME (flashback-data) and is"
+      _warn "  not touched either way."
     fi
   fi
   _hdr "Rebuilding + recreating via compose ($CFG)"
@@ -812,39 +815,42 @@ p_status() {
   else docker ps -a --filter "name=^/$(_p_container "$p")$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null | tail -n +1; fi
   _warn_half_recreated "$p" || true
   _health "$p" || true
-  [[ "$p" == "slop" ]] && { _slop_upstream_status; _baseline_status; }
+  [[ "$p" == "slop" ]] && { _slop_upstream_status; _flashback_status; }
   return 0
 }
 
-# Config backup (Baseline) status.
+# Config backup (Flashback) status.
 #
-# Baseline is a service inside the slop compose, so `ps` shows its container and
+# Flashback is a service inside the slop compose, so `ps` shows its container and
 # nothing more — and "Up 4 hours" is exactly what it said all the way through an
 # outage where no host could back anything up. Running is not the same as working
 # here: capture needs an agent token on BOTH sides, and the Controller reaching
-# Baseline over the host. This reports the chain, not the container.
-_baseline_status() {
+# Flashback over the host. This reports the chain, not the container.
+_flashback_status() {
   # Either container name, and either variable. A stack that has not been
   # recreated since the rebrand is still running `sysible-flashback`, and a
   # status command that reports "not running" for a container that is serving
   # perfectly sends the operator chasing an outage that isn't happening.
-  local fbc="${SYSIBLE_BASELINE_CONTAINER:-${SYSIBLE_FLASHBACK_CONTAINER:-}}"
+  local fbc="${SYSIBLE_FLASHBACK_CONTAINER:-${SYSIBLE_FLASHBACK_CONTAINER:-}}"
   if [[ -z "$fbc" ]]; then
-    if docker ps -a --filter "name=^/sysible-baseline$" -q 2>/dev/null | grep -q .; then
-      fbc=sysible-baseline
-    elif docker ps -a --filter "name=^/sysible-flashback$" -q 2>/dev/null | grep -q .; then
+    if docker ps -a --filter "name=^/sysible-flashback$" -q 2>/dev/null | grep -q .; then
       fbc=sysible-flashback
-    else
+    elif docker ps -a --filter "name=^/sysible-baseline$" -q 2>/dev/null | grep -q .; then
+      # A stack still on the two-day rename. Reporting "not running" for a
+      # container that is serving perfectly sends an operator chasing an outage
+      # that is not happening.
       fbc=sysible-baseline
+    else
+      fbc=sysible-flashback
     fi
   fi
   docker inspect "$fbc" >/dev/null 2>&1 || return 0     # not deployed here
-  _hdr "Sysible Baseline (config backup)"
+  _hdr "Sysible Flashback (config backup)"
 
   local up; up="$(docker inspect -f '{{.State.Status}}' "$fbc" 2>/dev/null || echo unknown)"
   printf '  container: %s\n' "$up"
 
-  # Both halves of the token. Baseline FAILS CLOSED without one, so an unset
+  # Both halves of the token. Flashback FAILS CLOSED without one, so an unset
   # token means every snapshot is refused — silently, from the console's side.
   local fbtok ctok
   local fb_wired=1        # cleared by any check below that fails
@@ -857,11 +863,11 @@ _baseline_status() {
   local curl_url; curl_url="$(_bl_pick URL "$cenv")"
 
   if [[ -z "$fbtok" ]]; then
-    _err "  agent token: NOT SET on Baseline — it refuses every snapshot (fails closed)."
+    _err "  agent token: NOT SET on Flashback — it refuses every snapshot (fails closed)."
     fb_wired=0
-    _warn "    fix: add SYSIBLE_BASELINE_AGENT_TOKEN to the SLOP .env, then 'sysible_ctl slop update'"
+    _warn "    fix: add SYSIBLE_FLASHBACK_AGENT_TOKEN to the SLOP .env, then 'sysible_ctl slop update'"
   elif [[ -z "$ctok" ]]; then
-    _err "  agent token: set on Baseline but MISSING on the Controller — nothing can post a backup."
+    _err "  agent token: set on Flashback but MISSING on the Controller — nothing can post a backup."
     fb_wired=0
     _warn "    fix: 'sysible_ctl slop update' seeds it, then 'sysible_ctl controller update'"
   elif [[ "$fbtok" != "$ctok" ]]; then
@@ -880,22 +886,22 @@ _baseline_status() {
     local code
     # The URL is PASSED IN, not re-read from the container's environment.
     # $curl_url was already resolved under either spelling; reading
-    # os.environ['SYSIBLE_BASELINE_URL'] in here would raise KeyError on a
+    # os.environ['SYSIBLE_FLASHBACK_URL'] in here would raise KeyError on a
     # Controller that has not been re-seeded since the rebrand, and this check
     # would report UNREACHABLE for a chain that works perfectly — the exact
     # false alarm that sends an operator looking for an outage that isn't there.
-    code="$(docker exec -e _BL_PROBE_URL="$curl_url" "$ctlc" python -c "
+    code="$(docker exec -e _FB_PROBE_URL="$curl_url" "$ctlc" python -c "
 import os,urllib.request
 try:
-    r=urllib.request.urlopen(os.environ['_BL_PROBE_URL'].rstrip('/')+'/api/health',timeout=5)
+    r=urllib.request.urlopen(os.environ['_FB_PROBE_URL'].rstrip('/')+'/api/health',timeout=5)
     print(r.status)
 except Exception as e:
     print(type(e).__name__)
 " 2>/dev/null | tail -n1)"
     if [[ "$code" == "200" ]]; then
-      _ok "  controller -> Baseline: reachable"
+      _ok "  controller -> Flashback: reachable"
     else
-      _err "  controller -> Baseline: UNREACHABLE ($code) — backups cannot be delivered."
+      _err "  controller -> Flashback: UNREACHABLE ($code) — backups cannot be delivered."
       fb_wired=0
     fi
   fi
@@ -924,7 +930,7 @@ print(len(h), sum(x.get('versions') or 0 for x in h))
   fi
 
   # THE AGENT SIDE — the link nothing else reports, and the one that leaves an
-  # operator stuck. Everything above can be green (token matched, Baseline
+  # operator stuck. Everything above can be green (token matched, Flashback
   # reachable, container up) and still nothing is ever captured, because capture
   # is driven BY THE AGENT: it asks the controller for config-backup work on its
   # own thread, and a host whose agent predates that feature never asks. From the
@@ -964,12 +970,12 @@ print(len(times), len(times) - len(never), ' '.join(sorted(never)[:6]))
         _warn "    these never have (agent too old): $never_list"
       elif [[ $fb_wired -eq 0 ]]; then
         # THE TRAP THIS EXISTS FOR. The controller records the poll BEFORE it
-        # consults Baseline (deliberately — an agent that never reaches that
+        # consults Flashback (deliberately — an agent that never reaches that
         # line is the "too old" signal), so a poll refused 503 a millisecond
         # later still counts as "asked". Reporting that as all-green sends the
         # operator to look at agents that are doing exactly what they should.
         _err "  agents: all ${total} ARE asking — and the controller is refusing every one."
-        _warn "    The fault is the controller's Baseline wiring above, not the agents."
+        _warn "    The fault is the controller's Flashback wiring above, not the agents."
         _warn "    fix: 'sysible_ctl slop update' to re-seed it, then 'sysible_ctl controller update'."
       else
         _ok "  agents: all ${total} ask for config-backup work"
@@ -1397,7 +1403,7 @@ ${BOLD}PRODUCTS${RESET}
   ${CYAN}controller${RESET}   Sysible Controller — console :8800, agent API :9000   (alias: ce)
   ${CYAN}slep${RESET}         Sysible Linux Engineering Platform — console :8810
   ${CYAN}connect${RESET}      Sysible Connect — :8700
-  ${CYAN}slop${RESET}         SLOP gateway — front door (Caddy + IdP + Baseline) on :443
+  ${CYAN}slop${RESET}         SLOP gateway — front door (Caddy + IdP + Flashback) on :443
 
 ${BOLD}COMMANDS${RESET}
  ${BOLD}run it${RESET}

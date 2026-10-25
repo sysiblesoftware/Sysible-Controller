@@ -55,7 +55,7 @@
 }
 /* ==========================================================================
    SKINS — each block is a complete look, chosen from the header skin picker.
-   Only the tokens that differ from the Slate baseline are set; everything
+   Only the tokens that differ from the Slate flashback are set; everything
    the app draws flows through these variables, so the palette does the work.
    A handful of scoped "signature" rules give each skin its one distinct move.
    ========================================================================== */
@@ -162,7 +162,7 @@ body {
 }
 
 /* The platform ground: the same topographic field as the SLOP portal, the sign-in
-   page, Baseline and the Visualizer — over the two brand glows. It replaces a
+   page, Flashback and the Visualizer — over the two brand glows. It replaces a
    green-only PNG recoloured through a CSS mask, which was a DIFFERENT field in a
    different colour, so no two Sysible surfaces agreed on what the background was.
 
@@ -384,7 +384,7 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100%; }
 .main-top {
-  display: flex; align-items: baseline; gap: 14px; padding: 18px 26px 14px;
+  display: flex; align-items: flashback; gap: 14px; padding: 18px 26px 14px;
   border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
 .main-top h2 { margin: 0; font-size: 20px; font-weight: 700; }
@@ -411,7 +411,7 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 
 .search-bar { width: 100%; padding: 11px 14px; font-size: 14px; margin-bottom: 18px;
   background: var(--panel); border: 1px solid var(--border-strong); border-radius: 7px; }
-.search-result { display: flex; align-items: baseline; width: 100%; text-align: left;
+.search-result { display: flex; align-items: flashback; width: 100%; text-align: left;
   background: transparent; border: none; border-radius: 6px; padding: 9px 12px; cursor: pointer; }
 .search-result:hover { background: var(--row-hover); }
 
@@ -527,7 +527,7 @@ tr:hover td { background: var(--row-hover); }
   max-height: calc(100vh - 230px); }
 .he-2col .he-actions { flex: 1; min-width: 0; }
 @media (max-width: 900px) { .he-2col { flex-direction: column; } .he-2col .he-hosts { width: 100%; } }
-.he-section-head { display: flex; align-items: baseline; justify-content: space-between;
+.he-section-head { display: flex; align-items: flashback; justify-content: space-between;
   gap: 12px; margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--border); }
 .he-section-head h3 { font-size: 16px; font-weight: 700; margin: 0; }
 .he-portal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
@@ -871,7 +871,7 @@ tr:hover td { background: var(--row-hover); }
 .d3l-modetab:hover { background: var(--row-hover); color: var(--text); }
 .d3l-modetab.active { background: var(--btn); color: #fff; }
 
-/* Compare workspace: baseline rail + wide compare panel */
+/* Compare workspace: flashback rail + wide compare panel */
 .d3l-cmpwrap { display: grid; grid-template-columns: minmax(200px, 0.8fr) minmax(320px, 2.6fr);
   gap: 12px; margin-top: 12px; align-items: start; }
 @media (max-width: 900px) { .d3l-cmpwrap { grid-template-columns: 1fr; } }
@@ -910,7 +910,7 @@ tr:hover td { background: var(--row-hover); }
 
 .d3l-col { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
   display: flex; flex-direction: column; min-height: 320px; max-height: calc(100vh - 230px); overflow: hidden; }
-.d3l-colhead { display: flex; justify-content: space-between; align-items: baseline;
+.d3l-colhead { display: flex; justify-content: space-between; align-items: flashback;
   padding: 10px 12px; font-weight: 600; font-size: 13px; border-bottom: 1px solid var(--border);
   color: var(--text); gap: 8px; }
 .d3l-colhead .faint, .d3l .faint { color: var(--text-faint); }

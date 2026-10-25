@@ -85,8 +85,15 @@ services:
       # reading an .env that still says FLASHBACK — and the fallback is what
       # stops config backup switching itself off fleet-wide in that window,
       # with both halves looking correctly configured.
-      SYSIBLE_FLASHBACK_URL: "${SYSIBLE_FLASHBACK_URL:-${SYSIBLE_FLASHBACK_URL:-}}"
-      SYSIBLE_FLASHBACK_AGENT_TOKEN: "${SYSIBLE_FLASHBACK_AGENT_TOKEN:-${SYSIBLE_FLASHBACK_AGENT_TOKEN:-}}"
+      SYSIBLE_FLASHBACK_URL: "${SYSIBLE_FLASHBACK_URL:-}"
+      SYSIBLE_FLASHBACK_AGENT_TOKEN: "${SYSIBLE_FLASHBACK_AGENT_TOKEN:-}"
+      # Desired-state configuration (Sysible Baseline). A SEPARATE service from
+      # Flashback with a SEPARATE token: Flashback's reads and writes a host's
+      # stored configuration, Baseline's declares what a host must become. One
+      # token for both would make a compromise of either a compromise of both.
+      # Both empty by default: a standalone controller manages no desired state.
+      SYSIBLE_BASELINE_URL: "${SYSIBLE_BASELINE_URL:-}"
+      SYSIBLE_BASELINE_AGENT_TOKEN: "${SYSIBLE_BASELINE_AGENT_TOKEN:-}"
       # Sysible Relay (bastion / jump-box transport). These are the FALLBACK for
       # each field — the console's Host Enrollment -> Relay / Bastion tab stores
       # them in the DB and that wins, so an operator can point the controller at a

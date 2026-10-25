@@ -302,16 +302,28 @@ def test_the_reachability_probe_does_not_reread_the_variable_inside_the_containe
     assert "_FB_PROBE_URL" in code
 
 
-def test_the_client_module_is_flashback_again():
-    """backend/flashback.py, not backend/baseline.py — and nothing should be
-    importing the rename-era name."""
-    assert (REPO / "backend" / "flashback.py").exists()
-    assert not (REPO / "backend" / "baseline.py").exists(), \
-        "both module names exist; one of them is dead code nobody will notice"
-    for rel in ["backend/app.py", "webgui/server.py", "host_agent/agent.py"]:
-        src = (REPO / rel).read_text()
-        assert not re.search(r"\bfrom backend import baseline\b", src), rel
-        assert not re.search(r"\bbackend\.baseline\b", src), rel
+def test_both_client_modules_exist_and_are_different_products():
+    """backend/flashback.py and backend/baseline.py BOTH exist now, and that is
+    correct — they are clients for two different services.
+
+    This test used to assert baseline.py was absent, which was right while that
+    filename meant the renamed backup module and wrong the moment Sysible
+    Baseline became a product of its own. What matters is no longer that one is
+    missing, but that they never become the same thing: two services, two
+    tokens, two addresses, two jobs.
+    """
+    fb = REPO / "backend" / "flashback.py"
+    bl = REPO / "backend" / "baseline.py"
+    assert fb.exists() and bl.exists()
+    fbs, bls = fb.read_text(), bl.read_text()
+    # Each reads ONLY its own prefix.
+    assert 'os.getenv(f"SYSIBLE_FLASHBACK_{suffix}")' in fbs
+    assert 'os.getenv(f"SYSIBLE_BASELINE_{suffix}")' in bls
+    assert "SYSIBLE_FLASHBACK_" not in bls, \
+        "the Baseline client reads Flashback's settings"
+    # And neither imports the other.
+    assert "from backend import baseline" not in fbs
+    assert "from backend import flashback" not in bls
 
 
 def test_flashback_does_not_read_the_config_managers_settings(monkeypatch):

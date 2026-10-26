@@ -388,16 +388,25 @@ def test_a_redirect_to_sign_in_is_the_gateways_healthy_answer(sandbox):
     assert "health: OK" in out
 
 
-def test_a_gateway_that_proxies_a_dead_app_is_still_a_live_gateway(sandbox):
+def test_a_gateway_that_proxies_a_dead_app_is_not_blamed_for_it(sandbox):
     """A 502 from a REVERSE PROXY means the proxy is up and something behind it
     is not. Reporting 'the gateway is not answering' there sends the operator to
-    restart the one component that was working."""
+    restart the one component that was working.
+
+    That rule is about the MESSAGE, and it still holds. The verdict changed:
+    this used to also return success, so `sysiblectl slop update` printed
+    "updated" over a platform whose portal served 502. Those are not in tension
+    — the message must not blame the gateway, and the exit code must not call a
+    dead portal a finished update.
+    """
     rc, out, err = run(sandbox, "_health_wait slop 4", FAKE_HTTP_CODE="502")
-    assert rc == 0, err
     both = out + err
-    assert "is answering" in both, both
     assert "BEHIND the gateway" in both, both
     assert "NOT answering" not in both, both
+    assert "gateway is not answering" not in both.lower(), both
+    # It names what to look at instead of what to restart.
+    assert "portal or the IdP" in both, both
+    assert rc == 1, "a platform whose apex still serves 502 was called healthy"
 
 
 def test_an_app_that_answers_502_is_NOT_called_healthy(sandbox):
@@ -425,3 +434,61 @@ def test_a_failure_names_what_it_probed(sandbox):
     assert "probed:" in both, both
     assert "https://127.0.0.1:443/" in both, both
     assert "localhost" not in both, both
+
+
+# ---- a 502 right after a rebuild is "still starting", not "done" ------------
+# Reported from a real update: the stack came up, the status table showed every
+# container "Up 2 seconds (health: starting)", and sysiblectl printed
+#
+#     health: Sysible SLOP gateway is answering (https://127.0.0.1:443/ -> 502)
+#     502 comes from BEHIND the gateway (the portal/IdP), not the gateway itself.
+#     Sysible SLOP gateway updated to ed84e1c.
+#
+# _health_verdict accepts a 5xx for the gateway and is RIGHT to: a reverse proxy
+# answering 502 is up, and calling that "the gateway is not answering" sends the
+# operator to the wrong box. But _health_wait then returned on the first probe,
+# so the loop that exists for "the container may still be starting" was skipped
+# for the most likely startup symptom there is — the portal sits behind
+# forward_auth to an IdP container two seconds old.
+def test_a_five_hundred_does_not_end_the_wait(sandbox):
+    """It must keep polling, and succeed once the thing behind comes up."""
+    rc, out, err = run(sandbox, """
+        # The counter lives in a FILE: _health_wait reads the probe through a
+        # command substitution, which is a subshell, so a shell variable
+        # incremented inside it never comes back. (The first version of this
+        # test used one, so every probe saw the same count and the test failed
+        # against correct code.)
+        C="$(mktemp)"; echo 0 > "$C"
+        _health_probe() {
+            n=$(( $(cat "$C") + 1 )); echo "$n" > "$C"
+            if [ "$n" -lt 3 ]; then echo "502 https://127.0.0.1:443/"
+            else echo "302 https://127.0.0.1:443/"; fi
+        }
+        _health_wait slop 20
+        echo "probes=$(cat "$C")"
+    """)
+    assert rc == 0, err
+    assert "health: OK" in out, out
+    # 3 probes in the loop, plus the one _health makes when it reports.
+    assert "probes=4" in out, f"it stopped polling early: {out}"
+
+
+def test_a_five_hundred_that_never_clears_is_a_failed_bring_up(sandbox):
+    """"updated" over a platform whose portal serves 502 is the same lie as
+    "is up" over a dead front door."""
+    rc, out, err = run(sandbox, "_health_wait slop 4", FAKE_HTTP_CODE="502")
+    assert rc == 1, "a persistent 502 was reported as a healthy bring-up"
+    both = out + err
+    assert "still answering 502" in both, both
+    assert "did not come up" in both, both
+    # ...and it still explains that the 502 came from behind the gateway, once.
+    assert both.count("comes from BEHIND the gateway") == 1, both
+
+
+def test_a_one_shot_health_check_still_accepts_a_five_hundred(sandbox):
+    """`sysiblectl slop status` asks a different question — is the GATEWAY up —
+    and for that a 502 is a yes. Only the post-rebuild wait treats it as
+    'not yet'."""
+    rc, out, err = run(sandbox, "_health slop", FAKE_HTTP_CODE="502")
+    assert rc == 0, "the gateway answering 502 was reported as a dead gateway"
+    assert "is answering" in out

@@ -50,18 +50,40 @@ _p_port() { case "$1" in
   slop)       echo 443 ;;
 esac; }
 # Space-separated volume list (a product may keep state across several volumes).
-_p_volume() { case "$1" in
+# The named volumes a product keeps its data in.
+#
+# ASK THE COMPOSE FILE FIRST. This list used to be hard-coded, and it went stale
+# exactly as you would expect: baseline-data was added to the SLOP stack and
+# this table never learned about it, so `sysiblectl slop backup` wrote four
+# tarballs, reported success, and silently left out every declared state and
+# every version of it — a store that cannot be rebuilt from anything else. The
+# compose file is the only thing that actually knows which volumes a stack has,
+# and the two live in different repositories, so a list copied from it here is a
+# list that drifts.
+#
+# The hard-coded table below is the FALLBACK, for when compose cannot be reached
+# (the product is not deployed on this host, or docker is not running). It is
+# still worth having — `backup` should say which volumes it expected — but it is
+# no longer what is trusted when the real answer is available.
+_p_volume_declared() { case "$1" in
   controller)    echo sysible-data ;;
   slep)          echo slep-data ;;
   connect)       echo connect-data ;;
-  # The slop stack keeps the IdP user store, Caddy's certs/config, AND the Flashback
-  # version store (Flashback is a service in the slop compose, not a separate stack).
   # flashback-data is Flashback's version store and KEEPS ITS PRE-REBRAND NAME.
-  # It holds every version of every config file on every host and is the only
-  # thing in the stack that cannot be rebuilt from anything else, so it was not
+  # It holds every version of every config file on every host, so it was not
   # renamed with the product — see the SLOP compose file.
-  slop)          echo "slop-idp-data slop-caddy-data slop-caddy-config flashback-data" ;;
+  slop)          echo "slop-idp-data slop-caddy-data slop-caddy-config flashback-data baseline-data" ;;
 esac; }
+
+_p_volume() {
+  local p="$1" vols=''
+  # `compose config --volumes` prints the project's named volumes, one per line.
+  # Run inside a subshell: _discover sets CFG/WD, and this must not leak that
+  # into a caller that was working on a different product.
+  vols="$( _discover "$p" >/dev/null 2>&1 && _compose config --volumes 2>/dev/null | tr '\n' ' ' || true )"
+  vols="${vols%"${vols##*[![:space:]]}"}"
+  if [[ -n "$vols" ]]; then echo "$vols"; else _p_volume_declared "$p"; fi
+}
 _p_health_path() { case "$1" in
   controller|slep) echo /api/health ;;
   connect)         echo /healthz ;;
@@ -287,13 +309,53 @@ _health() {
 # "no response on 443" arrived as a shrug immediately followed by a success line,
 # and there was nothing to act on. A bring-up that cannot serve its own port is a
 # FAILED bring-up, and the container's last words are the diagnosis.
+#
+# A 5xx does not END the wait. _health_verdict accepts one for the gateway and
+# is right to — a reverse proxy answering 502 IS up, and saying "the gateway is
+# not answering" sends the operator to the wrong box. But a 502 straight after
+# `up -d --build` is overwhelmingly the thing this loop exists for: the portal
+# sits behind forward_auth to the IdP, and the IdP container is seconds old.
+# Accepting it on the first pass meant the wait was skipped for the single most
+# likely startup symptom, and the update then printed
+#
+#     health: ... is answering (https://127.0.0.1:443/ -> 502)
+#     Sysible SLOP gateway updated to <sha>.
+#
+# which is "updated" over a platform whose portal serves nothing. So a 5xx keeps
+# polling, and is only accepted once the time is up — by which point it is a
+# real fault and worth every word of the explanation.
 _health_wait() {
-  local p="$1" secs="${2:-60}" i port c path
+  local p="$1" secs="${2:-60}" i port c path out code
   port="$(_p_port "$p")"; c="$(_p_container "$p")"; path="$(_p_health_path "$p")"
   for ((i = 0; i < secs; i += 2)); do
-    if _health "$p"; then return 0; fi
+    out="$(_health_probe "$p" || true)"
+    code="${out%% *}"
+    case "$code" in
+      5*) : ;;                      # still coming up — keep waiting
+      *)  if _health "$p"; then return 0; fi ;;
+    esac
     sleep 2
   done
+  # Out of time. A 5xx that is still there is a real fault now — but what to SAY
+  # about it depends on who answered.
+  #
+  # For the gateway, "not answering" would be the misdiagnosis this whole check
+  # exists to prevent: a reverse proxy returning 502 is up, and the thing to fix
+  # is behind it. So _health prints that explanation once, and the error names
+  # the portal and the IdP rather than the gateway. The exit code is still a
+  # failure, because "updated" over a platform whose apex serves 502 is the same
+  # lie as "is up" over a dead front door — the two are not in tension, they are
+  # the message and the verdict.
+  #
+  # For every other product a 5xx from its own health endpoint has no proxy
+  # excuse, and the generic branch below already says the right thing.
+  if [[ "${code:-}" == 5* && "$p" == "slop" ]]; then
+    _health "$p" || true
+    _err "$(_p_pretty "$p") is still answering ${code} after ${secs}s — the portal or the IdP behind the gateway did not come up."
+    _warn "  what each service is doing: $(basename "$0") $p status"
+    _warn "  the service's own words:    $(basename "$0") $p logs"
+    return 1
+  fi
   # "Not answering" and "answering with a status I refuse" are different faults
   # and need different advice; saying the first when it was the second is how an
   # operator ends up restarting a service that was never the problem.

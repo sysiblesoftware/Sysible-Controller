@@ -1,0 +1,125 @@
+"""`sysiblectl <p> backup` must not quietly skip a store.
+
+Reported from a real update, in its own success line:
+
+    Sysible SLOP gateway updated to ed84e1c.
+      Volume 'slop-idp-data slop-caddy-data slop-caddy-config flashback-data'
+      preserved.
+
+Five named volumes exist in that stack. Four are listed. The missing one is
+baseline-data, which holds every declared state and every version of it — and
+`p_backup` iterates exactly this list, one tarball per volume. So an operator
+could run the backup, watch four tarballs appear, be told it succeeded, and
+have no copy of the one store in the stack that cannot be rebuilt from anything
+else. That is the failure Flashback exists to prevent, happening to the tool
+that is supposed to prevent it.
+
+The cause is structural, not a typo: the list was hard-coded here and the
+compose file that actually defines those volumes lives in a DIFFERENT
+repository. A list copied across a repo boundary is a list that drifts, and
+nothing on either side could notice.
+
+So the list is now asked of compose, and the hard-coded table is only the
+fallback for when compose cannot be reached.
+"""
+import os
+import re
+import subprocess
+import textwrap
+
+import pytest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+CTL = os.path.join(os.path.dirname(HERE), "deploy", "sysiblectl")
+# The SLOP checkout, when it happens to sit alongside this one.
+SLOP_COMPOSE = os.path.join(os.path.dirname(os.path.dirname(HERE)),
+                            "slop", "docker-compose.yml")
+
+
+@pytest.fixture
+def lib(tmp_path):
+    src = open(CTL, encoding="utf-8").read()
+    p = tmp_path / "ctl.lib.sh"
+    p.write_text(re.sub(r'^main "\$@"\s*$', "", src, flags=re.M))
+    return str(p)
+
+
+def run(lib, snippet):
+    script = f'. "{lib}"\n' + textwrap.dedent(snippet)
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                       timeout=60, env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                                        "HOME": os.environ.get("HOME", "/root")})
+    return r.returncode, r.stdout.strip(), r.stderr
+
+
+def test_the_volume_list_comes_from_compose_when_compose_can_answer(lib):
+    """Whatever the stack actually declares, including something this file has
+    never heard of."""
+    rc, out, err = run(lib, """
+        _discover() { return 0; }
+        _compose() { printf 'a-data\\nb-data\\nsomething-new-data\\n'; }
+        _p_volume slop
+    """)
+    assert rc == 0, err
+    assert out == "a-data b-data something-new-data", out
+
+
+def test_it_falls_back_to_the_table_when_compose_cannot_be_reached(lib):
+    """A product that is not deployed on this host still has to produce a
+    sensible answer — `backup` should say which volumes it expected."""
+    rc, out, err = run(lib, """
+        _discover() { return 1; }
+        _p_volume slop
+    """)
+    assert rc == 0, err
+    assert "baseline-data" in out, out
+    assert "flashback-data" in out, out
+
+
+def test_the_fallback_table_lists_baselines_store(lib):
+    """The specific omission that was shipped."""
+    rc, out, err = run(lib, "_p_volume_declared slop")
+    assert "baseline-data" in out, \
+        f"Baseline's store is missing from the fallback list again: {out}"
+
+
+def test_backup_writes_one_tarball_per_volume(lib, tmp_path):
+    """The list is not cosmetic — it is the loop p_backup runs."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "docker").write_text(
+        "#!/bin/sh\n"
+        'case "$1" in volume) exit 0 ;; run) printf "%s\\n" "$*" >> "$TARLOG"; exit 0 ;; esac\n'
+        "exit 0\n")
+    (bindir / "docker").chmod(0o755)
+    tarlog = tmp_path / "tar.log"
+    script = (f'. "{lib}"\n'
+              '_discover() { return 1; }\n'      # force the fallback table
+              'cd "$WORK"; p_backup slop >/dev/null 2>&1\n')
+    subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+                   env={"PATH": str(bindir) + ":" + os.environ.get("PATH", "/usr/bin:/bin"),
+                        "HOME": os.environ.get("HOME", "/root"),
+                        "TARLOG": str(tarlog), "WORK": str(tmp_path)})
+    calls = tarlog.read_text() if tarlog.exists() else ""
+    for vol in ("slop-idp-data", "flashback-data", "baseline-data"):
+        assert vol in calls, f"backup never touched {vol}:\n{calls}"
+
+
+@pytest.mark.skipif(not os.path.exists(SLOP_COMPOSE),
+                    reason="the SLOP checkout is not alongside this one")
+def test_the_fallback_matches_the_real_slop_compose_file(lib):
+    """When both repositories are checked out together — a developer machine,
+    and the host the installer lays down — the two can be compared directly.
+    This is the drift that actually happened, in the one place it can be seen.
+    """
+    text = open(SLOP_COMPOSE, encoding="utf-8").read()
+    body = text.split("\nvolumes:", 1)[1]
+    body = re.split(r"\n(?=[a-zA-Z])", body)[0]
+    declared = set(re.findall(r"^  ([a-z0-9][a-z0-9_-]*):", body, re.M))
+    rc, out, err = run(lib, "_p_volume_declared slop")
+    listed = set(out.split())
+    assert declared, "no volumes parsed out of the SLOP compose file"
+    assert declared == listed, (
+        f"the fallback list and docker-compose.yml disagree — "
+        f"only in compose: {sorted(declared - listed)}; "
+        f"only in sysiblectl: {sorted(listed - declared)}")

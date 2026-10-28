@@ -84,6 +84,21 @@ _p_volume() {
   vols="${vols%"${vols##*[![:space:]]}"}"
   if [[ -n "$vols" ]]; then echo "$vols"; else _p_volume_declared "$p"; fi
 }
+# The short commit of a product's checkout, for stamping into the images it
+# builds. A SLOP console is server-rendered, so a stale image and a current one
+# are indistinguishable from outside — this is what lets each console print the
+# build it is actually running. Empty for anything that is not a git checkout,
+# and the console then says "version unknown" rather than claiming a build it
+# cannot prove.
+_p_rev() {
+  local d="$1" root
+  # Via _git_root, not a `.git` test on $d: the dir handed in is the COMPOSE
+  # dir, and for products whose compose lives in deploy/ that is a subdirectory
+  # of the checkout. Testing $d/.git directly left those products unstamped.
+  root="$(_git_root "$d" 2>/dev/null)" || return 0
+  git -C "$root" -c "safe.directory=$root" rev-parse --short HEAD 2>/dev/null || true
+}
+
 _p_health_path() { case "$1" in
   controller|slep) echo /api/health ;;
   connect)         echo /healthz ;;
@@ -668,7 +683,10 @@ p_update() {
   # command carried straight on to restart the gateway — so a failed update took
   # down a working front door. An update that could not build anything must leave
   # the running system exactly as it found it.
-  if ! _compose up -d --build "${up_extra[@]+"${up_extra[@]}"}"; then
+  # Read by the compose file as a build arg, so every image carries the commit
+  # it was built from and every console can show it.
+  local rev; rev="$(_p_rev "${WD:-$(dirname "$CFG")}")"
+  if ! SYSIBLE_SLOP_REV="$rev" _compose up -d --build "${up_extra[@]+"${up_extra[@]}"}"; then
     _err "$(_p_pretty "$p"): the build/recreate FAILED — see the output above."
     _warn "  Nothing was changed on the running system; it is still serving what it was."
     return 1
@@ -1212,7 +1230,9 @@ p_rebuild() {
   # that failed, or a container that could not bind its port, still reached the
   # "is up." line below — and install.sh, reading only the exit code, reported the
   # gateway as up. That is how a dead front door gets announced as a success.
-  if ! ( cd "$(dirname "$cfg")"; "${DC[@]}" -f "$cfg" "${envargs[@]}" up -d --build ); then
+  local rev; rev="$(_p_rev "$dir")"
+  if ! ( cd "$(dirname "$cfg")"; SYSIBLE_SLOP_REV="$rev" \
+         "${DC[@]}" -f "$cfg" "${envargs[@]}" up -d --build ); then
     _err "$(_p_pretty "$p"): compose failed to build or start it (see the output above)."
     return 1
   fi

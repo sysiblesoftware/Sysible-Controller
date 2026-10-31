@@ -241,13 +241,44 @@ _IPTABLES_MISSING = (
 #
 # An operator wants "open 443 on these hosts". WHICH of firewalld or ufw carries
 # that out is the host's business, and the host already knows. So ask it.
+# Is this backend ENFORCING right now? Asked the same way for both, which it
+# was not: firewalld was asked `firewall-cmd --state`, a real state query, and
+# ufw was asked to print its status as text which was then grepped.
+#
+# `ufw status` REQUIRES ROOT. When it cannot run it does not print "inactive" -
+# it prints an error, the grep finds nothing, and a running ufw reads as a
+# stopped one. The host then fell through to "whichever is enabled at boot",
+# which tries firewalld first, so a host with ufw actually enforcing and
+# firewalld merely enabled was reported as:
+#
+#     Backend: firewalld
+#     Running: not running
+#     Starts at boot: enabled
+#
+# ...followed by firewalld's port list, which is not the ruleset in force. That
+# is the "firewall enabled but not running" an operator sees on a host that is,
+# in fact, firewalled. Any sudo that does not cover ufw produces it.
+#
+# systemctl answers both questions without root and without parsing prose, so
+# it goes first for each. The command-level probes stay as a fallback for a host
+# with no systemd, and for a firewalld whose unit name is not what we expect.
+_FW_LIVE = (
+    "_fw_live() { case \"$1\" in "
+    "firewalld) command -v firewall-cmd >/dev/null 2>&1 || return 1; "
+    "systemctl is-active --quiet firewalld 2>/dev/null && return 0; "
+    "firewall-cmd --state >/dev/null 2>&1 && return 0; return 1 ;; "
+    "ufw) command -v ufw >/dev/null 2>&1 || return 1; "
+    "systemctl is-active --quiet ufw 2>/dev/null && return 0; "
+    "ufw status 2>/dev/null | grep -qi 'Status: active' && return 0; return 1 ;; "
+    "esac; return 1; }; "
+)
+
 _FW_PICK = (
+    _FW_LIVE +
     "_fw_pick() { "
     # What is ENFORCING right now wins - that is where a rule has to go.
-    "if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; "
-    "then echo firewalld; return; fi; "
-    "if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; "
-    "then echo ufw; return; fi; "
+    "if _fw_live firewalld; then echo firewalld; return; fi; "
+    "if _fw_live ufw; then echo ufw; return; fi; "
     # Nothing running: whichever is set to come up owns this host, even today.
     "for _u in firewalld ufw; do "
     "if systemctl is-enabled --quiet \"$_u\" 2>/dev/null; then echo \"$_u\"; return; fi; done; "
@@ -281,17 +312,50 @@ def _port_both_ways(value: str, label: str = "Port"):
 
 
 def cmd_fw_status() -> str:
-    """What this host's firewall is, and what it is doing."""
+    """What this host's firewall is, and what it is doing.
+
+    Reports the OTHER backend too when the host carries both. A host with
+    firewalld and ufw installed is the one where every reading of this screen
+    can be wrong in a way that is invisible: "Running: not running" is alarming
+    and useless if the other one is quietly enforcing, and two live at once is
+    the condition where they overwrite each other's netfilter tables and
+    connectivity comes and goes. Neither can be seen from one backend's status.
+    """
     return (
         _FW_PICK +
+        # Running state from systemctl, which answers without root. `ufw status`
+        # does not, and reading "not running" off a command that was refused is
+        # how a firewalled host gets reported as unprotected.
+        "_fw_state() { if _fw_live \"$1\"; then echo running; "
+        "elif systemctl is-enabled --quiet \"$1\" 2>/dev/null; then "
+        "echo 'NOT running (but set to start at boot)'; "
+        "else echo 'not running'; fi; }; "
         '_b=$(_fw_pick); echo "Backend: $_b"; case "$_b" in '
-        "firewalld) printf 'Running: '; firewall-cmd --state 2>&1; "
+        "firewalld) printf 'Running: '; _fw_state firewalld; "
         "printf 'Starts at boot: '; systemctl is-enabled firewalld 2>&1; "
         "echo; echo '-- open ports --'; firewall-cmd --list-ports 2>&1; "
         "echo; echo '-- services --'; firewall-cmd --list-services 2>&1 ;; "
-        "ufw) ufw status verbose 2>&1; "
-        "echo; printf 'Starts at boot: '; systemctl is-enabled ufw 2>&1 ;; "
-        "*) " + _NO_FIREWALL + " ;; esac"
+        "ufw) printf 'Running: '; _fw_state ufw; "
+        "printf 'Starts at boot: '; systemctl is-enabled ufw 2>&1; "
+        "echo; echo '-- rules --'; "
+        # Not 2>&1 into the rule list: ufw's root refusal would land there
+        # looking like a rule. Say what happened instead.
+        "if ufw status verbose 2>/dev/null; then :; else "
+        "echo '(could not read the rules - ufw status needs root, and this "
+        "command did not have it. The running state above came from systemctl, "
+        "which does not.)'; fi ;; "
+        "*) " + _NO_FIREWALL + " ;; esac; "
+        # ---- and the one it did NOT pick -----------------------------------
+        "_o=none; [ \"$_b\" = firewalld ] && _o=ufw; [ \"$_b\" = ufw ] && _o=firewalld; "
+        "if [ \"$_o\" != none ] && command -v \"$_o\" >/dev/null 2>&1 "
+        "|| { [ \"$_o\" = firewalld ] && command -v firewall-cmd >/dev/null 2>&1; }; then "
+        "echo; echo \"-- $_o is also installed on this host --\"; "
+        "printf 'Running: '; _fw_state \"$_o\"; "
+        "if _fw_live \"$_o\"; then "
+        "echo \"WARNING: $_b and $_o are BOTH running. They write the same"
+        " netfilter tables and overwrite each other - rules come and go, and"
+        " the host can lose connectivity. Turn one off.\"; "
+        "else echo \"(not enforcing - $_b is the one in charge)\"; fi; fi"
     )
 
 

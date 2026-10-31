@@ -390,9 +390,20 @@ def _require_gateway_when_sso(request: Request):
     The BFF mints a session cookie from the SSO headers, so without this a cookie
     picked up through the gateway goes on working directly against the console's
     own published port — outliving the SLOP sign-out that was supposed to end it,
-    for the cookie's full life. Clear it and refuse. Called by EVERY auth gate,
-    including /api/me, which does its own session check rather than depending on
-    require_login and would otherwise still answer from that cookie.
+    for the cookie's full life. Clear it and refuse.
+
+    EVERY auth gate must call this, including /api/me, which does its own session
+    check rather than depending on require_login and would otherwise still answer
+    from that cookie. For a long time only require_login and /api/me did:
+    require_operator and require_superuser_session called _ensure_sso_session,
+    which MINTS a session from gateway headers but does not REQUIRE them, so the
+    replay stayed open on every write and superuser route — fleet dispatch (which
+    runs as root), schedules, enrolment, the portal, TLS install. Those are the
+    routes a replay is worth doing.
+
+    tests/test_sso_is_the_only_door.py now walks the route table for every
+    `require_*` dependency and asserts each one refuses, so a gate added without
+    this call fails there rather than quietly.
     """
     if sso_only() and not _sso_identity(request):
         request.session.clear()
@@ -442,6 +453,7 @@ def require_operator(request: Request):
     controller also blocks command dispatch for auditors server-side, so this
     is the front-of-house half of a defence-in-depth pair."""
     _ensure_sso_session(request)
+    _require_gateway_when_sso(request)
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -470,6 +482,7 @@ def require_superuser_session(request: Request):
     the effective control; the high-value writes also get controller-side
     require_superuser as defence-in-depth."""
     _ensure_sso_session(request)
+    _require_gateway_when_sso(request)
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -784,7 +797,16 @@ def admin_setup_required_route():
     yet, so the console shows a 'create your administrator' screen instead of a
     login form. No session — there is no account to authenticate as. Fails SAFE:
     if the controller can't be reached we report NOT required (show login), so a
-    create-admin form is never offered on a controller that actually has admins."""
+    create-admin form is never offered on a controller that actually has admins.
+
+    Always false when SLOP owns identity. Nothing creates the controller's local
+    admin row until someone visits through the gateway (sso_provision does it),
+    so on a fresh platform install the controller genuinely HAS no administrator
+    and would answer "yes" — putting a create-your-administrator wizard in front
+    of whoever opened the console's published port first. There is no first-run
+    administrator to create in this mode; accounts live in SLOP Administration."""
+    if sso_only():
+        return {"setup_required": False}
     try:
         return {"setup_required": bool(api.admin_setup_required())}
     except Exception as e:
@@ -796,7 +818,19 @@ def admin_setup_required_route():
 def admin_setup_route(body: SetupRequest, request: Request):
     """PUBLIC (pre-login): create the FIRST administrator and log them straight in.
     The controller returns 409 once any admin exists, so this can't add accounts
-    later. On success we establish the session exactly like /api/login."""
+    later. On success we establish the session exactly like /api/login.
+
+    Refused outright when SLOP owns identity, for the same reason /api/login is:
+    the "409 once any admin exists" backstop does not arm here. The controller's
+    local admin row is created by sso_provision on the first gateway visit, so
+    before that visit a fresh platform install has no administrator and this
+    route would mint a superuser — with its own password and session — that SLOP
+    Administration can neither see nor revoke."""
+    if sso_only():
+        raise HTTPException(status_code=403,
+                            detail="This console has no first-run setup — sign in at the "
+                                   "Sysible Linux Operations Platform. Accounts are "
+                                   "managed in SLOP Administration.")
     import requests
     username = body.username.strip()
     if not username or not body.password:

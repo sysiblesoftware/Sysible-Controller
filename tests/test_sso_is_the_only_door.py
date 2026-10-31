@@ -92,3 +92,193 @@ def test_standalone_console_keeps_its_own_login(bff, monkeypatch):
     # Not 403 — the local login is still the way in when there is no SLOP.
     r = bff.post("/api/login", json={"username": "nope", "password": "nope"})
     assert r.status_code != 403
+
+
+# ---------------------------------------------------------------------------
+# EVERY gate, not just require_login
+# ---------------------------------------------------------------------------
+# The gap the tests above missed: _require_gateway_when_sso says in its own
+# docstring that it is "called by EVERY auth gate", and it was called by two of
+# four. require_operator and require_superuser_session called only
+# _ensure_sso_session — which mints the session from gateway headers but does
+# not REQUIRE them — so the replay closed above for /api/me stayed wide open on
+# every write and superuser route: fleet dispatch (root), schedules, enrolment,
+# the portal, TLS install. Those are the routes the replay was worth doing.
+#
+# So the check below is written against the gate functions themselves, found by
+# walking the route table, rather than against a hand-picked route. A new gate,
+# or a new route on an existing one, is covered the day it is added.
+from starlette.requests import Request as _StarletteRequest  # noqa: E402
+
+_GATEWAY_SESSION = {
+    "_sso": True, "user": "alice", "role": "superuser",
+    "sudo_connect": False, "must_change_password": False,
+}
+
+
+def _request(session=None, headers=None):
+    """A Starlette Request with a session, as the gates see it."""
+    hdrs = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
+    return _StarletteRequest({"type": "http", "method": "GET", "path": "/api/x",
+                              "headers": hdrs, "session": dict(session or {})})
+
+
+def _route_gates():
+    """Every `require_*` dependency reachable from the BFF's route table."""
+    from fastapi.routing import APIRoute
+
+    found, seen = {}, set()
+
+    def walk(dep):
+        if id(dep) in seen:
+            return
+        seen.add(id(dep))
+        call = getattr(dep, "call", None)
+        name = getattr(call, "__name__", "")
+        if name.startswith("require_") and getattr(call, "__module__", "") == srv.__name__:
+            found[name] = call
+        for sub in getattr(dep, "dependencies", ()) or ():
+            walk(sub)
+
+    for route in srv.app.routes:
+        if isinstance(route, APIRoute):
+            walk(route.dependant)
+    return found
+
+
+@pytest.fixture
+def live_session(monkeypatch):
+    """A session cookie exactly as a gateway visit mints one: SSO-flagged, with a
+    controller token that revalidates clean."""
+    monkeypatch.setattr(srv.api, "whoami", lambda: {"role": "superuser"})
+    sess = dict(_GATEWAY_SESSION)
+    sess["token_enc"] = srv._encrypt_token("tok")
+    return sess
+
+
+def test_the_route_table_has_the_gates_we_think_it_has():
+    # Guards the walker itself: if it silently finds nothing, every assertion
+    # below passes for the wrong reason.
+    gates = _route_gates()
+    assert set(gates) >= {"require_login", "require_login_changed",
+                          "require_operator", "require_superuser_session"}, gates
+
+
+def test_no_gate_accepts_a_replayed_cookie_without_the_gateway(sso_on, live_session):
+    from fastapi import HTTPException
+    for name, gate in sorted(_route_gates().items()):
+        req = _request(live_session)          # the cookie, no gateway headers
+        with pytest.raises(HTTPException) as ei:
+            gate(req)
+        assert ei.value.status_code == 401, f"{name} answered {ei.value.status_code}"
+        assert "Sysible Linux Operations Platform" in str(ei.value.detail), name
+        assert req.session == {}, f"{name} left the stale session in place"
+
+
+def test_every_gate_still_passes_a_real_gateway_request(sso_on, live_session):
+    for name, gate in sorted(_route_gates().items()):
+        assert gate(_request(live_session, _hdrs(user="alice", role="superuser"))) == "alice", name
+
+
+def test_standalone_gates_do_not_require_a_gateway(monkeypatch, live_session):
+    # No SLOP: the console's own cookie is the only identity there is.
+    monkeypatch.setattr(srv, "_TRUST_SSO", False)
+    monkeypatch.setattr(srv, "_SSO_SECRET", "")
+    for name, gate in sorted(_route_gates().items()):
+        assert gate(_request(live_session)) == "alice", name
+
+
+@pytest.fixture
+def tls_bff():
+    """A client on https://, so the Secure session cookie is actually REPLAYED.
+
+    The plain-http `bff` fixture never sends it back (https_only is on by
+    default), which is why a route-level replay test over http passes whether
+    the gate is there or not — the 401 it sees is "no cookie at all".
+    """
+    from starlette.testclient import TestClient
+    return TestClient(srv.app, base_url="https://testserver")
+
+
+def _assert_cookie_replays(client):
+    jar = client.cookies
+    assert "sysible_web" in jar, "expected the BFF to mint a session cookie"
+
+
+def test_a_write_route_refuses_the_replayed_cookie(tls_bff, sso_on, monkeypatch):
+    """The same thing end to end, through a route that actually dispatches."""
+    monkeypatch.setattr(srv.api, "sso_provision",
+                        lambda user, role: {"role": "sysadmin", "token": "tok",
+                                            "sudo_connect": False})
+    monkeypatch.setattr(srv.api, "whoami", lambda: {"role": "sysadmin"})
+    assert tls_bff.get("/api/schedules", headers=_hdrs()).status_code == 200
+    _assert_cookie_replays(tls_bff)
+
+    r = tls_bff.get("/api/schedules")        # straight at :8800 with that cookie
+    assert r.status_code == 401, r.text
+    assert "Sysible Linux Operations Platform" in r.json()["detail"]
+
+
+def test_a_superuser_route_refuses_the_replayed_cookie(tls_bff, sso_on, monkeypatch):
+    monkeypatch.setattr(srv.api, "sso_provision",
+                        lambda user, role: {"role": "superuser", "token": "tok",
+                                            "sudo_connect": False})
+    monkeypatch.setattr(srv.api, "whoami", lambda: {"role": "superuser"})
+    monkeypatch.setattr(srv.api, "get_portal_status", lambda: {"running": False})
+    assert tls_bff.get("/api/portal/status",
+                       headers=_hdrs(role="superuser")).status_code == 200
+    _assert_cookie_replays(tls_bff)
+
+    r = tls_bff.get("/api/portal/status")
+    assert r.status_code == 401, r.text
+    assert "Sysible Linux Operations Platform" in r.json()["detail"]
+
+
+def test_the_replay_is_only_blocked_because_of_the_gate(tls_bff, monkeypatch):
+    """Control: with SLOP out of the picture the very same replay WORKS.
+
+    Without this, the two tests above would also pass if the cookie were simply
+    never sent back — which is exactly how the original /api/me test came to
+    pass with the gap still open.
+    """
+    monkeypatch.setattr(srv, "_TRUST_SSO", False)
+    monkeypatch.setattr(srv, "_SSO_SECRET", "")
+    monkeypatch.setattr(srv.api, "admin_setup", lambda u, p: {"role": "superuser", "token": "tok"})
+    monkeypatch.setattr(srv.api, "whoami", lambda: {"role": "superuser"})
+    monkeypatch.setattr(srv.api, "get_portal_status", lambda: {"running": False})
+    assert tls_bff.post("/api/admin/setup",
+                        json={"username": "admin", "password": "Hunter2!!"}).status_code == 200
+    _assert_cookie_replays(tls_bff)
+    assert tls_bff.get("/api/portal/status").status_code == 200
+
+
+def test_first_run_setup_is_refused_when_slop_owns_identity(bff, sso_on):
+    """/api/login is closed under SSO; /api/admin/setup was not.
+
+    Nothing in SLOP creates the controller's local admin row until someone
+    visits through the gateway, so on a fresh platform install
+    admin_setup_required() is true and this route would mint a superuser — with
+    a password, a session, and no presence in SLOP Administration — to whoever
+    reached :8800 first.
+    """
+    r = bff.post("/api/admin/setup", json={"username": "backdoor", "password": "Hunter2!!"})
+    assert r.status_code == 403, r.text
+    assert "Sysible Linux Operations Platform" in r.json()["detail"]
+
+
+def test_the_spa_is_not_offered_a_setup_form_under_sso(bff, sso_on, monkeypatch):
+    # The console asks this before rendering anything. Answering "yes" under SSO
+    # puts a create-administrator wizard in front of an anonymous visitor.
+    monkeypatch.setattr(srv.api, "admin_setup_required", lambda: True)
+    assert bff.get("/api/admin/setup-required").json() == {"setup_required": False}
+
+
+def test_standalone_first_run_setup_still_works(bff, monkeypatch):
+    monkeypatch.setattr(srv, "_TRUST_SSO", False)
+    monkeypatch.setattr(srv, "_SSO_SECRET", "")
+    monkeypatch.setattr(srv.api, "admin_setup_required", lambda: True)
+    assert bff.get("/api/admin/setup-required").json() == {"setup_required": True}
+    monkeypatch.setattr(srv.api, "admin_setup",
+                        lambda u, p: {"role": "superuser", "token": "tok"})
+    r = bff.post("/api/admin/setup", json={"username": "admin", "password": "Hunter2!!"})
+    assert r.status_code == 200, r.text

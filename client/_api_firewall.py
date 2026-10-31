@@ -60,14 +60,89 @@ def _validate_protocol(value: str, label: str = "Protocol") -> str:
 
 
 
-def _resplit_quote(value: str, label: str) -> str:
+# ---------------------------------------------------------------------------
+# Rule specs: shell-safe is not enough, the TOOL's own options matter too
+# ---------------------------------------------------------------------------
+# A rule spec legitimately begins with a dash — `-p tcp --dport 22 -j ACCEPT`
+# is the whole point of the field — so it cannot be handled the way
+# _pkg_quote_list handles package names, by refusing a leading dash outright.
+# shlex.quote makes every token shell-safe and does nothing about the token
+# being read as a GENERAL option by iptables itself. That is the same class
+# _pkg_quote_list warns about ("shlex.quote stops shell-metacharacter injection
+# but NOT *option* injection"), and iptables has two that matter:
+#
+#   --modprobe=<command>  its own --help: "try to insert modules using this
+#                         command". iptables RUNS it, as root, as soon as a rule
+#                         needs a module (-m conntrack, the nat table, …). A
+#                         sudoers entry granting only /usr/sbin/iptables became
+#                         arbitrary root.
+#   -t / --table          iptables permutes its arguments, so a -t inside the
+#                         rule spec silently overrode the table the builder had
+#                         just validated. Verified: `iptables -t filter -A INPUT
+#                         -t nat -p tcp -j ACCEPT` put the rule in NAT.
+#
+# Long options are a closed problem: every other `--x` in a rule spec is a match
+# or target option that iptables resolves inside an extension, so naming these
+# two is complete. Short options are not, because getopt bundles: `-nM/tmp/x` is
+# `-n -M /tmp/x`. So a single-dash token may not bundle at all — a value may be
+# attached to an option that takes one (`-ptcp`), and an option that takes none
+# must stand alone (`-f`, `-4`). Nothing a person types in this field bundles.
+_IPT_BLOCKED_SHORT = set("Mt")
+_IPT_BLOCKED_LONG = {"--modprobe", "--table"}
+# iptables short options in a rule spec that take NO argument, so anything
+# following one of them in the same token is a bundle.
+_IPT_NO_ARGUMENT_SHORT = set("46nvfx")
+
+# nft is kept for defence in depth only. Its parser refuses an option that
+# follows a command — "options must be specified before commands" — so
+# `nft add rule … -f /etc/shadow` is rejected by nft itself, and
+# tests/test_a_rule_spec_cannot_become_an_option.py pins that behaviour so the
+# day an nft permutes like iptables does, this list is what holds.
+_NFT_BLOCKED_SHORT = set("fIi")
+_NFT_BLOCKED_LONG = {"--file", "--includepath", "--interactive"}
+
+
+def _reject_tool_options(token: str, label: str, blocked_short: set,
+                         blocked_long: set, no_argument_short: set) -> None:
+    """Refuse one rule-spec token that the tool would read as a general option."""
+    if not token.startswith("-") or token in ("-", "--"):
+        return
+    if token.startswith("--"):
+        name = token.split("=", 1)[0]
+        if name in blocked_long:
+            raise ValueError(
+                f"{label} may not contain the {name} option: it is an iptables/nft "
+                "option rather than part of a rule, and it changes what the command "
+                "does. Remove it.")
+        return
+
+    letters = token[1:]
+    first = letters[0]
+    if first in blocked_short:
+        raise ValueError(
+            f"{label} may not contain the -{first} option: it is an iptables/nft "
+            "option rather than part of a rule, and it changes what the command "
+            "does. Remove it.")
+    # A no-argument short option with anything attached is a bundle, and a bundle
+    # is how a blocked option hides behind an allowed one.
+    if first in no_argument_short and len(letters) > 1:
+        raise ValueError(
+            f"{label} may not bundle short options ({token!r}): write each one as "
+            "its own word, e.g. '-4 -p tcp', so nothing can hide inside another.")
+
+
+def _resplit_quote(value: str, label: str, *, blocked_short=frozenset(),
+                   blocked_long=frozenset(), no_argument_short=frozenset()) -> str:
     """For free-text rule specs handed to nft/iptables (e.g. '-p tcp
     --dport 22 -j ACCEPT'). Both tools treat their trailing arguments
     as a single space-separated token stream, the same way a person
     typing the command at a shell would - so this re-tokenizes with
     shlex.split() (rejecting unbalanced quotes) and re-quotes each
     token individually, which preserves that structure while keeping
-    every token shell-safe."""
+    every token shell-safe.
+
+    `blocked_*` additionally refuse the tool's own general options — see the
+    block above for why shell-safety alone is not enough here."""
     value = (value or "").strip()
     if not value:
         raise ValueError(f"{label} is required.")
@@ -77,7 +152,20 @@ def _resplit_quote(value: str, label: str) -> str:
         raise ValueError(f"{label} could not be parsed ({e}). Check for unbalanced quotes.")
     if not tokens:
         raise ValueError(f"{label} is required.")
+    for tok in tokens:
+        _reject_tool_options(tok, label, blocked_short, blocked_long, no_argument_short)
     return " ".join(shlex.quote(t) for t in tokens)
+
+
+def _resplit_iptables(value: str, label: str) -> str:
+    return _resplit_quote(value, label, blocked_short=_IPT_BLOCKED_SHORT,
+                          blocked_long=_IPT_BLOCKED_LONG,
+                          no_argument_short=_IPT_NO_ARGUMENT_SHORT)
+
+
+def _resplit_nft(value: str, label: str) -> str:
+    return _resplit_quote(value, label, blocked_short=_NFT_BLOCKED_SHORT,
+                          blocked_long=_NFT_BLOCKED_LONG)
 
 
 _FIREWALLD_MISSING = (
@@ -728,7 +816,7 @@ def cmd_nft_add_rule(family: str, table: str, chain: str, rule_spec: str) -> str
     family = _validate_nft_family(family)
     table = _validate_nft_identifier(table, "Table name")
     chain = _validate_nft_identifier(chain, "Chain name")
-    q_rule = _resplit_quote(rule_spec, "Rule")
+    q_rule = _resplit_nft(rule_spec, "Rule")
     return (
         _NFT_MISSING +
         f"nft add rule {family} {shlex.quote(table)} {shlex.quote(chain)} {q_rule} 2>&1 "
@@ -813,7 +901,7 @@ def cmd_iptables_add_rule(table: str, chain: str, rule_spec: str, append: bool =
     False."""
     table = _validate_iptables_table(table)
     chain = _validate_chain_name(chain)
-    q_rule = _resplit_quote(rule_spec, "Rule")
+    q_rule = _resplit_iptables(rule_spec, "Rule")
     flag = "-A" if append else "-I"
     verb = "appended to" if append else "inserted into"
     return (
@@ -835,7 +923,7 @@ def cmd_iptables_delete_rule(table: str, chain: str, rule_spec_or_number: str) -
     if value.isdigit():
         target = value
     else:
-        target = _resplit_quote(value, "Rule")
+        target = _resplit_iptables(value, "Rule")
     return (
         _IPTABLES_MISSING +
         f"iptables -t {table} -D {shlex.quote(chain)} {target} 2>&1 "

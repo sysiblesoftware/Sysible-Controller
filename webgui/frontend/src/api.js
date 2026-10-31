@@ -104,6 +104,30 @@ async function req(path, { method = "GET", body, headers, raw = false, timeout }
   // that must NOT be treated as an expired session).
   if (res.status === 401 && path !== "/api/login") _fireUnauthorized();
 
+  // A session that expires at the SLOP GATEWAY does not come back as a 401.
+  // The gateway answers an unauthenticated request — XHR included — with
+  // `redir * /login?next={uri} 302`; fetch FOLLOWS it and the IdP serves its
+  // sign-in page as 200 text/html. res.ok is true, so this used to JSON.parse
+  // that page, fail, and hand back { detail: "<!doctype html>…" } as the API
+  // result. api.me() then looked like a signed-in user with every field
+  // undefined, and api.authMode() like a console with no SSO — so the app fell
+  // through to its OWN login form, which under SSO answers 403 to every
+  // credential. SLOP's session TTL is 12 hours, so this is what a tab left open
+  // overnight did.
+  //
+  // A top-level navigation is what the gateway redirects properly, so reload:
+  // the browser lands on the platform sign-in instead of a dead form. Two
+  // signals, either is enough — the response was redirected away from the URL
+  // we asked for, or it is HTML where this client only ever expects JSON.
+  const ctype = res.headers.get("content-type") || "";
+  if (res.redirected || (!raw && ctype.includes("html"))) {
+    _fireUnauthorized();
+    try { window.location.reload(); } catch { /* non-browser host */ }
+    const err = new Error("Your session has expired — sign in again.");
+    err.status = 401;
+    throw err;
+  }
+
   if (raw) return res;
   let data = null;
   const text = await res.text();

@@ -75,12 +75,59 @@ _p_volume_declared() { case "$1" in
   slop)          echo "slop-idp-data slop-caddy-data slop-caddy-config flashback-data baseline-data" ;;
 esac; }
 
+# The project name compose uses for $CFG. With no -p (and _compose passes none),
+# compose derives it from the basename of the directory holding the first compose
+# file, lowercased with anything outside [a-z0-9_-] removed. That is the prefix on
+# every volume it creates.
+_compose_project() {
+  local d n
+  d="$(basename "$(dirname "${CFG:-.}")")"
+  n="${d,,}"
+  n="${n//[^a-z0-9_-]/}"
+  printf '%s' "$n"
+}
+
+# A DECLARED volume name (what `compose config --volumes` prints) resolved to the
+# name docker actually has.
+#
+# They are not the same, and conflating them meant `backup` printed
+#   volume 'slep-data' not found — skipping (is … deployed here?)
+# on a host where the product plainly was deployed, and wrote no tarball. The
+# real volume is <project>_slep-data. The backup reported success, with no copy.
+#
+# Prefixed first, because that is what compose makes and what is live; then the
+# bare name, for a volume declared external or created under an older layout;
+# then compose's own label, which is the truth when the project name is not what
+# we predicted (COMPOSE_PROJECT_NAME, a `name:` in the file, a renamed
+# directory). Falls back to the declared name so the "not deployed" message
+# still says something an operator recognises.
+_volume_real() {
+  local d="$1" proj cand
+  proj="$(_compose_project)"
+  for cand in ${proj:+"${proj}_${d}"} "$d"; do
+    if docker volume inspect "$cand" >/dev/null 2>&1; then printf '%s' "$cand"; return 0; fi
+  done
+  # `|| true` inside: this script runs under `set -e` with pipefail, and a failing
+  # `docker volume ls` would otherwise abort the whole command through the
+  # assignment rather than fall through to the declared name below.
+  cand="$( { docker volume ls -q --filter "label=com.docker.compose.volume=$d" 2>/dev/null || true; } | head -1 )"
+  printf '%s' "${cand:-$d}"
+}
+
 _p_volume() {
   local p="$1" vols=''
   # `compose config --volumes` prints the project's named volumes, one per line.
   # Run inside a subshell: _discover sets CFG/WD, and this must not leak that
-  # into a caller that was working on a different product.
-  vols="$( _discover "$p" >/dev/null 2>&1 && _compose config --volumes 2>/dev/null | tr '\n' ' ' || true )"
+  # into a caller that was working on a different product. _volume_real needs
+  # that same CFG, so the resolution happens in here too.
+  vols="$( _discover "$p" >/dev/null 2>&1 && {
+             out=''
+             while IFS= read -r v; do
+               [[ -n "$v" ]] || continue
+               out="${out}${out:+ }$(_volume_real "$v")"
+             done < <(_compose config --volumes 2>/dev/null)
+             printf '%s' "$out"
+           } || true )"
   vols="${vols%"${vols##*[![:space:]]}"}"
   if [[ -n "$vols" ]]; then echo "$vols"; else _p_volume_declared "$p"; fi
 }

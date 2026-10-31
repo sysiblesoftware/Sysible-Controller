@@ -123,3 +123,124 @@ def test_the_fallback_matches_the_real_slop_compose_file(lib):
         f"the fallback list and docker-compose.yml disagree — "
         f"only in compose: {sorted(declared - listed)}; "
         f"only in sysiblectl: {sorted(listed - declared)}")
+
+
+# ---------------------------------------------------------------------------
+# …and the name it asks docker for has to be the name docker has
+# ---------------------------------------------------------------------------
+# `compose config --volumes` prints the DECLARED name (`slep-data`). The volume
+# compose actually creates is `<project>_slep-data`, and the project name
+# defaults to the basename of the directory holding the compose file — `deploy`
+# for SLEP, whose compose file lives in deploy/. _compose passes no -p, so that
+# default is what every deployment used.
+#
+# So `docker volume inspect slep-data` failed and p_backup printed
+#
+#     volume 'slep-data' not found — skipping (is Sysible Linux Engineering
+#     Platform deployed here?)
+#
+# on a host where SLEP plainly is deployed, and wrote no tarball. Same shape as
+# the drift above: the backup reports success and there is no copy.
+def test_a_declared_name_resolves_to_the_prefixed_volume_that_exists(lib):
+    rc, out, err = run(lib, """
+        CFG=/srv/slep/deploy/docker-compose.yml
+        docker() { [[ "$1 $2" == "volume inspect" && "$3" == "deploy_slep-data" ]]; }
+        _volume_real slep-data
+    """)
+    assert rc == 0, err
+    assert out == "deploy_slep-data", out
+
+
+def test_an_unprefixed_volume_is_still_found(lib):
+    """An external volume, or one from an older layout, carries no prefix."""
+    rc, out, err = run(lib, """
+        CFG=/srv/slep/deploy/docker-compose.yml
+        docker() { [[ "$1 $2" == "volume inspect" && "$3" == "slep-data" ]]; }
+        _volume_real slep-data
+    """)
+    assert rc == 0, err
+    assert out == "slep-data", out
+
+
+def test_the_prefixed_one_wins_when_both_exist(lib):
+    """compose made the prefixed one; a stray unprefixed volume of the same name
+    must not be backed up instead of the live store."""
+    rc, out, err = run(lib, """
+        CFG=/srv/slep/deploy/docker-compose.yml
+        docker() { [[ "$1 $2" == "volume inspect" ]]; }
+        _volume_real slep-data
+    """)
+    assert rc == 0, err
+    assert out == "deploy_slep-data", out
+
+
+def test_composes_own_label_is_the_last_resort(lib):
+    """Neither guess exists. Rather than report "not found" for a volume that is
+    right there under a project name we did not predict, ask docker which volume
+    compose labelled for this declaration."""
+    rc, out, err = run(lib, """
+        CFG=/srv/slep/deploy/docker-compose.yml
+        docker() {
+          if [[ "$1 $2" == "volume inspect" ]]; then return 1; fi
+          if [[ "$1 $2" == "volume ls" ]]; then echo "someproject_slep-data"; return 0; fi
+          return 1
+        }
+        _volume_real slep-data
+    """)
+    assert rc == 0, err
+    assert out == "someproject_slep-data", out
+
+
+def test_it_falls_back_to_the_declared_name_when_nothing_is_found(lib):
+    """Not deployed here at all: keep today's behaviour and let p_backup say so,
+    naming the volume the operator would recognise."""
+    rc, out, err = run(lib, """
+        CFG=/srv/slep/deploy/docker-compose.yml
+        docker() { return 1; }
+        _volume_real slep-data
+    """)
+    assert rc == 0, err
+    assert out == "slep-data", out
+
+
+def test_the_project_name_is_derived_the_way_compose_derives_it(lib):
+    for cfg, want in [("/srv/slep/deploy/docker-compose.yml", "deploy"),
+                      ("/srv/Sysible-Controller/docker-compose.yml", "sysible-controller"),
+                      ("/srv/My_App 2/docker-compose.yml", "my_app2")]:
+        rc, out, err = run(lib, f"""
+            CFG={cfg!r}
+            _compose_project
+        """.replace("'", '"'))
+        assert rc == 0, err
+        assert out == want, f"{cfg} -> {out!r}, wanted {want!r}"
+
+
+def test_the_volume_list_is_resolved_end_to_end(lib):
+    """What p_backup actually iterates: declared names in, real names out."""
+    rc, out, err = run(lib, """
+        _discover() { CFG=/srv/slep/deploy/docker-compose.yml; return 0; }
+        _compose() { printf 'slep-data\\nother-data\\n'; }
+        docker() { [[ "$1 $2" == "volume inspect" && "$3" == deploy_* ]]; }
+        _p_volume slep
+    """)
+    assert rc == 0, err
+    assert out == "deploy_slep-data deploy_other-data", out
+
+
+def test_backup_mounts_the_resolved_volume(lib, tmp_path):
+    """The whole point, through p_backup itself."""
+    rc, out, err = run(lib, f"""
+        cd {tmp_path}
+        _hdr() {{ :; }}; _ok() {{ :; }}; _warn() {{ echo "WARN $*"; }}
+        _p_pretty() {{ echo SLEP; }}
+        _p_volume() {{ echo deploy_slep-data; }}
+        docker() {{
+          if [[ "$1 $2" == "volume inspect" ]]; then [[ "$3" == "deploy_slep-data" ]]; return; fi
+          if [[ "$1" == "run" ]]; then echo "RAN $*"; return 0; fi
+          return 1
+        }}
+        p_backup slep
+    """)
+    assert rc == 0, err
+    assert "WARN" not in out, out
+    assert "deploy_slep-data:/data:ro" in out, out

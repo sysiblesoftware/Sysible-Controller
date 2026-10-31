@@ -743,7 +743,7 @@ _register(Action(name="sub_register_all", tool="Distro Subscription & Licensing"
                 "Ideal for registering a fleet of RHEL servers in one click; safe "
                 "across mixed distros (hosts you didn't supply creds for are skipped).",
     params=[Param("org", "RHSM organization", required=False),
-            Param("activationkey", "RHSM activation key", required=False),
+            Param("activationkey", "RHSM activation key", type="password", required=False),
             Param("username", "RHSM username", required=False),
             Param("password", "RHSM password", type="password", required=False),
             Param("auto_attach", "RHSM auto-attach", type="checkbox", default=True, required=False),
@@ -757,7 +757,8 @@ _register(Action(name="sub_rhsm_status", tool="Distro Subscription & Licensing",
     label="Red Hat (RHSM) status", params=[], build=lambda p: api.cmd_rhsm_status()))
 _register(Action(name="sub_rhsm_register", tool="Distro Subscription & Licensing",
     label="RHSM register (org + key)",
-    params=[Param("org", "Organization"), Param("activationkey", "Activation key")],
+    params=[Param("org", "Organization"),
+            Param("activationkey", "Activation key", type="password")],
     build=lambda p: api.cmd_rhsm_register(_s(p, "org"), _s(p, "activationkey"))))
 _register(Action(name="sub_pro_status", tool="Distro Subscription & Licensing",
     label="Ubuntu Pro status", params=[], build=lambda p: api.cmd_pro_status()))

@@ -2377,26 +2377,82 @@ def login_throttle_clear(key):
 # readable so the audit trail stays useful.
 import re as _re
 
+# One shell word as a builder emits it. `(\S+)` alone stopped at the first
+# space, leaving the tail of a quoted secret in the clear — and shlex.quote
+# quotes anything with a space. It also has to survive quoting's awkward form:
+# a value containing a single quote comes out as 'ab'"'"'cd', three adjacent
+# chunks with no space between them, so the word is a RUN of quoted chunks and
+# bare characters rather than one chunk. The bare branch stops at a shell
+# separator so a redaction can never swallow the next command.
+_TOK = r'''(?:'[^']*'|"[^"]*"|[^\s'";|&<>()])+'''
+
 _SECRET_PATTERNS = [
-    # --password=xxx / --token xxx / -p xxx  (long or short opts, = or space)
+    # --password=xxx / --token xxx  (long or short opts, = or space)
     _re.compile(
-        r'(?i)(--?(?:password|passwd|pass|token|secret|api[-_]?key|apikey|auth[-_]?token|'
-        r'access[-_]?key|private[-_]?key|client[-_]?secret)[=\s]+)(\S+)'),
+        r'(?i)(--?(?:password|passwd|pass|passphrase|token|secret|api[-_]?key|apikey|'
+        r'auth[-_]?token|access[-_]?key|private[-_]?key|client[-_]?secret|'
+        r'activation[-_]?key|reg[-_]?code|license[-_]?key)[=\s]+)' + _TOK),
     # KEY=value env-style assignments for the same sensitive names
     _re.compile(
         r'(?i)\b((?:password|passwd|token|secret|api[-_]?key|apikey|access[-_]?key|'
-        r'client[-_]?secret)\s*=\s*)(\S+)'),
+        r'client[-_]?secret|activation[-_]?key|reg[-_]?code)\s*=\s*)' + _TOK),
     # Authorization: Bearer xxx  /  Authorization: Basic xxx
-    _re.compile(r'(?i)(authorization:\s*(?:bearer|basic)\s+)(\S+)'),
+    _re.compile(r'(?i)(authorization:\s*(?:bearer|basic)\s+)' + _TOK),
+
+    # ---- POSITIONAL secrets -------------------------------------------------
+    # The patterns above all key on a NAME next to the value. Several
+    # subscription and credential tools take the secret as a bare positional
+    # argument instead, so there is no name to key on and every one of them was
+    # stored in cleartext — readable in the activity feed by the read-only
+    # auditor role, which exists to review exactly that feed.
+    #
+    # Each is anchored on the command that consumes it, not on the value, so
+    # they cannot fire on unrelated text. tests/test_the_activity_log_keeps_no
+    # _secrets.py drives a sentinel through EVERY password-typed parameter of
+    # every registered action and fails if one survives, so a new builder that
+    # puts a secret on a command line is caught here rather than in a log.
+    #
+    # SUSEConnect -r <registration code> -e <email>
+    _re.compile(r'(\bSUSEConnect\b[^\n]*?\s-r\s+)' + _TOK),
+    # "$PRO" attach <token>  /  pro attach <token>  /  ua attach <token>
+    _re.compile(r'((?:"\$PRO"|\bpro\b|\bua\b)\s+attach\s+)' + _TOK),
+    # printf '%s' <secret> > "$cred"   — realm join's AD password, kinit's
+    # password. Right-anchored on the redirect, so the whole operand goes
+    # whatever quoting it arrived in.
+    _re.compile(r"(printf\s+'%s'\s+)(.*?)(\s*>\s*\"\$cred\")"),
+    # printf 'username=%s\npassword=%s\n' <user> <secret> > "$cred" — CIFS.
+    # The username is kept; it is not a secret and it is already in the mount
+    # options next to it.
+    _re.compile(r"(printf\s+'username=%s\\npassword=%s\\n'\s+" + _TOK +
+                r"\s+)(.*?)(\s*>\s*\"\$cred\")"),
 ]
 
 
 def _redact_secrets(command):
+    """Replace secret-bearing arguments with *** before the command is stored.
+
+    A pattern may capture a trailing anchor as its LAST group (e.g. the
+    `> "$cred"` a printf redirects into); everything between the first group and
+    that anchor is what gets replaced. Without it, a positional secret has no
+    name beside it to key on.
+
+    Still a denylist, and still conservative on purpose — the rest of the
+    command stays readable, because an audit trail whose command column says
+    nothing is not an audit trail. What stops it drifting is the test, which
+    drives a sentinel through every password-typed parameter of every action.
+    """
     if not command:
         return command
+
+    def _sub(m):
+        groups = m.groups()
+        if len(groups) >= 3:        # leading context, secret, trailing anchor
+            return m.group(1) + "***" + m.group(len(groups))
+        return m.group(1) + "***"
+
     out = command
     for pat in _SECRET_PATTERNS:
-        out = pat.sub(lambda m: m.group(1) + "***", out)
+        out = pat.sub(_sub, out)
     return out
 
 

@@ -80,6 +80,20 @@ def configured() -> bool:
 
 
 def _require_configured() -> None:
+    """Refuse, and say the thing that is most likely to be true.
+
+    These two settings live in the CONTROLLER's own .env, and the only thing
+    that writes them is the SLOP installer. An update — from the Updates page or
+    `sysiblectl <product> update` — pulls code and rebuilds images; it does not
+    re-run the installer. So a platform that was installed before Baseline
+    shipped, or before the wiring was fixed, keeps working perfectly in every
+    other respect and has nothing here, and the symptom is every host failing an
+    apply at once with a message about an environment variable.
+
+    "Run the SLOP installer" was already the cure. Saying only that left the
+    operator with no way to tell whether they were looking at a broken install
+    or a missing step, so the sentence now names the step.
+    """
     if BASELINE_URL and AGENT_TOKEN:
         return
     missing = []
@@ -88,9 +102,13 @@ def _require_configured() -> None:
     if not AGENT_TOKEN:
         missing.append("SYSIBLE_BASELINE_AGENT_TOKEN")
     raise BaselineUnavailable(
-        "Desired-state configuration is not configured on this controller ("
-        + " and ".join(missing) + " unset). Run the SLOP installer, or set them "
-        "in the controller's .env.")
+        "This controller is not wired to Sysible Baseline ("
+        + " and ".join(missing) + " unset), so nothing can be applied. These are "
+        "written into the controller's .env by the SLOP installer, and updating "
+        "the platform does not re-run it \u2014 so an install from before "
+        "Baseline was wired up has them missing. Re-run install.sh in the SLOP "
+        "checkout (it is idempotent and keeps your data), or set them by hand "
+        "and recreate the controller.")
 
 
 def _call(method: str, path: str, **kw):

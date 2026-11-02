@@ -112,9 +112,20 @@ def _require_configured() -> None:
         missing.append("SYSIBLE_FLASHBACK_URL")
     if not AGENT_TOKEN:
         missing.append("SYSIBLE_FLASHBACK_AGENT_TOKEN")
+    # Same sentence, and the same reason, as backend/baseline.py's: these live
+    # in the CONTROLLER's .env, only the SLOP installer writes them, and an
+    # update does not re-run it. Flashback's two names were additionally never
+    # written at all before the installer's wiring was fixed — they went in
+    # under Baseline's names — so an install from before that has config backup
+    # quietly off and no indication beyond this message.
     raise FlashbackUnavailable(
-        "Config backup is not configured on this controller (" + " and ".join(missing)
-        + " unset). Run the SLOP installer, or set them in the controller's .env.")
+        "This controller is not wired to Sysible Flashback ("
+        + " and ".join(missing) + " unset), so config backup is off. These are "
+        "written into the controller's .env by the SLOP installer, and updating "
+        "the platform does not re-run it \u2014 so an install from before "
+        "Flashback was wired up has them missing. Re-run install.sh in the SLOP "
+        "checkout (it is idempotent and keeps your data), or set them by hand "
+        "and recreate the controller.")
 
 
 def _headers() -> dict:

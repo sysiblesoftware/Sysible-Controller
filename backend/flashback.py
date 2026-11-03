@@ -224,10 +224,14 @@ MAX_MANIFEST_ENTRIES = int(_env("MAX_MANIFEST_ENTRIES", "5000"))
 MAX_BLOB_BATCH_BYTES = int(_env("MAX_BLOB_BATCH_BYTES", str(8 * 1024 * 1024)))
 
 
-def rp_open(host_id: str, label: str, roots: str = "", note: str = "") -> dict:
+def rp_open(host_id: str, label: str, roots: str = "", note: str = "",
+            host_label: str = "") -> dict:
+    """`label` names the POINT; `host_label` names the HOST. Flashback registers
+    a host it has not seen before, and without the second string it registered
+    it under the first — a box called "before the upgrade" ever after."""
     r = _call("POST", "/api/agent/restore-point/open",
               json={"host_id": host_id, "label": label, "roots": roots,
-                    "note": note})
+                    "note": note, "host_label": host_label or host_id})
     try:
         return r.json() or {}
     except Exception:

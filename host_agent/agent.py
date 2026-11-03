@@ -2152,6 +2152,19 @@ def _fb_poll_restores(state):
             _fb_send_snapshot(state)
         except Exception as e:
             print("[agent] requested snapshot failed:", e)
+    # A whole-machine restore point, asked for from the Flashback console. Rides
+    # this same poll, and is kept separate from the config snapshot above: one is
+    # a few files out of /etc, the other is the machine.
+    if body.get("restore_point_requested"):
+        print("[agent] restore point requested from the console — capturing now")
+        try:
+            # Named so the console can tell a point somebody asked for from
+            # one the schedule took. A list of identical labels is a list an
+            # operator cannot choose from under pressure.
+            print("[agent]", _rp_capture(
+                state, label="on request " + time.strftime("%Y-%m-%d %H:%M")))
+        except Exception as e:
+            print("[agent] requested restore point failed:", e)
 
 
 def _fb_loop(state):

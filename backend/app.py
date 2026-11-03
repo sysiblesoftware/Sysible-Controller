@@ -2056,6 +2056,11 @@ def agent_config_snapshot(host_id: str, body: dict = Body(...),
 # scheduled capture covers it, which is not worth a schema change.
 _CAPTURE_REQUESTS: set = set()
 _CAPTURE_LOCK = threading.Lock()
+# The same parking lot for whole-machine restore points. A SEPARATE set, not a
+# flag on the first one: a config snapshot is a few kilobytes of /etc and a
+# restore point is the machine, so an operator who asked for one must never get
+# the other by accident.
+_POINT_REQUESTS: set = set()
 
 
 @app.get("/agents/config-poll-times", dependencies=[Depends(require_api_key)])
@@ -2093,6 +2098,22 @@ def request_config_capture(host_id: str):
             "detail": "The host will capture on its next check-in (within a minute)."}
 
 
+@app.post("/agents/{host_id}/request-restore-point",
+          dependencies=[Depends(require_api_key)])
+def request_restore_point(host_id: str):
+    """Ask a host to capture a whole-machine restore point on its next poll.
+
+    Rides the config-backup poll the agent already makes, for the same reason
+    "Back up now" does: agents are outbound-only and nothing can reach in.
+    """
+    if not agent_exists(host_id):
+        raise HTTPException(status_code=404, detail="Unknown host_id")
+    with _CAPTURE_LOCK:
+        _POINT_REQUESTS.add(host_id)
+    return {"host_id": host_id, "queued": True,
+            "detail": "The host captures a restore point on its next check-in."}
+
+
 # --------------------------------------------------------------------------- #
 # Restore points — a whole machine, relayed
 # --------------------------------------------------------------------------- #
@@ -2107,10 +2128,16 @@ def agent_rp_open(host_id: str, body: dict = Body(default=None),
     from backend import flashback
     verify_agent(host_id, x_agent_secret or (body or {}).get("agent_secret") or "")
     b = body or {}
-    label = get_agent_hostname(host_id) or host_id
-    return _flashback_or_503(flashback.rp_open, host_id, str(b.get("label") or label),
+    # The HOST's name comes from the Controller's own records, never from the
+    # agent, and it is kept separate from the name of the POINT. Flashback has
+    # to register a host it has not seen, and one string for both meant a point
+    # called "before the upgrade" renamed the machine in the console.
+    hostname = get_agent_hostname(host_id) or host_id
+    return _flashback_or_503(flashback.rp_open, host_id,
+                             str(b.get("label") or hostname),
                              roots=str(b.get("roots") or ""),
-                             note=str(b.get("note") or ""))
+                             note=str(b.get("note") or ""),
+                             host_label=hostname)
 
 
 @app.post("/agents/{host_id}/restore-point/manifest")
@@ -2245,7 +2272,10 @@ def agent_config_restores(host_id: str,
     with _CAPTURE_LOCK:
         wanted = host_id in _CAPTURE_REQUESTS
         _CAPTURE_REQUESTS.discard(host_id)     # hand it over exactly once
-    return {"restores": restores, "capture_requested": wanted}
+        point = host_id in _POINT_REQUESTS
+        _POINT_REQUESTS.discard(host_id)
+    return {"restores": restores, "capture_requested": wanted,
+            "restore_point_requested": point}
 
 
 @app.get("/agents/{host_id}/config-restores/{restore_id}/payload")

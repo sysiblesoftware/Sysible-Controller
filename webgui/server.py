@@ -2966,6 +2966,18 @@ def host_backup_now(host_id: str, request: Request,
     return _wrap(lambda: _as_admin(request, lambda: api.request_config_capture(host_id)))
 
 
+@app.post("/api/host/{host_id}/restore-point-now")
+def host_restore_point_now(host_id: str, request: Request,
+                           user: str = Depends(require_operator)):
+    """Capture a whole-machine restore point on one host.
+
+    OPERATOR, not merely signed in, unlike the config snapshot above: a restore
+    point reads every file under the captured roots, so it is the one capture
+    that can put a secret into the store on an operator's behalf.
+    """
+    return _wrap(lambda: _as_admin(request, lambda: api.request_restore_point(host_id)))
+
+
 class BaselineApplyRequest(BaseModel):
     preview: bool = False
 

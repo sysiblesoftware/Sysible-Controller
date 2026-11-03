@@ -554,6 +554,11 @@ def request_config_capture(host_id: str):
     return _request("POST", f"/agents/{host_id}/request-capture")
 
 
+def request_restore_point(host_id: str):
+    """Ask a host to capture a whole-machine restore point on its next check-in."""
+    return _request("POST", f"/agents/{host_id}/request-restore-point")
+
+
 def get_environment_sudo_defaults():
     return _request("GET", "/environments/sudo-defaults").get("defaults", {})
 

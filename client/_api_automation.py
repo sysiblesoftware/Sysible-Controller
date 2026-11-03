@@ -887,3 +887,108 @@ def cmd_release_upgrade(target: str = "") -> str:
     version; RHEL/Ubuntu/Tumbleweed/SLES auto-select. Nothing auto-reboots — the
     RPM-family paths stage the transaction and print the reboot command."""
     return _release_upgrade_script(target, assess=False)
+
+
+# ---------------------------------------------------------------------------
+# Salt, for Sysible Baseline
+# ---------------------------------------------------------------------------
+# Baseline declares what a host must look like and evaluates it with
+# `salt-call --local` ON THE HOST. Salt is therefore a hard prerequisite on
+# every managed host, and until this existed there was no way to satisfy it
+# from the product: a fleet without Salt failed every apply at once, and the
+# console said so in a sentence about JSON.
+#
+# THE BUILDER LIVES HERE, not in Baseline. Baseline asks the Controller to
+# install Salt on a host by name; it does not hand over a command to run. The
+# Controller holds the only authenticated channel to the fleet and runs as root
+# through it, so it builds every command it executes and accepts none from a
+# caller — the same rule the updater states about its own allowlist. A Baseline
+# that could post arbitrary shell here would be a second root on every host.
+
+# Candidate packages that provide /usr/bin/salt-call, per package manager, in
+# the order to try them.
+#
+# TRIED, NOT ASSUMED. Which package ships salt-call differs by distribution and
+# has moved between releases: Debian splits the library into salt-common and
+# the daemon into salt-minion, RHEL and openSUSE have shipped it under both
+# `salt` and `salt-minion`, Arch has a single `salt`. Rather than encode one
+# guess per distro and be quietly wrong on whichever changed, each candidate is
+# tried and `command -v salt-call` decides. The CHECK is the source of truth,
+# never the package name.
+_SALT_PACKAGES = {
+    "apt-get": ("salt-common", "salt-minion", "salt"),
+    "dnf": ("salt", "salt-minion"),
+    "yum": ("salt", "salt-minion"),
+    "zypper": ("salt", "salt-minion"),
+    "pacman": ("salt",),
+}
+
+
+def _salt_refresh(mgr: str) -> str:
+    """Refresh package metadata, where the manager needs that as its own step."""
+    if mgr == "apt-get":
+        return "apt-get update -qq || true;"
+    if mgr == "zypper":
+        return "zypper --non-interactive refresh >/dev/null 2>&1 || true;"
+    return ""          # dnf/yum refresh as part of install; pacman uses -Sy
+
+
+def _salt_install_one(mgr: str, pkg: str) -> str:
+    if mgr == "apt-get":
+        return (f"DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
+                f"{pkg} >/dev/null 2>&1")
+    if mgr == "pacman":
+        return f"pacman -Sy --needed --noconfirm {pkg} >/dev/null 2>&1"
+    if mgr == "zypper":
+        return f"zypper --non-interactive install {pkg} >/dev/null 2>&1"
+    return f"{mgr} install -y {pkg} >/dev/null 2>&1"
+
+
+def cmd_install_salt() -> str:
+    """Put salt-call on this host, or say why it could not be done.
+
+    MASTERLESS. Baseline runs `salt-call --local`: the state is written on the
+    host and evaluated there, and there is no Salt master anywhere in this
+    product. Several distributions ship salt-call only inside salt-minion,
+    whose package starts a DAEMON that will then spend its life trying to reach
+    a master that does not exist — filling the host's logs and showing as a
+    failed unit on a host the console calls healthy. So where a minion service
+    appears, it is stopped and disabled. Baseline is not a Salt installation
+    and must not quietly become one.
+
+    IDEMPOTENT. A host that already has salt-call is left completely alone,
+    including one where the operator installed and configured Salt themselves.
+    Reinstalling over that is not ours to do.
+
+    NEWLINE-SEPARATED, deliberately. An earlier draft joined these with spaces
+    and ran `set -e` straight into the `if` that follows it; the whole script
+    died on line 1 with "Syntax error: then unexpected". It also makes the job
+    log legible to the operator who ends up reading it.
+    """
+    lines = [
+        "set -e",
+        'if command -v salt-call >/dev/null 2>&1; then '
+        'echo "salt-call is already installed: $(command -v salt-call)"; exit 0; fi',
+        # The SHARED cascade — the same one every other builder here uses, so a
+        # host served by dnf for packages is served by dnf for Salt.
+        _pkgmgr_detect_fragment() + ";",
+        'echo "Installing Salt with $PKGMGR" >&2',
+    ]
+    for mgr, pkgs in _SALT_PACKAGES.items():
+        tries = " ".join(
+            f'if ! command -v salt-call >/dev/null 2>&1; then '
+            f'{_salt_install_one(mgr, pkg)} || true; fi;'
+            for pkg in pkgs)
+        lines.append(
+            f'if [ "$PKGMGR" = "{mgr}" ]; then {_salt_refresh(mgr)} {tries} fi')
+    lines += [
+        # THE ANSWER. Everything above is an attempt.
+        'if ! command -v salt-call >/dev/null 2>&1; then '
+        'echo "The package manager ran, but salt-call is still not on PATH. '
+        'Salt may not be packaged for this distribution; install it by hand '
+        '(https://docs.saltproject.io) and apply again." >&2; exit 1; fi',
+        'if command -v systemctl >/dev/null 2>&1; then '
+        'systemctl disable --now salt-minion >/dev/null 2>&1 || true; fi',
+        'echo "Salt installed: $(salt-call --version 2>/dev/null || echo salt-call)"',
+    ]
+    return "\n".join(lines)

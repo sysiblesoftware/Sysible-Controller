@@ -2987,6 +2987,44 @@ def host_baseline_apply(host_id: str, body: BaselineApplyRequest, request: Reque
         host_id, preview=body.preview, actor=user, request=request)))
 
 
+@app.post("/api/host/{host_id}/baseline-install-salt")
+def host_baseline_install_salt(host_id: str, request: Request,
+                               user: str = Depends(require_operator)):
+    """Put Salt on one host, for Sysible Baseline.
+
+    Baseline evaluates a declared state with `salt-call --local` ON THE HOST,
+    so Salt is a hard prerequisite of every host it manages — and until this
+    existed there was no way to satisfy it from the product. A fleet without
+    Salt failed every apply at once, with a message about JSON.
+
+    BASELINE NAMES A HOST, NOT A COMMAND. The command is built here, by
+    client/_api_automation.cmd_install_salt(), from this Controller's own
+    package-manager cascade. Accepting a shell string from another service
+    would make that service a second root on every host in the fleet.
+
+    OPERATOR+, on the real human the gateway asserted — the same rule as
+    baseline-apply. Baseline proves who is asking; it does not vouch for them.
+    """
+    def _go():
+        entries = {e["id"]: e for e in dispatch.list_merged_hosts(agent_only=False)}
+        entry = entries.get(host_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail=f"No host {host_id!r}.")
+        from client import api as client_api
+        # Installing a package needs root and can take a while on a cold
+        # metadata cache, so this gets a longer run budget than a state apply.
+        r = _dispatch_one(entry, client_api.cmd_install_salt(), "command", None,
+                          _session_token(request), "Baseline: install Salt",
+                          needs_sudo=True, want_root=True, exec_timeout=900,
+                          poll_timeout=900)
+        out = ((r.get("stdout") or "") + (r.get("stderr") or "")).strip()
+        ok = (r.get("code") == 0)
+        return {"ok": ok, "detail": out[-2000:] or
+                ("Salt installed." if ok else "The install produced no output.")}
+
+    return _wrap(lambda: _as_admin(request, _go))
+
+
 def _run_baseline_cycle(host_id: str, preview: bool, actor: str, request: Request):
     from backend import baseline
 

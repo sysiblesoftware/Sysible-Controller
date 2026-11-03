@@ -23,7 +23,37 @@ import sys
 
 import pytest
 
-FB_DIR = "/home/user/sysible-linux-operations-platform/flashback"
+def _find_flashback() -> str:
+    """Where the SLOP checkout actually is.
+
+    This was one hard-coded absolute path, and a checkout cloned under any
+    other name made every test in this file SKIP — silently, which is the
+    worst way for a test to stop working: the run stays green and the relay
+    that moves config history and machine images is covered by nothing.
+
+    Looks for the conventional name first, then anything beside this repo that
+    really is a Flashback checkout (its store is the thing to check for, not
+    the directory name).
+    """
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    parent = os.path.dirname(here)
+    named = os.environ.get("SYSIBLE_SLOP_DIR", "")
+    for cand in ([os.path.join(named, "flashback")] if named else []) + [
+            os.path.join(parent, "sysible-linux-operations-platform", "flashback"),
+            os.path.join(parent, "slop", "flashback")]:
+        if os.path.isfile(os.path.join(cand, "backend", "store.py")):
+            return cand
+    try:
+        for name in sorted(os.listdir(parent)):
+            cand = os.path.join(parent, name, "flashback")
+            if os.path.isfile(os.path.join(cand, "backend", "store.py")):
+                return cand
+    except OSError:
+        pass
+    return ""
+
+
+FB_DIR = _find_flashback()
 TOKEN = "test-flashback-agent-token"
 
 

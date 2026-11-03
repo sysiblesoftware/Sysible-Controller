@@ -29,6 +29,11 @@ AGENT_REQUIREMENTS_FILE = PROJECT_ROOT / "host_agent" / "requirements.txt"
 # Integrity module, bundled alongside agent.py. Always installed (guarded
 # import in agent.py; enables integrity self-measurement/reporting).
 AGENT_INTEGRITY_SOURCE_FILE = PROJECT_ROOT / "host_agent" / "agent_integrity.py"
+# Staged restore-point apply (guarded import in agent.py). Shipped always: it
+# is what turns a queued restore into one applied offline on the next boot, and
+# an agent without it refuses the restore rather than writing a filesystem
+# under live processes.
+AGENT_RESTORE_SOURCE_FILE = PROJECT_ROOT / "host_agent" / "flashback_restore.py"
 CERT_FILE = Path(os.getenv("SYSIBLE_CERT_FILE", str(PROJECT_ROOT / "certs" / "server.crt")))
 # What new agent bundles should pin as their trust anchor - see
 # backend/tls_manager.py's module docstring. trust.crt is the issuing
@@ -373,6 +378,7 @@ cp -f ./agent.py {_AGENT_INSTALL_DIR}/agent.py
 # Integrity self-measurement module (guarded import in agent.py) — always
 # installed so the controller can seal a baseline and detect tampering.
 cp -f ./agent_integrity.py {_AGENT_INSTALL_DIR}/agent_integrity.py
+cp -f ./flashback_restore.py {_AGENT_INSTALL_DIR}/flashback_restore.py
 cp -f ./sysible_agent.env {_AGENT_INSTALL_DIR}/sysible_agent.env
 chmod 600 {_AGENT_INSTALL_DIR}/sysible_agent.env
 
@@ -842,6 +848,7 @@ def build_agent_bundle(controller_addresses, controller_port: int, token: str):
         zf.writestr("agent.py", agent_source)
         # Integrity module (always installed). Shipped verbatim.
         zf.writestr("agent_integrity.py", AGENT_INTEGRITY_SOURCE_FILE.read_text())
+        zf.writestr("flashback_restore.py", AGENT_RESTORE_SOURCE_FILE.read_text())
         zf.writestr("requirements.txt", requirements_text)
         zf.writestr("sysible_agent.env", _env_file(controller_url, token, include_cert))
 

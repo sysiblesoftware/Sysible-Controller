@@ -2093,6 +2093,135 @@ def request_config_capture(host_id: str):
             "detail": "The host will capture on its next check-in (within a minute)."}
 
 
+# --------------------------------------------------------------------------- #
+# Restore points — a whole machine, relayed
+# --------------------------------------------------------------------------- #
+# THE HOST ID COMES FROM THE URL THAT JUST AUTHENTICATED, in every one of
+# these, exactly as it does for config snapshots above. These routes move a
+# machine's whole filesystem, so the rule earns its keep twice over: an agent
+# that could name a host could capture another machine's image, read its
+# contents, or be handed one to become.
+@app.post("/agents/{host_id}/restore-point/open")
+def agent_rp_open(host_id: str, body: dict = Body(default=None),
+                  x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
+    from backend import flashback
+    verify_agent(host_id, x_agent_secret or (body or {}).get("agent_secret") or "")
+    b = body or {}
+    label = get_agent_hostname(host_id) or host_id
+    return _flashback_or_503(flashback.rp_open, host_id, str(b.get("label") or label),
+                             roots=str(b.get("roots") or ""),
+                             note=str(b.get("note") or ""))
+
+
+@app.post("/agents/{host_id}/restore-point/manifest")
+def agent_rp_manifest(host_id: str, body: dict = Body(...),
+                      x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
+    from backend import flashback
+    verify_agent(host_id, x_agent_secret or (body or {}).get("agent_secret") or "")
+    entries = (body or {}).get("entries") or []
+    if not isinstance(entries, list):
+        raise HTTPException(status_code=400, detail="entries must be a list")
+    if len(entries) > flashback.MAX_MANIFEST_ENTRIES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"{len(entries)} entries in one chunk; the limit is "
+                   f"{flashback.MAX_MANIFEST_ENTRIES}. Send the manifest in "
+                   "smaller pieces.")
+    return _flashback_or_503(flashback.rp_manifest,
+                             int((body or {}).get("point_id") or 0), entries)
+
+
+@app.post("/agents/{host_id}/restore-point/blobs")
+def agent_rp_blobs(host_id: str, body: dict = Body(...),
+                   x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
+    from backend import flashback
+    verify_agent(host_id, x_agent_secret or (body or {}).get("agent_secret") or "")
+    blobs = (body or {}).get("blobs") or []
+    if not isinstance(blobs, list):
+        raise HTTPException(status_code=400, detail="blobs must be a list")
+    total = sum(len(str(b.get("content_b64") or "")) for b in blobs
+                if isinstance(b, dict))
+    if total > flashback.MAX_BLOB_BATCH_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"blob batch too large ({total} bytes); the limit is "
+                   f"{flashback.MAX_BLOB_BATCH_BYTES}. Upload in smaller batches.")
+    return _flashback_or_503(flashback.rp_blobs,
+                             int((body or {}).get("point_id") or 0), blobs)
+
+
+@app.post("/agents/{host_id}/restore-point/seal")
+def agent_rp_seal(host_id: str, body: dict = Body(...),
+                  x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
+    from backend import flashback
+    verify_agent(host_id, x_agent_secret or (body or {}).get("agent_secret") or "")
+    return _flashback_or_503(flashback.rp_seal,
+                             int((body or {}).get("point_id") or 0))
+
+
+@app.get("/agents/{host_id}/restore-point/pending")
+def agent_rp_pending(host_id: str,
+                     x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
+    from backend import flashback
+    verify_agent(host_id, x_agent_secret or "")
+    return _flashback_or_503(flashback.rp_pending, host_id)
+
+
+@app.post("/agents/{host_id}/restore-point/start")
+def agent_rp_start(host_id: str, body: dict = Body(...),
+                   x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
+    from backend import flashback
+    verify_agent(host_id, x_agent_secret or (body or {}).get("agent_secret") or "")
+    return _flashback_or_503(flashback.rp_start, int((body or {}).get("job_id") or 0))
+
+
+@app.get("/agents/{host_id}/restore-point/manifest")
+def agent_rp_fetch_manifest(host_id: str, point_id: int, limit: int = 2000,
+                            offset: int = 0,
+                            x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
+    """A page of the manifest this host is restoring to.
+
+    THE POINT MUST BE THIS HOST'S. Flashback refuses a cross-host restore when
+    the job is queued, but a manifest is readable before any job exists — and
+    another machine's manifest is a list of every path and permission on it.
+    """
+    from backend import flashback
+    verify_agent(host_id, x_agent_secret or "")
+    job = (_flashback_or_503(flashback.rp_pending, host_id) or {}).get("job")
+    if not job or int(job.get("point_id") or 0) != int(point_id):
+        raise HTTPException(
+            status_code=403,
+            detail="that restore point is not the one this host is restoring to")
+    return _flashback_or_503(flashback.rp_fetch_manifest, int(point_id),
+                             limit=int(limit), offset=int(offset))
+
+
+@app.get("/agents/{host_id}/restore-point/blob")
+def agent_rp_blob(host_id: str, sha256: str,
+                  x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
+    """One blob. Only while this host has a restore in flight — content is
+    shared across every host, so an agent that could ask for any hash at any
+    time could read any file the fleet has ever captured."""
+    from backend import flashback
+    verify_agent(host_id, x_agent_secret or "")
+    job = (_flashback_or_503(flashback.rp_pending, host_id) or {}).get("job")
+    if not job:
+        raise HTTPException(status_code=403,
+                            detail="this host has no restore in progress")
+    content = _flashback_or_503(flashback.rp_blob, sha256)
+    return Response(content=content, media_type="application/octet-stream")
+
+
+@app.post("/agents/{host_id}/restore-point/finish")
+def agent_rp_finish(host_id: str, body: dict = Body(...),
+                    x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):
+    from backend import flashback
+    verify_agent(host_id, x_agent_secret or (body or {}).get("agent_secret") or "")
+    b = body or {}
+    return _flashback_or_503(flashback.rp_finish, int(b.get("job_id") or 0),
+                             bool(b.get("ok", True)), str(b.get("note") or ""))
+
+
 @app.get("/agents/{host_id}/config-restores")
 def agent_config_restores(host_id: str,
                           x_agent_secret: str = Header(default=None, alias="X-Agent-Secret")):

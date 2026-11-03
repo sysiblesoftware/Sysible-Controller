@@ -24,6 +24,7 @@ The token may also be passed as the first CLI argument, e.g.:
   python3 agent.py <token>
 """
 
+import base64
 import hashlib
 import json
 import os
@@ -340,6 +341,19 @@ def _fb_env(suffix: str, default: str) -> str:
             return val
     return default
 
+
+# The staged-restore helper, bundled alongside this file. Guarded exactly like
+# the integrity module: an agent whose bundle predates restore points must keep
+# doing everything else rather than failing to start.
+try:
+    import flashback_restore as _fbrestore
+except Exception:                                       # pragma: no cover
+    _fbrestore = None
+
+# Where staged restores live. Named here as well as in the helper so the
+# capture walk can exclude it — a restore point that captured the staging tree
+# of a previous restore would double in size every time.
+_FB_STAGE_PARENT = "/var/lib/sysible/flashback"
 
 # Seconds between config snapshots; 0 disables capture entirely on this host.
 FB_INTERVAL = float(_fb_env("INTERVAL", "3600"))
@@ -1640,6 +1654,296 @@ def _fb_collect():
     return files, skipped, truncated
 
 
+# =========================================================
+# Restore points — a whole machine, captured here and put back offline
+# =========================================================
+# Config capture above keeps a history of a short list of config files. A
+# RESTORE POINT is the machine: every file, symlink and directory under the
+# captured roots, with its mode and ownership. It exists so that a host which
+# has gone wrong can be put back to a state it was actually in, on bare metal
+# and in any cloud alike — which is why it is taken from inside the operating
+# system and not from a hypervisor that may not exist.
+#
+# The protocol is manifest-first: describe everything, be told which hashes
+# this fleet has never seen, upload only those. On a second capture of an
+# unchanged host, or the tenth identical VM, that is nothing at all.
+RP_INTERVAL = float(_fb_env("RESTORE_POINT_INTERVAL", "0"))      # 0 = manual only
+RP_ROOTS = _fb_env("RESTORE_POINT_ROOTS", "/etc:/usr/local:/opt:/srv")
+# Never captured, whatever the roots say: kernel and device interfaces that are
+# not files, volatile state, and caches. Capturing /proc is not a backup, it is
+# a way to fill a disk with a snapshot of the kernel's imagination.
+RP_NEVER = _fb_env(
+    "RESTORE_POINT_EXCLUDE",
+    "/proc:/sys:/dev:/run:/tmp:/var/tmp:/var/cache:/var/lib/docker:"
+    "/var/lib/containers:/swapfile:/lost+found:" + _FB_STAGE_PARENT)
+RP_MAX_FILE = int(_fb_env("RESTORE_POINT_MAX_FILE_BYTES", str(64 * 1024 * 1024)))
+RP_MANIFEST_CHUNK = int(_fb_env("RESTORE_POINT_MANIFEST_CHUNK", "2000"))
+RP_BLOB_BATCH_BYTES = int(_fb_env("RESTORE_POINT_BLOB_BATCH_BYTES",
+                                  str(4 * 1024 * 1024)))
+
+
+def _rp_excluded(path):
+    for pref in [p for p in RP_NEVER.split(":") if p]:
+        if path == pref or path.startswith(pref.rstrip("/") + "/"):
+            return True
+    return False
+
+
+def _rp_walk(roots):
+    """Every entry under `roots`, as manifest dicts. Never follows a symlink
+    out of the tree: the link itself is what was there, and following it would
+    capture the target twice and the link not at all."""
+    import stat as _stat
+    out = []
+    for root in [r for r in roots.split(":") if r]:
+        if _rp_excluded(root) or not os.path.exists(root):
+            continue
+        for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+            if _rp_excluded(dirpath):
+                dirnames[:] = []
+                continue
+            dirnames[:] = [d for d in dirnames
+                           if not _rp_excluded(os.path.join(dirpath, d))]
+            try:
+                st = os.lstat(dirpath)
+                out.append({"path": dirpath, "kind": "d",
+                            "mode": _stat.S_IMODE(st.st_mode),
+                            "uid": st.st_uid, "gid": st.st_gid})
+            except OSError:
+                continue
+            for name in filenames:
+                full = os.path.join(dirpath, name)
+                if _rp_excluded(full):
+                    continue
+                try:
+                    st = os.lstat(full)
+                except OSError:
+                    continue
+                if _stat.S_ISLNK(st.st_mode):
+                    try:
+                        out.append({"path": full, "kind": "l", "mode": 0o777,
+                                    "uid": st.st_uid, "gid": st.st_gid,
+                                    "target": os.readlink(full)})
+                    except OSError:
+                        pass
+                    continue
+                # Sockets, fifos and devices are not content and cannot be
+                # restored by writing bytes; recording them as files would
+                # produce a manifest that can never be satisfied.
+                if not _stat.S_ISREG(st.st_mode):
+                    continue
+                if st.st_size > RP_MAX_FILE:
+                    continue
+                try:
+                    h = hashlib.sha256()
+                    with open(full, "rb") as fh:
+                        for chunk in iter(lambda: fh.read(1 << 20), b""):
+                            h.update(chunk)
+                except OSError:
+                    continue
+                out.append({"path": full, "kind": "f",
+                            "mode": _stat.S_IMODE(st.st_mode),
+                            "uid": st.st_uid, "gid": st.st_gid,
+                            "size": st.st_size, "sha256": h.hexdigest()})
+    return out
+
+
+def _rp_capture(state, label=""):
+    """Take one restore point. Returns a short summary for the log."""
+    host = state["host_id"]
+    entries = _rp_walk(RP_ROOTS)
+    if not entries:
+        return "nothing to capture"
+    r = _request("POST", f"/agents/{host}/restore-point/open",
+                 headers={"X-Agent-Secret": state["agent_secret"]},
+                 json={"label": label or time.strftime("%Y-%m-%d %H:%M"),
+                       "roots": RP_ROOTS}, timeout=60)
+    if r.status_code >= 400:
+        return f"refused (HTTP {r.status_code})"
+    point_id = (r.json() or {}).get("point_id")
+    by_path = {e["path"]: e for e in entries}
+
+    missing = []
+    for i in range(0, len(entries), RP_MANIFEST_CHUNK):
+        chunk = entries[i:i + RP_MANIFEST_CHUNK]
+        rr = _request("POST", f"/agents/{host}/restore-point/manifest",
+                      headers={"X-Agent-Secret": state["agent_secret"]},
+                      json={"point_id": point_id, "entries": chunk}, timeout=120)
+        if rr.status_code >= 400:
+            return f"manifest refused (HTTP {rr.status_code})"
+        missing += (rr.json() or {}).get("missing") or []
+
+    # Only the content this whole fleet has never seen. Batched by BYTES, not
+    # by count: one 40 MB file and four thousand 2 KB ones need very different
+    # batch sizes and the relay caps the request either way.
+    want = {}
+    for e in entries:
+        if e.get("kind") == "f" and e.get("sha256") in set(missing):
+            want.setdefault(e["sha256"], e["path"])
+    batch, size, sent = [], 0, 0
+    def _flush():
+        nonlocal batch, size, sent
+        if not batch:
+            return None
+        rr = _request("POST", f"/agents/{host}/restore-point/blobs",
+                      headers={"X-Agent-Secret": state["agent_secret"]},
+                      json={"point_id": point_id, "blobs": batch}, timeout=300)
+        batch, size = [], 0
+        if rr.status_code >= 400:
+            return f"content refused (HTTP {rr.status_code})"
+        sent += (rr.json() or {}).get("stored") or 0
+        return None
+    for sha, path in want.items():
+        try:
+            with open(path, "rb") as fh:
+                body = fh.read()
+        except OSError:
+            continue
+        enc = base64.b64encode(body).decode()
+        if size + len(enc) > RP_BLOB_BATCH_BYTES:
+            err = _flush()
+            if err:
+                return err
+        batch.append({"sha256": sha, "content_b64": enc})
+        size += len(enc)
+    err = _flush()
+    if err:
+        return err
+
+    rr = _request("POST", f"/agents/{host}/restore-point/seal",
+                  headers={"X-Agent-Secret": state["agent_secret"]},
+                  json={"point_id": point_id}, timeout=120)
+    if rr.status_code >= 400:
+        try:
+            why = (rr.json() or {}).get("detail") or rr.text[:200]
+        except Exception:
+            why = rr.text[:200]
+        return f"could not seal: {why}"
+    return (f"restore point #{point_id}: {len(entries)} entries, "
+            f"{sent} new file(s) uploaded")
+
+
+def _rp_poll(state):
+    """Stage and arm a restore an operator queued, then reboot into it.
+
+    NOTHING IS WRITTEN TO THE LIVE FILESYSTEM HERE. Staging builds the new tree
+    beside the old one and verifies every digest; the swap happens from
+    systemd's offline-update target, where almost nothing from this filesystem
+    is running. See host_agent/flashback_restore.py.
+
+    IT REFUSES RATHER THAN FALLING BACK. If the offline apply cannot be armed
+    on this host, the restore does not happen — writing a filesystem under live
+    processes is the thing this design exists to avoid, and doing it anyway
+    because the safe path was unavailable would be the worst possible moment to
+    take that risk.
+    """
+    if _fbrestore is None:
+        return
+    host = state["host_id"]
+    r = _request("GET", f"/agents/{host}/restore-point/pending",
+                 headers={"X-Agent-Secret": state["agent_secret"]}, timeout=30)
+    if r.status_code >= 400:
+        return
+    job = (r.json() or {}).get("job")
+    if not job:
+        return
+    jid, pid = job["id"], job["point_id"]
+    if _fbrestore.is_ready(jid):
+        return                      # already staged; waiting on the reboot
+    print(f"[agent] restore point #{pid} requested — staging (nothing is "
+          f"changed until the reboot)")
+    _request("POST", f"/agents/{host}/restore-point/start",
+             headers={"X-Agent-Secret": state["agent_secret"]},
+             json={"job_id": jid}, timeout=30)
+
+    def _fetch(sha):
+        rr = _request("GET", f"/agents/{host}/restore-point/blob",
+                      headers={"X-Agent-Secret": state["agent_secret"]},
+                      params={"sha256": sha}, timeout=300)
+        if rr.status_code >= 400:
+            raise OSError(f"blob {sha[:12]}… unavailable (HTTP {rr.status_code})")
+        return rr.content
+
+    try:
+        entries, off = [], 0
+        while True:
+            rr = _request("GET", f"/agents/{host}/restore-point/manifest",
+                          headers={"X-Agent-Secret": state["agent_secret"]},
+                          params={"point_id": pid, "limit": 2000, "offset": off},
+                          timeout=120)
+            if rr.status_code >= 400:
+                raise OSError(f"manifest unavailable (HTTP {rr.status_code})")
+            page = (rr.json() or {}).get("entries") or []
+            if not page:
+                break
+            entries += page
+            off += len(page)
+        summary = _fbrestore.stage(jid, entries, _fetch)
+        armed, how = _fbrestore.arm(jid)
+        if not armed:
+            raise OSError(how)
+    except Exception as e:
+        _request("POST", f"/agents/{host}/restore-point/finish",
+                 headers={"X-Agent-Secret": state["agent_secret"]},
+                 json={"job_id": jid, "ok": False, "note": str(e)[:400]},
+                 timeout=30)
+        print("[agent] restore could not be staged:", e)
+        return
+    print(f"[agent] staged {summary['files']} file(s) "
+          f"({summary['fetched']} fetched, {summary['reused']} already here); "
+          f"applying via {how} on reboot")
+    if job.get("reboot", True):
+        _rp_reboot()
+
+
+def _rp_reboot():
+    for argv in (["systemctl", "reboot"], ["reboot"], ["shutdown", "-r", "now"]):
+        try:
+            subprocess.Popen(argv, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+            return
+        except Exception:
+            continue
+    print("[agent] could not reboot — the restore is staged and will apply on "
+          "the next boot")
+
+
+def _rp_report_result(state):
+    """After a reboot: did the offline apply run, and how did it go?
+
+    The agent was not running when it happened, so the apply leaves its result
+    on disk and this is what picks it up. Without it a restore succeeds and the
+    console shows it as still running for ever.
+    """
+    if _fbrestore is None:
+        return
+    host = state["host_id"]
+    try:
+        jobs = sorted(os.listdir(_fbrestore.STAGE_ROOT))
+    except OSError:
+        return
+    for jid in jobs:
+        res = _fbrestore.read_result(jid)
+        if not res:
+            continue
+        note = (f"{res.get('wrote', 0)} written, "
+                f"{res.get('displaced', 0)} displaced")
+        errs = res.get("errors") or []
+        if errs:
+            note += f"; {len(errs)} error(s): " + "; ".join(errs[:3])
+        r = _request("POST", f"/agents/{host}/restore-point/finish",
+                     headers={"X-Agent-Secret": state["agent_secret"]},
+                     json={"job_id": int(jid), "ok": bool(res.get("ok")),
+                           "note": note[:400]}, timeout=30)
+        if r.status_code < 400:
+            try:
+                os.remove(os.path.join(_fbrestore.job_dir(jid),
+                                       _fbrestore.RESULT))
+            except OSError:
+                pass
+            print(f"[agent] reported restore #{jid}: {note}")
+
+
 def _fb_send_snapshot(state):
     files, skipped, truncated = _fb_collect()
     if not files:
@@ -1859,12 +2163,24 @@ def _fb_loop(state):
         print("[agent] config backup disabled (SYSIBLE_FLASHBACK_INTERVAL=0)")
         return
     next_capture = 0.0
+    next_point = time.time() + RP_INTERVAL if RP_INTERVAL > 0 else 0.0
+    # FIRST, before anything else this thread does. A restore applied while we
+    # were not running has left its result on disk, and until it is reported
+    # the console shows that host as still restoring — for ever.
+    try:
+        _rp_report_result(state)
+    except Exception as e:                                  # pragma: no cover
+        print("[agent] could not report a finished restore:", e)
     while True:
         try:
             now = time.time()
             if now >= next_capture:
                 _fb_send_snapshot(state)
                 next_capture = now + FB_INTERVAL
+            if next_point and now >= next_point:
+                print("[agent]", _rp_capture(state))
+                next_point = now + RP_INTERVAL
+            _rp_poll(state)
             _fb_poll_restores(state)
         except Exception as e:
             if not isinstance(e, (requests.ConnectionError, requests.Timeout)):

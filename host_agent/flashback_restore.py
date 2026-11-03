@@ -158,6 +158,102 @@ def is_ready(job_id, stage_root: str = STAGE_ROOT) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# ARM — install the offline apply, or refuse
+# ---------------------------------------------------------------------------
+UNIT_PATH = "/etc/systemd/system/sysible-flashback-restore.service"
+APPLY_BIN = "/usr/local/lib/sysible/flashback-apply-restore"
+
+# WantedBy=system-update.target is what makes systemd run this, and only this,
+# on the boot where /system-update exists. DefaultDependencies=no keeps it out
+# of the ordinary boot ordering so almost nothing else is started; and
+# FailureAction=reboot means a host that cannot apply its restore still comes
+# back rather than sitting at a prompt nobody is in front of.
+_UNIT = """\
+[Unit]
+Description=Sysible Flashback — apply a staged restore point
+DefaultDependencies=no
+Requires=sysinit.target
+After=sysinit.target
+Before=shutdown.target
+ConditionPathExists=/system-update
+
+[Service]
+Type=oneshot
+ExecStart={apply_bin} {job_id}
+FailureAction=reboot
+SuccessAction=reboot
+
+[Install]
+WantedBy=system-update.target
+"""
+
+_APPLY_SCRIPT = """\
+#!/usr/bin/env python3
+# Applies one staged Flashback restore point, from systemd's offline-update
+# target. Written by the Sysible agent; see host_agent/flashback_restore.py.
+import sys
+sys.path.insert(0, {helper_dir!r})
+import flashback_restore as fr
+job = sys.argv[1] if len(sys.argv) > 1 else ""
+try:
+    out = fr.apply_staged(job)
+    print("sysible-flashback: wrote %d, displaced %d, ok=%s"
+          % (out["wrote"], out["displaced"], out["ok"]))
+except Exception as e:
+    print("sysible-flashback: restore failed:", e)
+    raise SystemExit(1)
+"""
+
+
+def arm(job_id, root: str = "/", stage_root: str = STAGE_ROOT) -> tuple:
+    """Make the next boot apply this staged restore. (ok, how-or-why).
+
+    REFUSES RATHER THAN FALLING BACK. If the offline apply cannot be installed
+    on this host, this returns False and the restore does not happen. Writing a
+    filesystem under live processes is precisely what this design exists to
+    avoid, and the moment the safe path turns out to be unavailable is the
+    worst possible moment to take that risk instead.
+    """
+    if not is_ready(job_id, stage_root):
+        return False, "that restore point is not fully staged"
+    if not os.path.isdir(os.path.join(root, "run/systemd/system")) and \
+            not os.path.isdir(os.path.join(root, "etc/systemd/system")):
+        return False, ("this host does not appear to run systemd, so the "
+                       "offline apply cannot be installed — the restore has "
+                       "NOT been applied")
+    helper_dir = os.path.dirname(os.path.abspath(__file__))
+    apply_bin = os.path.join(root, APPLY_BIN.lstrip("/"))
+    unit_path = os.path.join(root, UNIT_PATH.lstrip("/"))
+    try:
+        os.makedirs(os.path.dirname(apply_bin), exist_ok=True)
+        with open(apply_bin, "w", encoding="utf-8") as fh:
+            fh.write(_APPLY_SCRIPT.format(helper_dir=helper_dir))
+        os.chmod(apply_bin, 0o755)
+        os.makedirs(os.path.dirname(unit_path), exist_ok=True)
+        with open(unit_path, "w", encoding="utf-8") as fh:
+            fh.write(_UNIT.format(apply_bin=APPLY_BIN, job_id=job_id))
+        # Enabled by hand rather than by `systemctl enable`: this may run in a
+        # container or a chroot where systemctl cannot talk to PID 1, and the
+        # symlink is all `enable` does for a WantedBy unit.
+        wants = os.path.join(root, "etc/systemd/system/system-update.target.wants")
+        os.makedirs(wants, exist_ok=True)
+        link = os.path.join(wants, os.path.basename(UNIT_PATH))
+        if os.path.islink(link) or os.path.exists(link):
+            os.remove(link)
+        os.symlink(UNIT_PATH, link)
+        # LAST: this is the switch. systemd enters system-update.target on the
+        # next boot because this exists, so it goes in only once everything it
+        # needs is already on disk.
+        su = os.path.join(root, SYSTEM_UPDATE_LINK.lstrip("/"))
+        if os.path.islink(su) or os.path.exists(su):
+            os.remove(su)
+        os.symlink(job_dir(job_id, stage_root), su)
+    except OSError as e:
+        return False, f"could not install the offline apply: {e}"
+    return True, "systemd offline update"
+
+
+# ---------------------------------------------------------------------------
 # APPLY — offline, from system-update.target
 # ---------------------------------------------------------------------------
 def apply_staged(job_id, root: str = "/", stage_root: str = STAGE_ROOT,

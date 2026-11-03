@@ -207,3 +207,105 @@ def ack_restore(host_id: str, restore_id: int, ok: bool = True) -> dict:
         return r.json()
     except Exception:
         return {"ok": bool(ok)}
+
+
+# ---------------------------------------------------------------------------
+# Restore points — a whole machine, relayed
+# ---------------------------------------------------------------------------
+# Same reasoning as every call above, and it matters more here: these move a
+# machine's entire filesystem. The agent never holds Flashback's token and
+# never names a host — the Controller stamps the host_id it just authenticated
+# from the URL, so a compromised host cannot capture, read or restore another
+# one's machine image.
+#
+# Bounded on both sides. A manifest chunk and a blob batch are each a request
+# this relay has to hold in memory, so the agent chunks and the relay caps.
+MAX_MANIFEST_ENTRIES = int(_env("MAX_MANIFEST_ENTRIES", "5000"))
+MAX_BLOB_BATCH_BYTES = int(_env("MAX_BLOB_BATCH_BYTES", str(8 * 1024 * 1024)))
+
+
+def rp_open(host_id: str, label: str, roots: str = "", note: str = "") -> dict:
+    r = _call("POST", "/api/agent/restore-point/open",
+              json={"host_id": host_id, "label": label, "roots": roots,
+                    "note": note})
+    try:
+        return r.json() or {}
+    except Exception:
+        raise FlashbackUnavailable("Flashback returned a malformed reply.",
+                                   status=502) from None
+
+
+def rp_manifest(point_id: int, entries: list) -> dict:
+    """One chunk of a manifest. Returns {"missing": [sha256, …]}."""
+    r = _call("POST", "/api/agent/restore-point/manifest",
+              json={"point_id": int(point_id), "entries": entries or []})
+    try:
+        return r.json() or {}
+    except Exception:
+        raise FlashbackUnavailable("Flashback returned a malformed reply.",
+                                   status=502) from None
+
+
+def rp_blobs(point_id: int, blobs: list) -> dict:
+    r = _call("POST", "/api/agent/restore-point/blobs",
+              json={"point_id": int(point_id), "blobs": blobs or []})
+    try:
+        return r.json() or {}
+    except Exception:
+        raise FlashbackUnavailable("Flashback returned a malformed reply.",
+                                   status=502) from None
+
+
+def rp_seal(point_id: int) -> dict:
+    r = _call("POST", "/api/agent/restore-point/seal",
+              json={"point_id": int(point_id)})
+    try:
+        return r.json() or {}
+    except Exception:
+        raise FlashbackUnavailable("Flashback returned a malformed reply.",
+                                   status=502) from None
+
+
+def rp_pending(host_id: str) -> dict:
+    """The restore this host should be carrying out, or {"job": None}."""
+    r = _call("GET", "/api/agent/restore-point/pending", params={"host_id": host_id})
+    try:
+        return r.json() or {}
+    except Exception:
+        raise FlashbackUnavailable("Flashback returned a malformed reply.",
+                                   status=502) from None
+
+
+def rp_start(job_id: int) -> dict:
+    r = _call("POST", "/api/agent/restore-point/start", json={"job_id": int(job_id)})
+    try:
+        return r.json() or {}
+    except Exception:
+        return {"ok": True}
+
+
+def rp_fetch_manifest(point_id: int, limit: int = 2000, offset: int = 0) -> dict:
+    r = _call("GET", "/api/agent/restore-point/manifest",
+              params={"point_id": int(point_id), "limit": int(limit),
+                      "offset": int(offset)})
+    try:
+        return r.json() or {}
+    except Exception:
+        raise FlashbackUnavailable("Flashback returned a malformed manifest.",
+                                   status=502) from None
+
+
+def rp_blob(sha256: str) -> bytes:
+    """One blob's raw content. The agent checks the digest again before it
+    writes — this store is content-addressed and the hash is the contract."""
+    r = _call("GET", "/api/agent/restore-point/blob", params={"sha256": sha256})
+    return r.content
+
+
+def rp_finish(job_id: int, ok: bool, note: str = "") -> dict:
+    r = _call("POST", "/api/agent/restore-point/finish",
+              json={"job_id": int(job_id), "ok": bool(ok), "note": note or ""})
+    try:
+        return r.json() or {}
+    except Exception:
+        return {"ok": True}

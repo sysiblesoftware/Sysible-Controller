@@ -27,6 +27,7 @@
   --btn-press: #313748;
   --accent: #8c95cf;
   --accent-soft: rgba(140,149,207,0.13);
+  --accent-line: rgba(140,149,207,0.30);
   --on-accent: #fff;  /* text/tick drawn ON an accent-filled surface (checkbox tick, etc.) */
   --rail-bg: #131519;
   --field: #1b1e23;
@@ -44,7 +45,7 @@
   --slate: #8aa0c8;  --slate-bg: rgba(138,160,200,0.14);
   --purple: #a679f0; --purple-bg: rgba(166,121,240,0.14);
   --coral: #e2785b;  --coral-bg: rgba(226,120,91,0.14);
-  --ambert: #e3a72f; --amber-bg: rgba(227,167,47,0.14);
+  --amber-bg: rgba(227,167,47,0.14);
   --sky: #4ea3e0;    --sky-bg: rgba(78,163,224,0.14);
   --green: #36b37e;  --green-bg: rgba(54,179,126,0.14);
   --rose: #e0689a;   --rose-bg: rgba(224,104,154,0.14);
@@ -81,6 +82,7 @@
   --btn-press: #141b28;
   --accent: #5580ee;       /* brand blue */
   --accent-soft: rgba(85,128,238,0.15);
+  --accent-line: rgba(85,128,238,0.32);
   --on-accent: #ffffff;
   --rail-bg: #0a0d13;
   --field: #12161f;
@@ -115,6 +117,7 @@
   --btn-press: #dde4ee;
   --accent: #3b6fe0;       /* brand blue, a touch deeper for contrast on white */
   --accent-soft: rgba(59,111,224,0.12);
+  --accent-line: rgba(59,111,224,0.30);
   --on-accent: #ffffff;
   --rail-bg: #e9edf3;
   --field: #ffffff;
@@ -384,7 +387,7 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100%; }
 .main-top {
-  display: flex; align-items: flashback; gap: 14px; padding: 18px 26px 14px;
+  display: flex; align-items: baseline; gap: 14px; padding: 18px 26px 14px;
   border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
 .main-top h2 { margin: 0; font-size: 20px; font-weight: 700; }
@@ -411,7 +414,7 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 
 .search-bar { width: 100%; padding: 11px 14px; font-size: 14px; margin-bottom: 18px;
   background: var(--panel); border: 1px solid var(--border-strong); border-radius: 7px; }
-.search-result { display: flex; align-items: flashback; width: 100%; text-align: left;
+.search-result { display: flex; align-items: baseline; width: 100%; text-align: left;
   background: transparent; border: none; border-radius: 6px; padding: 9px 12px; cursor: pointer; }
 .search-result:hover { background: var(--row-hover); }
 
@@ -439,7 +442,7 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 .ico-slate { color: var(--slate); background: var(--slate-bg); }
 .ico-purple { color: var(--purple); background: var(--purple-bg); }
 .ico-coral { color: var(--coral); background: var(--coral-bg); }
-.ico-amber { color: var(--ambert); background: var(--amber-bg); }
+.ico-amber { color: var(--amber); background: var(--amber-bg); }
 .ico-sky { color: var(--sky); background: var(--sky-bg); }
 .ico-green  { color: var(--green); background: var(--green-bg); }
 .ico-rose   { color: var(--rose); background: var(--rose-bg); }
@@ -472,13 +475,13 @@ tr:hover td { background: var(--row-hover); }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px;
   background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--border); }
 .badge.green { color: var(--green-bright); border-color: rgba(46,160,67,0.5); background: rgba(46,160,67,0.12); }
-.badge.amber { color: var(--ambert); border-color: rgba(227,167,47,0.5); background: rgba(227,167,47,0.12); }
+.badge.amber { color: var(--amber); border-color: rgba(227,167,47,0.5); background: rgba(227,167,47,0.12); }
 /* A portal that is RUNNING but that nothing outside can reach. It has to outrank
    the muted "Reachable at" line it replaces: the whole failure was a green
    "Running" badge next to an address that answered nowhere, so this must not read
    as one more faint aside. */
 .portal-unreachable { margin-top: 6px; padding: 6px 9px; border-radius: 6px;
-  color: var(--ambert); border: 1px solid rgba(227,167,47,0.42);
+  color: var(--amber); border: 1px solid rgba(227,167,47,0.42);
   background: rgba(227,167,47,0.10); font-size: 12.5px; line-height: 1.45; max-width: 880px; }
 
 /* ---------- Three-pane tool layout ---------- */
@@ -527,7 +530,7 @@ tr:hover td { background: var(--row-hover); }
   max-height: calc(100vh - 230px); }
 .he-2col .he-actions { flex: 1; min-width: 0; }
 @media (max-width: 900px) { .he-2col { flex-direction: column; } .he-2col .he-hosts { width: 100%; } }
-.he-section-head { display: flex; align-items: flashback; justify-content: space-between;
+.he-section-head { display: flex; align-items: baseline; justify-content: space-between;
   gap: 12px; margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--border); }
 .he-section-head h3 { font-size: 16px; font-weight: 700; margin: 0; }
 .he-portal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
@@ -887,7 +890,7 @@ tr:hover td { background: var(--row-hover); }
 
 .d3l-cmpbadge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; }
 .d3l-cmpbadge.s-same    { background: var(--green-bg); color: var(--green); }
-.d3l-cmpbadge.s-differs { background: var(--amber-bg); color: var(--ambert); }
+.d3l-cmpbadge.s-differs { background: var(--amber-bg); color: var(--amber); }
 .d3l-cmpbadge.s-missing { background: var(--crimson-bg); color: var(--crimson); }
 .d3l-cmpbadge.s-extra   { background: var(--sky-bg); color: var(--sky); }
 .d3l-cmpbadge.s-absent  { background: var(--slate-bg); color: var(--slate); }
@@ -910,7 +913,7 @@ tr:hover td { background: var(--row-hover); }
 
 .d3l-col { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
   display: flex; flex-direction: column; min-height: 320px; max-height: calc(100vh - 230px); overflow: hidden; }
-.d3l-colhead { display: flex; justify-content: space-between; align-items: flashback;
+.d3l-colhead { display: flex; justify-content: space-between; align-items: baseline;
   padding: 10px 12px; font-weight: 600; font-size: 13px; border-bottom: 1px solid var(--border);
   color: var(--text); gap: 8px; }
 .d3l-colhead .faint, .d3l .faint { color: var(--text-faint); }

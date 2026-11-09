@@ -14,7 +14,7 @@
 ###############################################################################
 
 # ---- stage 1: build the React web console into static files ----------------
-FROM node:20-slim AS frontend
+FROM node:26-slim AS frontend
 WORKDIR /src/webgui/frontend
 # URL prefix the console's assets are fetched from. EMPTY by default, on
 # purpose — do not restore the "/" that used to be here.

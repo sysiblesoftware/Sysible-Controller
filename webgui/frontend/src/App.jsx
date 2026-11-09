@@ -256,9 +256,18 @@ export default function App() {
   });
   // Light / dark theme (persisted). Dark is the default brand look; "light" sets
   // data-theme on <html>, which the styles.css light block reads to flip surfaces.
+  // The INITIAL value comes from whatever index.html already applied before
+  // first paint — never from localStorage directly. index.html owns the one
+  // "sysible-theme" key the whole suite shares (and the migration off the old
+  // per-app keys); reading storage a second time here is how the Controller
+  // came to disagree with SLOP about what the theme was.
   const [theme, setTheme] = useState(() => {
-    const t = localStorage.getItem("sysible_theme");
-    return t === "light" || t === "dark" ? t : "dark";
+    try {
+      const t = window.sysibleTheme?.get();
+      if (t === "light" || t === "dark") return t;
+    } catch { /* no-op */ }
+    return document.documentElement.getAttribute("data-theme") === "light"
+      ? "light" : "dark";
   });
 
   // Transient toast notifications (host enrolled, etc.). App owns the auto-
@@ -274,11 +283,32 @@ export default function App() {
 
   useEffect(() => { applySkin(skin); }, [skin]);
   useEffect(() => {
-    const root = document.documentElement;
-    if (theme === "light") root.setAttribute("data-theme", "light");
-    else root.removeAttribute("data-theme");
-    try { localStorage.setItem("sysible_theme", theme); } catch { /* private mode */ }
+    // Hand it to the shared helper: it sets data-theme AND writes the one key
+    // every Sysible console reads, so switching here switches SLOP and SLEP too.
+    // Note it sets data-theme="dark" explicitly rather than removing the
+    // attribute — styles.css only keys off [data-theme="light"], so dark is
+    // unaffected, and an explicit value is what the other consoles render.
+    try {
+      window.sysibleTheme.set(theme);
+    } catch {
+      const root = document.documentElement;
+      if (theme === "light") root.setAttribute("data-theme", "light");
+      else root.removeAttribute("data-theme");
+    }
   }, [theme]);
+
+  // Another console changed it while this tab was open. index.html already
+  // repainted <html>; this keeps React's idea of the theme (and the toggle's
+  // label) in step with what is on screen.
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key === "sysible-theme" && (e.newValue === "light" || e.newValue === "dark")) {
+        setTheme(e.newValue);
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   // Notify when a host enrolls: poll the agent inventory and toast any host_id
   // that appears after the first (baseline) fetch. Runs while signed in.

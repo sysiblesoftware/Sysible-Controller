@@ -14,6 +14,25 @@
         document.documentElement.setAttribute("data-skin", ids[s] ? s : "brand");
       } catch (e) {}
     </script>
+    <!-- ONE theme for the whole suite, applied before first paint.
+
+         Two bugs lived here. The theme was applied by React in App.jsx, so a
+         dark-mode console painted light for a frame on every load — the skin
+         above already had a pre-paint script for exactly that reason and the
+         theme never got one. And the Controller stored its choice under
+         "sysible_theme" while SLOP used "slop-theme" and SLEP "slep_theme":
+         three keys for one setting. Behind the gateway all three are served
+         from the SAME ORIGIN and share localStorage, so they could always have
+         agreed; they just never read the same key. A light SLOP sign-in handed
+         over to a dark Controller.
+
+         This is the identical script every Sysible console now embeds: it reads
+         "sysible-theme", migrates a legacy key forward if that is all there is,
+         otherwise follows prefers-color-scheme, and repaints on `storage` so a
+         change made in another app reaches this one while it is open. App.jsx
+         drives it through window.sysibleTheme rather than touching localStorage.
+         Sysible-Controller/tests/test_the_theme_is_one_setting.py pins it. -->
+    <script>(function(){var K='sysible-theme',O=['sysible_theme','slop-theme','slep_theme'],r=document.documentElement;function g(){try{var t=localStorage.getItem(K);if(t!=='light'&&t!=='dark'){for(var i=0;i<O.length;i++){var v=localStorage.getItem(O[i]);if(v==='light'||v==='dark'){t=v;try{localStorage.setItem(K,t)}catch(e){}break}}}if(t!=='light'&&t!=='dark')t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';return t}catch(e){return'dark'}}function a(t){r.setAttribute('data-theme',t)}a(g());try{window.addEventListener('storage',function(e){if(e.key===K&&(e.newValue==='light'||e.newValue==='dark'))a(e.newValue)})}catch(e){}window.sysibleTheme={get:g,apply:a,set:function(t){a(t);try{localStorage.setItem(K,t)}catch(e){}}}})();</script>
   </head>
   <body>
     <div id="root"></div>

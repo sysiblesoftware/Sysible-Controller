@@ -16,12 +16,26 @@
 # ---- stage 1: build the React web console into static files ----------------
 FROM node:20-slim AS frontend
 WORKDIR /src/webgui/frontend
-# URL prefix the console is served under: "/" standalone (served at the domain
-# root), "/controller/" behind the SLOP gateway (which path-routes /controller/*
-# to this app on one shared origin). Vite bakes it into the asset URLs and the
-# SPA's API base — see webgui/frontend/vite.config.js. SLOP passes /controller/
-# via --build-arg; a plain `docker build` keeps the standalone root default.
-ARG SYSIBLE_BASE_PATH=/
+# URL prefix the console's assets are fetched from. EMPTY by default, on
+# purpose — do not restore the "/" that used to be here.
+#
+# vite.config.js already defaults to a RELATIVE base ("./"), which is correct at
+# the domain root AND under /controller/ behind the SLOP gateway, and api.js
+# already reads the prefix at runtime from <base href>. Both were written to fix
+# exactly the blank console this line brought back, and both say so at length.
+#
+# This defeated them. `ARG SYSIBLE_BASE_PATH=/` plus `ENV ...=${...}` means the
+# variable is ALWAYS set in the build environment, so `process.env.SYSIBLE_BASE_PATH
+# || "./"` never reaches its fallback: every image baked an absolute
+# /assets/index-*.js into index.html. Behind the gateway the browser then asks
+# the SLOP PORTAL for this console's script, gets a 404, and renders nothing.
+#
+# A fixed prefix is not the answer either, which is why this is empty rather than
+# "/controller/": ONE controller is reached BOTH ways — directly on its own port
+# and through the gateway — and any baked-in prefix can only ever suit one of
+# them. Passing --build-arg SYSIBLE_BASE_PATH=... still pins one for anyone who
+# genuinely wants that.
+ARG SYSIBLE_BASE_PATH=
 ENV SYSIBLE_BASE_PATH=${SYSIBLE_BASE_PATH}
 # Install deps first (better layer caching), then build.
 COPY webgui/frontend/package.json webgui/frontend/package-lock.json* ./

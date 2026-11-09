@@ -20,7 +20,10 @@ services:
         # URL prefix the console is served under. "/" standalone; the SLOP
         # installer sets "/controller/" so the SPA's assets + API base live under
         # the gateway's /controller/* path on the one shared origin.
-        SYSIBLE_BASE_PATH: "${SYSIBLE_BASE_PATH:-/}"
+        # EMPTY, not "/": vite falls back to a relative base that is correct both
+        # at the root and under /controller/. A "/" here re-bakes an absolute
+        # /assets/... and the console comes up blank behind the gateway.
+        SYSIBLE_BASE_PATH: "${SYSIBLE_BASE_PATH:-}"
     image: sysible-controller:latest
     container_name: sysible-controller
     restart: unless-stopped

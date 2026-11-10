@@ -451,11 +451,31 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 .ico-crimson{ color: var(--crimson); background: var(--crimson-bg); }
 .ico-graphite{ color: var(--graphite); background: var(--graphite-bg); }
 
-/* tool grid: 3-column tiles like the desktop System Administration page */
-.tool-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-.tool-grid .tile { min-height: 118px; }
-@media (max-width: 1100px) { .tool-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 720px) { .tool-grid { grid-template-columns: 1fr; } }
+/* Tool grid — the System Administration page.
+   21 tiles, each carrying a full paragraph: 3,168 characters of body copy on one
+   screen, median 145 and longest 249. That is ~500 words in a tile grid, and the
+   tiles were sized for it — a 46px icon, 18/20 padding and a 118px floor, which
+   on the long ones became much more. The long text now lives on the tool's own
+   page (and still backs the search); the tile carries one short line, so it can
+   be the size of a label rather than the size of a paragraph.
+   Four across at desk width: at three, 20 visible tiles are seven rows. */
+.tool-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+  margin-bottom: 4px; }
+.tool-grid .tile { padding: 12px 14px; }
+/* The icon is a marker, not an illustration. At 46px it set the row height on
+   its own, so a one-line tile was mostly empty square. */
+.tool-grid .tile-ico { width: 30px; height: 30px; border-radius: 8px;
+  font-size: 14px; margin-bottom: 8px; }
+.tool-grid .tile h3 { font-size: 14px; line-height: 1.3; margin: 0 0 2px; }
+.tool-grid .tile p { font-size: 12px; line-height: 1.35; }
+/* The group heading sits tighter to its own grid than .section-title's default
+   20px, which otherwise reads as a gap belonging to the section above. */
+.tool-grid-section .section-title,
+section > .section-title { margin: 14px 0 7px; }
+section:first-of-type > .section-title { margin-top: 2px; }
+@media (max-width: 1400px) { .tool-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 1040px) { .tool-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 700px)  { .tool-grid { grid-template-columns: 1fr; } }
 
 /* ---------- Page (opened from a tile) ---------- */
 .page-head { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }

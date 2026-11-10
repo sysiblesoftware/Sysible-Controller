@@ -72,7 +72,19 @@ _p_volume_declared() { case "$1" in
   # flashback-data is Flashback's version store and KEEPS ITS PRE-REBRAND NAME.
   # It holds every version of every config file on every host, so it was not
   # renamed with the product — see the SLOP compose file.
-  slop)          echo "slop-idp-data slop-caddy-data slop-caddy-config flashback-data baseline-data" ;;
+  #
+  # controller-data / slep-data / connect-data exist only on a host running the
+  # INTEGRATED layout, where the three apps are services of the platform's own
+  # compose project rather than three stacks of their own. They are listed here
+  # all the same: this is the fallback for when compose cannot be reached, and a
+  # volume that is not on the host simply has nothing to back up — while one
+  # that IS on the host and missing from this list is a fleet database left out
+  # of a backup that reported success. That is the exact failure baseline-data
+  # had, and it is what the test beside this file now checks for.
+  #
+  # updater-data holds the automatic-update schedule and the record of the last
+  # run. Small, and genuinely lost if it is skipped.
+  slop)          echo "slop-idp-data slop-caddy-data slop-caddy-config flashback-data baseline-data controller-data slep-data connect-data updater-data" ;;
 esac; }
 
 # The project name compose uses for $CFG. With no -p (and _compose passes none),
@@ -249,8 +261,44 @@ _discover() {
   [[ -n "$CFG" ]]
 }
 
+# The extra compose arguments the ONE-CHECKOUT layout needs, for a compose file
+# that is SLOP's. Empty for every other product and for a host that has not
+# migrated.
+#
+# Two halves of one switch: `--profile integrated` brings up the three app
+# services that live behind that profile, and `-f docker-compose.integrated.yml`
+# points the gateway at them by service name. Forgetting the second does not
+# fail -- the gateway goes on dialling host.docker.internal:8800, finds nothing
+# now that the app is a service on the project network, and every app reports
+# down on a platform that is running perfectly well. So they are emitted
+# together, from here, and never typed separately.
+#
+# Keyed on SYSIBLE_INTEGRATED in the compose .env, which `install.sh
+# --integrated` writes. NOT on apps/ being present: that directory arrives with
+# a git pull, and a pull must not silently change what `sysiblectl slop update`
+# brings up on a host whose three apps are still three separate stacks.
+_integrated_args() {  # _integrated_args <compose-file>
+  local cfg="$1" dir overlay env_file val
+  dir="$(dirname "$cfg")"
+  overlay="$dir/docker-compose.integrated.yml"
+  [[ -f "$overlay" ]] || return 0
+  val="${SYSIBLE_INTEGRATED:-}"
+  if [[ -z "$val" ]]; then
+    env_file="$dir/.env"
+    [[ -f "$env_file" ]] && val="$(sed -n 's/^SYSIBLE_INTEGRATED=//p' "$env_file" | tail -1)"
+  fi
+  case "${val,,}" in
+    1|true|yes|on) printf '%s\n' -f "$overlay" --profile integrated ;;
+    *) return 0 ;;
+  esac
+}
+
 # Run a compose subcommand against the discovered file, from its working dir.
-_compose() { _detect_compose; ( cd "${WD:-.}" 2>/dev/null || true; "${DC[@]}" -f "$CFG" "$@" ); }
+_compose() {
+  _detect_compose
+  local extra=(); mapfile -t extra < <(_integrated_args "$CFG")
+  ( cd "${WD:-.}" 2>/dev/null || true; "${DC[@]}" -f "$CFG" "${extra[@]}" "$@" )
+}
 
 # Echo the compose file under a checkout dir (root or deploy/), or fail. Used by
 # first-run `up`, before any container/labels exist to discover from.
@@ -642,7 +690,8 @@ _recreate_product() {
   cfg="$(_compose_file_in "$dir")" || return 1
   _detect_compose
   _hdr "Recreating $(_p_pretty "$p") so it picks up the new settings"
-  ( cd "$dir"; "${DC[@]}" -f "$cfg" up -d ) || return 1
+  local _ia=(); mapfile -t _ia < <(_integrated_args "$cfg")
+  ( cd "$dir"; "${DC[@]}" -f "$cfg" "${_ia[@]}" up -d ) || return 1
   _ok "$(_p_pretty "$p") recreated with the seeded settings."
 }
 
@@ -1339,8 +1388,9 @@ p_rebuild() {
   # "is up." line below — and install.sh, reading only the exit code, reported the
   # gateway as up. That is how a dead front door gets announced as a success.
   local rev; rev="$(_p_rev "$dir")"
+  local _ia=(); mapfile -t _ia < <(_integrated_args "$cfg")
   if ! ( cd "$(dirname "$cfg")"; SYSIBLE_SLOP_REV="$rev" \
-         "${DC[@]}" -f "$cfg" "${envargs[@]}" up -d --build ); then
+         "${DC[@]}" -f "$cfg" "${_ia[@]}" "${envargs[@]}" up -d --build ); then
     _err "$(_p_pretty "$p"): compose failed to build or start it (see the output above)."
     return 1
   fi

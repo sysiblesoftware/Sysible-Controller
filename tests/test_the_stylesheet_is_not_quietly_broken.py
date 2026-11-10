@@ -78,10 +78,37 @@ def test_keyword_properties_only_use_real_keywords(prop):
     )
 
 
+def _series(name):
+    """(stem, number) for a token carrying exactly one run of digits, else None.
+
+    --ramp3 -> ("--ramp#", 3) and --ramp3-bg -> ("--ramp#-bg", 3), so the step
+    colour and its tint are two SEPARATE series rather than one with each number
+    appearing twice. The digit run is matched wherever it sits, not only at the
+    end: --ramp3-bg's number is in the middle, and keying off the suffix would
+    leave those five tokens unexempted — which is exactly the shape that made
+    this function necessary.
+
+    Exactly one run, so a token with two numbers in it is not treated as a step
+    of anything; there are none today and guessing which number indexes the
+    series would be a worse answer than declining to.
+    """
+    runs = re.findall(r"[0-9]+", name)
+    if len(runs) != 1:
+        return None
+    return (re.sub(r"[0-9]+", "#", name), int(runs[0]))
+
+
 def test_no_custom_property_is_a_typo_of_another():
     """--ambert vs --amber. The typo RESOLVED, which is why it survived: it was
     defined once in the default scope and simply never re-toned per skin, so it
-    pinned every consumer to one skin's colour."""
+    pinned every consumer to one skin's colour.
+
+    A deliberate numbered series is exempt: --ramp1 and --ramp2 differ by one
+    character BY DESIGN, and the whole point of a ramp is that its steps are
+    spelled alike. The exemption is narrow — same stem, both ending in digits —
+    so --ambert/--amber, which carry no number, are still caught. The gap check
+    below is what keeps the exemption from becoming a hole.
+    """
     names = sorted(DEFINED)
 
     def edit1(a, b):
@@ -92,10 +119,42 @@ def test_no_custom_property_is_a_typo_of_another():
         short, long = (a, b) if len(a) < len(b) else (b, a)
         return any(long[:i] + long[i + 1:] == short for i in range(len(long)))
 
-    pairs = [(a, b) for i, a in enumerate(names) for b in names[i + 1:] if edit1(a, b)]
+    def same_series(a, b):
+        sa, sb = _series(a), _series(b)
+        return sa is not None and sb is not None and sa[0] == sb[0]
+
+    pairs = [(a, b) for i, a in enumerate(names) for b in names[i + 1:]
+             if edit1(a, b) and not same_series(a, b)]
     assert not pairs, (
         "these custom properties differ by one character, which is how --ambert "
         f"shadowed --amber for months: {pairs}"
+    )
+
+
+def test_a_numbered_series_has_no_gap():
+    """The other half of the exemption above.
+
+    --ramp1..--ramp5 are allowed to differ by one character because they are a
+    ramp. That same leniency would wave through --ramp4 when the stylesheet only
+    ever defines 1, 2, 3 and 5 — a consumer asking for the missing step gets an
+    invalid declaration, dropped in silence, which is the exact failure mode this
+    file exists for. A series is only exempt while it is complete.
+    """
+    series = {}
+    for name in DEFINED:
+        s = _series(name)
+        if s:
+            series.setdefault(s[0], set()).add(s[1])
+    gaps = {}
+    for stem, nums in series.items():
+        if len(nums) < 2:
+            continue  # --panel-2 beside --panel is a pair of names, not a ramp
+        missing = sorted(set(range(min(nums), max(nums) + 1)) - nums)
+        if missing:
+            gaps[stem] = missing
+    assert not gaps, (
+        "these numbered token series skip a step, so var() for the missing one "
+        f"resolves to nothing and its declaration is dropped: {gaps}"
     )
 
 

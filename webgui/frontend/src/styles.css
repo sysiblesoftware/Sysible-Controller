@@ -53,6 +53,19 @@
   --copper: #d08a4a; --copper-bg: rgba(208,138,74,0.14);
   --crimson: #e0564e; --crimson-bg: rgba(224,86,78,0.14);
   --graphite: #9aa7b8; --graphite-bg: rgba(154,167,184,0.14);
+  /* System Administration icon ramp — a blue-to-green blend between the two
+     Sysible brand colours, one step per section of the tool grid.
+     Replaces the twelve-hue rainbow (coral, amber, rose, copper, crimson,
+     purple) that had no relationship to the brand and made colour decorative
+     rather than meaningful.
+     Interpolated in OKLCH, not sRGB: a straight blend between #5580ee and
+     #43a047 passes through a muddy grey, while rotating hue perceptually goes
+     blue -> cyan -> teal -> green. These five are that path, sampled evenly. */
+  --ramp1: #5580ee;  --ramp1-bg: rgba(85,128,238,0.15);
+  --ramp2: #0094e8;  --ramp2-bg: rgba(0,148,232,0.15);
+  --ramp3: #00a5be;  --ramp3-bg: rgba(0,165,190,0.15);
+  --ramp4: #00a981;  --ramp4-bg: rgba(0,169,129,0.15);
+  --ramp5: #43a047;  --ramp5-bg: rgba(67,160,71,0.15);
 }
 /* ==========================================================================
    SKINS — each block is a complete look, chosen from the header skin picker.
@@ -128,6 +141,15 @@
   --amber: #b9791a;
   --row-hover: #eef2f8;
   --shadow: rgba(20,30,50,0.14);
+  /* The icon ramp, darkened for white. The dark-theme values clear 3:1 against
+     their own 15% tint on a dark panel but only reach 2.5-2.8:1 on a light one,
+     and an icon is a graphical object: 3:1 is the floor, not 4.5. Same hues,
+     same blend, each step taken down in OKLCH lightness until it passes. */
+  --ramp1: #547eec;  --ramp1-bg: rgba(84,126,236,0.15);
+  --ramp2: #0087da;  --ramp2-bg: rgba(0,135,218,0.15);
+  --ramp3: #008fa8;  --ramp3-bg: rgba(0,143,168,0.15);
+  --ramp4: #00956e;  --ramp4-bg: rgba(0,149,110,0.15);
+  --ramp5: #37953c;  --ramp5-bg: rgba(55,149,60,0.15);
 }
 /* Active nav item: the logo's green→blue trace down the left edge. */
 :root[data-skin="brand"] .rail-item.active { position: relative; border-left-color: transparent; }
@@ -450,6 +472,11 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 .ico-copper { color: var(--copper); background: var(--copper-bg); }
 .ico-crimson{ color: var(--crimson); background: var(--crimson-bg); }
 .ico-graphite{ color: var(--graphite); background: var(--graphite-bg); }
+.ico-ramp1 { color: var(--ramp1); background: var(--ramp1-bg); }
+.ico-ramp2 { color: var(--ramp2); background: var(--ramp2-bg); }
+.ico-ramp3 { color: var(--ramp3); background: var(--ramp3-bg); }
+.ico-ramp4 { color: var(--ramp4); background: var(--ramp4-bg); }
+.ico-ramp5 { color: var(--ramp5); background: var(--ramp5-bg); }
 
 /* Tool grid — the System Administration page.
    21 tiles, each carrying a full paragraph: 3,168 characters of body copy on one

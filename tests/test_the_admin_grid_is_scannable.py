@@ -172,3 +172,106 @@ class TestTheTilesAreSizedForALabel:
     def test_it_steps_down_for_narrow_screens(self, w):
         assert f"max-width: {w}px" in self.CSS_TEXT, \
             f"no breakpoint at {w}px — four columns would survive onto a phone"
+
+
+class TestTheIconsUseTheBrandRamp:
+    """The grid had twelve hues — coral, amber, rose, copper, crimson, purple —
+    with no relationship to the brand, so colour was decoration. It is now a
+    blue-to-green blend between the two Sysible brand colours, one step per
+    section, which makes colour carry the grouping instead."""
+
+    CSS_TEXT = CSS.read_text()
+    STEPS = 5
+
+    @pytest.mark.parametrize("n", range(1, STEPS + 1))
+    def test_each_step_has_a_class(self, n):
+        assert f".ico-ramp{n}" in self.CSS_TEXT
+
+    def test_every_tool_uses_a_ramp_step(self):
+        off = [t["name"] for t in TOOLS
+               if not re.fullmatch(r"ico-ramp[1-5]", _cls_of(t["name"]) or "")]
+        assert not off, f"these are still on an off-brand hue: {off}"
+
+    def test_colour_follows_the_group(self):
+        """Two tools in the same section must not differ in colour, or the ramp
+        stops meaning anything."""
+        by_group = {}
+        for t in TOOLS:
+            by_group.setdefault(t["group"], set()).add(_cls_of(t["name"]))
+        for g, classes in by_group.items():
+            assert len(classes) == 1, f"{g} uses {sorted(classes)}"
+
+    def test_each_group_has_its_own_step(self):
+        used = {_cls_of(t["name"]) for t in TOOLS if not t["hidden"]}
+        assert len(used) == len(GROUPS), \
+            f"{len(GROUPS)} sections but {len(used)} colours: {sorted(used)}"
+
+    def test_the_endpoints_are_the_brand_colours(self):
+        assert "--ramp1: #5580ee" in self.CSS_TEXT, "the ramp no longer starts at brand blue"
+        assert "--ramp5: #43a047" in self.CSS_TEXT, "the ramp no longer ends at brand green"
+
+    def test_the_light_theme_has_its_own_values(self):
+        """The dark values reach only 2.5-2.8:1 against their own tint on white.
+        An icon is a graphical object, so 3:1 is the floor."""
+        light = re.search(r':root\[data-theme="light"\]\s*\{(.*?)\n\}',
+                          self.CSS_TEXT, re.S)
+        assert light and "--ramp1:" in light.group(1), \
+            "the light theme inherits the dark ramp and fails contrast"
+
+    @pytest.mark.parametrize("theme,panel", [("dark", "#171c26"), ("light", "#ffffff")])
+    def test_every_step_clears_three_to_one(self, theme, panel):
+        vals = _ramp_values(self.CSS_TEXT, theme)
+        assert len(vals) == self.STEPS, f"{theme}: found {len(vals)} ramp values"
+        for name, hexv in sorted(vals.items()):
+            r = _contrast(hexv, _mix(hexv, panel, 0.15))
+            assert r >= 3.0, f"{theme} {name} {hexv} is {r:.2f}:1 on its own tint"
+
+
+def _cls_of(name):
+    m = re.search(r'name:\s*"' + re.escape(name) + r'".*?cls:\s*"([^"]+)"',
+                  SRC, re.S)
+    return m.group(1) if m else None
+
+
+def _ramp_values(css, theme):
+    """The ramp declarations for a theme, found structurally.
+
+    A selector regex is the wrong tool here: the dark block is a GROUPED
+    selector (`:root,\n:root[data-skin="base"] {`), so matching `:root\s*\{`
+    skips it entirely and the check silently finds nothing to test. Walk out
+    from each declaration to its own block instead.
+    """
+    out = {}
+    for m in re.finditer(r"--ramp\d:\s*#[0-9a-f]{6}", css):
+        open_brace = css.rfind("{", 0, m.start())
+        close_brace = css.find("}", m.end())
+        if open_brace < 0 or close_brace < 0:
+            continue
+        prev_close = css.rfind("}", 0, open_brace)
+        selector = css[prev_close + 1:open_brace]
+        is_light = 'data-theme="light"' in selector
+        if is_light != (theme == "light"):
+            continue
+        out.update(re.findall(r"--(ramp\d):\s*(#[0-9a-f]{6})",
+                              css[open_brace:close_brace]))
+    return out
+
+
+def _srgb_to_lin(c):
+    c /= 255
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def _lum(h):
+    r, g, b = (_srgb_to_lin(int(h[i:i + 2], 16)) for i in (1, 3, 5))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _mix(fg, bg, a):
+    return "#%02x%02x%02x" % tuple(
+        round(int(fg[i:i + 2], 16) * a + int(bg[i:i + 2], 16) * (1 - a)) for i in (1, 3, 5))
+
+
+def _contrast(a, b):
+    l1, l2 = sorted((_lum(a), _lum(b)), reverse=True)
+    return (l1 + 0.05) / (l2 + 0.05)

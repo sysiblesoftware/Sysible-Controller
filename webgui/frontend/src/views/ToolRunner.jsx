@@ -37,83 +37,86 @@ const CUSTOM_PAGES = {
 // `short` is what the tile shows; `desc` still backs the search and the tool's
 // own page.
 //
-// `group` sorts the 21 into five sections rather than one undifferentiated wall.
+// `group` sorts the 21 into five sections rather than one undifferentiated wall,
+// and `cls` follows from it: one step of the blue-to-green brand ramp per
+// section (see --ramp1..5 in styles.css). Colour marks the grouping instead of
+// decorating twelve tools in twelve unrelated hues.
 const TOOLS = [
   // ---- Accounts & access ----
   { name: "User & Group Administration", group: "Accounts & access",
-    short: "Accounts, passwords, sudo and groups", icon: "users", cls: "ico-slate",
+    short: "Accounts, passwords, sudo and groups", icon: "users", cls: "ico-ramp1",
     desc: "Create, lock, and manage user accounts, passwords, sudo access, and groups across agent and SSH hosts." },
   { name: "Environmental Policies", group: "Accounts & access",
-    short: "Password, lockout, sudo and umask policy", icon: "shield-alt", cls: "ico-coral",
+    short: "Password, lockout, sudo and umask policy", icon: "shield-alt", cls: "ico-ramp1",
     special: "env",
     desc: "Set the baseline password, lockout, sudo, and umask policy for accounts on managed hosts, and push it out." },
   { name: "Directory Services (Active Directory / LDAP)", group: "Accounts & access",
-    short: "Join Active Directory, configure LDAP", icon: "users-cog", cls: "ico-sky",
+    short: "Join Active Directory, configure LDAP", icon: "users-cog", cls: "ico-ramp1",
     desc: "Join hosts to Active Directory (realmd/SSSD), manage realm status and login permits, enable home-dir creation, and configure/test LDAP and LDAPS." },
 
   // ---- System & services ----
   { name: "System Health, Logs & Recovery", group: "System & services",
-    short: "Disk, memory, services, logs, boot recovery", icon: "heartbeat", cls: "ico-green",
+    short: "Disk, memory, services, logs, boot recovery", icon: "heartbeat", cls: "ico-ramp2",
     desc: "Disk usage, memory/CPU, failed services, logs, and process tools, plus boot/GRUB and kernel recovery — across agent and SSH hosts." },
   { name: "Service Management", group: "System & services",
-    short: "Start, stop and troubleshoot systemd services", icon: "cogs", cls: "ico-purple",
+    short: "Start, stop and troubleshoot systemd services", icon: "cogs", cls: "ico-ramp2",
     desc: "Start, stop, restart, enable/disable, and troubleshoot systemd services, or create and configure new ones." },
   { name: "Cron & Systemd Timers", group: "System & services",
-    short: "Scheduled jobs and systemd timers", icon: "clock", cls: "ico-amber",
+    short: "Scheduled jobs and systemd timers", icon: "clock", cls: "ico-ramp2",
     desc: "View, add, and remove cron jobs, and view, create, start/stop, enable/disable, and delete systemd timers." },
   { name: "Environment & Shell", group: "System & services",
-    short: "System-wide variables and shell aliases", icon: "cogs", cls: "ico-teal",
+    short: "System-wide variables and shell aliases", icon: "cogs", cls: "ico-ramp2",
     desc: "Set and remove persistent, system-wide environment variables and shell aliases across managed hosts (via /etc/profile.d drop-ins for new login shells)." },
   { name: "Time Synchronization", group: "System & services",
-    short: "NTP/chrony, clock drift and time zone", icon: "clock", cls: "ico-sky",
+    short: "NTP/chrony, clock drift and time zone", icon: "clock", cls: "ico-ramp2",
     desc: "Configure NTP/chrony, verify synchronization, troubleshoot clock drift, and set the system time zone across managed hosts." },
   { name: "Containers & VMs", group: "System & services",
-    short: "Docker and Podman containers, libvirt VMs", icon: "cube", cls: "ico-indigo",
+    short: "Docker and Podman containers, libvirt VMs", icon: "cube", cls: "ico-ramp2",
     desc: "List and start/stop/restart Docker or Podman containers, view container logs and images, and manage libvirt virtual machines across managed hosts." },
 
   // ---- Software & updates ----
   { name: "Host Software Management", group: "Software & updates",
-    short: "Install, update and query packages", icon: "box", cls: "ico-teal",
+    short: "Install, update and query packages", icon: "box", cls: "ico-ramp3",
     desc: "Detect each host's package manager, then install, remove, update, query, verify, and clean packages across dnf/yum, zypper, and apt hosts alike." },
   { name: "Repository Management", group: "Software & updates",
-    short: "Add, enable and remove repositories", icon: "code-branch", cls: "ico-rose",
+    short: "Add, enable and remove repositories", icon: "code-branch", cls: "ico-ramp3",
     desc: "List, add, enable, disable, and remove software repositories across dnf/yum, zypper, and apt hosts." },
   { name: "OS Release Upgrade", group: "Software & updates",
-    short: "Move a host to its next major release", icon: "level-up", cls: "ico-crimson",
+    short: "Move a host to its next major release", icon: "level-up", cls: "ico-ramp3",
     desc: "Move a host to its next major/distribution release with the right mechanism per distro — Leapp (RHEL/Rocky/Alma), dnf system-upgrade (Fedora), do-release-upgrade (Ubuntu), and zypper migration/dup (SUSE/openSUSE). Assess first; nothing auto-reboots." },
   { name: "Distro Subscription & Licensing", group: "Software & updates",
-    short: "Red Hat, Ubuntu Pro and SUSE subscriptions", icon: "id-card", cls: "ico-amber",
+    short: "Red Hat, Ubuntu Pro and SUSE subscriptions", icon: "id-card", cls: "ico-ramp3",
     desc: "Register and manage commercial-distro subscriptions: Red Hat (subscription-manager), Ubuntu Pro, and SUSE (SUSEConnect) — status, attach/enable, and repositories." },
 
   // ---- Storage & files ----
   { name: "File System Management", group: "Storage & files",
-    short: "Files, permissions, mounts and fstab", icon: "hdd", cls: "ico-indigo",
+    short: "Files, permissions, mounts and fstab", icon: "hdd", cls: "ico-ramp4",
     desc: "Create/remove directories, copy/move/rename files, manage ownership/permissions/ACLs and links, mount/unmount/resize/repair filesystems, configure /etc/fstab and quotas, and archive/compress files across managed hosts." },
   { name: "Storage Administration", group: "Storage & files",
-    short: "Disks, partitions, LVM, RAID and swap", icon: "database", cls: "ico-copper",
+    short: "Disks, partitions, LVM, RAID and swap", icon: "database", cls: "ico-ramp4",
     desc: "Partition, format, and monitor disks, manage LVM physical volumes/volume groups/logical volumes, configure RAID and replace failed disks, and set up swap space across managed hosts." },
   { name: "Backup & Recovery", group: "Storage & files",
-    short: "Back up, restore, snapshot and verify", icon: "save", cls: "ico-teal",
+    short: "Back up, restore, snapshot and verify", icon: "save", cls: "ico-ramp4",
     desc: "Back up and restore files, verify backup integrity, schedule backups, create and restore LVM snapshots, guide deleted-file recovery, and run disaster-recovery drills." },
 
   // ---- Network & security ----
   { name: "Network Management", group: "Network & security",
-    short: "Connectivity, DNS, IP, routing and VLANs", icon: "network-wired", cls: "ico-sky",
+    short: "Connectivity, DNS, IP, routing and VLANs", icon: "network-wired", cls: "ico-ramp5",
     desc: "Diagnose connectivity and DNS, inspect ports and capture packets, and configure IP/DHCP/DNS/gateway/routing/hostname/bonding/teaming/VLANs/bridges/MTU across managed hosts." },
   { name: "Firewall Administration", group: "Network & security",
-    short: "firewalld zones, ports and nftables rules", icon: "fire", cls: "ico-crimson",
+    short: "firewalld zones, ports and nftables rules", icon: "fire", cls: "ico-ramp5",
     desc: "Configure firewalld zones, ports, and rich rules, and manage the underlying nftables and iptables rule sets across managed hosts." },
   { name: "Security Administration", group: "Network & security",
-    short: "SELinux, SSH hardening, audit and scans", icon: "lock", cls: "ico-graphite",
+    short: "SELinux, SSH hardening, audit and scans", icon: "lock", cls: "ico-ramp5",
     desc: "Configure and troubleshoot SELinux, harden SSH access and rotate keys, review audit logs and failed logins, install security updates, set password policy, harden systems, and run vulnerability scans across managed hosts." },
   { name: "Certificate Management", group: "Network & security",
-    short: "CSRs, renewals and TLS troubleshooting", icon: "certificate", cls: "ico-rose",
+    short: "CSRs, renewals and TLS troubleshooting", icon: "certificate", cls: "ico-ramp5",
     desc: "Generate CSRs, install/renew/replace certificates, verify certificate chains, and troubleshoot TLS endpoints across managed hosts." },
 
   // hidden → resolvable by name (sidebar `solo` mode + "Fix in…" links) but NOT
   // shown as a tile here; it lives only in its own left-sidebar entry.
   { name: "Quick System Actions", group: "System & services", hidden: true,
-    short: "One-click reboot, restart and reload fixes", icon: "bolt", cls: "ico-amber",
+    short: "One-click reboot, restart and reload fixes", icon: "bolt", cls: "ico-ramp2",
     desc: "One-click common fixes across selected hosts: reboot or power off, restart a service (NetworkManager, SSH, time sync, or any by name), flush DNS, clear failed units, and reload systemd." },
 ];
 

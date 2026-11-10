@@ -1542,6 +1542,11 @@ cmd_install() {
     *) _warn "$bindir is not on your PATH. Add it:  echo 'export PATH=\"$bindir:\$PATH\"' >> ~/.bashrc && source ~/.bashrc" ;;
   esac
 }
+# NAME WARNING. This removes the CLI SYMLINKS and nothing else — every
+# container, data volume and checkout stays exactly where it is. An operator who
+# types "uninstall" means the opposite of that, and is then left without the
+# tool they would have removed it all with, so this says what it does and points
+# at the thing that does the rest.
 cmd_uninstall() {
   local removed=0 d
   for d in "/usr/local/bin/$CLI_NAME" "/usr/local/bin/$CLI_LEGACY_NAME" \
@@ -1549,6 +1554,10 @@ cmd_uninstall() {
     [[ -L "$d" || -f "$d" ]] && rm -f "$d" && { _ok "Removed $d"; removed=1; }
   done
   [[ $removed -eq 1 ]] || _warn "No installed '$CLI_NAME' found."
+  _warn "This removed the CLI only. Every product is still installed and running."
+  _warn "To remove the products too — containers, data volumes and the checkouts:"
+  _warn "    sudo install-sysible --uninstall              (keeps nothing)"
+  _warn "    sudo install-sysible --uninstall --keep-data  (keeps the data volumes)"
 }
 
 # One line, on stderr, the first time someone reaches for the old name.
@@ -1683,7 +1692,9 @@ Caddyfile/portal takes effect with no downtime.
 
 ${BOLD}META${RESET}
   $me install                       # put this CLI on your PATH as 'sysiblectl'
-  $me uninstall                     # remove it from your PATH
+  $me uninstall                     # remove this CLI from your PATH — products
+                                    # keep running. To remove THEM:
+                                    #   sudo install-sysible --uninstall
   $me help                          # this help
 
 ${BOLD}NOTES${RESET}

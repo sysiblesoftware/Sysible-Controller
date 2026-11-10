@@ -154,6 +154,15 @@ export const api = {
   authMode: () => req("/api/auth-mode"),
   edition: () => req("/api/edition"),
   hosts: () => req("/api/hosts"),
+  // PUSH enrollment: the Controller SSHes OUT to the host and installs its own
+  // key, using the password once and never storing it. The backend route and the
+  // BFF have existed all along (/remote/enroll-ssh, /api/enroll-ssh) — there was
+  // simply no way to reach them from the console, so "Enroll a Host" offered a
+  // curl one-liner and nowhere to type a hostname.
+  // The timeout is generous on purpose: this opens an SSH connection, writes
+  // authorized_keys and verifies the result on a machine that may be slow or far
+  // away, and a default-timeout failure here looks identical to a wrong password.
+  enrollSsh: (body) => req("/api/enroll-ssh", { method: "POST", body, timeout: 120000 }),
   environments: () => req("/api/environments"),
   tools: () => req("/api/tools"),
   fleetHealth: (refresh) => req("/api/fleet-health" + (refresh ? "?refresh=1" : ""),

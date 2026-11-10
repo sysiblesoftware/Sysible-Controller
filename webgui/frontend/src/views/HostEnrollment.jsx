@@ -34,6 +34,10 @@ export default function HostEnrollment() {
   const [copied, setCopied] = useState(false);
   const [copiedAnsible, setCopiedAnsible] = useState(false);
   const [curlUseIp, setCurlUseIp] = useState(false);   // curl one-liner: address by IP (no DNS) vs hostname
+  // Push enrollment: the Controller reaches OUT to the host. Everything the
+  // backend needs is here — name, address, an account and its password, used
+  // once and never stored.
+  const [push, setPush] = useState({ name: "", ip: "", username: "root", password: "", environment: "" });
   const [portPort, setPortPort] = useState("");
   const [portalBusy, setPortalBusy] = useState("");
   const [tab, setTab] = useState("hosts");
@@ -517,7 +521,73 @@ export default function HostEnrollment() {
       {/* ============================ TAB: ENROLL A HOST ============================ */}
       {tab === "enroll" && (
       <div style={{ maxWidth: 760 }}>
-        <fieldset className="tool-group-box" style={{ marginTop: 0 }}><legend>Download the agent bundle</legend>
+        {/* PUSH enrollment, first: it is the only path that needs nothing on the
+            target beforehand. Everything below this asks the operator to already
+            have a shell on the machine they are enrolling — which is the thing
+            enrolment is supposed to give them. */}
+        <fieldset className="tool-group-box" style={{ marginTop: 0 }}>
+          <legend>Enroll a host from here</legend>
+          <p className="faint" style={{ marginTop: 0 }}>
+            The Controller connects to the host over SSH, installs its own key, and enrolls the
+            agent. The password is used once to install that key and is never stored — every
+            later connection uses the key.
+          </p>
+          <form onSubmit={async (e) => {
+            e.preventDefault();
+            setErr(""); setMsg(""); setBusy("push");
+            try {
+              const r = await api.enrollSsh({
+                name: push.name.trim(), ip: push.ip.trim(),
+                username: push.username.trim(), password: push.password,
+                environment: push.environment,
+              });
+              setMsg(r?.detail || `${push.name.trim()} enrolled.`);
+              // Clear the password even on success: it has done its one job, and
+              // leaving it in a field is leaving a credential on screen.
+              setPush((p) => ({ ...p, name: "", ip: "", password: "" }));
+              load();
+            } catch (e2) {
+              setErr(e2.message || "Enrollment failed.");
+            } finally { setBusy(""); }
+          }}>
+            <div className="group-fields">
+              <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Host name</span>
+                <input value={push.name} required autoComplete="off" placeholder="web-01"
+                       onChange={(e) => setPush({ ...push, name: e.target.value })} /></label></div>
+              <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Address</span>
+                <input value={push.ip} required autoComplete="off"
+                       placeholder="10.0.0.12 or web-01.example.com"
+                       onChange={(e) => setPush({ ...push, ip: e.target.value })} /></label></div>
+            </div>
+            <div className="group-fields">
+              <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>SSH user</span>
+                <input value={push.username} required autoComplete="off"
+                       onChange={(e) => setPush({ ...push, username: e.target.value })} /></label></div>
+              <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Password</span>
+                <input type="password" value={push.password} required autoComplete="new-password"
+                       onChange={(e) => setPush({ ...push, password: e.target.value })} /></label></div>
+            </div>
+            <div className="group-fields">
+              <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Environment</span>
+                <select value={push.environment}
+                        onChange={(e) => setPush({ ...push, environment: e.target.value })}>
+                  <option value="">(unassigned)</option>
+                  {envs.map((x) => <option key={x} value={x}>{x}</option>)}
+                </select></label></div>
+            </div>
+            <div className="row" style={{ marginTop: 10, alignItems: "center", gap: 10 }}>
+              <button className="btn" type="submit" disabled={busy === "push"}>
+                {busy === "push" ? "Enrolling…" : "Enroll host"}
+              </button>
+              <span className="faint" style={{ fontSize: 12 }}>
+                Needs SSH reachable from the Controller, and an account that can write
+                its own <code>~/.ssh/authorized_keys</code>.
+              </span>
+            </div>
+          </form>
+        </fieldset>
+
+        <fieldset className="tool-group-box"><legend>Download the agent bundle</legend>
           <p className="faint" style={{ marginTop: 0 }}>
             The ready-to-run bundle, built on demand — each download bakes in a fresh, one-time enrollment token.
             Copy it to the target host, unzip, and run <code>./run_agent.sh</code>.

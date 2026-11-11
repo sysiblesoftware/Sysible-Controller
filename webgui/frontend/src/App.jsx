@@ -200,11 +200,51 @@ function setSearchView(v) {
   } catch { /* ignore */ }
 }
 
-// Shown when SLOP is this console's identity authority but the request carried no
-// usable SSO session — a gateway that could not vouch for the browser, or an SSO
-// sign-in the controller could not turn into a local account. The console has no
-// login of its own in that mode, so offering the form would strand the operator
-// on a screen whose every answer is 403.
+// Where the platform's sign-in lives, from wherever this console is mounted.
+// Under the gateway the console is served at /controller/, so a bare "/login"
+// is right — the gateway owns the origin — but this is written out rather than
+// assumed so a console mounted somewhere else still points at the front door.
+function platformLoginUrl() {
+  try {
+    const next = window.location.pathname + window.location.search;
+    return "/login?next=" + encodeURIComponent(next);
+  } catch {
+    return "/login";
+  }
+}
+
+// SLOP owns the accounts, so there is nothing for this console to ASK. Send the
+// browser to the platform sign-in instead of showing it a page with a button on
+// it: asked for directly — "why is there a controller login page that just says
+// sign in on SLOP? It should redirect to the SLOP login if needed. It should
+// all be the same."
+//
+// Once per page load. A console that cannot establish a session for an account
+// that IS signed in to SLOP would otherwise bounce between the two forever,
+// with the reason never on screen long enough to read — so the second time
+// round it stops and says so.
+const _SSO_BOUNCED = "sysible.sso.bounced";
+
+function ssoBounceOnce() {
+  try {
+    if (window.sessionStorage.getItem(_SSO_BOUNCED)) return false;
+    window.sessionStorage.setItem(_SSO_BOUNCED, "1");
+  } catch {
+    return false;   // no sessionStorage to remember with: show the card instead
+  }
+  try {
+    window.location.assign(platformLoginUrl());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Shown when SLOP is this console's identity authority, the browser has no
+// usable SSO session, AND sending it to the platform sign-in did not work or
+// has already been tried. The console has no login of its own in that mode, so
+// offering the form would strand the operator on a screen whose every answer is
+// 403.
 function SsoSignIn() {
   return (
     <div className="login-wrap">
@@ -215,7 +255,7 @@ function SsoSignIn() {
           platform front door and open Controller from the portal.
         </p>
         <div className="row" style={{ gap: 8, marginTop: 14 }}>
-          <a className="btn" href="/login">Go to sign-in</a>
+          <a className="btn" href={platformLoginUrl()}>Go to sign-in</a>
           <button className="btn ghost" onClick={() => window.location.reload()}>Try again</button>
         </div>
         <p className="faint" style={{ fontSize: 12, marginTop: 14, marginBottom: 0 }}>
@@ -341,7 +381,11 @@ export default function App() {
   useEffect(() => {
     api.me()
       .then((d) => { setUser(d.username); setRole(d.role || ""); setMustChange(!!d.must_change_password);
-                     setSso(!!d.sso); })
+                     setSso(!!d.sso);
+                     // Signed in: forget that we bounced, so a session that
+                     // expires later gets the same one free trip to the
+                     // platform sign-in rather than the explanatory card.
+                     try { window.sessionStorage.removeItem(_SSO_BOUNCED); } catch { /* none */ } })
       .catch(async () => {
         setUser(null);
         // Which kind of "not signed in" is this? Under SLOP SSO the console has no
@@ -349,8 +393,23 @@ export default function App() {
         // typing credentials at a screen that can only ever answer 403.
         try {
           const m = await api.authMode();
-          if (m && m.sso) { setSsoBlocked(true); return; }
-        } catch { /* fall through to the normal paths */ }
+          if (m && m.sso) {
+            // Straight to the platform sign-in. The card is the fallback, not
+            // the destination.
+            if (!ssoBounceOnce()) setSsoBlocked(true);
+            return;
+          }
+        } catch (e) {
+          // Could not even ASK which mode this is. Falling through to the local
+          // form is only right for a standalone controller; behind the gateway
+          // it is the dead end this whole branch exists to avoid, and a reader
+          // cannot tell the two apart from here. A redirected or HTML answer
+          // means a gateway was in the way, which is answer enough.
+          if (e && (e.status === 401 || e.gatewayError)) {
+            if (!ssoBounceOnce()) setSsoBlocked(true);
+            return;
+          }
+        }
         // Not signed in — on a brand-new controller with no admin yet, show the
         // first-run create-administrator screen instead of an unusable login form.
         try {

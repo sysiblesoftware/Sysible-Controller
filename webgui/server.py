@@ -2801,7 +2801,15 @@ def enroll_ssh(body: EnrollRequest, request: Request, user: str = Depends(requir
                "password": body.password}
     if body.environment:
         payload["environment"] = body.environment
-    return _superuser_request("POST", "/remote/enroll-ssh", request, json=payload)
+    # 120s, not the 30s default. This opens an SSH connection to another
+    # machine, installs a key and enrolls an agent; 30s is a normal duration for
+    # it, not a fault. Timing out HERE turned a working enrollment into a 502,
+    # the gateway turned that into an HTML error page, and the console read the
+    # HTML as an expired session and signed the operator out mid-enrollment.
+    # The browser allows 120s for this call; the hop behind it must not give up
+    # first, or the client can never see what actually happened.
+    return _superuser_request("POST", "/remote/enroll-ssh", request, json=payload,
+                              timeout=120)
 
 
 @app.delete("/api/ssh-host/{name}")

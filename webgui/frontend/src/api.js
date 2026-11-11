@@ -116,15 +116,39 @@ async function req(path, { method = "GET", body, headers, raw = false, timeout }
   // overnight did.
   //
   // A top-level navigation is what the gateway redirects properly, so reload:
-  // the browser lands on the platform sign-in instead of a dead form. Two
-  // signals, either is enough — the response was redirected away from the URL
-  // we asked for, or it is HTML where this client only ever expects JSON.
+  // the browser lands on the platform sign-in instead of a dead form.
+  //
+  // res.ok IS LOAD-BEARING. The sign-in page the gateway serves on an expired
+  // session comes back 200 text/html. But the gateway ALSO serves an HTML page
+  // for an upstream that did not answer — `handle_errors` in its Caddyfile
+  // responds 502/503/504 with a styled "that module is not answering" card. So
+  // without this, every slow or failing request logged the operator out and
+  // reloaded the page: reported as "when I click enroll a host it logs me out
+  // of controller", and then as a Controller sign-in page appearing under SLOP,
+  // which is where that reload landed.
+  //
+  // An expired session and a service that did not answer want opposite
+  // responses, and the only thing separating them is the status.
   const ctype = res.headers.get("content-type") || "";
-  if (res.redirected || (!raw && ctype.includes("html"))) {
+  if (res.redirected || (!raw && res.ok && ctype.includes("html"))) {
     _fireUnauthorized();
     try { window.location.reload(); } catch { /* non-browser host */ }
     const err = new Error("Your session has expired — sign in again.");
     err.status = 401;
+    throw err;
+  }
+
+  // The other half: an HTML error page must not be handed to the caller as its
+  // own error text. JSON.parse fails on it and the whole document ends up in
+  // `detail`, so the console renders a page of markup where a sentence belongs.
+  if (!raw && !res.ok && ctype.includes("html")) {
+    const err = new Error(
+      res.status >= 500 && res.status < 600
+        ? `The controller did not answer (HTTP ${res.status}). It may still be `
+          + `working on it — check the host list before trying again.`
+        : `Request failed (HTTP ${res.status}).`);
+    err.status = res.status;
+    err.gatewayError = true;
     throw err;
   }
 

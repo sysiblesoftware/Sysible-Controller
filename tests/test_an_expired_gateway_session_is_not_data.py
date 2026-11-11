@@ -67,8 +67,20 @@ def test_it_bounces_to_the_platform_sign_in_rather_than_the_local_form(src):
 
 def test_a_raw_response_is_not_judged_on_its_content_type(src):
     """`raw` callers are downloads and streams — a blob, a tarball, an HTML
-    document. Only the JSON path can treat HTML as a sign-in page."""
-    assert "!raw && ctype.includes" in src
+    document. Only the JSON path can treat HTML as a sign-in page.
+
+    Asserted on the CONDITION, not on an exact spelling. This used to pin the
+    substring "!raw && ctype.includes", which broke the day a third term was
+    added between the two — for a fix that left this guard exactly as it was.
+    A test that fails when correct code is reworded teaches people to edit the
+    test, which is the habit that lets a real break through.
+    """
+    import re
+    conds = re.findall(r'^\s*if \(.*ctype\.includes\("html"\).*$', src, re.M)
+    assert conds, "nothing judges a response on its content type any more"
+    for c in conds:
+        assert "!raw" in c, (
+            f"a content-type branch does not exempt raw downloads: {c.strip()}")
 
 
 def test_the_built_console_carries_the_guard():

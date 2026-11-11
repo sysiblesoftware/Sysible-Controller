@@ -52,9 +52,15 @@ FROM python:3.12-slim AS runtime
 #                which the in-container "restart backend" flow uses)
 #   ca-certificates — TLS trust for outbound (e.g. license/update checks)
 #   tini       — reap zombies / forward signals as PID 1's child of supervisord
+#   openssh-client — ssh + ssh-keygen. The Controller GENERATES its own keypair
+#                with ssh-keygen on first use and reaches managed hosts with the
+#                ssh binary (backend/remote_routes.py, backend/relay_keys.py).
+#                Without it, "Enroll a host from here" died on a FileNotFoundError
+#                from subprocess and the console showed a bare "Internal Server
+#                Error" -- a missing 2MB package presenting as a broken feature.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-         openssl supervisor ca-certificates tini curl bash \
+         openssl openssh-client supervisor ca-certificates tini curl bash \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -90,6 +96,19 @@ COPY docker/supervisord.conf /etc/supervisor/supervisord.conf
 RUN chmod +x /usr/local/bin/sysible-entrypoint
 
 # --- environment: point every persistent path at the /data volume ----------
+# EVERY one of them. These defaults were written for the native install, where
+# /opt/sysible is the writable home; in the container it is neither writable (the
+# runtime user is uid 10001 and only /data and /app are chowned) nor persistent
+# (it is an image layer, thrown away on every recreate).
+#
+# Three were missed: SYSIBLE_HOME, SYSIBLE_HOSTS_FILE and SYSIBLE_REMOTE_KEY_DIR.
+# So push-enrollment wrote its SSH keypair and its host records under
+# /opt/sysible -- which failed outright as a 500, and would have been worse if it
+# had succeeded: the key every enrolled host had authorised would be thrown away
+# by the next update, locking the Controller out of its own fleet, silently.
+#
+# tests/test_the_container_can_write_what_it_persists.py fails if a path that
+# defaults under /opt/sysible is not redirected here.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     SYSIBLE_CONTAINER=1 \
@@ -99,6 +118,9 @@ ENV PYTHONUNBUFFERED=1 \
     SYSIBLE_DB_PATH=/data/sysible.db \
     SYSIBLE_PORTAL_FILES_DIR=/data/portal_files \
     SYSIBLE_API_KEY_FILE=/data/api_key.txt \
+    SYSIBLE_HOME=/data \
+    SYSIBLE_HOSTS_FILE=/data/hosts.json \
+    SYSIBLE_REMOTE_KEY_DIR=/data/remote_keys \
     SYSIBLE_API_URL=https://127.0.0.1:9000 \
     SYSIBLE_CA_CERT=/data/certs/server.crt \
     SYSIBLE_CERT_FILE=/data/certs/server.crt \

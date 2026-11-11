@@ -27,6 +27,7 @@ import posixpath
 import re
 import select
 import shlex
+import shutil
 import stat as stat_module
 
 # Ceiling for a single SFTP file download buffered into controller memory (getfo reads
@@ -63,6 +64,16 @@ HOST_FILE = Path(os.getenv("SYSIBLE_HOSTS_FILE", "/opt/sysible/hosts.json"))
 REMOTE_KEY_DIR = Path(os.getenv("SYSIBLE_REMOTE_KEY_DIR", "/opt/sysible/remote_keys"))
 CONTROLLER_KEY_PATH = REMOTE_KEY_DIR / "controller_ed25519"
 CONTROLLER_PUB_KEY_PATH = REMOTE_KEY_DIR / "controller_ed25519.pub"
+
+# Where these lived before the container image redirected them onto the /data
+# volume. The move is a FIX -- /opt/sysible is an image layer, so anything
+# written there is discarded by the next recreate -- but on its own it is also a
+# quiet catastrophe: a Controller that generates a FRESH keypair has lost the one
+# every enrolled host authorised, and the entire SSH fleet goes unreachable with
+# no error raised anywhere. So a readable key at the old path is ADOPTED, once,
+# before any decision to generate one.
+_LEGACY_HOME = Path("/opt/sysible")
+_adopted = False
 
 _SSH_PUBLIC_KEY_RE = re.compile(
     r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521)"
@@ -210,27 +221,91 @@ def save_hosts(hosts):
 # CONTROLLER SSH KEY (one keypair, shared across all enrolled
 # hosts - generated on first use, then reused forever)
 # =========================================================
+def _adopt_legacy_state():
+    """Carry a keypair, known_hosts or hosts.json left at the pre-/data location
+    across to where they live now. Runs once, copies only into empty slots, and
+    never raises: a Controller that cannot read the old path is in exactly the
+    state it would have been in without this.
+
+    Without it, the move onto the volume reads as "no key here" and the next
+    enrollment generates a new one -- leaving every host that already trusts the
+    old key unreachable, and nothing on screen to say why.
+    """
+    global _adopted
+    if _adopted:
+        return
+    _adopted = True
+    if _LEGACY_HOME == REMOTE_KEY_DIR.parent and _LEGACY_HOME == HOST_FILE.parent:
+        return  # a native install: already where it was
+    pairs = [(_LEGACY_HOME / "remote_keys" / n, REMOTE_KEY_DIR / n)
+             for n in ("controller_ed25519", "controller_ed25519.pub", "known_hosts")]
+    pairs.append((_LEGACY_HOME / "hosts.json", HOST_FILE))
+    for src, dst in pairs:
+        try:
+            if dst.exists() or not src.is_file():
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            if dst.name.endswith("ed25519") or dst.name == "known_hosts":
+                os.chmod(dst, 0o600)
+            print(f"[sysible] adopted {src} -> {dst}", flush=True)
+        except OSError:
+            # Unreadable, unwritable, or gone between the check and the copy.
+            # Carry on: this is a best-effort rescue, not a precondition.
+            continue
+
+
 def _ensure_controller_key() -> str:
     """Make sure the controller's ed25519 keypair exists on disk and
     return the public key text. Generating it is the one "one-time
     setup" step this module needs - everything after this is
     automatic."""
+    _adopt_legacy_state()
     if CONTROLLER_KEY_PATH.exists() and CONTROLLER_PUB_KEY_PATH.exists():
         return CONTROLLER_PUB_KEY_PATH.read_text().strip()
 
-    REMOTE_KEY_DIR.mkdir(parents=True, exist_ok=True)
+    # Everything below can fail for a reason the operator can act on, and every
+    # one of those reasons used to arrive as a bare "Internal Server Error".
+    # FileNotFoundError and PermissionError are both OSError, and this runs
+    # BEFORE the enrollment route's try/except -- so an unwritable directory and
+    # a missing ssh-keygen were indistinguishable from a bug in the code.
+    try:
+        REMOTE_KEY_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=(f"Cannot create {REMOTE_KEY_DIR} for the Controller's SSH key: {e}. "
+                    f"In a container this directory must be on the /data volume "
+                    f"(SYSIBLE_REMOTE_KEY_DIR); anywhere else is read-only to the "
+                    f"service user and would be discarded on the next update."))
 
     # ssh-keygen refuses to overwrite, so if only one half exists
     # (interrupted previous run) clear both and start clean.
     CONTROLLER_KEY_PATH.unlink(missing_ok=True)
     CONTROLLER_PUB_KEY_PATH.unlink(missing_ok=True)
 
-    proc = subprocess.run(
-        ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(CONTROLLER_KEY_PATH)],
-        capture_output=True,
-        text=True,
-        timeout=30,  # never let a stuck ssh-keygen (e.g. blocked entropy) hang the worker
-    )
+    try:
+        proc = subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(CONTROLLER_KEY_PATH)],
+            capture_output=True,
+            text=True,
+            timeout=30,  # never let a stuck ssh-keygen (e.g. blocked entropy) hang the worker
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=500,
+            detail=("ssh-keygen is not installed on the Controller, so it cannot "
+                    "generate the key it uses to reach managed hosts. Install the "
+                    "openssh-client package (the container image carries it; a "
+                    "native install needs it too)."))
+    except subprocess.TimeoutExpired:
+        raise HTTPException(
+            status_code=504,
+            detail=("ssh-keygen did not finish within 30s. On a machine with no "
+                    "entropy source this can block indefinitely; check "
+                    "/dev/urandom is available."))
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Could not run ssh-keygen: {e}")
 
     if proc.returncode != 0:
         raise HTTPException(

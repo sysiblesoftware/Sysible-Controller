@@ -85,10 +85,22 @@ class TestTheConsoleCanActuallyReachIt:
         assert "api.enrollSsh(" in VIEW, "nothing in the console calls push enrollment"
 
     @pytest.mark.parametrize("f", FIELDS)
-    def test_the_form_sends_every_required_field(self, f):
-        m = re.search(r"api\.enrollSsh\(\{(.*?)\}\)", VIEW, re.S)
-        assert m, "the enrollSsh call is not in the expected shape"
-        assert f"{f}:" in m.group(1), f"the form does not send {f}"
+    def test_every_caller_sends_every_required_field(self, f):
+        """EVERY call site, not the first one found.
+
+        There are two now -- the single-host form and the bulk import from a
+        hosts file -- and these assertions used to anchor on `the first
+        api.enrollSsh( in the file`, which silently became a different call
+        site the moment a second one was added above it. A test that moves to
+        whichever code happens to come first in a file is a test about
+        nothing in particular.
+        """
+        sites = re.findall(r"api\.enrollSsh\(\{(.*?)\}\)", VIEW, re.S)
+        assert len(sites) >= 2, (
+            f"expected the form AND the bulk import to call it; found "
+            f"{len(sites)} call site(s)")
+        for i, body in enumerate(sites):
+            assert f"{f}:" in body, f"call site {i + 1} does not send {f}"
 
     def test_there_is_somewhere_to_type_an_address(self):
         """The literal complaint."""
@@ -99,18 +111,38 @@ class TestTheConsoleCanActuallyReachIt:
         assert m and 'type="password"' in VIEW[max(0, m.start() - 200):m.end()], \
             "the password is rendered in clear text"
 
-    def test_the_password_is_cleared_after_a_successful_enrollment(self):
-        """It has done its one job; leaving it on screen is leaving a credential
-        on screen."""
-        m = re.search(r"api\.enrollSsh\(\{.*?\}\);(.*?)\} catch", VIEW, re.S)
-        assert m, "the success branch is not in the expected shape"
-        assert re.search(r'password:\s*""', m.group(1)), \
-            "the password field survives a successful enrollment"
+    # The two code paths that enroll, by a stable anchor each rather than by
+    # position in the file.
+    HANDLERS = {
+        "the single-host form": (r"const r = await api\.enrollSsh\(\{",
+                                 r'finally \{ setBusy\(""\); \}'),
+        "the bulk hosts-file import": (r"async function enrollPicked\(\)",
+                                       r"\n  \}"),
+    }
 
-    def test_the_host_list_refreshes_afterwards(self):
+    def _handler(self, which):
+        start_re, end_re = self.HANDLERS[which]
+        m = re.search(start_re, VIEW)
+        assert m, f"{which} is gone, or no longer in the expected shape"
+        rest = VIEW[m.start():]
+        e = re.search(end_re, rest)
+        assert e, f"could not find the end of {which}"
+        return rest[:e.end()]
+
+    @pytest.mark.parametrize("which", list(HANDLERS))
+    def test_the_password_is_cleared_after_enrolling(self, which):
+        """It has done its one job; leaving it on screen is leaving a credential
+        on screen. True of the batch password too -- more so, since one password
+        there was used against a dozen machines."""
+        body = self._handler(which)
+        assert re.search(r'password:\s*""', body), \
+            f"the password survives enrollment in {which}"
+
+    @pytest.mark.parametrize("which", list(HANDLERS))
+    def test_the_host_list_refreshes_afterwards(self, which):
         """A host that enrolled but does not appear looks like a failure."""
-        m = re.search(r"api\.enrollSsh\(\{.*?\}\);(.*?)\} catch", VIEW, re.S)
-        assert "load();" in m.group(1), "the page does not reload its hosts"
+        body = self._handler(which)
+        assert "load();" in body, f"{which} does not reload the host list"
 
     def test_it_does_not_call_a_loader_that_does_not_exist(self):
         """The first version of this called loadAgents(), which this component

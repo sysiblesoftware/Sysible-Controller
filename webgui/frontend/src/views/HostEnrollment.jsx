@@ -38,6 +38,15 @@ export default function HostEnrollment() {
   // backend needs is here — name, address, an account and its password, used
   // once and never stored.
   const [push, setPush] = useState({ name: "", ip: "", username: "root", password: "", environment: "" });
+  // Bulk enrollment from a hosts file. `rows` is every line the Controller read
+  // back, skipped ones included — a 40-line file that yields 12 candidates has
+  // to be able to say where the other 28 went.
+  const [bulkText, setBulkText] = useState("");
+  const [bulkRows, setBulkRows] = useState(null);
+  const [bulkPick, setBulkPick] = useState({});   // line -> true
+  const [bulkName, setBulkName] = useState({});   // line -> edited name
+  const [bulkCreds, setBulkCreds] = useState({ username: "root", password: "", environment: "" });
+  const [bulkProgress, setBulkProgress] = useState(null);
   const [portPort, setPortPort] = useState("");
   const [portalBusy, setPortalBusy] = useState("");
   const [tab, setTab] = useState("hosts");
@@ -202,6 +211,80 @@ export default function HostEnrollment() {
     if (!failures.length) return null;
     throw new Error(`${verb} ${done} of ${ids.length}. ${failures.length} failed:\n` +
       failures.slice(0, 12).join("\n") + (failures.length > 12 ? `\n…and ${failures.length - 12} more` : ""));
+  }
+
+  // Ask the Controller to read the pasted file. It enrolls nothing — every
+  // candidate is posted back through the ordinary one-host route below, so a
+  // bulk import gets the same duplicate-IP check, host limit and superuser gate
+  // that typing one in by hand does.
+  async function previewHostsFile() {
+    setErr(""); setMsg(""); setBusy("bulk-read");
+    try {
+      const d = await api.hostsFilePreview(bulkText);
+      const rows = (d && d.rows) || [];
+      setBulkRows(rows);
+      const pick = {}, names = {};
+      rows.forEach((r) => {
+        names[r.line] = r.name;
+        // Everything enrollable is ticked, EXCEPT a name that already exists:
+        // that one needs a human to look at it before it overwrites a record.
+        if (r.enrollable && !r.conflict) pick[r.line] = true;
+      });
+      setBulkPick(pick); setBulkName(names);
+      if (!rows.some((r) => r.enrollable)) {
+        setErr("Nothing in that file can be enrolled — see the reasons below.");
+      }
+    } catch (e) {
+      setErr(e.message || "Could not read that file.");
+      setBulkRows(null);
+    } finally { setBusy(""); }
+  }
+
+  async function enrollPicked() {
+    const picked = (bulkRows || []).filter((r) => r.enrollable && bulkPick[r.line]);
+    if (!picked.length) { setErr("Tick at least one host."); return; }
+    if (!bulkCreds.password) { setErr("Enter the SSH password to use."); return; }
+    if (!(await confirmDialog(
+      `Enroll ${picked.length} host(s)?\n\nThe Controller connects to each over SSH ` +
+      `as "${bulkCreds.username}", installs its key, and enrolls the agent. The password ` +
+      `is used once per host and is never stored.`))) return;
+
+    setErr(""); setMsg(""); setBusy("bulk-enroll");
+    const done = [], failed = [];
+    setBulkProgress({ done: 0, total: picked.length, current: "" });
+    // Serial, not the concurrency bulkOp uses elsewhere. Each of these opens an
+    // SSH session and runs a command on a different machine; eight at once is
+    // eight passwords in flight and eight ways for a half-finished enrollment to
+    // interleave in the activity log. Slower, and legible when one fails.
+    for (let i = 0; i < picked.length; i++) {
+      const r = picked[i];
+      const name = (bulkName[r.line] || r.name).trim();
+      setBulkProgress({ done: i, total: picked.length, current: name });
+      try {
+        await api.enrollSsh({
+          name, ip: r.address,
+          username: bulkCreds.username.trim(), password: bulkCreds.password,
+          environment: bulkCreds.environment,
+        });
+        done.push(name);
+      } catch (e) {
+        failed.push(`${name}: ${e.message || "failed"}`);
+      }
+    }
+    setBulkProgress(null);
+    setBusy("");
+    // Both halves, always. "Enrolled 11 of 12" with no word on the twelfth is
+    // the report that sends someone hunting through the activity log.
+    if (done.length) setMsg(`Enrolled ${done.length} of ${picked.length} host(s).`);
+    if (failed.length) {
+      setErr(`${failed.length} failed:\n` + failed.join("\n"));
+    } else {
+      // Only on a clean run: leaving the list up after a partial failure is how
+      // someone re-runs it and re-enrolls the ones that already worked.
+      setBulkRows(null); setBulkText("");
+    }
+    setBulkCreds((c) => ({ ...c, password: "" }));
+    load();
   }
 
   async function disenrollChecked() {
@@ -585,6 +668,121 @@ export default function HostEnrollment() {
               </span>
             </div>
           </form>
+        </fieldset>
+
+        {/* The same thing for a list. One at a time is the right shape for the
+            first host and the wrong one for the fortieth, and the list an
+            operator already has is almost always /etc/hosts. */}
+        <fieldset className="tool-group-box">
+          <legend>Enroll several from a hosts file</legend>
+          <p className="faint" style={{ marginTop: 0 }}>
+            Paste or upload an <code>/etc/hosts</code>-style list — <code>address name</code>,
+            one per line. The Controller reads it and shows what it found; nothing is
+            enrolled until you pick.
+          </p>
+          <div className="row" style={{ gap: 8, alignItems: "center", marginBottom: 8 }}>
+            <input type="file" accept=".txt,.hosts,text/plain,application/octet-stream"
+                   onChange={async (e) => {
+                     const f = e.target.files && e.target.files[0];
+                     if (!f) return;
+                     if (f.size > 1000000) { setErr("That file is larger than 1 MB."); return; }
+                     setBulkText(await f.text());
+                     setBulkRows(null);
+                     // Let the same file be chosen again after an edit.
+                     e.target.value = "";
+                   }} />
+          </div>
+          <textarea value={bulkText} rows={7} spellCheck={false}
+                    placeholder={"192.168.155.135  ubuntu-lab\n10.0.0.5         db.internal db\n10.0.0.6         web-01"}
+                    style={{ width: "100%", fontFamily: "ui-monospace, monospace", fontSize: 12.5 }}
+                    onChange={(e) => { setBulkText(e.target.value); setBulkRows(null); }} />
+          <div className="row" style={{ marginTop: 8, gap: 10, alignItems: "center" }}>
+            <button className="btn sm" type="button"
+                    disabled={!bulkText.trim() || busy === "bulk-read"}
+                    onClick={previewHostsFile}>
+              {busy === "bulk-read" ? "Reading…" : "Read the list"}
+            </button>
+            {bulkRows && (
+              <span className="faint" style={{ fontSize: 12 }}>
+                {bulkRows.filter((r) => r.enrollable).length} of {bulkRows.length} line(s)
+                can be enrolled.
+              </span>
+            )}
+          </div>
+
+          {bulkRows && bulkRows.length > 0 && (
+            <>
+              <table className="table" style={{ marginTop: 12, fontSize: 13 }}>
+                <thead><tr>
+                  <th style={{ width: 28 }}></th>
+                  <th>Address</th><th>Enroll as</th><th>From the file</th>
+                </tr></thead>
+                <tbody>
+                  {bulkRows.map((r) => (
+                    <tr key={r.line} style={{ opacity: r.enrollable ? 1 : 0.55 }}>
+                      <td>
+                        {r.enrollable ? (
+                          <input type="checkbox" checked={!!bulkPick[r.line]}
+                                 onChange={(e) => setBulkPick({ ...bulkPick, [r.line]: e.target.checked })} />
+                        ) : null}
+                      </td>
+                      <td><code>{r.address}</code></td>
+                      <td>
+                        {r.enrollable ? (
+                          <input value={bulkName[r.line] ?? r.name} autoComplete="off"
+                                 style={{ width: "100%", maxWidth: 220 }}
+                                 onChange={(e) => setBulkName({ ...bulkName, [r.line]: e.target.value })} />
+                        ) : <span className="faint">—</span>}
+                      </td>
+                      <td className="faint" style={{ fontSize: 12 }}>
+                        {/* Why a line is not on offer, in place of the line
+                            itself. A filter that drops entries without saying
+                            which, or why, is the one an operator stops trusting. */}
+                        {r.skip_reason
+                          ? <span>{r.skip_reason}</span>
+                          : r.conflict
+                            ? <span style={{ color: "var(--amber, #e0a83b)" }}>{r.conflict}</span>
+                            : <span>{(r.names || []).join(" ") || "—"}</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <div className="group-fields" style={{ marginTop: 10 }}>
+                <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>SSH user</span>
+                  <input value={bulkCreds.username} autoComplete="off"
+                         onChange={(e) => setBulkCreds({ ...bulkCreds, username: e.target.value })} /></label></div>
+                <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Password</span>
+                  <input type="password" value={bulkCreds.password} autoComplete="new-password"
+                         onChange={(e) => setBulkCreds({ ...bulkCreds, password: e.target.value })} /></label></div>
+              </div>
+              <div className="group-fields">
+                <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Environment</span>
+                  <select value={bulkCreds.environment}
+                          onChange={(e) => setBulkCreds({ ...bulkCreds, environment: e.target.value })}>
+                    <option value="">(unassigned)</option>
+                    {envs.map((x) => <option key={x} value={x}>{x}</option>)}
+                  </select></label></div>
+              </div>
+              <div className="row" style={{ marginTop: 10, gap: 10, alignItems: "center" }}>
+                <button className="btn" type="button" disabled={busy === "bulk-enroll"}
+                        onClick={enrollPicked}>
+                  {busy === "bulk-enroll"
+                    ? "Enrolling…"
+                    : `Enroll ${bulkRows.filter((r) => r.enrollable && bulkPick[r.line]).length} host(s)`}
+                </button>
+                {bulkProgress && (
+                  <span className="faint" style={{ fontSize: 12 }}>
+                    {bulkProgress.done} of {bulkProgress.total} — {bulkProgress.current}…
+                  </span>
+                )}
+                <span className="faint" style={{ fontSize: 12 }}>
+                  One password for the batch, used once per host and never stored.
+                </span>
+              </div>
+            </>
+          )}
         </fieldset>
 
         <fieldset className="tool-group-box"><legend>Download the agent bundle</legend>

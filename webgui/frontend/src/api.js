@@ -163,6 +163,11 @@ export const api = {
   // authorized_keys and verifies the result on a machine that may be slow or far
   // away, and a default-timeout failure here looks identical to a wrong password.
   enrollSsh: (body) => req("/api/enroll-ssh", { method: "POST", body, timeout: 120000 }),
+  // Reads a hosts file and says which machines in it could be enrolled. Enrolls
+  // nothing: the rows it returns are posted back through enrollSsh above, one at
+  // a time, so a bulk import goes through exactly the checks a single one does.
+  hostsFilePreview: (text) =>
+    req("/api/hosts-file/preview", { method: "POST", body: { text }, timeout: 30000 }),
   environments: () => req("/api/environments"),
   tools: () => req("/api/tools"),
   fleetHealth: (refresh) => req("/api/fleet-health" + (refresh ? "?refresh=1" : ""),

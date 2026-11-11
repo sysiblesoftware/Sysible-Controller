@@ -43,7 +43,7 @@ import time
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 
 from backend.auth import require_superuser
@@ -56,6 +56,7 @@ from backend.models.remote_models import (
     TerminalWriteRequest,
 )
 from backend.models.environment_models import SetEnvironmentRequest
+from backend import hosts_file
 
 router = APIRouter(prefix="/remote", tags=["remote"])
 
@@ -911,6 +912,58 @@ def set_host_environment(name: str, body: SetEnvironmentRequest):
 # install the controller's public key, then discarded. After this
 # the host is reachable by exec_remote() with no further setup.
 # =========================================================
+# =========================================================
+# READ A HOSTS FILE (preview only - enrolls nothing)
+# =========================================================
+@router.post("/hosts-file/preview", dependencies=[Depends(require_superuser)])
+def hosts_file_preview(body: dict = Body(...)):
+    """Read a hosts file and say which machines in it could be enrolled.
+
+    Enrolls NOTHING and touches no machine. The caller posts each candidate it
+    wants to the existing /enroll-ssh route, one at a time, so the duplicate-IP
+    check, the host limit and the superuser gate all stay in the single place
+    they already live. A bulk enrollment ENDPOINT would be a second path onto a
+    host and a second place for those to be forgotten.
+
+    Every line comes back, including the ones that cannot be enrolled and why:
+    an operator looking at a 40-line file that produced 12 candidates needs to
+    be able to see where the other 28 went.
+    """
+    text = body.get("text")
+    if not isinstance(text, str):
+        raise HTTPException(status_code=400, detail="Expected a 'text' field.")
+    if len(text) > 1_000_000:
+        raise HTTPException(status_code=413,
+                            detail="That file is larger than 1 MB; a hosts file is not.")
+
+    rows = hosts_file.parse(text)
+
+    # What is already here. Done once over the inventory rather than per row:
+    # a 500-line file would otherwise be 500 passes over every host record.
+    existing_names = {n.lower() for n in (load_hosts() or {})}
+    for row in rows:
+        if not row["enrollable"]:
+            continue
+        owner = _ip_owner(row["address"])
+        if owner:
+            row["enrollable"] = False
+            row["skip"] = "managed"
+            row["skip_reason"] = f"already managed as '{owner}'"
+        elif row["name"].lower() in existing_names:
+            # Same name, different address. Not refused -- the operator may well
+            # be re-pointing a host that moved -- but it must not be ticked by
+            # default and then silently overwrite the record.
+            row["conflict"] = f"a host called '{row['name']}' already exists"
+
+    usable = [r for r in rows if r["enrollable"]]
+    return {
+        "rows": rows,
+        "candidates": len(usable),
+        "lines": len(rows),
+        "skipped": len(rows) - len(usable),
+    }
+
+
 @router.post("/enroll-ssh", dependencies=[Depends(require_superuser)])
 def enroll_ssh(body: EnrollSSHRequest):
     from backend.edition import enforce_host_limit

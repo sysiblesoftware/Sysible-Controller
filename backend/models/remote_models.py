@@ -12,6 +12,14 @@ _SSH_LOGIN_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")      # no leading '
 _HOST_ADDR_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9._:-]*)?$")   # IPv4/IPv6/hostname chars, no leading '-'
 _HOST_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
+# Public aliases. backend/hosts_file.py reads a hosts file and OFFERS names and
+# addresses for enrollment, and every one it offers is posted straight back to
+# the route these validators guard. Two independent ideas of "a usable name"
+# would mean a screen that proposes a host and an API that then refuses it, with
+# nothing to tell the operator which of the two was wrong.
+HOST_NAME_RE = _HOST_NAME_RE
+HOST_ADDR_RE = _HOST_ADDR_RE
+
 
 def _validate(pattern, value, field):
     v = (value or "").strip()

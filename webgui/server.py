@@ -2778,6 +2778,23 @@ class EnrollRequest(BaseModel):
     environment: str = ""
 
 
+class HostsFilePreview(BaseModel):
+    text: str
+
+
+@app.post("/api/hosts-file/preview")
+def hosts_file_preview(body: HostsFilePreview, request: Request,
+                       user: str = Depends(require_operator)):
+    """Read a hosts file and report which machines in it could be enrolled.
+
+    Reads only. The browser posts each candidate the operator ticks to
+    /api/enroll-ssh, one at a time, so every check that route makes is made
+    for a bulk import too.
+    """
+    return _superuser_request("POST", "/remote/hosts-file/preview", request,
+                              json={"text": body.text}, timeout=30)
+
+
 @app.post("/api/enroll-ssh")
 def enroll_ssh(body: EnrollRequest, request: Request, user: str = Depends(require_operator)):
     payload = {"name": body.name, "ip": body.ip, "username": body.username,

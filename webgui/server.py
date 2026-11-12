@@ -2620,7 +2620,30 @@ def _superuser_request(method, path, request: Request, **kw):
             detail = r.json().get("detail")
         except Exception:
             pass
-        raise HTTPException(status_code=r.status_code, detail=detail or r.reason)
+        status = r.status_code
+        # NEVER mirror an upstream 401 without checking what it was ABOUT.
+        #
+        # To the browser, 401 means one thing: this console session is over,
+        # drop it and go to the sign-in page. The controller uses 401 for that
+        # too -- a rejected admin token -- but it also used to use it for a
+        # MANAGED HOST refusing an SSH password. Mirroring the status verbatim
+        # turned a mistyped password into a logout, reported as "when I click
+        # enroll a host it logs me out of controller".
+        #
+        # Those routes say 400 now, but the shape of the mistake outlives any
+        # one of them, so this decides on EVIDENCE rather than trust: ask the
+        # controller whether the token we just sent is still good. If it is,
+        # the 401 was about something else and must not end the session. If the
+        # check cannot be made, keep the 401 -- that is the safer of the two
+        # wrong answers.
+        if status == 401:
+            try:
+                _with_token(token, api.whoami)
+                status = 502
+                detail = (detail or r.reason or "Upstream refused the request")
+            except Exception:
+                pass
+        raise HTTPException(status_code=status, detail=detail or r.reason)
     return r.json() if r.content else {}
 
 

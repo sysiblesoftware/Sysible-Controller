@@ -1035,7 +1035,17 @@ def enroll_ssh(body: EnrollSSHRequest):
                     f"was rebuilt/reassigned. If you trust the change, remove the pinned "
                     f"entry for this IP from {KNOWN_HOSTS_PATH} and enroll again. ({e})"))
     except paramiko.AuthenticationException:
-        raise HTTPException(status_code=401, detail="SSH authentication failed")
+        # 400, NOT 401. This is the MANAGED HOST refusing the credentials the
+        # operator typed into a form -- it says nothing about their console
+        # session. A 401 travels back through the BFF, which mirrors the
+        # upstream status verbatim, to a browser where 401 means exactly one
+        # thing: your session is over. So a mistyped SSH password signed the
+        # operator out of the Controller, which is what "when I click enroll a
+        # host it logs me out" was.
+        #
+        # 400 matches "Could not reach host" a few lines below: both are the
+        # machine you asked us to connect to saying no.
+        raise HTTPException(status_code=400, detail="SSH authentication failed")
     except OSError as e:
         raise HTTPException(status_code=400, detail=f"Could not reach host: {e}")
     except paramiko.SSHException as e:
@@ -1854,7 +1864,10 @@ def open_terminal(name: str, request: Request):
                     f"and reconnect. ({e})"))
     except paramiko.AuthenticationException:
         client.close()
-        raise HTTPException(status_code=401, detail="SSH authentication failed")
+        # 400, not 401 -- see the note in enroll_ssh. The host refused the key;
+        # the operator's console session is fine, and telling the browser 401
+        # ends it.
+        raise HTTPException(status_code=400, detail="SSH authentication failed")
     except OSError as e:
         client.close()
         raise HTTPException(status_code=400, detail=f"Could not reach host: {e}")
@@ -2076,7 +2089,10 @@ def _connect_sftp(name: str):
                     f"and retry. ({e})"))
     except paramiko.AuthenticationException:
         client.close()
-        raise HTTPException(status_code=401, detail="SSH authentication failed")
+        # 400, not 401 -- see the note in enroll_ssh. The host refused the key;
+        # the operator's console session is fine, and telling the browser 401
+        # ends it.
+        raise HTTPException(status_code=400, detail="SSH authentication failed")
     except OSError as e:
         client.close()
         raise HTTPException(status_code=400, detail=f"Could not reach host: {e}")

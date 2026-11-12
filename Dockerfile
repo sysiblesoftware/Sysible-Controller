@@ -14,7 +14,7 @@
 ###############################################################################
 
 # ---- stage 1: build the React web console into static files ----------------
-FROM node:20-slim AS frontend
+FROM node:25-slim AS frontend
 WORKDIR /src/webgui/frontend
 # URL prefix the console's assets are fetched from. EMPTY by default, on
 # purpose — do not restore the "/" that used to be here.
@@ -44,7 +44,7 @@ COPY webgui/frontend/ ./
 RUN npm run build          # -> /src/webgui/frontend/dist
 
 # ---- stage 2: python runtime ----------------------------------------------
-FROM python:3.12-slim AS runtime
+FROM python:3.15-slim AS runtime
 
 # Runtime OS packages:
 #   openssl    — first-run self-signed TLS cert generation (entrypoint)

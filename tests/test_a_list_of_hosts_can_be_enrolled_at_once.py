@@ -127,9 +127,19 @@ def test_a_short_name_two_machines_share_is_not_used_for_either():
     assert _names(rows) == ["web-01.a.example.com", "web-01.b.example.com"], _names(rows)
 
 
-def test_a_line_with_no_hostname_is_not_a_candidate():
+def test_a_line_with_no_hostname_is_offered_under_its_own_address():
+    """Changed deliberately, with "IP should be optional if using /etc/hosts".
+
+    An address on its own used to be skipped for having no name. But there is
+    nothing wrong with the line -- it names a machine the only way it can, and
+    refusing it meant an operator pasting a column of addresses got nothing at
+    all. It is offered labelled by its address, and the label is editable
+    before anything is posted.
+    """
     rows = hosts_file.parse("10.0.0.9\n")
-    assert rows[0]["enrollable"] is False and rows[0]["skip"] == "no-name"
+    assert rows[0]["enrollable"] is True
+    assert rows[0]["name"] == "10.0.0.9"
+    assert rows[0]["target"] == "10.0.0.9"
 
 
 def test_something_that_is_not_an_address_is_not_a_candidate():

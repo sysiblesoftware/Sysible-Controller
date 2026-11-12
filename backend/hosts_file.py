@@ -53,7 +53,6 @@ SKIP_REASONS = {
     "unspecified": "unspecified address",
     "multicast": "multicast address",
     "link-local": "link-local address",
-    "no-name": "address with no hostname",
     "bad-address": "not an IP address",
     "bad-name": "not a usable hostname",
     "duplicate": "same address as an earlier line",
@@ -106,6 +105,9 @@ def parse(text: str, max_lines: int = 20000) -> list[dict]:
         fields = body.split()
         addr, names = fields[0], fields[1:]
         parsed.append((lineno, raw.rstrip(), addr, names))
+        if _classify(addr) == "bad-address" and not names and HOST_NAME_RE.match(addr):
+            short_counts[_short(addr).lower()] = short_counts.get(_short(addr).lower(), 0) + 1
+            continue
         if _classify(addr) is None and names:
             usable = [n for n in names
                       if n.lower() not in _SELF_NAMES
@@ -116,9 +118,27 @@ def parse(text: str, max_lines: int = 20000) -> list[dict]:
 
     for lineno, raw, addr, names in parsed:
         row = {"line": lineno, "raw": raw, "address": addr, "names": names,
-               "name": "", "enrollable": False, "skip": None, "skip_reason": None}
+               "name": "", "target": "", "enrollable": False,
+               "skip": None, "skip_reason": None}
 
         bad = _classify(addr)
+
+        # A LINE WITH NO ADDRESS AT ALL. `web-01` on its own is not a hosts-file
+        # entry, but it is what an operator has when the names are already in
+        # /etc/hosts or DNS -- and asking them to look each address up and type
+        # it back in is asking them to do by hand the one thing a resolver is
+        # for. The name becomes the connection target and the Controller
+        # resolves it, exactly as it does for the single-host form.
+        if bad == "bad-address" and not names and HOST_NAME_RE.match(addr):
+            row["address"] = ""
+            row["names"] = [addr]
+            row["name"] = _short(addr) if short_counts.get(_short(addr).lower(), 0) <= 1 \
+                and HOST_NAME_RE.match(_short(addr)) else addr
+            row["target"] = addr
+            row["enrollable"] = True
+            out.append(row)
+            continue
+
         if bad:
             row["skip"] = bad
             row["skip_reason"] = SKIP_REASONS[bad]
@@ -127,7 +147,12 @@ def parse(text: str, max_lines: int = 20000) -> list[dict]:
 
         lowered = [n.lower() for n in names]
         if not names:
-            row["skip"], row["skip_reason"] = "no-name", SKIP_REASONS["no-name"]
+            # An ADDRESS with no name. Enrollable, labelled by the address --
+            # there is nothing else to call it, and the label is editable before
+            # anything is posted.
+            row["name"] = addr
+            row["target"] = addr
+            row["enrollable"] = True
             out.append(row)
             continue
         if all(n in _SELF_NAMES for n in lowered):
@@ -166,6 +191,7 @@ def parse(text: str, max_lines: int = 20000) -> list[dict]:
         seen_addrs[key] = lineno
 
         row["name"] = label
+        row["target"] = addr
         row["enrollable"] = True
         out.append(row)
 

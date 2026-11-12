@@ -45,7 +45,12 @@ class AddHostRequest(BaseModel):
 
     @field_validator("ip")
     @classmethod
-    def _v_ip(cls, v): return _validate(_HOST_ADDR_RE, v, "ip/host")
+    def _v_ip(cls, v):
+        # Empty is allowed and means "use the name". Anything else still has to
+        # look like an address or a hostname -- the pattern is what keeps a
+        # value with shell metacharacters or a leading dash out of an ssh argv.
+        v = (v or "").strip()
+        return v if not v else _validate(_HOST_ADDR_RE, v, "ip/host")
 
     @field_validator("user")
     @classmethod
@@ -61,7 +66,11 @@ class ExecRequest(BaseModel):
 
 class EnrollSSHRequest(BaseModel):
     name: str
-    ip: str
+    # OPTIONAL. Left empty, the controller connects to the NAME and resolves it
+    # the way everything else on the host does -- /etc/hosts, DNS, whatever is
+    # configured. Requiring an address meant typing a machine's identity twice
+    # on every fleet that already has its names written down somewhere.
+    ip: str = ""
     username: str = "root"
     password: str
     environment: str = ""
@@ -73,7 +82,12 @@ class EnrollSSHRequest(BaseModel):
 
     @field_validator("ip")
     @classmethod
-    def _v_ip(cls, v): return _validate(_HOST_ADDR_RE, v, "ip/host")
+    def _v_ip(cls, v):
+        # Empty is allowed and means "use the name". Anything else still has to
+        # look like an address or a hostname -- the pattern is what keeps a
+        # value with shell metacharacters or a leading dash out of an ssh argv.
+        v = (v or "").strip()
+        return v if not v else _validate(_HOST_ADDR_RE, v, "ip/host")
 
     @field_validator("username")
     @classmethod

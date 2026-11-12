@@ -19,6 +19,8 @@ convention as backend/auth.py's api_key.txt. Host metadata (name,
 ip, user) is persisted to hosts.json.
 """
 
+import ipaddress
+import socket
 import io
 import json
 import os
@@ -600,6 +602,28 @@ def _norm_ip(ip) -> str:
     return (ip or "").strip()
 
 
+def _resolve_addrs(target: str) -> set:
+    """Every IP `target` resolves to right now, or an empty set.
+
+    One lookup, used for two things: proving a name the operator typed is
+    reachable before trying to enroll it, and recognising that `web-01` and
+    `10.0.0.6` are the same machine. Never raises -- an unresolvable name is a
+    normal answer here, and the caller decides what it means.
+    """
+    target = _norm_ip(target)
+    if not target:
+        return set()
+    try:
+        ipaddress.ip_address(target)
+        return {target}          # already an address; no lookup to do
+    except ValueError:
+        pass
+    try:
+        return {info[4][0] for info in socket.getaddrinfo(target, None)}
+    except (OSError, UnicodeError):
+        return set()
+
+
 def _ip_owner(ip: str, exclude_name=None):
     """If `ip` is already managed - by another SSH host record or by an
     enrolled agent - return the name it's known by, else None. This is what
@@ -610,8 +634,17 @@ def _ip_owner(ip: str, exclude_name=None):
     ip = _norm_ip(ip)
     if not ip:
         return None
+    # What this candidate IS, by every name it answers to. The address an
+    # operator typed and the name they typed are the same machine, and storing
+    # one of each used to read as two -- so the duplicate-IP check, which is the
+    # only thing stopping one box becoming two rows, missed exactly the case
+    # that made it easy to create.
+    mine = {ip} | _resolve_addrs(ip)
     for n, h in (load_hosts() or {}).items():
-        if n != exclude_name and _norm_ip(h.get("ip")) == ip:
+        if n == exclude_name:
+            continue
+        theirs = {_norm_ip(h.get("ip")), _norm_ip(h.get("addr"))} - {""}
+        if theirs & mine:
             return n
     try:
         from backend.db import list_agents
@@ -944,7 +977,10 @@ def hosts_file_preview(body: dict = Body(...)):
     for row in rows:
         if not row["enrollable"]:
             continue
-        owner = _ip_owner(row["address"])
+        # The TARGET, not the address: a bare-name line has no address, and
+        # checking "" against the inventory would match nothing and quietly
+        # offer a machine that is already managed.
+        owner = _ip_owner(row.get("target") or row["address"])
         if owner:
             row["enrollable"] = False
             row["skip"] = "managed"
@@ -969,14 +1005,28 @@ def enroll_ssh(body: EnrollSSHRequest):
     from backend.edition import enforce_host_limit
     enforce_host_limit(body.name)
 
-    # Refuse to enroll a machine that's already managed at this IP (by an
+    # No address given: connect to the NAME. A fleet whose names are already in
+    # /etc/hosts or DNS should not have to write each machine's identity twice,
+    # and the name is the better thing to keep -- an address goes stale the next
+    # time DHCP moves the host, a name does not.
+    target = _norm_ip(body.ip) or _norm_ip(body.name)
+    resolved = _resolve_addrs(target)
+    if not resolved:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Could not resolve '{target}'. Give an address, or add the "
+                    f"name to this host's /etc/hosts or DNS. (The Controller "
+                    f"resolves names the same way the rest of this machine "
+                    f"does.)"))
+
+    # Refuse to enroll a machine that's already managed at this address (by an
     # agent or another SSH host). Same physical box, two records = the
     # duplicate rows we want to make impossible.
-    owner = _ip_owner(body.ip, exclude_name=body.name)
+    owner = _ip_owner(target, exclude_name=body.name)
     if owner:
         raise HTTPException(
             status_code=409,
-            detail=(f"{body.ip} is already managed as '{owner}'. Remove that host "
+            detail=(f"{target} is already managed as '{owner}'. Remove that host "
                     f"first if you want to re-enroll it under a different name."))
 
     public_key = _ensure_controller_key()
@@ -1005,13 +1055,13 @@ def enroll_ssh(body: EnrollSSHRequest):
 
     # A host being enrolled can itself be behind the bastion, so resolve the relay
     # from the values the request carries (there is no host record yet).
-    proxy = _host_proxy({"name": getattr(body, "name", None), "ip": body.ip,
+    proxy = _host_proxy({"name": getattr(body, "name", None), "ip": target,
                          "user": body.username,
                          "relay": getattr(body, "relay", None)})
 
     try:
         _ssh_connect(
-            client, body.ip, proxy=proxy,
+            client, target, proxy=proxy,
             username=body.username,
             password=body.password,
             timeout=10,
@@ -1030,7 +1080,7 @@ def enroll_ssh(body: EnrollSSHRequest):
         # connection. Refuse rather than silently re-trust.
         raise HTTPException(
             status_code=409,
-            detail=(f"Host key for {body.ip} does not match the key pinned on first "
+            detail=(f"Host key for {target} does not match the key pinned on first "
                     f"contact - possible man-in-the-middle, or the machine at this IP "
                     f"was rebuilt/reassigned. If you trust the change, remove the pinned "
                     f"entry for this IP from {KNOWN_HOSTS_PATH} and enroll again. ({e})"))
@@ -1063,7 +1113,13 @@ def enroll_ssh(body: EnrollSSHRequest):
     with _HOSTS_LOCK:
         hosts = load_hosts()
         hosts[body.name] = {
-            "ip": body.ip,
+            # What to CONNECT to -- the name when that is what was given, so the
+            # record survives the next time DHCP moves the machine.
+            "ip": target,
+            # What it resolved to AT ENROLMENT. Not used for connecting: it is
+            # how `web-01` and `10.0.0.6` are recognised as one machine later,
+            # without a DNS lookup per record on every enrolment.
+            "addr": sorted(resolved)[0] if resolved else "",
             "user": body.username,
             "key_path": str(CONTROLLER_KEY_PATH),
             "environment": body.environment or "",

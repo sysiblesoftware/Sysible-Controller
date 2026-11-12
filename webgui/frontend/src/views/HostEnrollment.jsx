@@ -262,7 +262,9 @@ export default function HostEnrollment() {
       setBulkProgress({ done: i, total: picked.length, current: name });
       try {
         await api.enrollSsh({
-          name, ip: r.address,
+          // The TARGET. A line that was just a name has no address, and sending
+          // "" would enroll nothing -- the Controller resolves the name itself.
+          name, ip: r.target || r.address,
           username: bulkCreds.username.trim(), password: bulkCreds.password,
           environment: bulkCreds.environment,
         });
@@ -637,9 +639,9 @@ export default function HostEnrollment() {
               <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Host name</span>
                 <input value={push.name} required autoComplete="off" placeholder="web-01"
                        onChange={(e) => setPush({ ...push, name: e.target.value })} /></label></div>
-              <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Address</span>
-                <input value={push.ip} required autoComplete="off"
-                       placeholder="10.0.0.12 or web-01.example.com"
+              <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Address <span className="faint" style={{ fontWeight: 400 }}>(optional)</span></span>
+                <input value={push.ip} autoComplete="off"
+                       placeholder="blank = use the host name"
                        onChange={(e) => setPush({ ...push, ip: e.target.value })} /></label></div>
             </div>
             <div className="group-fields">
@@ -663,8 +665,9 @@ export default function HostEnrollment() {
                 {busy === "push" ? "Enrolling…" : "Enroll host"}
               </button>
               <span className="faint" style={{ fontSize: 12 }}>
-                Needs SSH reachable from the Controller, and an account that can write
-                its own <code>~/.ssh/authorized_keys</code>.
+                Leave the address blank when the name already resolves here. Needs SSH
+                reachable from the Controller, and an account that can write its own{" "}
+                <code>~/.ssh/authorized_keys</code>.
               </span>
             </div>
           </form>
@@ -676,9 +679,11 @@ export default function HostEnrollment() {
         <fieldset className="tool-group-box">
           <legend>Enroll several from a hosts file</legend>
           <p className="faint" style={{ marginTop: 0 }}>
-            Paste or upload an <code>/etc/hosts</code>-style list — <code>address name</code>,
-            one per line. The Controller reads it and shows what it found; nothing is
-            enrolled until you pick.
+            One host per line. An <code>/etc/hosts</code>-style{" "}
+            <code>address name</code> pair, or <strong>just the name</strong> if it is
+            already in this host&rsquo;s <code>/etc/hosts</code> or DNS — the Controller
+            resolves it the same way the rest of the machine does. An address on its own
+            works too. Nothing is enrolled until you pick.
           </p>
           <div className="row" style={{ gap: 8, alignItems: "center", marginBottom: 8 }}>
             <input type="file" accept=".txt,.hosts,text/plain,application/octet-stream"
@@ -693,7 +698,7 @@ export default function HostEnrollment() {
                    }} />
           </div>
           <textarea value={bulkText} rows={7} spellCheck={false}
-                    placeholder={"192.168.155.135  ubuntu-lab\n10.0.0.5         db.internal db\n10.0.0.6         web-01"}
+                    placeholder={"web-01\nweb-02\ndb-01\n\n…or, with addresses:\n192.168.155.135  ubuntu-lab\n10.0.0.5         db.internal db"}
                     style={{ width: "100%", fontFamily: "ui-monospace, monospace", fontSize: 12.5 }}
                     onChange={(e) => { setBulkText(e.target.value); setBulkRows(null); }} />
           <div className="row" style={{ marginTop: 8, gap: 10, alignItems: "center" }}>
@@ -715,7 +720,7 @@ export default function HostEnrollment() {
               <table className="table" style={{ marginTop: 12, fontSize: 13 }}>
                 <thead><tr>
                   <th style={{ width: 28 }}></th>
-                  <th>Address</th><th>Enroll as</th><th>From the file</th>
+                  <th>Connect to</th><th>Enroll as</th><th>From the file</th>
                 </tr></thead>
                 <tbody>
                   {bulkRows.map((r) => (
@@ -726,7 +731,7 @@ export default function HostEnrollment() {
                                  onChange={(e) => setBulkPick({ ...bulkPick, [r.line]: e.target.checked })} />
                         ) : null}
                       </td>
-                      <td><code>{r.address}</code></td>
+                      <td><code>{r.target || r.address || "—"}</code></td>
                       <td>
                         {r.enrollable ? (
                           <input value={bulkName[r.line] ?? r.name} autoComplete="off"

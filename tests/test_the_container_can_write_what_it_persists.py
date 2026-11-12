@@ -49,8 +49,12 @@ _SOURCES = ("backend", "webgui")
 def _persisted_defaults():
     """(env var, default) for every path that defaults under /opt/sysible."""
     out = {}
+    # BOTH spellings. os.getenv and os.environ.get do the same thing, and a
+    # scanner that knows only one leaves the other silently uncovered --
+    # which is the same shape of gap this whole test exists to close.
     pattern = re.compile(
-        r'getenv\(\s*"(?P<var>SYSIBLE_[A-Z0-9_]+)"\s*,\s*"(?P<default>/opt/sysible[^"]*)"')
+        r'(?:getenv|environ\.get)\(\s*"(?P<var>SYSIBLE_[A-Z0-9_]+)"'
+        r'\s*,\s*"(?P<default>/opt/sysible[^"]*)"')
     for sub in _SOURCES:
         for path in (REPO / sub).rglob("*.py"):
             if "node_modules" in path.parts:

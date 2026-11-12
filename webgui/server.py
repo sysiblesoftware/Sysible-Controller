@@ -2805,6 +2805,24 @@ class HostsFilePreview(BaseModel):
     text: str
 
 
+class NameList(BaseModel):
+    text: str
+
+
+@app.get("/api/names")
+def names_get(request: Request, user: str = Depends(require_operator)):
+    """The names this Controller can resolve by itself, and where from."""
+    return _superuser_request("GET", "/remote/names", request, timeout=15)
+
+
+@app.put("/api/names")
+def names_put(body: NameList, request: Request,
+              user: str = Depends(require_operator)):
+    """Replace that list. A lookup table for enrollment; no system file moves."""
+    return _superuser_request("PUT", "/remote/names", request,
+                              json={"text": body.text}, timeout=30)
+
+
 @app.post("/api/hosts-file/preview")
 def hosts_file_preview(body: HostsFilePreview, request: Request,
                        user: str = Depends(require_operator)):

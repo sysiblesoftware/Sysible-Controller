@@ -58,7 +58,7 @@ from backend.models.remote_models import (
     TerminalWriteRequest,
 )
 from backend.models.environment_models import SetEnvironmentRequest
-from backend import hosts_file
+from backend import hosts_file, name_table
 
 router = APIRouter(prefix="/remote", tags=["remote"])
 
@@ -618,6 +618,13 @@ def _resolve_addrs(target: str) -> set:
         return {target}          # already an address; no lookup to do
     except ValueError:
         pass
+    # What the OPERATOR wrote down, before what the network says. The
+    # Controller usually runs in a container, so the platform host's
+    # /etc/hosts is not its own -- without this, a name that resolves
+    # perfectly well everywhere else on that machine is unknown here.
+    written = name_table.lookup(target)
+    if written:
+        return set(written)
     try:
         return {info[4][0] for info in socket.getaddrinfo(target, None)}
     except (OSError, UnicodeError):
@@ -948,6 +955,48 @@ def set_host_environment(name: str, body: SetEnvironmentRequest):
 # =========================================================
 # READ A HOSTS FILE (preview only - enrolls nothing)
 # =========================================================
+@router.get("/names", dependencies=[Depends(require_superuser)])
+def names_get():
+    """The names this Controller can resolve on its own, and where they come from.
+
+    Shown rather than merely used: "the Controller cannot resolve this name"
+    and "the host's /etc/hosts was never mounted" produce the same failure
+    from the console, and the fix for each is a different one.
+    """
+    return {"text": name_table.read_own(), "sources": name_table.sources()}
+
+
+@router.put("/names", dependencies=[Depends(require_superuser)])
+def names_put(body: dict = Body(...)):
+    """Replace this Controller's own name list with a hosts-file body.
+
+    This is a LOOKUP TABLE, not /etc/hosts: it is read when enrollment needs
+    to turn a name into an address and at no other time, nothing on this
+    machine or any other consults it, and writing it changes no system file.
+    Addresses that cannot name a machine to manage -- loopback, link-local,
+    multicast -- are dropped on the way in rather than stored and skipped
+    later.
+    """
+    text = body.get("text")
+    if not isinstance(text, str):
+        raise HTTPException(status_code=400, detail="Expected a 'text' field.")
+    if len(text) > name_table.MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="That list is larger than 4 MB; a hosts file is not.")
+    try:
+        count = name_table.save(text)
+    except OSError as exc:
+        # The volume is the usual culprit, and saying so beats "500".
+        raise HTTPException(
+            status_code=500,
+            detail=(f"Could not write the name list to "
+                    f"{name_table.own_table_path()}: {exc.strerror or exc}. "
+                    f"The Controller needs a writable /data (set "
+                    f"SYSIBLE_NAME_TABLE to put it elsewhere).")) from exc
+    return {"names": count, "sources": name_table.sources()}
+
+
 @router.post("/hosts-file/preview", dependencies=[Depends(require_superuser)])
 def hosts_file_preview(body: dict = Body(...)):
     """Read a hosts file and say which machines in it could be enrolled.
@@ -1014,10 +1063,12 @@ def enroll_ssh(body: EnrollSSHRequest):
     if not resolved:
         raise HTTPException(
             status_code=400,
-            detail=(f"Could not resolve '{target}'. Give an address, or add the "
-                    f"name to this host's /etc/hosts or DNS. (The Controller "
-                    f"resolves names the same way the rest of this machine "
-                    f"does.)"))
+            detail=(f"Could not resolve '{target}'. The Controller resolves "
+                    f"names with its own /etc/hosts and DNS \u2014 which, when it "
+                    f"runs in a container, are not this machine's. Either give "
+                    f"the address, or paste your hosts list into \u201cNames the "
+                    f"Controller knows\u201d below and the name will work from "
+                    f"then on."))
 
     # Refuse to enroll a machine that's already managed at this address (by an
     # agent or another SSH host). Same physical box, two records = the

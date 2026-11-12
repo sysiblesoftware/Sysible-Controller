@@ -192,6 +192,11 @@ export const api = {
   // a time, so a bulk import goes through exactly the checks a single one does.
   hostsFilePreview: (text) =>
     req("/api/hosts-file/preview", { method: "POST", body: { text }, timeout: 30000 }),
+  // The names this Controller can turn into addresses by itself. Read to show
+  // the operator what it knows; written when they paste their hosts list in.
+  names: () => req("/api/names"),
+  saveNames: (text) =>
+    req("/api/names", { method: "PUT", body: { text }, timeout: 30000 }),
   environments: () => req("/api/environments"),
   tools: () => req("/api/tools"),
   fleetHealth: (refresh) => req("/api/fleet-health" + (refresh ? "?refresh=1" : ""),

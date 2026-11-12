@@ -47,6 +47,10 @@ export default function HostEnrollment() {
   const [bulkName, setBulkName] = useState({});   // line -> edited name
   const [bulkCreds, setBulkCreds] = useState({ username: "root", password: "", environment: "" });
   const [bulkProgress, setBulkProgress] = useState(null);
+  // The names this Controller can turn into addresses by itself.
+  const [namesText, setNamesText] = useState("");
+  const [namesSaved, setNamesSaved] = useState("");   // what is stored, to spot edits
+  const [namesSources, setNamesSources] = useState(null);
   const [portPort, setPortPort] = useState("");
   const [portalBusy, setPortalBusy] = useState("");
   const [tab, setTab] = useState("hosts");
@@ -88,7 +92,37 @@ export default function HostEnrollment() {
     loadPortal();
     api.enrollmentPause().then((d) => setEnrollPaused(!!(d && d.paused))).catch(() => {});
   }
+  // The name list is only consulted when an address is left blank, but it has
+  // to be LOADED up front: the point of showing it is that "the Controller
+  // cannot resolve this name" and "it was never told any names" are the same
+  // failure from the console and have different fixes.
+  const loadNames = useCallback(async () => {
+    try {
+      const d = await api.names();
+      setNamesText(d.text || "");
+      setNamesSaved(d.text || "");
+      setNamesSources(d.sources || []);
+    } catch (e) {
+      // Not fatal: enrollment by address works without any of this.
+      setNamesSources([]);
+    }
+  }, []);
+
+  async function saveNames() {
+    setBusy("names"); setErr(""); setMsg("");
+    try {
+      const d = await api.saveNames(namesText);
+      setNamesSaved(namesText);
+      setNamesSources(d.sources || []);
+      setMsg(d.names === 1
+        ? "1 name saved. You can now enroll it without an address."
+        : `${d.names} names saved. You can now enroll them without an address.`);
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(""); }
+  }
+
   useEffect(() => { load(true); }, []);
+  useEffect(() => { loadNames(); }, [loadNames]);
   useEffect(() => {
     if (tab === "portal") { loadPortal(); loadHistory(); loadSessions(); loadUploads(); loadDownloads(); }
   }, [tab]);
@@ -788,6 +822,59 @@ export default function HostEnrollment() {
               </div>
             </>
           )}
+        </fieldset>
+
+        {/* Why a name with no address can work at all. The Controller usually
+            runs in a container, so the platform host's /etc/hosts is NOT its
+            own -- a name written only there is unknown to it, which is exactly
+            the failure an operator hits first and cannot explain. */}
+        <fieldset className="tool-group-box">
+          <legend>Names the Controller knows</legend>
+          <p className="faint" style={{ marginTop: 0 }}>
+            How a host name with no address becomes one. The Controller resolves
+            names with its own <code>/etc/hosts</code> and DNS &mdash; which, when it
+            runs in a container, are <strong>not this machine&rsquo;s</strong>. Paste
+            your hosts list here and it will know them. This is a lookup table for
+            enrollment only: no file on this machine or any other is changed.
+          </p>
+          {namesSources && namesSources.length > 0 && (
+            <ul className="faint" style={{ fontSize: 12, marginTop: 0, paddingLeft: 18 }}>
+              {namesSources.map((src) => (
+                <li key={src.key}>
+                  {src.label} (<code>{src.path}</code>) —{" "}
+                  {src.present
+                    ? `${src.names} name${src.names === 1 ? "" : "s"}`
+                    : (src.key === "host"
+                        ? (<>not mounted. Add{" "}
+                           <code>/etc/hosts:/host/etc/hosts:ro</code> to the
+                           controller service&rsquo;s <code>volumes:</code> and
+                           recreate it, and these names arrive by themselves.</>)
+                        : "nothing saved yet")}
+                </li>
+              ))}
+            </ul>
+          )}
+          <textarea value={namesText} rows={6} spellCheck={false}
+                    placeholder={"192.168.155.135  ubuntu-lab\n10.0.0.5         db.internal db"}
+                    style={{ width: "100%", fontFamily: "ui-monospace, monospace", fontSize: 12.5 }}
+                    onChange={(e) => setNamesText(e.target.value)} />
+          <div className="row" style={{ marginTop: 8, gap: 10, alignItems: "center" }}>
+            <button className="btn sm" type="button"
+                    disabled={busy === "names" || namesText === namesSaved}
+                    onClick={saveNames}>
+              {busy === "names" ? "Saving…" : "Save names"}
+            </button>
+            {bulkText.trim() && bulkText !== namesText && (
+              <button className="btn sm ghost" type="button"
+                      onClick={() => setNamesText(bulkText)}>
+                Use the list above
+              </button>
+            )}
+            <span className="faint" style={{ fontSize: 12 }}>
+              Loopback, link-local and multicast addresses are dropped: they never
+              name a machine to manage.
+            </span>
+          </div>
         </fieldset>
 
         <fieldset className="tool-group-box"><legend>Download the agent bundle</legend>

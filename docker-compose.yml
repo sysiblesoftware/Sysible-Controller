@@ -113,6 +113,18 @@ services:
       # this mapping explicitly; it is a no-op where the name already resolves.
       - "host.docker.internal:host-gateway"
     volumes:
+      # The platform host's OWN /etc/hosts, read-only. Enrollment lets an
+      # operator type a host NAME and leave the address blank -- and a
+      # container's /etc/hosts is its own, so without this the names that
+      # machine resolves perfectly well are unknown in here. Read for lookups
+      # during enrollment and nothing else; the Controller never writes it.
+      #
+      # A bind-mounted single FILE does not follow a rename, so an editor that
+      # replaces /etc/hosts rather than editing it in place leaves this showing
+      # the old contents until the container is recreated. The console's
+      # "Names the Controller knows" is the copy that does not have that
+      # problem, and it wins over this one.
+      - /etc/hosts:/host/etc/hosts:ro
       - sysible-data:/data   # DB, certs, API key, cookie secret, portal files
 
 volumes:

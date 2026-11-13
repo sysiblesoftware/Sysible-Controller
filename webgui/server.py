@@ -2815,6 +2815,14 @@ def names_get(request: Request, user: str = Depends(require_operator)):
     return _superuser_request("GET", "/remote/names", request, timeout=15)
 
 
+@app.get("/api/names/check")
+def names_check(name: str, request: Request,
+                user: str = Depends(require_operator)):
+    """Ask what the Controller gets for one name, and from where."""
+    return _superuser_request("GET", "/remote/names/check", request,
+                              params={"name": name}, timeout=20)
+
+
 @app.put("/api/names")
 def names_put(body: NameList, request: Request,
               user: str = Depends(require_operator)):

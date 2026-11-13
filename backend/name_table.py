@@ -185,3 +185,45 @@ def sources() -> list:
             "names": len(table),
         })
     return out
+
+
+def where(name: str):
+    """Which source answers for `name`, for a console that has to explain itself.
+
+    Returns (addresses, key) with key one of "own", "host" or None. Separate
+    from lookup() because lookup's caller wants an answer and this caller
+    wants a REASON: "it cannot resolve the name" and "the hosts file was never
+    mounted" are the same dead end from the console, and the fix for each is a
+    different one.
+    """
+    key = (name or "").strip().lower()
+    if not key:
+        return [], None
+    for src, path in (("own", own_table_path()), ("host", host_hosts_path())):
+        hit = _table_for(path).get(key)
+        if hit:
+            return list(hit), src
+    return [], None
+
+
+def diagnose(name: str) -> str:
+    """One sentence on why `name` is not known here, for the failure message."""
+    srcs = {s["key"]: s for s in sources()}
+    host, own = srcs["host"], srcs["own"]
+    if not host["present"] and not own["names"]:
+        return ("This Controller has no host list at all: nothing is mounted at "
+                f"{host['path']} and nothing has been saved here.")
+    def _n(k):
+        return f"{k} name" + ("" if k == 1 else "s")
+
+    bits = []
+    if host["present"]:
+        bits.append("the platform host's /etc/hosts is mounted and lists "
+                    + _n(host["names"]))
+    else:
+        bits.append(f"nothing is mounted at {host['path']}")
+    if own["names"]:
+        bits.append("this Controller's own list holds " + _n(own["names"]))
+    else:
+        bits.append("this Controller's own list is empty")
+    return f"Right now {bits[0]}, and {bits[1]} \u2014 neither names '{name}'."

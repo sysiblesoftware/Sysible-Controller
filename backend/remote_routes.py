@@ -966,6 +966,45 @@ def names_get():
     return {"text": name_table.read_own(), "sources": name_table.sources()}
 
 
+@router.get("/names/check", dependencies=[Depends(require_superuser)])
+def names_check(name: str = ""):
+    """What this Controller gets when it resolves `name`, and from where.
+
+    The console had no way to ask. An operator who had mounted the file,
+    saved a list, or both, and still could not enroll by name was left to
+    guess which of the three was not doing its job -- and so was anyone
+    helping them.
+
+    Resolves only. It opens no connection to the host.
+    """
+    name = (name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Give a name to check.")
+    addrs, via = name_table.where(name)
+    if not addrs:
+        try:
+            ipaddress.ip_address(name)
+            addrs, via = [name], "literal"
+        except ValueError:
+            resolved = _resolve_addrs(name)
+            if resolved:
+                addrs, via = sorted(resolved), "dns"
+    labels = {
+        "literal": "it is already an address",
+        "own": "this Controller's own list",
+        "host": "the platform host's /etc/hosts",
+        "dns": "DNS, or the container's own /etc/hosts",
+    }
+    return {
+        "name": name,
+        "addresses": addrs,
+        "via": via,
+        "via_label": labels.get(via, ""),
+        "reason": "" if addrs else name_table.diagnose(name),
+        "sources": name_table.sources(),
+    }
+
+
 @router.put("/names", dependencies=[Depends(require_superuser)])
 def names_put(body: dict = Body(...)):
     """Replace this Controller's own name list with a hosts-file body.
@@ -1065,10 +1104,16 @@ def enroll_ssh(body: EnrollSSHRequest):
             status_code=400,
             detail=(f"Could not resolve '{target}'. The Controller resolves "
                     f"names with its own /etc/hosts and DNS \u2014 which, when it "
-                    f"runs in a container, are not this machine's. Either give "
-                    f"the address, or paste your hosts list into \u201cNames the "
-                    f"Controller knows\u201d below and the name will work from "
-                    f"then on."))
+                    f"runs in a container, are not this machine's. "
+                    # WHAT IT CAN ACTUALLY SEE, not just what it could not do.
+                    # Without this, "still cannot resolve" has three causes --
+                    # no mount, a mounted file that does not list the name, and
+                    # an empty list here -- that look identical from the
+                    # console and are fixed three different ways.
+                    f"{name_table.diagnose(target)} "
+                    f"Either give the address, or paste your hosts list into "
+                    f"\u201cNames the Controller knows\u201d below and the name "
+                    f"will work from then on."))
 
     # Refuse to enroll a machine that's already managed at this address (by an
     # agent or another SSH host). Same physical box, two records = the

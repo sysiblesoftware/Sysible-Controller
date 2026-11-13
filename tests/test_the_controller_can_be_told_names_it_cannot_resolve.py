@@ -34,7 +34,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from backend import name_table
+from backend import hosts_file, name_table
 
 REPO = Path(__file__).resolve().parents[1]
 VIEW = (REPO / "webgui" / "frontend" / "src" / "views" / "HostEnrollment.jsx").read_text(
@@ -411,3 +411,144 @@ def test_the_console_is_told_which_sources_exist(tables):
     srcs = {s["key"]: s for s in rr.names_get()["sources"]}
     assert srcs["host"]["present"] and srcs["host"]["names"] == 3
     assert not srcs["own"]["present"]
+
+
+# ---- saying WHY, not just no ------------------------------------------------
+def test_the_failure_says_the_hosts_file_was_never_mounted(tmp_path, monkeypatch):
+    """The first thing to check, and the console could not say it."""
+    msg = _unresolvable_message(tmp_path, monkeypatch)
+    assert "no host list at all" in msg
+    assert "/nothing-either" in msg, "the path it looked at is not named"
+
+
+def test_the_failure_distinguishes_a_mounted_file_that_lacks_the_name(
+        tmp_path, monkeypatch):
+    """A different cause and a different fix: the mount is fine, the entry is
+    missing. Reported identically before this."""
+    import backend.remote_routes as rr
+    from backend.models.remote_models import EnrollSSHRequest
+    (tmp_path / "host").write_text("10.0.0.5  db\n10.0.0.6  web\n")
+    monkeypatch.setenv("SYSIBLE_HOST_HOSTS_FILE", str(tmp_path / "host"))
+    monkeypatch.setenv("SYSIBLE_NAME_TABLE", str(tmp_path / "own"))
+    name_table._CACHE.clear()
+    monkeypatch.setattr(rr.socket, "getaddrinfo",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("no network")))
+    monkeypatch.setattr(rr, "enforce_host_limit", lambda *a, **k: None, raising=False)
+    with pytest.raises(Exception) as caught:
+        rr.enroll_ssh(EnrollSSHRequest(name="ubuntu-lab", password="x"))
+    msg = caught.value.detail
+    assert "is mounted and lists 2 names" in msg, msg
+    assert "neither names 'ubuntu-lab'" in msg, msg
+
+
+def test_the_count_reads_as_english_for_one(tables):
+    (tables / "host-hosts").write_text("10.0.0.5  db\n")
+    assert "lists 1 name," in name_table.diagnose("x")
+    assert "1 names" not in name_table.diagnose("x")
+
+
+# ---- checking a name without trying to enroll it ----------------------------
+def test_checking_a_name_says_which_source_answered(tables):
+    import backend.remote_routes as rr
+    (tables / "host-hosts").write_text(HOSTS)
+    out = rr.names_check(name="ubuntu-lab")
+    assert out["addresses"] == ["192.168.155.135"]
+    assert out["via"] == "host"
+    assert "/etc/hosts" in out["via_label"]
+
+
+def test_checking_a_name_the_console_list_answers_for(tables):
+    import backend.remote_routes as rr
+    (tables / "host-hosts").write_text(HOSTS)
+    (tables / "own").write_text("10.9.9.9  ubuntu-lab\n")
+    out = rr.names_check(name="ubuntu-lab")
+    assert out["addresses"] == ["10.9.9.9"] and out["via"] == "own"
+
+
+def test_checking_an_address_does_not_pretend_to_have_resolved_it(tables, monkeypatch):
+    import backend.remote_routes as rr
+    monkeypatch.setattr(rr.socket, "getaddrinfo",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("an address was sent off to be resolved")))
+    out = rr.names_check(name="192.168.155.135")
+    assert out["addresses"] == ["192.168.155.135"] and out["via"] == "literal"
+    # The LABEL is what the operator reads, so it has to be honest too: a
+    # screen that says an address came "from DNS" is evidence of a lookup that
+    # never happened, and the next person debugging believes it.
+    assert "DNS" not in out["via_label"], out["via_label"]
+    assert "address" in out["via_label"]
+
+
+def test_checking_a_name_only_dns_knows_says_so(tables, monkeypatch):
+    import backend.remote_routes as rr
+    monkeypatch.setattr(rr.socket, "getaddrinfo",
+                        lambda *a, **k: [(0, 0, 0, "", ("203.0.113.9", 0))])
+    out = rr.names_check(name="elsewhere")
+    assert out["addresses"] == ["203.0.113.9"] and out["via"] == "dns"
+
+
+def test_a_name_nothing_knows_comes_back_with_the_reason(tables, monkeypatch):
+    import backend.remote_routes as rr
+    monkeypatch.setattr(rr.socket, "getaddrinfo",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("no network")))
+    out = rr.names_check(name="ubuntu-lab")
+    assert out["addresses"] == [] and out["via"] is None
+    assert "no host list at all" in out["reason"], out["reason"]
+
+
+def test_checking_nothing_is_refused(tables):
+    import backend.remote_routes as rr
+    with pytest.raises(Exception) as caught:
+        rr.names_check(name="   ")
+    assert getattr(caught.value, "status_code", None) == 400
+
+
+def test_the_check_opens_no_connection_to_the_host(tables, monkeypatch):
+    """It answers a question about names. Dialling the host is enrollment's
+    job, and doing it here would make a diagnostic tool change something."""
+    import backend.remote_routes as rr
+    (tables / "host-hosts").write_text(HOSTS)
+    monkeypatch.setattr(rr.subprocess, "run",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("the check shelled out to ssh")))
+    assert rr.names_check(name="ubuntu-lab")["addresses"] == ["192.168.155.135"]
+
+
+def test_the_check_route_declares_the_login_check_too():
+    w, _ = _bff()
+    route = next(r for r in w.app.routes
+                 if getattr(r, "path", None) == "/api/names/check"
+                 and "GET" in getattr(r, "methods", ()))
+    assert "require_operator" in [d.call.__name__ for d in route.dependant.dependencies]
+
+
+# ---- the example in the box has to BE an example ---------------------------
+def test_the_bulk_placeholder_is_a_file_the_parser_would_accept():
+    """It was prose in the middle of a hosts file: "…or, with addresses:",
+    uncommented. Anyone who copied the example got a line the parser rejects,
+    and the box teaches the shape it expects."""
+    import re
+    m = re.search(r'placeholder=\{"((?:[^"\\]|\\.)*)"\}', VIEW[VIEW.index("Read the list") - 3000:])
+    assert m, "the bulk placeholder is no longer where this test looks"
+    text = m.group(1).encode().decode("unicode_escape")
+    rows = hosts_file.parse(text)
+    bad = [r for r in rows if not r["enrollable"]]
+    assert not bad, f"the example contains lines the parser rejects: {bad}"
+    assert rows, "the example parses to nothing at all"
+    assert text.lstrip().startswith("#"), "the explaining line is not a comment"
+
+
+def test_the_check_result_uses_classes_the_stylesheet_actually_defines():
+    """It was written with className="ok" / "warn". Neither is a text class in
+    this stylesheet -- .ok exists only as .dot.ok, .warn only under .ug-tile --
+    so the result rendered in body text and the one case that most needs to
+    stand out, a name that resolves to nothing, looked like prose."""
+    css = (REPO / "webgui" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    import re
+    used = set(re.findall(r'checkResult\.addresses\.length \? "([\w-]+)" : "([\w-]+)"', VIEW))
+    assert used, "the check result no longer picks a class this way"
+    for pair in used:
+        for cls in pair:
+            assert re.search(r'(^|[\s,}])\.' + re.escape(cls) + r'\s*\{', css, re.M), \
+                (f'the check result renders with class "{cls}", which this '
+                 f'stylesheet does not define on its own')

@@ -51,6 +51,8 @@ export default function HostEnrollment() {
   const [namesText, setNamesText] = useState("");
   const [namesSaved, setNamesSaved] = useState("");   // what is stored, to spot edits
   const [namesSources, setNamesSources] = useState(null);
+  const [checkName, setCheckName] = useState("");
+  const [checkResult, setCheckResult] = useState(null);
   const [portPort, setPortPort] = useState("");
   const [portalBusy, setPortalBusy] = useState("");
   const [tab, setTab] = useState("hosts");
@@ -108,12 +110,20 @@ export default function HostEnrollment() {
     }
   }, []);
 
+  async function runCheck() {
+    setBusy("check"); setErr(""); setCheckResult(null);
+    try { setCheckResult(await api.checkName(checkName.trim())); }
+    catch (e) { setErr(e.message); }
+    finally { setBusy(""); }
+  }
+
   async function saveNames() {
     setBusy("names"); setErr(""); setMsg("");
     try {
       const d = await api.saveNames(namesText);
       setNamesSaved(namesText);
       setNamesSources(d.sources || []);
+      setCheckResult(null);
       setMsg(d.names === 1
         ? "1 name saved. You can now enroll it without an address."
         : `${d.names} names saved. You can now enroll them without an address.`);
@@ -732,7 +742,7 @@ export default function HostEnrollment() {
                    }} />
           </div>
           <textarea value={bulkText} rows={7} spellCheck={false}
-                    placeholder={"web-01\nweb-02\ndb-01\n\n…or, with addresses:\n192.168.155.135  ubuntu-lab\n10.0.0.5         db.internal db"}
+                    placeholder={"# names alone, if they already resolve here\nweb-01\nweb-02\n\n# or an address and its names, as in /etc/hosts\n192.168.155.135  ubuntu-lab\n10.0.0.5         db.internal db"}
                     style={{ width: "100%", fontFamily: "ui-monospace, monospace", fontSize: 12.5 }}
                     onChange={(e) => { setBulkText(e.target.value); setBulkRows(null); }} />
           <div className="row" style={{ marginTop: 8, gap: 10, alignItems: "center" }}>
@@ -874,6 +884,33 @@ export default function HostEnrollment() {
               Loopback, link-local and multicast addresses are dropped: they never
               name a machine to manage.
             </span>
+          </div>
+
+          {/* Ask the Controller what it actually gets for one name. Without
+              this, "it still cannot resolve it" has three causes -- no mount,
+              a mounted file that does not list the name, an empty list here --
+              which look identical from the console and are fixed three
+              different ways. */}
+          <div className="row" style={{ marginTop: 12, gap: 8, alignItems: "center",
+                                        flexWrap: "wrap" }}>
+            <label className="faint" style={{ fontSize: 12 }}>Check a name</label>
+            <input value={checkName} placeholder="ubuntu-lab" spellCheck={false}
+                   style={{ width: 200 }}
+                   onChange={(e) => { setCheckName(e.target.value); setCheckResult(null); }}
+                   onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); runCheck(); } }} />
+            <button className="btn sm ghost" type="button"
+                    disabled={!checkName.trim() || busy === "check"}
+                    onClick={runCheck}>
+              {busy === "check" ? "Checking…" : "Check"}
+            </button>
+            {checkResult && (
+              <span style={{ fontSize: 12 }}
+                    className={checkResult.addresses.length ? "ok-text" : "warn-text"}>
+                {checkResult.addresses.length
+                  ? `${checkResult.name} → ${checkResult.addresses.join(", ")} (from ${checkResult.via_label})`
+                  : `${checkResult.name} cannot be resolved here. ${checkResult.reason}`}
+              </span>
+            )}
           </div>
         </fieldset>
 

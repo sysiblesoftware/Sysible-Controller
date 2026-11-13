@@ -711,6 +711,9 @@ tr:hover td { background: var(--row-hover); }
 @keyframes sp { to { transform: rotate(360deg); } }
 .empty { color: var(--text-faint); padding: 40px; text-align: center; }
 .ok-text { color: var(--green-bright); }
+/* The counterpart to .ok-text: a result that did not work out, but is an
+   ANSWER rather than an error -- a name that resolved to nothing, say. */
+.warn-text { color: var(--amber); }
 
 /* Indeterminate progress sweep (Settings → Software updates: controller restart). */
 @keyframes progIndef { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }

@@ -963,7 +963,46 @@ def names_get():
     and "the host's /etc/hosts was never mounted" produce the same failure
     from the console, and the fix for each is a different one.
     """
-    return {"text": name_table.read_own(), "sources": name_table.sources()}
+    return {"text": name_table.read_own(),
+            "entries": name_table.entries(),
+            "sources": name_table.sources()}
+
+
+@router.post("/names/entry", dependencies=[Depends(require_superuser)])
+def names_add(body: dict = Body(...)):
+    """Add one name to this Controller's own list."""
+    try:
+        count = name_table.add_entry(body.get("name", ""), body.get("address", ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(f"Could not write {name_table.own_table_path()}: "
+                    f"{exc.strerror or exc}.")) from exc
+    return {"names": count, "entries": name_table.entries(),
+            "sources": name_table.sources()}
+
+
+@router.delete("/names/entry", dependencies=[Depends(require_superuser)])
+def names_remove(name: str = ""):
+    """Remove one name from this Controller's own list.
+
+    Only ever touches OUR file. A name that came from the platform host's
+    /etc/hosts is not ours to delete, and a console button that silently did
+    nothing would be worse than one that is not offered.
+    """
+    try:
+        count = name_table.remove_entry(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(f"Could not write {name_table.own_table_path()}: "
+                    f"{exc.strerror or exc}.")) from exc
+    return {"names": count, "entries": name_table.entries(),
+            "sources": name_table.sources()}
 
 
 @router.get("/names/check", dependencies=[Depends(require_superuser)])
@@ -1033,7 +1072,8 @@ def names_put(body: dict = Body(...)):
                     f"{name_table.own_table_path()}: {exc.strerror or exc}. "
                     f"The Controller needs a writable /data (set "
                     f"SYSIBLE_NAME_TABLE to put it elsewhere).")) from exc
-    return {"names": count, "sources": name_table.sources()}
+    return {"names": count, "entries": name_table.entries(),
+            "sources": name_table.sources()}
 
 
 @router.post("/hosts-file/preview", dependencies=[Depends(require_superuser)])
@@ -1111,9 +1151,9 @@ def enroll_ssh(body: EnrollSSHRequest):
                     # an empty list here -- that look identical from the
                     # console and are fixed three different ways.
                     f"{name_table.diagnose(target)} "
-                    f"Either give the address, or paste your hosts list into "
-                    f"\u201cNames the Controller knows\u201d below and the name "
-                    f"will work from then on."))
+                    f"Either give the address, or add it to the Hosts list "
+                    f"beside this form \u2014 that works with nothing mounted "
+                    f"and takes effect at once."))
 
     # Refuse to enroll a machine that's already managed at this address (by an
     # agent or another SSH host). Same physical box, two records = the

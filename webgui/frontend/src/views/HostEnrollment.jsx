@@ -7,6 +7,13 @@ import { confirmDialog } from "../confirmDialog.js";
 // full Webserver Portal administration (status/port/credentials/sessions/files),
 // since the portal exists to serve enrollment. One page, mirrors the desktop.
 
+// Short names for the hosts-list "From" column; the full label is the title.
+const SRC_SHORT = {
+  own: "this list",
+  host: "host /etc/hosts",
+  local: "container /etc/hosts",
+};
+
 function fmtSeen(v) {
   if (v === null || v === undefined || v === "") return "—";
   let d;
@@ -53,6 +60,10 @@ export default function HostEnrollment() {
   const [namesSources, setNamesSources] = useState(null);
   const [checkName, setCheckName] = useState("");
   const [checkResult, setCheckResult] = useState(null);
+  const [namesEntries, setNamesEntries] = useState(null);
+  const [addName, setAddName] = useState("");
+  const [addAddr, setAddAddr] = useState("");
+  const [namesOpen, setNamesOpen] = useState(false);
   const [portPort, setPortPort] = useState("");
   const [portalBusy, setPortalBusy] = useState("");
   const [tab, setTab] = useState("hosts");
@@ -103,12 +114,44 @@ export default function HostEnrollment() {
       const d = await api.names();
       setNamesText(d.text || "");
       setNamesSaved(d.text || "");
-      setNamesSources(d.sources || []);
+      // isArray, not a truthiness check. A setter given a FUNCTION is an
+      // updater to React, and it calls it -- so a response whose `entries` is
+      // anything but an array (Array.prototype.entries is a function, and an
+      // array response has one) throws inside React and blanks the console.
+      setNamesSources(Array.isArray(d.sources) ? d.sources : []);
+      setNamesEntries(Array.isArray(d.entries) ? d.entries : []);
     } catch (e) {
       // Not fatal: enrollment by address works without any of this.
       setNamesSources([]);
+      setNamesEntries([]);
     }
   }, []);
+
+  function applyNames(d) {
+    if (Array.isArray(d?.entries)) setNamesEntries(d.entries);
+    if (Array.isArray(d?.sources)) setNamesSources(d.sources);
+    // The answer below the list was true of the list BEFORE this change.
+    setCheckResult(null);
+  }
+
+  async function addEntry() {
+    setBusy("add-name"); setErr(""); setMsg("");
+    try {
+      applyNames(await api.addName(addName.trim(), addAddr.trim()));
+      setAddName(""); setAddAddr("");
+      // The text box behind the disclosure is now out of date; refresh it so
+      // "Replace list" cannot quietly put back what was just removed.
+      loadNames();
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(""); }
+  }
+
+  async function removeEntry(name) {
+    setBusy("rm-" + name); setErr(""); setMsg("");
+    try { applyNames(await api.removeName(name)); loadNames(); }
+    catch (e) { setErr(e.message); }
+    finally { setBusy(""); }
+  }
 
   async function runCheck() {
     setBusy("check"); setErr(""); setCheckResult(null);
@@ -122,8 +165,7 @@ export default function HostEnrollment() {
     try {
       const d = await api.saveNames(namesText);
       setNamesSaved(namesText);
-      setNamesSources(d.sources || []);
-      setCheckResult(null);
+      applyNames(d);
       setMsg(d.names === 1
         ? "1 name saved. You can now enroll it without an address."
         : `${d.names} names saved. You can now enroll them without an address.`);
@@ -649,7 +691,8 @@ export default function HostEnrollment() {
 
       {/* ============================ TAB: ENROLL A HOST ============================ */}
       {tab === "enroll" && (
-      <div style={{ maxWidth: 760 }}>
+      <div className="enroll-split">
+      <div className="enroll-main">
         {/* PUSH enrollment, first: it is the only path that needs nothing on the
             target beforehand. Everything below this asks the operator to already
             have a shell on the machine they are enrolling — which is the thing
@@ -834,86 +877,6 @@ export default function HostEnrollment() {
           )}
         </fieldset>
 
-        {/* Why a name with no address can work at all. The Controller usually
-            runs in a container, so the platform host's /etc/hosts is NOT its
-            own -- a name written only there is unknown to it, which is exactly
-            the failure an operator hits first and cannot explain. */}
-        <fieldset className="tool-group-box">
-          <legend>Names the Controller knows</legend>
-          <p className="faint" style={{ marginTop: 0 }}>
-            How a host name with no address becomes one. The Controller resolves
-            names with its own <code>/etc/hosts</code> and DNS &mdash; which, when it
-            runs in a container, are <strong>not this machine&rsquo;s</strong>. Paste
-            your hosts list here and it will know them. This is a lookup table for
-            enrollment only: no file on this machine or any other is changed.
-          </p>
-          {namesSources && namesSources.length > 0 && (
-            <ul className="faint" style={{ fontSize: 12, marginTop: 0, paddingLeft: 18 }}>
-              {namesSources.map((src) => (
-                <li key={src.key}>
-                  {src.label} (<code>{src.path}</code>) —{" "}
-                  {src.present
-                    ? `${src.names} name${src.names === 1 ? "" : "s"}`
-                    : (src.key === "host"
-                        ? (<>not mounted. Add{" "}
-                           <code>/etc/hosts:/host/etc/hosts:ro</code> to the
-                           controller service&rsquo;s <code>volumes:</code> and
-                           recreate it, and these names arrive by themselves.</>)
-                        : "nothing saved yet")}
-                </li>
-              ))}
-            </ul>
-          )}
-          <textarea value={namesText} rows={6} spellCheck={false}
-                    placeholder={"192.168.155.135  ubuntu-lab\n10.0.0.5         db.internal db"}
-                    style={{ width: "100%", fontFamily: "ui-monospace, monospace", fontSize: 12.5 }}
-                    onChange={(e) => setNamesText(e.target.value)} />
-          <div className="row" style={{ marginTop: 8, gap: 10, alignItems: "center" }}>
-            <button className="btn sm" type="button"
-                    disabled={busy === "names" || namesText === namesSaved}
-                    onClick={saveNames}>
-              {busy === "names" ? "Saving…" : "Save names"}
-            </button>
-            {bulkText.trim() && bulkText !== namesText && (
-              <button className="btn sm ghost" type="button"
-                      onClick={() => setNamesText(bulkText)}>
-                Use the list above
-              </button>
-            )}
-            <span className="faint" style={{ fontSize: 12 }}>
-              Loopback, link-local and multicast addresses are dropped: they never
-              name a machine to manage.
-            </span>
-          </div>
-
-          {/* Ask the Controller what it actually gets for one name. Without
-              this, "it still cannot resolve it" has three causes -- no mount,
-              a mounted file that does not list the name, an empty list here --
-              which look identical from the console and are fixed three
-              different ways. */}
-          <div className="row" style={{ marginTop: 12, gap: 8, alignItems: "center",
-                                        flexWrap: "wrap" }}>
-            <label className="faint" style={{ fontSize: 12 }}>Check a name</label>
-            <input value={checkName} placeholder="ubuntu-lab" spellCheck={false}
-                   style={{ width: 200 }}
-                   onChange={(e) => { setCheckName(e.target.value); setCheckResult(null); }}
-                   onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); runCheck(); } }} />
-            <button className="btn sm ghost" type="button"
-                    disabled={!checkName.trim() || busy === "check"}
-                    onClick={runCheck}>
-              {busy === "check" ? "Checking…" : "Check"}
-            </button>
-            {checkResult && (
-              <span style={{ fontSize: 12 }}
-                    className={checkResult.addresses.length ? "ok-text" : "warn-text"}>
-                {checkResult.addresses.length
-                  ? `${checkResult.name} → ${checkResult.addresses.join(", ")} (from ${checkResult.via_label})`
-                  : `${checkResult.name} cannot be resolved here. ${checkResult.reason}`}
-              </span>
-            )}
-          </div>
-        </fieldset>
-
         <fieldset className="tool-group-box"><legend>Download the agent bundle</legend>
           <p className="faint" style={{ marginTop: 0 }}>
             The ready-to-run bundle, built on demand — each download bakes in a fresh, one-time enrollment token.
@@ -991,6 +954,144 @@ export default function HostEnrollment() {
             {" "}Add <code>-u</code>/<code>--ask-become-pass</code> or <code>-e</code> vars as your SSH access requires.
           </p>
         </fieldset>
+      </div>
+
+      {/* ---- the hosts list, beside the forms rather than below them ----
+          It is what the forms on the left are ABOUT: the left column turns a
+          name into a managed host, and this is the list of names it has to
+          work with. Below the fold it was a thing to be told about in an
+          error message; here it is a thing to look at while typing. */}
+      <aside className="enroll-aside">
+        <fieldset className="tool-group-box">
+          <legend>Hosts list</legend>
+          <p className="faint" style={{ marginTop: 0, fontSize: 12 }}>
+            Every name this Controller can turn into an address. Leave a form&rsquo;s
+            Address blank and the name is looked up here. Nothing outside this
+            Controller is changed.
+          </p>
+
+          <div className="row" style={{ gap: 6, alignItems: "center", marginBottom: 8,
+                                        flexWrap: "wrap" }}>
+            <input value={addName} placeholder="name" spellCheck={false}
+                   style={{ flex: "1 1 110px", minWidth: 90 }}
+                   onChange={(e) => setAddName(e.target.value)}
+                   onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addEntry(); } }} />
+            <input value={addAddr} placeholder="address" spellCheck={false}
+                   style={{ flex: "1 1 120px", minWidth: 100 }}
+                   onChange={(e) => setAddAddr(e.target.value)}
+                   onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addEntry(); } }} />
+            <button className="btn sm" type="button"
+                    disabled={!addName.trim() || !addAddr.trim() || busy === "add-name"}
+                    onClick={addEntry}>
+              {busy === "add-name" ? "Adding…" : "Add"}
+            </button>
+          </div>
+
+          {namesEntries === null ? (
+            <div className="faint" style={{ fontSize: 12 }}>Loading…</div>
+          ) : namesEntries.length === 0 ? (
+            <div className="empty" style={{ padding: 16, fontSize: 12 }}>
+              No names yet. Add one above, or paste a hosts file below.
+            </div>
+          ) : (
+            <div style={{ maxHeight: 320, overflowY: "auto" }}>
+              <table className="compact">
+                <thead><tr><th>Name</th><th>Address</th><th>From</th><th></th></tr></thead>
+                <tbody>
+                  {namesEntries.map((e) => (
+                    <tr key={e.name}>
+                      <td style={{ fontFamily: "ui-monospace, monospace" }}>{e.name}</td>
+                      <td style={{ fontFamily: "ui-monospace, monospace" }}>{e.address}</td>
+                      <td className="faint" style={{ fontSize: 11 }}
+                          title={e.shadows.length
+                            ? "also written in: " + e.shadows.join(", ")
+                            : e.source_label}>
+                        {SRC_SHORT[e.source] || e.source}
+                        {e.shadows.length > 0 && " ⃰"}
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        {e.editable && (
+                          <button className="linklike" type="button" title={"Remove " + e.name}
+                                  disabled={busy === "rm-" + e.name}
+                                  onClick={() => removeEntry(e.name)}>remove</button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="row" style={{ marginTop: 10, gap: 8, alignItems: "center",
+                                        flexWrap: "wrap" }}>
+            <input value={checkName} placeholder="check a name…" spellCheck={false}
+                   style={{ flex: "1 1 130px", minWidth: 110 }}
+                   onChange={(e) => { setCheckName(e.target.value); setCheckResult(null); }}
+                   onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); runCheck(); } }} />
+            <button className="btn sm ghost" type="button"
+                    disabled={!checkName.trim() || busy === "check"}
+                    onClick={runCheck}>
+              {busy === "check" ? "Checking…" : "Check"}
+            </button>
+          </div>
+          {checkResult && (
+            <div style={{ fontSize: 12, marginTop: 6 }}
+                 className={checkResult.addresses.length ? "ok-text" : "warn-text"}>
+              {checkResult.addresses.length
+                ? `${checkResult.name} → ${checkResult.addresses.join(", ")} (from ${checkResult.via_label})`
+                : `${checkResult.name} cannot be resolved here. ${checkResult.reason}`}
+            </div>
+          )}
+
+          <details style={{ marginTop: 12 }} open={namesOpen}
+                   onToggle={(e) => setNamesOpen(e.target.open)}>
+            <summary className="faint" style={{ fontSize: 12, cursor: "pointer" }}>
+              Paste a hosts file, and where these names come from
+            </summary>
+            {namesSources && namesSources.length > 0 && (
+              <ul className="faint" style={{ fontSize: 11.5, marginTop: 8, paddingLeft: 18 }}>
+                {namesSources.map((src) => (
+                  <li key={src.key}>
+                    {src.label} (<code>{src.path}</code>) —{" "}
+                    {src.present
+                      ? `${src.names} name${src.names === 1 ? "" : "s"}`
+                      : (src.key === "host"
+                          ? (<>not mounted. Add{" "}
+                             <code>/etc/hosts:/host/etc/hosts:ro</code> to the
+                             controller service&rsquo;s <code>volumes:</code> and
+                             recreate it, and these names arrive by themselves.</>)
+                          : "not present")}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <textarea value={namesText} rows={6} spellCheck={false}
+                      placeholder={"# an /etc/hosts, pasted whole\n192.168.155.135  ubuntu-lab\n10.0.0.5         db.internal db"}
+                      style={{ width: "100%", fontFamily: "ui-monospace, monospace",
+                               fontSize: 12 }}
+                      onChange={(e) => setNamesText(e.target.value)} />
+            <div className="row" style={{ marginTop: 8, gap: 8, alignItems: "center" }}>
+              <button className="btn sm" type="button"
+                      disabled={busy === "names" || namesText === namesSaved}
+                      onClick={saveNames}>
+                {busy === "names" ? "Saving…" : "Replace list"}
+              </button>
+              {bulkText.trim() && bulkText !== namesText && (
+                <button className="btn sm ghost" type="button"
+                        onClick={() => setNamesText(bulkText)}>
+                  Use the list above
+                </button>
+              )}
+            </div>
+            <p className="faint" style={{ fontSize: 11.5, marginTop: 8 }}>
+              Replaces this Controller&rsquo;s own list entirely. Loopback,
+              link-local and multicast addresses are dropped: they never name a
+              machine to manage.
+            </p>
+          </details>
+        </fieldset>
+      </aside>
       </div>
       )}
 

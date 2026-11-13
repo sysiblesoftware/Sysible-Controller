@@ -195,6 +195,10 @@ export const api = {
   // The names this Controller can turn into addresses by itself. Read to show
   // the operator what it knows; written when they paste their hosts list in.
   names: () => req("/api/names"),
+  addName: (name, address) =>
+    req("/api/names/entry", { method: "POST", body: { name, address }, timeout: 20000 }),
+  removeName: (name) =>
+    req("/api/names/entry?name=" + encodeURIComponent(name), { method: "DELETE" }),
   checkName: (name) => req("/api/names/check?name=" + encodeURIComponent(name)),
   saveNames: (text) =>
     req("/api/names", { method: "PUT", body: { text }, timeout: 30000 }),

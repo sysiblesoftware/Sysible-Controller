@@ -35,6 +35,7 @@ import os
 import threading
 
 from backend import hosts_file
+from backend.models.remote_models import HOST_NAME_RE
 
 # A hosts file is a list of machines, not a payload. 4 MB is far past any real
 # one and still bounded, so a mount pointed at the wrong file cannot be read
@@ -48,6 +49,18 @@ _CACHE: dict = {}        # path -> (stamp, table)
 def host_hosts_path() -> str:
     """The platform host's /etc/hosts, as mounted into this container."""
     return os.getenv("SYSIBLE_HOST_HOSTS_FILE", "/host/etc/hosts")
+
+
+def local_hosts_path() -> str:
+    """This process's own /etc/hosts.
+
+    Readable in every deployment, with nothing to mount and nothing to set up.
+    In a container it holds whatever `extra_hosts:` put there, plus anything
+    the operator added -- and NATIVELY it is the platform host's own file, so
+    a Controller installed on the metal reads exactly the list the question
+    was about without any of the rest of this.
+    """
+    return os.getenv("SYSIBLE_LOCAL_HOSTS_FILE", "/etc/hosts")
 
 
 def own_table_path() -> str:
@@ -122,16 +135,21 @@ def _table_for(path: str) -> dict:
     return table
 
 
+# Every place a name can be written down, in the order they win. Declared
+# ONCE: lookup, where, sources and the console list all walked their own copy
+# of this, and a source added to one of them but not the others is a name the
+# console offers and enrollment then cannot resolve.
+def _source_specs():
+    return (
+        ("own", own_table_path(), "This Controller's own list"),
+        ("host", host_hosts_path(), "The platform host's /etc/hosts"),
+        ("local", local_hosts_path(), "The Controller's own /etc/hosts"),
+    )
+
+
 def lookup(name: str) -> list:
     """Every address `name` is written down as, or []."""
-    key = (name or "").strip().lower()
-    if not key:
-        return []
-    for path in (own_table_path(), host_hosts_path()):
-        hit = _table_for(path).get(key)
-        if hit:
-            return list(hit)
-    return []
+    return where(name)[0]
 
 
 def save(text: str) -> int:
@@ -172,10 +190,7 @@ def sources() -> list:
     console otherwise, and the fix for each is different.
     """
     out = []
-    for key, path, label in (
-        ("own", own_table_path(), "This Controller's own list"),
-        ("host", host_hosts_path(), "The platform host's /etc/hosts"),
-    ):
+    for key, path, label in _source_specs():
         table = _table_for(path)
         out.append({
             "key": key,
@@ -199,7 +214,7 @@ def where(name: str):
     key = (name or "").strip().lower()
     if not key:
         return [], None
-    for src, path in (("own", own_table_path()), ("host", host_hosts_path())):
+    for src, path, _label in _source_specs():
         hit = _table_for(path).get(key)
         if hit:
             return list(hit), src
@@ -227,3 +242,128 @@ def diagnose(name: str) -> str:
     else:
         bits.append("this Controller's own list is empty")
     return f"Right now {bits[0]}, and {bits[1]} \u2014 neither names '{name}'."
+
+
+def entries() -> list:
+    """Every name this Controller can resolve, with where it came from.
+
+    One row per NAME, not per file: a name written in two places resolves to
+    one address, and a list that showed both would be showing a choice the
+    resolver does not offer. The row that wins is the row that is shown, and
+    it carries `shadows` when a lower source also had that name -- so an
+    operator whose edit appears to do nothing can see what is covering it.
+    """
+    rows, seen = [], {}
+    for key, path, label in _source_specs():
+        table = _table_for(path)
+        for name in sorted(table):
+            if name in seen:
+                seen[name]["shadows"].append(label)
+                continue
+            row = {
+                "name": name,
+                "addresses": list(table[name]),
+                "address": table[name][0],
+                "source": key,
+                "source_label": label,
+                "editable": key == "own",   # only our own file is ours to change
+                "shadows": [],
+            }
+            seen[name] = row
+            rows.append(row)
+    rows.sort(key=lambda r: r["name"])
+    return rows
+
+
+def _rewrite(mutate) -> int:
+    """Read the own list, let `mutate` change its lines, write it back."""
+    lines = read_own().splitlines()
+    lines = mutate(lines)
+    text = "\n".join(lines).rstrip("\n")
+    if text:
+        text += "\n"
+    return save(text)
+
+
+def add_entry(name: str, address: str) -> int:
+    """Put one name->address in this Controller's own list.
+
+    Replaces any line of the own list that already names it, rather than
+    appending a second: two lines for one name is a file whose meaning depends
+    on which one the parser reaches first, and nobody should have to know.
+    """
+    name = (name or "").strip()
+    address = (address or "").strip()
+    if not HOST_NAME_RE.match(name):
+        raise ValueError(f"'{name}' is not a usable host name.")
+    bad = _classify_addr(address)
+    if bad:
+        raise ValueError(bad)
+
+    def mutate(lines):
+        kept = []
+        for raw in lines:
+            body = raw.split("#", 1)[0].strip()
+            fields = body.split()
+            if len(fields) > 1 and any(n.lower() == name.lower() for n in fields[1:]):
+                # Drop just this name; the line may carry others.
+                others = [n for n in fields[1:] if n.lower() != name.lower()]
+                if others:
+                    kept.append(" ".join([fields[0]] + others))
+                continue
+            kept.append(raw)
+        kept.append(f"{address}  {name}")
+        return kept
+
+    return _rewrite(mutate)
+
+
+def remove_entry(name: str) -> int:
+    """Take one name out of this Controller's own list.
+
+    Refuses a name that is not IN that list. Rewriting our file and reporting
+    success for a name that comes from somewhere else would tell an operator
+    it was removed while it still resolves -- and the next thing they do is
+    distrust the list rather than the button.
+    """
+    name = (name or "").strip().lower()
+    if not name:
+        raise ValueError("Give a name to remove.")
+    if name not in build(read_own()):
+        _, src = where(name)
+        if src:
+            label = dict((k, lbl) for k, _p, lbl in _source_specs())[src]
+            raise ValueError(
+                f"'{name}' is not in this Controller's own list -- it comes "
+                f"from {label}, which this console does not write.")
+        raise ValueError(f"'{name}' is not in this Controller's own list.")
+
+    def mutate(lines):
+        kept = []
+        for raw in lines:
+            body = raw.split("#", 1)[0].strip()
+            fields = body.split()
+            if len(fields) > 1 and any(n.lower() == name for n in fields[1:]):
+                others = [n for n in fields[1:] if n.lower() != name]
+                if others:
+                    kept.append(" ".join([fields[0]] + others))
+                continue
+            kept.append(raw)
+        return kept
+
+    return _rewrite(mutate)
+
+
+def _classify_addr(address: str):
+    """Why this address cannot be written down here, or None."""
+    if not address:
+        return "Give an address for the name to point at."
+    bad = hosts_file._classify(address)
+    if bad == "bad-address":
+        return f"'{address}' is not an IP address."
+    if bad:
+        return (f"{hosts_file.SKIP_REASONS[bad].capitalize()}: an address like "
+                f"that never names a machine to manage.")
+    if not hosts_file.HOST_ADDR_RE.match(address):
+        return f"'{address}' is not an address this Controller could connect to."
+    return None

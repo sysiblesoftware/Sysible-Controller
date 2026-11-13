@@ -2815,6 +2815,28 @@ def names_get(request: Request, user: str = Depends(require_operator)):
     return _superuser_request("GET", "/remote/names", request, timeout=15)
 
 
+class NameEntry(BaseModel):
+    name: str
+    address: str
+
+
+@app.post("/api/names/entry")
+def names_add(body: NameEntry, request: Request,
+              user: str = Depends(require_operator)):
+    """Add one name to the Controller's own list."""
+    return _superuser_request("POST", "/remote/names/entry", request,
+                              json={"name": body.name, "address": body.address},
+                              timeout=20)
+
+
+@app.delete("/api/names/entry")
+def names_remove(name: str, request: Request,
+                 user: str = Depends(require_operator)):
+    """Remove one name from the Controller's own list."""
+    return _superuser_request("DELETE", "/remote/names/entry", request,
+                              params={"name": name}, timeout=20)
+
+
 @app.get("/api/names/check")
 def names_check(name: str, request: Request,
                 user: str = Depends(require_operator)):

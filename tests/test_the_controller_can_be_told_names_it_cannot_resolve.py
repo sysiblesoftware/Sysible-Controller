@@ -133,9 +133,14 @@ def test_a_name_in_neither_is_simply_not_known(tables):
     assert name_table.lookup("not-a-host") == []
 
 
-def test_nothing_breaks_when_neither_file_exists(tables):
+def test_nothing_breaks_when_no_file_exists(tmp_path, monkeypatch):
+    monkeypatch.setenv("SYSIBLE_NAME_TABLE", str(tmp_path / "a"))
+    monkeypatch.setenv("SYSIBLE_HOST_HOSTS_FILE", str(tmp_path / "b"))
+    monkeypatch.setenv("SYSIBLE_LOCAL_HOSTS_FILE", str(tmp_path / "c"))
+    name_table._CACHE.clear()
     assert name_table.lookup("ubuntu-lab") == []
-    assert [s["present"] for s in name_table.sources()] == [False, False]
+    assert not any(s["present"] for s in name_table.sources())
+    assert name_table.entries() == []
 
 
 def test_a_directory_where_a_file_was_expected_is_not_a_crash(tables):
@@ -271,13 +276,16 @@ def test_the_failure_no_longer_gives_advice_that_cannot_be_taken(tmp_path, monke
     assert "add the name to this host's /etc/hosts" not in msg, \
         "still telling the operator to do the thing they already did"
     assert "container" in msg, "nothing explains why the name is unknown here"
-    assert "Names the Controller knows" in msg, \
-        "the message does not say where the fix is"
+    assert "Hosts list" in msg, "the message does not say where the fix is"
 
 
 def test_the_console_offers_the_list_the_message_points_at():
-    assert "Names the Controller knows" in VIEW
-    assert "api.saveNames" in VIEW or "saveNames()" in VIEW
+    """The panel the failure names has to be the panel that exists. It was
+    renamed to "Hosts list" and the message still pointed at the old one."""
+    import re
+    legends = set(re.findall(r"<legend>([^<]+)</legend>", VIEW))
+    assert "Hosts list" in legends, f"no such panel; legends are {sorted(legends)}"
+    assert "api.addName" in VIEW and "api.saveNames" in VIEW
 
 
 def test_the_console_says_when_the_host_file_was_never_mounted():
@@ -552,3 +560,198 @@ def test_the_check_result_uses_classes_the_stylesheet_actually_defines():
             assert re.search(r'(^|[\s,}])\.' + re.escape(cls) + r'\s*\{', css, re.M), \
                 (f'the check result renders with class "{cls}", which this '
                  f'stylesheet does not define on its own')
+
+
+# ---- the hosts list: what it reads, and what it can be told ----------------
+@pytest.fixture()
+def all_three(tmp_path, monkeypatch):
+    """All three sources under this test's control."""
+    monkeypatch.setenv("SYSIBLE_NAME_TABLE", str(tmp_path / "own"))
+    monkeypatch.setenv("SYSIBLE_HOST_HOSTS_FILE", str(tmp_path / "mounted"))
+    monkeypatch.setenv("SYSIBLE_LOCAL_HOSTS_FILE", str(tmp_path / "local"))
+    name_table._CACHE.clear()
+    yield tmp_path
+    name_table._CACHE.clear()
+
+
+def test_the_controller_reads_its_own_etc_hosts_with_nothing_mounted(all_three):
+    """The source that is always there. Natively it IS the platform host's
+    file, so a Controller on the metal needs none of the rest of this; in a
+    container it carries whatever extra_hosts: put there."""
+    (all_three / "local").write_text("192.168.155.135  ubuntu-lab\n")
+    assert name_table.lookup("ubuntu-lab") == ["192.168.155.135"]
+
+
+def test_the_default_local_path_is_the_real_one(monkeypatch):
+    monkeypatch.delenv("SYSIBLE_LOCAL_HOSTS_FILE", raising=False)
+    assert name_table.local_hosts_path() == "/etc/hosts"
+
+
+def test_the_sources_are_tried_in_one_declared_order(all_three):
+    """own, then the mounted copy, then the container's own file."""
+    for f, addr in (("local", "10.0.0.3"), ("mounted", "10.0.0.2"), ("own", "10.0.0.1")):
+        (all_three / f).write_text(f"{addr}  box\n")
+        name_table._CACHE.clear()
+    assert name_table.where("box") == (["10.0.0.1"], "own")
+    (all_three / "own").unlink(); name_table._CACHE.clear()
+    assert name_table.where("box") == (["10.0.0.2"], "host")
+    (all_three / "mounted").unlink(); name_table._CACHE.clear()
+    assert name_table.where("box") == (["10.0.0.3"], "local")
+
+
+def test_every_source_appears_in_the_list_the_console_shows(all_three):
+    """lookup, where, sources and the list each used to walk their own copy of
+    the source order. A source added to one and not the others is a name the
+    console offers and enrollment then cannot resolve."""
+    listed = {s["key"] for s in name_table.sources()}
+    assert listed == {k for k, _p, _l in name_table._source_specs()}
+
+
+def test_the_list_shows_one_row_per_name_with_where_it_came_from(all_three):
+    (all_three / "local").write_text("172.18.0.4  sysible-controller\n")
+    (all_three / "mounted").write_text("10.0.0.5  db\n")
+    name_table.add_entry("ubuntu-lab", "192.168.155.135")
+    rows = {r["name"]: r for r in name_table.entries()}
+    assert rows["ubuntu-lab"]["source"] == "own" and rows["ubuntu-lab"]["editable"]
+    assert rows["db"]["source"] == "host" and not rows["db"]["editable"]
+    assert rows["sysible-controller"]["source"] == "local"
+
+
+def test_a_name_in_two_files_is_one_row_that_says_what_it_covers(all_three):
+    """Showing both would show a choice the resolver does not offer -- and an
+    operator whose edit appears to do nothing needs to see what covers it."""
+    (all_three / "mounted").write_text("10.0.0.9  box\n")
+    name_table.add_entry("box", "10.0.0.1")
+    rows = [r for r in name_table.entries() if r["name"] == "box"]
+    assert len(rows) == 1 and rows[0]["address"] == "10.0.0.1"
+    assert rows[0]["shadows"] == ["The platform host's /etc/hosts"]
+
+
+def test_adding_a_name_twice_replaces_it(all_three):
+    """Two lines for one name is a file whose meaning depends on which the
+    parser reaches first."""
+    name_table.add_entry("box", "10.0.0.1")
+    name_table.add_entry("box", "10.0.0.2")
+    assert name_table.lookup("box") == ["10.0.0.2"]
+    assert len([r for r in name_table.entries() if r["name"] == "box"]) == 1
+
+
+def test_adding_a_name_keeps_the_others_on_its_line(all_three):
+    name_table.save("10.0.0.5  db.internal db\n")
+    name_table.add_entry("db", "10.9.9.9")
+    assert name_table.lookup("db") == ["10.9.9.9"]
+    assert name_table.lookup("db.internal") == ["10.0.0.5"], \
+        "an alias on the same line was collateral damage"
+
+
+@pytest.mark.parametrize("name,addr,why", [
+    ("box", "127.0.0.1", "loopback"),
+    ("box", "not-an-ip", "not an IP"),
+    ("box", "", "no address"),
+    ("-oProxyCommand=x", "10.0.0.1", "unusable name"),
+    ("box", "224.0.0.1", "multicast"),
+])
+def test_the_list_refuses_what_enrollment_would_refuse(all_three, name, addr, why):
+    with pytest.raises(ValueError):
+        name_table.add_entry(name, addr)
+
+
+def test_removing_a_name_takes_it_out(all_three):
+    name_table.add_entry("box", "10.0.0.1")
+    name_table.remove_entry("box")
+    assert name_table.lookup("box") == []
+
+
+def test_removing_one_name_from_a_shared_line_keeps_the_rest(all_three):
+    name_table.save("10.0.0.5  db.internal db\n")
+    name_table.remove_entry("db")
+    assert name_table.lookup("db") == [] and name_table.lookup("db.internal") == ["10.0.0.5"]
+
+
+def test_removing_a_name_that_is_not_ours_is_refused_not_pretended(all_three):
+    """Rewriting our file and reporting success for a name from somewhere else
+    tells an operator it was removed while it still resolves."""
+    (all_three / "mounted").write_text("10.0.0.9  theirs\n")
+    with pytest.raises(ValueError) as caught:
+        name_table.remove_entry("theirs")
+    assert "/etc/hosts" in str(caught.value)
+    assert name_table.lookup("theirs") == ["10.0.0.9"], "it was removed anyway"
+
+
+def test_a_name_added_to_the_list_can_be_enrolled_at_once(all_three, monkeypatch):
+    """The property the whole panel exists for: no mount, no restart."""
+    import backend.remote_routes as rr
+    monkeypatch.setattr(rr.socket, "getaddrinfo",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("no network")))
+    assert rr._resolve_addrs("ubuntu-lab") == set()
+    rr.names_add({"name": "ubuntu-lab", "address": "192.168.155.135"})
+    assert rr._resolve_addrs("ubuntu-lab") == {"192.168.155.135"}
+
+
+def test_the_entry_routes_report_the_new_list(all_three):
+    import backend.remote_routes as rr
+    out = rr.names_add({"name": "box", "address": "10.0.0.1"})
+    assert [e["name"] for e in out["entries"]] == ["box"]
+    out = rr.names_remove(name="box")
+    assert out["entries"] == []
+
+
+def test_the_entry_routes_turn_a_refusal_into_a_400(all_three):
+    import backend.remote_routes as rr
+    for call in (lambda: rr.names_add({"name": "box", "address": "127.0.0.1"}),
+                 lambda: rr.names_remove(name="never-added")):
+        with pytest.raises(Exception) as caught:
+            call()
+        assert getattr(caught.value, "status_code", None) == 400, caught.value
+
+
+@pytest.mark.parametrize("method,path", [
+    ("POST", "/api/names/entry"), ("DELETE", "/api/names/entry")])
+def test_the_entry_routes_check_that_anyone_is_signed_in(method, path):
+    w, _ = _bff()
+    route = next(r for r in w.app.routes
+                 if getattr(r, "path", None) == path and method in getattr(r, "methods", ()))
+    assert "require_operator" in [d.call.__name__ for d in route.dependant.dependencies]
+
+
+# ---- where it sits on the page ---------------------------------------------
+def test_the_hosts_list_is_beside_the_forms_not_below_them():
+    css = (REPO / "webgui" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    assert "enroll-aside" in VIEW, "the hosts list is no longer in its own column"
+    assert "<aside" in VIEW
+    import re
+    m = re.search(r"\.enroll-split\s*\{([^}]*)\}", css)
+    assert m, "the two-column layout is gone from the stylesheet"
+    cols = re.search(r"grid-template-columns:([^;]*);", m.group(1))
+    assert cols and cols.group(1).count("minmax") == 2, \
+        f"enroll-split is not two columns: {m.group(1)}"
+    # ...and ONE column when there is not room for the list to be readable.
+    assert re.search(r"@media[^{]*max-width:\s*11\d\dpx[^{]*\{[^}]*\.enroll-split", css, re.S), \
+        "nothing collapses the split on a narrow window"
+
+
+def test_an_unexpected_names_response_does_not_blank_the_console():
+    """`setState(fn)` is an UPDATER to React, and it calls it.
+
+    The hosts list arrives as `d.entries`. Every array has an `.entries` --
+    Array.prototype.entries, a function -- so a response that is an array
+    rather than the expected object passed a function to the setter, React
+    called it with the previous state, and the whole Host Enrollment page went
+    blank with "Cannot convert undefined or null to object". A truthiness
+    check does not catch it because a function is truthy; only a type check
+    does."""
+    checked = 0
+    for line in VIEW.splitlines():
+        for field, setter in (("entries", "setNamesEntries"),
+                              ("sources", "setNamesSources")):
+            if setter + "(" not in line:
+                continue
+            if not any(f"d{sep}{field}" in line for sep in (".", "?.")):
+                continue        # a literal, not the server's answer
+            checked += 1
+            assert "Array.isArray" in line, (
+                f"a server-supplied {field} reaches {setter} with no type "
+                f"check, which blanks the page: {line.strip()!r}")
+    assert checked >= 3, (
+        f"only {checked} such calls found; this test has stopped looking at "
+        f"the code it is about")

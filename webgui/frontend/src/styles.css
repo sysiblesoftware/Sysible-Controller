@@ -1039,3 +1039,19 @@ tr:hover td { background: var(--row-hover); }
 
 .badge.ok { background: var(--green-bg, rgba(106,176,76,.16)); color: var(--green-bright, #6ab04c); }
 .badge.warn { background: rgba(235,77,75,.16); color: var(--red, #eb4d4b); }
+
+/* Host Enrollment: the forms, and beside them the list of names they resolve
+   against. Two columns while there is room for the list to be READABLE next to
+   a 760px form; one below the other when there is not, because a 200px-wide
+   table of addresses is worse than a table further down the page. */
+.enroll-split { display: grid; grid-template-columns: minmax(0, 760px) minmax(320px, 420px);
+  gap: 18px; align-items: start; }
+.enroll-main { min-width: 0; }
+.enroll-aside { min-width: 0; position: sticky; top: 12px; }
+@media (max-width: 1180px) {
+  .enroll-split { grid-template-columns: minmax(0, 760px); }
+  .enroll-aside { position: static; max-width: 760px; }
+}
+/* A table that fits in the aside: the default row padding turns 12 names into
+   a scroll of its own. */
+table.compact th, table.compact td { padding: 3px 6px; font-size: 12px; }

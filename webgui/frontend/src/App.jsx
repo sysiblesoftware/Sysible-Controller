@@ -45,28 +45,44 @@ const SECTIONS = {
 //                  Fleet Query (act on hosts, quick actions before deep tools)
 //   4. Maintain  — Update Hosts, Schedules, Alerts (keep it healthy over time)
 //   5. Oversee   — Activity & Logs, Settings (audit + configure)
+// WHY THE GROUPS ARE DATA NOW. They already existed -- as comments, right here,
+// reading Observe / Onboard / Operate / Maintain / Oversee. Whoever wrote them
+// had the model; the rail rendered twelve undifferentiated rows and the reader
+// got none of it. "Quick System Actions" and "System Administration Tools" sat
+// adjacent with nothing to say how they relate, and "Update Hosts", "Schedules"
+// and "Alerts" read as three unrelated features rather than one job.
+//
+// `group` is the heading the item sits under. null is the first item and needs
+// none: a heading above Dashboard would be a heading above one row.
 const NAV = [
-  // Observe
   { key: null, label: "Dashboard", icon: "grid", su: false, aud: true },
-  // Onboard
-  { key: "hosts", label: "Host Enrollment", icon: "server", su: true },
+  { key: "hosts", label: "Host Enrollment", icon: "server", su: true, group: "Onboard" },
   { key: "migrate", label: "Migrate", icon: "move", su: true },
-  // Operate
-  { key: "quickactions", label: "Quick System Actions", icon: "bolt", su: false },
+  { key: "quickactions", label: "Quick System Actions", icon: "bolt", su: false, group: "Operate" },
   { key: "sysadmin", label: "System Administration Tools", icon: "tools", su: false },
   { key: "fleetquery", label: "Fleet Query", icon: "search", su: false },
-  // Maintain
-  { key: "updates", label: "Update Hosts", icon: "download", su: false, aud: true },
+  { key: "updates", label: "Update Hosts", icon: "download", su: false, aud: true, group: "Maintain" },
   { key: "schedules", label: "Schedules", icon: "clock", su: false },
   { key: "alerts", label: "Alerts", icon: "bell", su: false },
-  // Oversee
-  { key: "live", label: "Activity & Logs", icon: "activity", su: true, aud: true },
+  { key: "live", label: "Activity & Logs", icon: "activity", su: true, aud: true, group: "Oversee" },
   { key: "settings", label: "Settings", icon: "cog", su: true },
   // Reference — open the bundled, self-contained manual as a webpage in a new
   // tab (not a view switch, not a download); available to every role.
   { key: "docs", label: "Documentation", icon: "book", su: false, aud: true,
-    external: apiUrl("/api/docs/view") },
+    group: "Reference", external: apiUrl("/api/docs/view") },
 ];
+
+// A heading only when the items under it survived the role filter. An auditor
+// sees four of these twelve; headings over nothing would be most of their rail.
+function withHeadings(items) {
+  const out = [];
+  let shown = null;
+  for (const n of items) {
+    if (n.group && n.group !== shown) { out.push({ heading: n.group }); shown = n.group; }
+    out.push(n);
+  }
+  return out;
+}
 
 const ICONS = {
   grid: <><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></>,
@@ -517,8 +533,10 @@ export default function App() {
         </div>
 
         <div className="rail-nav">
-          {nav.map((n) => (
-            n.external ? (
+          {withHeadings(nav).map((n) => (
+            n.heading ? (
+              <div key={"h-" + n.heading} className="rail-group">{n.heading}</div>
+            ) : n.external ? (
               <a key={n.key ?? "dash"} className="rail-item" href={apiUrl(n.external)}
                  target="_blank" rel="noopener"
                  title="Open the documentation in a new tab">

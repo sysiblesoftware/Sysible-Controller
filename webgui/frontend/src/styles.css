@@ -80,31 +80,40 @@
        The active nav item carries the logo's green→blue trace; "ok" dots glow in
        brand green. ----------------------------------------------------------- */
 :root[data-skin="brand"] {
+  /* The Sysible palette. These values are NOT this console's to choose: they
+     are written down once in the platform's portal/brand/tokens.json and
+     pinned here by test. Five surfaces render this platform and they had
+     drifted into two families; an operator moving from the portal into a
+     console saw the ground shift for no reason they could name. */
   --bg: #0d1117;
-  --bg-raise: #12161f;
-  --panel: #12161f;
-  --panel-2: #161b26;
-  --border: #232b3a;
+  --bg-raise: #161b26;
+  --panel: #131923;
+  --panel-2: #1a212d;
+  --border: #26303f;
   --border-strong: #33405a;
-  --text: #e9f0f7;
-  --text-dim: #9aa7bd;
+  --text: #e6edf5;
+  --text-dim: #9aa7bd;     /* 7.78:1 on --bg */
   --text-faint: #7d8ca3;   /* ~4.8:1 on --bg */
   --btn: #1a2233;
   --btn-hover: #24304a;
   --btn-border: #33405a;
   --btn-press: #141b28;
-  --accent: #5580ee;       /* brand blue */
-  --accent-soft: rgba(85,128,238,0.15);
-  --accent-line: rgba(85,128,238,0.32);
-  --on-accent: #ffffff;
+  /* Sysible green. Text drawn ON it is --on-accent, which is DARK: white on
+     this green measures 3.30:1, below the 4.5:1 AA floor for a button label.
+     The same is true of our red (3.70:1) and amber (2.14:1), so the rule is
+     the fill's, not the green's. Dark ink gives 5.73, 5.11 and 8.86. */
+  --accent: #43a047;
+  --accent-soft: rgba(67,160,71,0.15);
+  --accent-line: rgba(67,160,71,0.32);
+  --on-accent: #0d1117;
   --rail-bg: #0a0d13;
-  --field: #12161f;
+  --field: #131923;
   --field-border: #33405a;
-  --green: #43a047;        /* brand green (base) */
-  --green-bright: #63c869; /* brand green (bright) — ok dots / online */
+  --green: #43a047;
+  --green-bright: #63c869; /* ok dots / online — 9.01:1 on --bg */
   --red: #e5534b;
   --amber: #e0a83b;
-  --row-hover: #161b26;
+  --row-hover: #1a212d;
   --shadow: rgba(0,0,0,0.55);
 }
 /* Light theme — a bright ground carrying the same brand accents, toggled from the
@@ -228,11 +237,11 @@ button { font-family: inherit; color: inherit; }
    ghost "select all"/secondary buttons elsewhere. */
 .btn.secondary { background: transparent; color: var(--text); border-color: var(--border-strong); }
 .btn.secondary:hover { background: var(--panel); }
-.btn.danger { background: var(--red); border-color: var(--red); color: #fff; }
+.btn.danger { background: var(--red); border-color: var(--red); color: var(--on-accent); }
 .btn.danger:hover { background: var(--red); filter: brightness(1.08); }
 /* A danger button that also carries `ghost` must stay red on hover — the plain
    `.btn.ghost:hover` would otherwise flip it to the neutral panel colour. */
-.btn.ghost.danger { background: var(--red); border-color: var(--red); color: #fff; }
+.btn.ghost.danger { background: var(--red); border-color: var(--red); color: var(--on-accent); }
 .btn.ghost.danger:hover { background: var(--red); filter: brightness(1.08); }
 /* Outline danger — a *secondary* destructive action: red text/border on a
    transparent ground, filling solid red only on hover. Keeps a row of
@@ -383,6 +392,13 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
      underline and keep padding inside the fixed rail width. */
   text-decoration: none; box-sizing: border-box;
 }
+/* Rail section headings. Quiet on purpose: they are a reading aid, not a
+   control -- small, spaced, lower contrast than the items they introduce, and
+   never the thing the eye lands on first. */
+.rail-group { padding: 14px 11px 4px; font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint);
+  user-select: none; }
+.rail-group:first-child { padding-top: 4px; }
 .rail-item:hover, .rail-item.active { text-decoration: none; }
 .rail-item svg { flex-shrink: 0; opacity: 0.85; }
 .rail-item .rail-ext { margin-left: auto; font-size: 12px; opacity: 0.55; }

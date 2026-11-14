@@ -125,6 +125,20 @@ services:
       # "Names the Controller knows" is the copy that does not have that
       # problem, and it wins over this one.
       - /etc/hosts:/host/etc/hosts:ro
+      # The host's RESOLVER CONFIG, so enrollment can resolve a name the way
+      # this machine does rather than the way a container does -- its DNS
+      # servers, its search domains. Read for lookups and nothing else.
+      #
+      # BOTH files, because on a systemd-resolved host -- Ubuntu, Debian, most
+      # of the fleet -- /etc/resolv.conf says `nameserver 127.0.0.53`, the stub
+      # listener. In here 127.0.0.53 is this container's loopback, where
+      # nothing answers. The real upstream servers are in the run file, and
+      # that is the one worth having; the other is the fallback for hosts
+      # without systemd-resolved. Missing files are tolerated: a bind mount of
+      # a path that does not exist makes Docker create a DIRECTORY, which the
+      # parser then reads as "no servers" rather than failing.
+      - /run/systemd/resolve/resolv.conf:/host/run/resolv.conf:ro
+      - /etc/resolv.conf:/host/etc/resolv.conf:ro
       - sysible-data:/data   # DB, certs, API key, cookie secret, portal files
 
 volumes:

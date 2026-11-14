@@ -58,7 +58,7 @@ from backend.models.remote_models import (
     TerminalWriteRequest,
 )
 from backend.models.environment_models import SetEnvironmentRequest
-from backend import hosts_file, name_table
+from backend import host_resolver, hosts_file, name_table
 
 router = APIRouter(prefix="/remote", tags=["remote"])
 
@@ -625,6 +625,13 @@ def _resolve_addrs(target: str) -> set:
     written = name_table.lookup(target)
     if written:
         return set(written)
+    # THROUGH THE HOST. The container's resolver is not the platform host's:
+    # different servers, no search domain, none of the local names. This asks
+    # the host's own nameservers, read from its resolver config, which is what
+    # makes a name the operator resolves every day resolvable in here.
+    through_host, _via = host_resolver.resolve(target)
+    if through_host:
+        return set(through_host)
     try:
         return {info[4][0] for info in socket.getaddrinfo(target, None)}
     except (OSError, UnicodeError):
@@ -1019,20 +1026,29 @@ def names_check(name: str = ""):
     name = (name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Give a name to check.")
+    host_via = ""
     addrs, via = name_table.where(name)
     if not addrs:
         try:
             ipaddress.ip_address(name)
             addrs, via = [name], "literal"
         except ValueError:
-            resolved = _resolve_addrs(name)
-            if resolved:
-                addrs, via = sorted(resolved), "dns"
+            # The host's resolver FIRST, and named as such: "DNS" alone does
+            # not tell an operator whether the answer came from the machine
+            # they are standing on or from the container.
+            through_host, how = host_resolver.resolve(name)
+            if through_host:
+                addrs, via, host_via = sorted(through_host), "host-dns", how
+            else:
+                resolved = _resolve_addrs(name)
+                if resolved:
+                    addrs, via = sorted(resolved), "dns"
     labels = {
         "literal": "it is already an address",
         "own": "this Controller's own list",
         "host": "the platform host's /etc/hosts",
-        "dns": "DNS, or the container's own /etc/hosts",
+        "host-dns": host_via or "the platform host's DNS",
+        "dns": "the container's own resolver",
     }
     return {
         "name": name,

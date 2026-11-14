@@ -422,11 +422,17 @@ def test_the_console_is_told_which_sources_exist(tables):
 
 
 # ---- saying WHY, not just no ------------------------------------------------
-def test_the_failure_says_the_hosts_file_was_never_mounted(tmp_path, monkeypatch):
-    """The first thing to check, and the console could not say it."""
+def test_the_failure_names_every_place_it_looked(tmp_path, monkeypatch):
+    """FOUR places now: this Controller's list, the host's /etc/hosts, the
+    host's DNS, and the container's own resolver. The message used to return
+    early when the first two were empty, which skipped the DNS clause -- the
+    one most likely to hold the answer, since the reported name was never in
+    anyone's /etc/hosts."""
     msg = _unresolvable_message(tmp_path, monkeypatch)
-    assert "no host list at all" in msg
-    assert "/nothing-either" in msg, "the path it looked at is not named"
+    assert "own list is empty" in msg, msg
+    assert "/nothing-either" in msg, "the host's hosts file is not named"
+    assert "resolver" in msg or "DNS" in msg, \
+        f"the host's DNS is not mentioned at all: {msg}"
 
 
 def test_the_failure_distinguishes_a_mounted_file_that_lacks_the_name(
@@ -446,7 +452,7 @@ def test_the_failure_distinguishes_a_mounted_file_that_lacks_the_name(
         rr.enroll_ssh(EnrollSSHRequest(name="ubuntu-lab", password="x"))
     msg = caught.value.detail
     assert "is mounted and lists 2 names" in msg, msg
-    assert "neither names 'ubuntu-lab'" in msg, msg
+    assert "nothing here names 'ubuntu-lab'" in msg, msg
 
 
 def test_the_count_reads_as_english_for_one(tables):
@@ -501,7 +507,7 @@ def test_a_name_nothing_knows_comes_back_with_the_reason(tables, monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(OSError("no network")))
     out = rr.names_check(name="ubuntu-lab")
     assert out["addresses"] == [] and out["via"] is None
-    assert "no host list at all" in out["reason"], out["reason"]
+    assert "own list is empty" in out["reason"], out["reason"]
 
 
 def test_checking_nothing_is_refused(tables):

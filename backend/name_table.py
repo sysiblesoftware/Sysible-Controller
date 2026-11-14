@@ -221,27 +221,49 @@ def where(name: str):
     return [], None
 
 
+def host_dns_note() -> str:
+    """One clause on what the host's resolver looks like from in here."""
+    from backend import host_resolver
+    cfg = host_resolver.host_config()
+    if not cfg["present"]:
+        return ("the platform host's resolver config is not mounted "
+                f"({host_resolver.host_resolv_paths()[0]})")
+    if not cfg["servers"]:
+        return ("the platform host's resolver config lists only loopback "
+                f"servers ({', '.join(cfg['skipped'])}), which from inside this "
+                f"container are this container")
+    return (f"its DNS servers ({', '.join(cfg['servers'])}) were asked and did "
+            f"not have it")
+
+
 def diagnose(name: str) -> str:
-    """One sentence on why `name` is not known here, for the failure message."""
+    """Why `name` is not known here, naming EVERY place that was looked.
+
+    There are four, and DNS through the platform host is now the one most
+    likely to be the answer -- the reported name was never in anyone's
+    /etc/hosts; it was in DNS. An early return that skipped the DNS clause
+    left the one place that mattered unmentioned, which is how a diagnosis
+    manages to be accurate and useless at the same time.
+    """
     srcs = {s["key"]: s for s in sources()}
     host, own = srcs["host"], srcs["own"]
-    if not host["present"] and not own["names"]:
-        return ("This Controller has no host list at all: nothing is mounted at "
-                f"{host['path']} and nothing has been saved here.")
+
     def _n(k):
         return f"{k} name" + ("" if k == 1 else "s")
 
     bits = []
+    if own["names"]:
+        bits.append("this Controller's own list holds " + _n(own["names"]))
+    else:
+        bits.append("this Controller's own list is empty")
     if host["present"]:
         bits.append("the platform host's /etc/hosts is mounted and lists "
                     + _n(host["names"]))
     else:
         bits.append(f"nothing is mounted at {host['path']}")
-    if own["names"]:
-        bits.append("this Controller's own list holds " + _n(own["names"]))
-    else:
-        bits.append("this Controller's own list is empty")
-    return f"Right now {bits[0]}, and {bits[1]} \u2014 neither names '{name}'."
+    bits.append(host_dns_note())
+    return (f"Right now {bits[0]}, {bits[1]}, and {bits[2]} \u2014 "
+            f"nothing here names '{name}'.")
 
 
 def entries() -> list:

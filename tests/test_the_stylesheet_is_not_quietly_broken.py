@@ -98,6 +98,28 @@ def _series(name):
     return (re.sub(r"[0-9]+", "#", name), int(runs[0]))
 
 
+# The ordered steps a scale's names can end in, smallest first. A SCALE is a
+# deliberate series exactly as --ramp1..5 is -- its members are MEANT to be
+# spelled alike -- but its steps are words, so _series (which keys on digits)
+# cannot see them. Without this, --fs-xl and --fs-xs read as a one-character
+# typo of each other, which is the one thing a type scale guarantees.
+_STEPS = ("xs", "sm", "md", "lg", "xl", "2xl", "3xl", "pill")
+
+
+def _scale_step(name):
+    """(stem, step index) for a token ending in a scale step, else None."""
+    stem, _, suffix = name.rpartition("-")
+    if not stem or suffix not in _STEPS:
+        return None
+    return (stem, _STEPS.index(suffix))
+
+
+# A pair that is deliberate and cannot be spelled apart. --accent2 is what all
+# five of the platform's surfaces call the second brand colour; renaming it
+# here alone would trade a test failure for a real inconsistency.
+_DELIBERATE_PAIRS = {("--accent", "--accent2")}
+
+
 def test_no_custom_property_is_a_typo_of_another():
     """--ambert vs --amber. The typo RESOLVED, which is why it survived: it was
     defined once in the default scope and simply never re-toned per skin, so it
@@ -121,10 +143,14 @@ def test_no_custom_property_is_a_typo_of_another():
 
     def same_series(a, b):
         sa, sb = _series(a), _series(b)
-        return sa is not None and sb is not None and sa[0] == sb[0]
+        if sa is not None and sb is not None and sa[0] == sb[0]:
+            return True
+        ca, cb = _scale_step(a), _scale_step(b)
+        return ca is not None and cb is not None and ca[0] == cb[0]
 
     pairs = [(a, b) for i, a in enumerate(names) for b in names[i + 1:]
-             if edit1(a, b) and not same_series(a, b)]
+             if edit1(a, b) and not same_series(a, b)
+             and (a, b) not in _DELIBERATE_PAIRS]
     assert not pairs, (
         "these custom properties differ by one character, which is how --ambert "
         f"shadowed --amber for months: {pairs}"

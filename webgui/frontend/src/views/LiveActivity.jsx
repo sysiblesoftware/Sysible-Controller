@@ -114,6 +114,11 @@ export default function LiveActivity({ role }) {
   const [auto, setAuto] = useState(true);
   const [detail, setDetail] = useState(null);
   const [copied, setCopied] = useState(false);
+  // Whether the FIRST fetch has come back. Without it an empty log and a
+  // log still arriving render the same words -- "No activity recorded
+  // yet" -- and the one that is about to fill reads as the one that never
+  // will. The tab resets it, because switching tabs starts a new fetch.
+  const [loaded, setLoaded] = useState(false);
   const [hostInv, setHostInv] = useState([]);  // fleet inventory for env-aware host labels
   const [q, setQ] = useState("");              // free-text filter (user / host / action)
   const [filterUser, setFilterUser] = useState("");   // "" = all users
@@ -134,9 +139,11 @@ export default function LiveActivity({ role }) {
         setLog(typeof d === "string" ? d : (d.log || d.text || JSON.stringify(d)));
       }
     } catch (e) { setErr(e.message); }
+    finally { setLoaded(true); }   // an error is also an answer: stop saying "loading"
   }
 
   useEffect(() => {
+    setLoaded(false);
     load();
     if (auto) { timer.current = setInterval(load, 4000); }
     return () => clearInterval(timer.current);
@@ -216,6 +223,7 @@ export default function LiveActivity({ role }) {
       )}
 
       {tab === "activity" ? (
+        !loaded ? <div className="empty"><span className="spin" /> Loading activity…</div> :
         activity.length === 0 ? <div className="empty">No activity recorded yet.</div> :
         shown.length === 0 ? <div className="empty">No activity matches this filter. Pick <b>All</b> to see all {grouped.length} entries.</div> : (
           <div style={{ overflowX: "auto" }}>
@@ -239,7 +247,7 @@ export default function LiveActivity({ role }) {
         )
       ) : (
         <pre className="card mono" style={{ whiteSpace: "pre-wrap", maxHeight: "70vh", overflowY: "auto", fontSize: 12.5 }}>
-          {log || "(empty)"}
+          {!loaded ? "Loading\u2026" : (log || "(empty)")}
         </pre>
       )}
 

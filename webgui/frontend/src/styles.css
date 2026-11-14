@@ -1,9 +1,13 @@
-/* Sysible web console — selectable skins.
+/* Sysible web console — the token layers.
    The default (":root") is "Slate", the original graphite look. Each
-   [data-skin="…"] block below is a complete look chosen from the header
-   skin picker (see App.jsx) and persisted to localStorage; there is no
-   separate light/dark toggle — "Porcelain" is the light skin.
-   Every surface reads a CSS variable, so a skin is purely a token swap
+   TWO layers, and the order matters. The :root block is the FOUNDATION: it
+   holds every token, including the tile accents (--slate, --teal, --purple,
+   --coral) that nothing else redefines. The [data-skin="brand"] block below
+   overrides the subset that carries the brand -- ground, surfaces, text and
+   accent -- and index.html puts that attribute on <html> before first paint.
+   Without it the console renders the foundation, which is the retired Slate
+   palette. Light theme is a third layer, [data-theme="light"], later again.
+   Every surface reads a CSS variable, so a layer is purely a token swap
    plus a few scoped signature rules. */
 :root,
 :root[data-skin="base"] {
@@ -68,13 +72,13 @@
   --ramp5: #43a047;  --ramp5-bg: rgba(67,160,71,0.15);
 }
 /* ==========================================================================
-   SKINS — each block is a complete look, chosen from the header skin picker.
+   The brand layer.
    Only the tokens that differ from the Slate flashback are set; everything
    the app draws flows through these variables, so the palette does the work.
-   A handful of scoped "signature" rules give each skin its one distinct move.
+   A handful of scoped rules below carry the brand's own moves.
    ========================================================================== */
 
-/* --- Sysible: the brand skin — the hexagon-prompt family palette. A near-black
+/* --- Sysible: the brand palette — the hexagon-prompt family. A near-black
        engineering ground with the mark's green→blue as accent and status, tying
        the console to the logo, honeycomb wallpapers, and the boot & lock screens.
        The active nav item carries the logo's green→blue trace; "ok" dots glow in
@@ -258,38 +262,6 @@ button { font-family: inherit; color: inherit; }
 }
 .iconbtn:hover { background: var(--panel); }
 
-/* Console skin picker — a compact select fronted by a palette glyph. */
-.skin-picker {
-  display: inline-flex; align-items: center; gap: 6px;
-  height: 30px; padding: 0 8px 0 10px;
-  border: 1px solid var(--border-strong); border-radius: 999px;
-  background: transparent; color: var(--text-dim); cursor: pointer;
-}
-.skin-picker:hover { background: var(--panel); color: var(--text); }
-.skin-picker:focus-within { border-color: var(--accent); }
-.skin-picker svg { flex: 0 0 auto; color: var(--accent); }
-.skin-picker select {
-  appearance: none; -webkit-appearance: none; border: 0; outline: none;
-  background: transparent; color: inherit; cursor: pointer;
-  font: inherit; font-size: 12.5px; padding-right: 2px;
-}
-.skin-picker select option { color: #1a1c20; background: #fff; } /* readable native menu */
-/* Full-width variant for the rail footer — a labelled row that stacks cleanly
-   with the Sudo Password / Log Out buttons, with a chevron on the right. */
-.skin-picker.block {
-  display: flex; width: 100%; height: 32px; border-radius: 7px;
-  padding: 0 10px; gap: 8px; justify-content: flex-start;
-}
-.skin-picker.block .skin-picker-label {
-  font-size: 12.5px; color: inherit; flex: 0 0 auto;
-}
-.skin-picker.block select {
-  flex: 1 1 auto; min-width: 0; text-align: right; padding-right: 16px;
-  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
-                    linear-gradient(135deg, currentColor 50%, transparent 50%);
-  background-position: right 6px center, right 1px center;
-  background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
-}
 
 /* ---------- Form controls ---------- */
 input, select, textarea {
@@ -834,8 +806,8 @@ tr:hover td { background: var(--row-hover); }
   place-items: center; font-weight: 650; font-size: 12px; border: 1px solid transparent;
   background: var(--slate-bg); color: var(--text-dim); }
 /* Root and system markers use FIXED logo-palette colors (royal blue / green) so
-   they read the same on every skin — "like the logo" — rather than following the
-   per-skin --accent (which is only royal blue on the Sysible brand skin). */
+   they read the same everywhere — "like the logo" — rather than following
+   --accent. */
 .ug-mono.root { background: rgba(47,96,212,0.16); color: #2f60d4; border-color: rgba(47,96,212,0.35); }
 .ug-mono.sys { background: rgba(67,160,71,0.16); color: #43a047; border-color: rgba(67,160,71,0.35); }
 .ug-mono.human { background: var(--slate-bg); color: var(--slate); border-color: rgba(138,160,200,0.3); }

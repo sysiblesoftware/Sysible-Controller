@@ -5,15 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="logo.svg" />
     <title>Sysible Controller</title>
-    <script>
-      // Apply the saved console skin before first paint so a light skin
-      // (Porcelain) doesn't flash the dark baseline on load.
-      try {
-        var ids = { brand:1 };
-        var s = localStorage.getItem("sysible_skin");
-        document.documentElement.setAttribute("data-skin", ids[s] ? s : "brand");
-      } catch (e) {}
-    </script>
+    <!-- The console ships ONE look. This attribute is what styles.css's brand
+         token block keys off, so it has to be on <html> before first paint --
+         without it the console falls back to the retired Slate palette. It was
+         read from localStorage and matched against a list of one; the picker it
+         belonged to was removed long ago. -->
+    <script>document.documentElement.setAttribute("data-skin", "brand");</script>
     <!-- ONE theme for the whole suite, applied before first paint.
 
          Two bugs lived here. The theme was applied by React in App.jsx, so a

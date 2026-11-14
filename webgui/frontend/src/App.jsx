@@ -106,41 +106,6 @@ function NavIcon({ name }) {
   );
 }
 
-// Selectable console skins. Each is a complete look defined as a token block in
-// styles.css ([data-skin="…"]); "base" is the original Slate palette. There is no
-// separate light/dark toggle — "Porcelain" is the light skin.
-// The console ships a single look: Sysible (the brand palette). Other skins were
-// removed; the picker is gone and the app always renders data-skin="brand".
-const SKINS = [
-  { id: "brand", name: "Sysible" },
-];
-const SKIN_IDS = new Set(SKINS.map((s) => s.id));
-function applySkin(s) { document.documentElement.setAttribute("data-skin", s); }
-
-// `block` renders a full-width row (rail footer); the default compact pill is
-// for the horizontal Connect toolbar.
-function SkinPicker({ skin, onChange, block }) {
-  return (
-    <label className={"skin-picker" + (block ? " block" : "")} title="Console skin">
-      <SkinIcon />
-      {block && <span className="skin-picker-label">Skin</span>}
-      <select value={skin} onChange={(e) => onChange(e.target.value)} aria-label="Console skin">
-        {SKINS.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-      </select>
-    </label>
-  );
-}
-function SkinIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-         strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="13.5" cy="6.5" r="2.5" /><circle cx="17.5" cy="10.5" r="2.5" />
-      <circle cx="8.5" cy="7.5" r="2.5" /><circle cx="6.5" cy="12.5" r="2.5" />
-      <path d="M12 2a10 10 0 0 0 0 20c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.4-.5-.8-.5-1.2 0-1 .8-1.5 1.7-1.5H16a6 6 0 0 0 6-6c0-4.9-4.5-8-10-8Z" />
-    </svg>
-  );
-}
-
 // --- URL-addressable views ------------------------------------------------
 // Nav items are real links (?view=<key>) so they can be opened in a new tab,
 // bookmarked, and shared — not just JS buttons. Excludes the dashboard
@@ -306,10 +271,6 @@ export default function App() {
   const [history, setHistory] = useState([]); // breadcrumb stack of {view,target}
   const [edition, setEdition] = useState(null);
   const [sudoOpen, setSudoOpen] = useState(false);
-  const [skin, setSkin] = useState(() => {
-    const s = localStorage.getItem("sysible_skin");
-    return s && SKIN_IDS.has(s) ? s : "brand";
-  });
   // Light / dark theme (persisted). Dark is the default brand look; "light" sets
   // data-theme on <html>, which the styles.css light block reads to flip surfaces.
   // The INITIAL value comes from whatever index.html already applied before
@@ -337,7 +298,6 @@ export default function App() {
   }, []);
   const dismissToast = useCallback((id) => setToasts((t) => t.filter((x) => x.id !== id)), []);
 
-  useEffect(() => { applySkin(skin); }, [skin]);
   useEffect(() => {
     // Hand it to the shared helper: it sets data-theme AND writes the one key
     // every Sysible console reads, so switching here switches SLOP and SLEP too.
@@ -483,11 +443,6 @@ export default function App() {
       return h.slice(0, -1);
     });
   }, []);
-
-  const chooseSkin = (next) => {
-    setSkin(next);
-    localStorage.setItem("sysible_skin", next);
-  };
 
   // Redirect away from a view the current role can't access — a URL-seeded ?view=
   // (bookmark, shared link) or a mid-session role change. Bouncing to the dashboard

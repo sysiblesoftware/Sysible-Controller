@@ -240,7 +240,15 @@ def _ramp_values(css, theme):
     selector (`:root,\n:root[data-skin="base"] {`), so matching `:root\s*\{`
     skips it entirely and the check silently finds nothing to test. Walk out
     from each declaration to its own block instead.
+
+    COMMENTS ARE STRIPPED FIRST. The dark block is the first in the file, so
+    "the text since the previous }" is everything above it -- the file header.
+    A header that merely MENTIONS [data-theme="light"], as prose explaining the
+    layers, was read as the block's own selector, and the dark ramp vanished
+    from a test that then passed on the light half and reported "found 0". A
+    comment must not be able to change what a parser believes.
     """
+    css = re.sub(r"/\*.*?\*/", " ", css, flags=re.S)
     out = {}
     for m in re.finditer(r"--ramp\d:\s*#[0-9a-f]{6}", css):
         open_brace = css.rfind("{", 0, m.start())

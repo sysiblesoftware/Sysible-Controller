@@ -93,7 +93,18 @@ export default function FleetQuery() {
             </span>
           </div>
 
-          {resMeta.group === "value" ? (
+          {/* A QUERY THAT MATCHED NOTHING is not a query that failed, and the
+              two looked identical: an empty table under a heading. The count
+              line above says "0 of 12 hosts match", which is the answer -- but
+              the body said nothing at all, and an operator reads the body. */}
+          {res.rows.length === 0 ? (
+            <div className="empty" style={{ padding: 28, fontSize: 13 }}>
+              {res.count === 0
+                ? "No managed hosts to query yet. Enrol one from Host Enrollment."
+                : <>Ran on {res.count} host{res.count === 1 ? "" : "s"}; none matched.
+                   The query worked — nothing on the fleet met it.</>}
+            </div>
+          ) : resMeta.group === "value" ? (
             // Drift view: one block per distinct value; non-majority = drifted.
             <div style={{ display: "grid", gap: 8, padding: 10 }}>
               {clusters.map(([val, hosts], i) => {

@@ -530,8 +530,8 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 section > .section-title { margin: 14px 0 7px; }
 section:first-of-type > .section-title { margin-top: 2px; }
 @media (max-width: 1400px) { .tool-grid { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 1040px) { .tool-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 700px)  { .tool-grid { grid-template-columns: 1fr; } }
+@media (max-width: 1180px) { .tool-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 720px)  { .tool-grid { grid-template-columns: 1fr; } }
 
 /* ---------- Page (opened from a tile) ---------- */
 .page-head { display: flex; align-items: center; gap: var(--sp-4); margin-bottom: 16px; }
@@ -635,7 +635,7 @@ tr:hover td { background: var(--row-hover); }
 .linklike { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer;
   font: inherit; text-decoration: underline; }
 
-@media (max-width: 820px) { .he-portal-grid { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .he-portal-grid { grid-template-columns: 1fr; } }
 
 /* ---------- Tool page: host tree | actions | results (3 columns) ---------- */
 .tool-flex {
@@ -934,7 +934,7 @@ tr:hover td { background: var(--row-hover); }
 .d3l-grid { display: grid;
   grid-template-columns: minmax(200px, 0.85fr) minmax(200px, 1fr) minmax(220px, 1.1fr) minmax(300px, 1.8fr);
   gap: var(--sp-3); margin-top: 12px; align-items: start; }
-@media (max-width: 1300px) { .d3l-grid { grid-template-columns: minmax(180px, 0.9fr) 1fr 1fr; } }
+@media (max-width: 1400px) { .d3l-grid { grid-template-columns: minmax(180px, 0.9fr) 1fr 1fr; } }
 @media (max-width: 900px) { .d3l-grid { grid-template-columns: 1fr; } }
 
 /* Single-select host rail — clickable rows grouped by environment. */

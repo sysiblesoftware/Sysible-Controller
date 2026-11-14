@@ -189,3 +189,39 @@ def test_the_accent_is_the_same_hue_in_both_themes():
         hues[name] = colorsys.rgb_to_hls(r, g, b)[0] * 360
     spread = max(hues.values()) - min(hues.values())
     assert spread < 30, f"the accent hue differs by {spread:.0f} degrees: {hues}"
+
+
+# ---- breakpoints -----------------------------------------------------------
+# Four, and four is the honest number: the tools grid runs 4 -> 3 -> 2 -> 1
+# columns, which needs three steps of its own, and the widest layout needs one
+# above those. It was eight -- 700, 720, 820, 900, 1040, 1180, 1300, 1400 --
+# with pairs twenty pixels apart. Those are not a system; they are one-off
+# patches, each added to fix one screen and each now a place where some other
+# screen reflows for no reason.
+#
+# var() does not work inside @media, so these cannot be tokens. This test is
+# the only thing holding the set together.
+_BREAKPOINTS = {720, 900, 1180, 1400}
+
+
+def test_the_breakpoints_are_the_declared_set():
+    used = {int(x) for x in re.findall(r"@media[^{]*max-width:\s*(\d+)px", CSS)}
+    assert used, "no max-width media queries found; this test has stopped looking"
+    extra = used - _BREAKPOINTS
+    assert not extra, (
+        f"{sorted(extra)} are not in the breakpoint set {sorted(_BREAKPOINTS)}. "
+        f"A one-off width fixes one screen and moves another.")
+
+
+def test_the_breakpoints_are_far_enough_apart_to_be_separate():
+    """700 and 720 were two breakpoints twenty pixels apart."""
+    bp = sorted(_BREAKPOINTS)
+    gaps = [b - a for a, b in zip(bp, bp[1:])]
+    assert min(gaps) >= 150, f"two breakpoints are {min(gaps)}px apart: {bp}"
+
+
+def test_every_declared_breakpoint_is_actually_used():
+    """A set that lists widths nothing uses is a set nobody maintains."""
+    used = {int(x) for x in re.findall(r"@media[^{]*max-width:\s*(\d+)px", CSS)}
+    unused = _BREAKPOINTS - used
+    assert not unused, f"{sorted(unused)} is declared but no rule uses it"

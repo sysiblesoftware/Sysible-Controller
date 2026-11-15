@@ -88,36 +88,46 @@ class TestTheConsoleCanActuallyReachIt:
     def test_every_caller_sends_every_required_field(self, f):
         """EVERY call site, not the first one found.
 
-        There are two now -- the single-host form and the bulk import from a
-        hosts file -- and these assertions used to anchor on `the first
-        api.enrollSsh( in the file`, which silently became a different call
-        site the moment a second one was added above it. A test that moves to
-        whichever code happens to come first in a file is a test about
-        nothing in particular.
+        There is ONE now. It was two -- a single-host form and a bulk import
+        from a hosts file, the same job described twice -- and a typed host is
+        a one-line list, so they were merged into one. The count is asserted
+        rather than tolerated: a second call site appearing means a second way
+        in has been added back, and whoever adds it should have to say so
+        here. Anchoring on `the first api.enrollSsh( in the file` was the old
+        mistake, and it is a test about nothing in particular.
         """
         sites = re.findall(r"api\.enrollSsh\(\{(.*?)\}\)", VIEW, re.S)
-        assert len(sites) >= 2, (
-            f"expected the form AND the bulk import to call it; found "
-            f"{len(sites)} call site(s)")
+        assert len(sites) == 1, (
+            f"enrollment has one way in; found {len(sites)} call site(s)")
         for i, body in enumerate(sites):
             assert f"{f}:" in body, f"call site {i + 1} does not send {f}"
+
+    def test_there_is_one_enroll_panel_and_it_has_both_steps(self):
+        """The merge itself. Two panels side by side made an operator with one
+        host to add decide which half of the page was for them, and both halves
+        ended at the same call with the same credentials."""
+        assert VIEW.count("<legend>Enroll hosts</legend>") == 1, \
+            "there is no single Enroll hosts panel"
+        for gone in ("Enroll a host from here", "Enroll several from a hosts file"):
+            assert gone not in VIEW, f"the old separate panel {gone!r} is back"
+        assert "Which hosts" in VIEW and "How to connect" in VIEW, \
+            "the one panel no longer says which hosts, then how to connect"
 
     def test_there_is_somewhere_to_type_an_address(self):
         """The literal complaint."""
         assert "push.ip" in VIEW and "push.name" in VIEW
 
     def test_the_password_field_is_masked(self):
-        m = re.search(r'value=\{push\.password\}[^/]*', VIEW, re.S)
+        m = re.search(r'value=\{bulkCreds\.password\}[^/]*', VIEW, re.S)
         assert m and 'type="password"' in VIEW[max(0, m.start() - 200):m.end()], \
             "the password is rendered in clear text"
 
     # The two code paths that enroll, by a stable anchor each rather than by
     # position in the file.
+    # One code path that enrolls, by a stable anchor rather than by position
+    # in the file. It was two.
     HANDLERS = {
-        "the single-host form": (r"const r = await api\.enrollSsh\(\{",
-                                 r'finally \{ setBusy\(""\); \}'),
-        "the bulk hosts-file import": (r"async function enrollPicked\(\)",
-                                       r"\n  \}"),
+        "the enrollment run": (r"async function enrollPicked\(\)", r"\n  \}"),
     }
 
     def _handler(self, which):
@@ -132,8 +142,8 @@ class TestTheConsoleCanActuallyReachIt:
     @pytest.mark.parametrize("which", list(HANDLERS))
     def test_the_password_is_cleared_after_enrolling(self, which):
         """It has done its one job; leaving it on screen is leaving a credential
-        on screen. True of the batch password too -- more so, since one password
-        there was used against a dozen machines."""
+        on screen -- more so now that the one password is used against every
+        machine in the list."""
         body = self._handler(which)
         assert re.search(r'password:\s*""', body), \
             f"the password survives enrollment in {which}"

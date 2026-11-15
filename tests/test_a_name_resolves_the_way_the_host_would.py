@@ -280,8 +280,8 @@ def test_the_failure_says_when_every_server_is_loopback(tmp_path, monkeypatch):
 
 
 # ---- the mounts are a contract ---------------------------------------------
-@pytest.mark.parametrize("path", ["/run/systemd/resolve/resolv.conf:/host/run/resolv.conf:ro",
-                                  "/etc/resolv.conf:/host/etc/resolv.conf:ro"])
+@pytest.mark.parametrize("path", ["/run/systemd/resolve:/host/run/systemd-resolve:ro",
+                                  "/etc:/host/etc:ro"])
 def test_the_compose_file_mounts_the_resolver_config(path):
     import yaml
     repo = Path(__file__).resolve().parents[1]
@@ -290,6 +290,42 @@ def test_the_compose_file_mounts_the_resolver_config(path):
     assert path in vols, f"without {path} the host's resolver is invisible in here"
 
 
+def test_the_resolver_config_is_mounted_as_a_directory(monkeypatch):
+    """systemd-resolved rewrites resolv.conf by renaming a new file over the
+    old one on every network change, and a bind mount of a FILE is bound to
+    the inode. Mount the file and the server list freezes at whatever it was
+    when the container was created -- silently, because the mount goes on
+    reading perfectly."""
+    import yaml
+    repo = Path(__file__).resolve().parents[1]
+    doc = yaml.safe_load((repo / "docker-compose.yml").read_text(encoding="utf-8"))
+    vols = [v for v in doc["services"]["controller"]["volumes"] if "/host/" in v]
+    for v in vols:
+        src = v.split(":")[0]
+        assert not src.endswith(".conf"), (
+            f"{v} mounts a single resolver FILE; it will freeze at container "
+            f"creation the first time the server's network changes")
+
+
 def test_the_paths_the_code_reads_are_the_paths_mounted(monkeypatch):
+    """Every path the resolver reads has to be one the compose file provides,
+    or the code is looking somewhere nothing was ever put."""
+    import yaml
     monkeypatch.delenv("SYSIBLE_HOST_RESOLV", raising=False)
-    assert hr.host_resolv_paths() == ["/host/run/resolv.conf", "/host/etc/resolv.conf"]
+    paths = hr.host_resolv_paths()
+    assert paths[0] == "/host/run/systemd-resolve/resolv.conf", (
+        "systemd-resolved's real upstreams have to be tried first: "
+        "/etc/resolv.conf is the 127.0.0.53 stub, which in here is this "
+        "container")
+    repo = Path(__file__).resolve().parents[1]
+    doc = yaml.safe_load((repo / "docker-compose.yml").read_text(encoding="utf-8"))
+    targets = [v.split(":")[1] for v in doc["services"]["controller"]["volumes"]
+               if "/host/" in v]
+    covered = [p for p in paths if any(p == t or p.startswith(t + "/") for t in targets)]
+    assert covered, f"none of {paths} is under any of {targets}"
+    # The older single-file target stays in the list on purpose: a Controller
+    # that has not been recreated since this changed still has it mounted
+    # there, and a frozen server list still beats no server list.
+    assert "/host/run/resolv.conf" in paths, (
+        "dropping the old mount point orphans every Controller that has not "
+        "been recreated yet")

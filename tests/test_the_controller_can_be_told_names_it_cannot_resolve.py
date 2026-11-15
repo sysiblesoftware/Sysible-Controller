@@ -54,9 +54,19 @@ fe80::1         link-local-box
 
 @pytest.fixture()
 def tables(tmp_path, monkeypatch):
-    """Point both sources at files this test owns, and clear the parse cache."""
+    """Point both sources at files this test owns, and clear the parse cache.
+
+    Containerised, because that is the deployment the whole module is for: it
+    is what makes the SERVER's hosts file the mounted one rather than this
+    process's own. The os-release beside it is what a mount of the whole /etc
+    directory looks like from in here, and the difference matters -- a mount
+    of the single FILE is frozen at container-creation time, which the code
+    detects and reports. Tests that want the frozen case build it themselves.
+    """
+    monkeypatch.setenv("SYSIBLE_IN_CONTAINER", "1")
     monkeypatch.setenv("SYSIBLE_NAME_TABLE", str(tmp_path / "own"))
     monkeypatch.setenv("SYSIBLE_HOST_HOSTS_FILE", str(tmp_path / "host-hosts"))
+    (tmp_path / "os-release").write_text("ID=ubuntu\n")
     name_table._CACHE.clear()
     yield tmp_path
     name_table._CACHE.clear()
@@ -256,6 +266,7 @@ def _unresolvable_message(tmp_path, monkeypatch):
     """The message an operator really gets, by making the real call fail."""
     import backend.remote_routes as rr
     from backend.models.remote_models import EnrollSSHRequest
+    monkeypatch.setenv("SYSIBLE_IN_CONTAINER", "1")
     monkeypatch.setenv("SYSIBLE_NAME_TABLE", str(tmp_path / "nothing"))
     monkeypatch.setenv("SYSIBLE_HOST_HOSTS_FILE", str(tmp_path / "nothing-either"))
     name_table._CACHE.clear()
@@ -275,7 +286,12 @@ def test_the_failure_no_longer_gives_advice_that_cannot_be_taken(tmp_path, monke
     assert "ubuntu-lab" in msg, "the message does not say which name failed"
     assert "add the name to this host's /etc/hosts" not in msg, \
         "still telling the operator to do the thing they already did"
-    assert "container" in msg, "nothing explains why the name is unknown here"
+    # Not the word "container" -- the EXPLANATION. The message has to name the
+    # places that were looked in, because "cannot resolve" with no account of
+    # where it looked is what sent people guessing in the first place.
+    assert "own list" in msg, "the Controller's own list is not accounted for"
+    assert "/etc/hosts" in msg, "the server's hosts file is not accounted for"
+    assert "DNS" in msg or "resolver" in msg, "DNS is not accounted for"
     assert "Hosts list" in msg, "the message does not say where the fix is"
 
 
@@ -291,8 +307,11 @@ def test_the_console_offers_the_list_the_message_points_at():
 def test_the_console_says_when_the_host_file_was_never_mounted():
     """"It cannot resolve the name" and "the mount is missing" are the same
     failure from the console and have different fixes."""
-    assert "/etc/hosts:/host/etc/hosts:ro" in VIEW, \
+    assert "/etc:/host/etc:ro" in VIEW, \
         "the console does not tell the operator what to add"
+    assert "/etc/hosts:/host/etc/hosts:ro" not in VIEW, (
+        "the console is still telling operators to mount the single FILE, "
+        "which detaches from /etc/hosts the first time it is edited")
 
 
 # ---- the mount is a contract, not a suggestion -----------------------------
@@ -302,16 +321,22 @@ def test_the_console_says_when_the_host_file_was_never_mounted():
 def test_the_compose_file_mounts_the_hosts_file_read_only(compose):
     doc = yaml.safe_load(compose.read_text(encoding="utf-8"))
     vols = doc["services"]["controller"]["volumes"]
-    assert "/etc/hosts:/host/etc/hosts:ro" in vols, \
-        (f"{compose.name} no longer mounts the host's /etc/hosts; enrolling by "
-         f"name silently stops working")
+    assert "/etc:/host/etc:ro" in vols, (
+        f"{compose.name} no longer mounts the server's /etc as a DIRECTORY. "
+        f"Enrolling by name silently stops working -- and mounting the single "
+        f"file instead is the subtler version of the same outage: a bind mount "
+        f"of a file is bound to its inode, so the first `vim /etc/hosts` on the "
+        f"server detaches this container from it for good.")
+    assert not any(v.startswith("/etc/hosts:") for v in vols), (
+        f"{compose.name} is back to mounting /etc/hosts a file at a time; see "
+        f"above for why that stops working the moment somebody edits it")
 
 
 def test_the_mount_is_read_only_everywhere_it_appears():
     """Read-only is the whole claim the console makes about it."""
     for compose in REPO.rglob("docker-compose*.yml"):
         for line in compose.read_text(encoding="utf-8").splitlines():
-            if "/host/etc/hosts" in line and not line.strip().startswith("#"):
+            if "/host/etc" in line and not line.strip().startswith("#"):
                 assert line.rstrip().endswith(":ro"), \
                     f"{compose}: {line.strip()} is not read-only"
 
@@ -417,7 +442,7 @@ def test_the_console_is_told_which_sources_exist(tables):
     import backend.remote_routes as rr
     (tables / "host-hosts").write_text(HOSTS)
     srcs = {s["key"]: s for s in rr.names_get()["sources"]}
-    assert srcs["host"]["present"] and srcs["host"]["names"] == 3
+    assert srcs["server"]["present"] and srcs["server"]["names"] == 3
     assert not srcs["own"]["present"]
 
 
@@ -442,6 +467,8 @@ def test_the_failure_distinguishes_a_mounted_file_that_lacks_the_name(
     import backend.remote_routes as rr
     from backend.models.remote_models import EnrollSSHRequest
     (tmp_path / "host").write_text("10.0.0.5  db\n10.0.0.6  web\n")
+    (tmp_path / "os-release").write_text("ID=ubuntu\n")   # a whole-/etc mount
+    monkeypatch.setenv("SYSIBLE_IN_CONTAINER", "1")
     monkeypatch.setenv("SYSIBLE_HOST_HOSTS_FILE", str(tmp_path / "host"))
     monkeypatch.setenv("SYSIBLE_NAME_TABLE", str(tmp_path / "own"))
     name_table._CACHE.clear()
@@ -451,7 +478,7 @@ def test_the_failure_distinguishes_a_mounted_file_that_lacks_the_name(
     with pytest.raises(Exception) as caught:
         rr.enroll_ssh(EnrollSSHRequest(name="ubuntu-lab", password="x"))
     msg = caught.value.detail
-    assert "is mounted and lists 2 names" in msg, msg
+    assert "the server's /etc/hosts lists 2 names" in msg, msg
     assert "nothing here names 'ubuntu-lab'" in msg, msg
 
 
@@ -459,6 +486,8 @@ def test_the_count_reads_as_english_for_one(tables):
     (tables / "host-hosts").write_text("10.0.0.5  db\n")
     assert "lists 1 name," in name_table.diagnose("x")
     assert "1 names" not in name_table.diagnose("x")
+    name_table.add_entry("other", "10.0.0.6")
+    assert "own list holds 1 name," in name_table.diagnose("x")
 
 
 # ---- checking a name without trying to enroll it ----------------------------
@@ -467,7 +496,7 @@ def test_checking_a_name_says_which_source_answered(tables):
     (tables / "host-hosts").write_text(HOSTS)
     out = rr.names_check(name="ubuntu-lab")
     assert out["addresses"] == ["192.168.155.135"]
-    assert out["via"] == "host"
+    assert out["via"] == "server"
     assert "/etc/hosts" in out["via_label"]
 
 
@@ -571,21 +600,42 @@ def test_the_check_result_uses_classes_the_stylesheet_actually_defines():
 # ---- the hosts list: what it reads, and what it can be told ----------------
 @pytest.fixture()
 def all_three(tmp_path, monkeypatch):
-    """All three sources under this test's control."""
+    """Every source under this test's control, containerised. See `tables`."""
+    monkeypatch.setenv("SYSIBLE_IN_CONTAINER", "1")
     monkeypatch.setenv("SYSIBLE_NAME_TABLE", str(tmp_path / "own"))
     monkeypatch.setenv("SYSIBLE_HOST_HOSTS_FILE", str(tmp_path / "mounted"))
     monkeypatch.setenv("SYSIBLE_LOCAL_HOSTS_FILE", str(tmp_path / "local"))
+    (tmp_path / "os-release").write_text("ID=ubuntu\n")
     name_table._CACHE.clear()
     yield tmp_path
     name_table._CACHE.clear()
 
 
-def test_the_controller_reads_its_own_etc_hosts_with_nothing_mounted(all_three):
-    """The source that is always there. Natively it IS the platform host's
-    file, so a Controller on the metal needs none of the rest of this; in a
-    container it carries whatever extra_hosts: put there."""
+def test_natively_the_servers_hosts_file_is_just_etc_hosts(all_three, monkeypatch):
+    """On the metal there is no mount and no difference: /etc/hosts IS the
+    server's file, and none of the rest of this module applies."""
+    monkeypatch.setenv("SYSIBLE_IN_CONTAINER", "0")
+    name_table._CACHE.clear()
     (all_three / "local").write_text("192.168.155.135  ubuntu-lab\n")
+    assert name_table.server_hosts_path() == str(all_three / "local")
     assert name_table.lookup("ubuntu-lab") == ["192.168.155.135"]
+    assert name_table.server_hosts_is_live(), \
+        "there is no mount to go stale when the Controller runs natively"
+
+
+def test_in_a_container_the_containers_own_etc_hosts_is_not_offered(all_three):
+    """Docker writes it, and every name in it is wrong for this purpose: the
+    container id names this container, host.docker.internal names the machine
+    the Controller is RUNNING on -- enrolling that would point the Controller
+    at itself, with SSH listening -- and ip6-localnet names nothing at all.
+    They were being listed as hosts to manage."""
+    (all_three / "local").write_text(
+        "172.24.0.2  4f96d7437a52\n172.17.0.1  host.docker.internal\n")
+    name_table._CACHE.clear()
+    assert name_table.lookup("host.docker.internal") == []
+    assert name_table.lookup("4f96d7437a52") == []
+    listed = {r["name"] for r in name_table.entries()}
+    assert listed == set(), f"the container's own /etc/hosts is still listed: {listed}"
 
 
 def test_the_default_local_path_is_the_real_one(monkeypatch):
@@ -594,15 +644,17 @@ def test_the_default_local_path_is_the_real_one(monkeypatch):
 
 
 def test_the_sources_are_tried_in_one_declared_order(all_three):
-    """own, then the mounted copy, then the container's own file."""
+    """What the operator typed here, then the server's own hosts file. The
+    container's /etc/hosts is not a third source and must not become one."""
     for f, addr in (("local", "10.0.0.3"), ("mounted", "10.0.0.2"), ("own", "10.0.0.1")):
         (all_three / f).write_text(f"{addr}  box\n")
         name_table._CACHE.clear()
     assert name_table.where("box") == (["10.0.0.1"], "own")
     (all_three / "own").unlink(); name_table._CACHE.clear()
-    assert name_table.where("box") == (["10.0.0.2"], "host")
+    assert name_table.where("box") == (["10.0.0.2"], "server")
     (all_three / "mounted").unlink(); name_table._CACHE.clear()
-    assert name_table.where("box") == (["10.0.0.3"], "local")
+    assert name_table.where("box") == ([], None), \
+        "the container's own /etc/hosts answered, and it is not the server's"
 
 
 def test_every_source_appears_in_the_list_the_console_shows(all_three):
@@ -619,8 +671,9 @@ def test_the_list_shows_one_row_per_name_with_where_it_came_from(all_three):
     name_table.add_entry("ubuntu-lab", "192.168.155.135")
     rows = {r["name"]: r for r in name_table.entries()}
     assert rows["ubuntu-lab"]["source"] == "own" and rows["ubuntu-lab"]["editable"]
-    assert rows["db"]["source"] == "host" and not rows["db"]["editable"]
-    assert rows["sysible-controller"]["source"] == "local"
+    assert rows["db"]["source"] == "server" and not rows["db"]["editable"]
+    assert "sysible-controller" not in rows, \
+        "this Controller's own container name is not a host to manage"
 
 
 def test_a_name_in_two_files_is_one_row_that_says_what_it_covers(all_three):
@@ -630,7 +683,7 @@ def test_a_name_in_two_files_is_one_row_that_says_what_it_covers(all_three):
     name_table.add_entry("box", "10.0.0.1")
     rows = [r for r in name_table.entries() if r["name"] == "box"]
     assert len(rows) == 1 and rows[0]["address"] == "10.0.0.1"
-    assert rows[0]["shadows"] == ["The platform host's /etc/hosts"]
+    assert rows[0]["shadows"] == ["The server's /etc/hosts"]
 
 
 def test_adding_a_name_twice_replaces_it(all_three):

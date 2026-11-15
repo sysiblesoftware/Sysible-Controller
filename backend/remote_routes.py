@@ -1046,7 +1046,7 @@ def names_check(name: str = ""):
     labels = {
         "literal": "it is already an address",
         "own": "this Controller's own list",
-        "host": "the platform host's /etc/hosts",
+        "server": "the server's /etc/hosts",
         "host-dns": host_via or "the platform host's DNS",
         "dns": "the container's own resolver",
     }
@@ -1057,6 +1057,34 @@ def names_check(name: str = ""):
         "via_label": labels.get(via, ""),
         "reason": "" if addrs else name_table.diagnose(name),
         "sources": name_table.sources(),
+    }
+
+
+@router.get("/names/server-hosts", dependencies=[Depends(require_superuser)])
+def names_server_hosts():
+    """The server's /etc/hosts, verbatim, for the enrollment list to read.
+
+    The list an operator wants to enroll from is almost always the one the
+    server already keeps, and asking them to go and fetch it by hand -- from
+    a machine the Controller can read directly -- is asking them to do the
+    Controller's job.
+
+    Verbatim, comments included: this is text to pick hosts out of, and a
+    rebuilt copy would have dropped the comments that say what each block is
+    for. Nothing is enrolled and nothing is stored; the caller still has to
+    read it, pick, and confirm.
+    """
+    src = next((x for x in name_table.sources() if x["key"] == "server"), {})
+    return {
+        "text": name_table.read_server_hosts(),
+        "path": name_table.server_hosts_path(),
+        "present": bool(src.get("present")),
+        # A frozen mount reads perfectly and serves the file as it was when
+        # the container started, so "I pasted it and the name is still not
+        # here" needs this flag to be answerable at all.
+        "live": bool(src.get("live", True)),
+        "stale_note": src.get("stale_note", ""),
+        "in_container": bool(src.get("in_container")),
     }
 
 
@@ -1158,17 +1186,18 @@ def enroll_ssh(body: EnrollSSHRequest):
     if not resolved:
         raise HTTPException(
             status_code=400,
-            detail=(f"Could not resolve '{target}'. The Controller resolves "
-                    f"names with its own /etc/hosts and DNS \u2014 which, when it "
-                    f"runs in a container, are not this machine's. "
+            detail=(f"Could not resolve '{target}'. The Controller looks in its "
+                    f"own list, then the server's /etc/hosts, then asks the "
+                    f"server's DNS. "
                     # WHAT IT CAN ACTUALLY SEE, not just what it could not do.
-                    # Without this, "still cannot resolve" has three causes --
-                    # no mount, a mounted file that does not list the name, and
-                    # an empty list here -- that look identical from the
-                    # console and are fixed three different ways.
+                    # Without this, "still cannot resolve" has four causes --
+                    # no mount, a mount frozen at container-creation time, a
+                    # file that does not list the name, and DNS that does not
+                    # have it -- that look identical from the console and are
+                    # fixed four different ways.
                     f"{name_table.diagnose(target)} "
                     f"Either give the address, or add it to the Hosts list "
-                    f"beside this form \u2014 that works with nothing mounted "
+                    f"beside this form \u2014 that is read before anything else "
                     f"and takes effect at once."))
 
     # Refuse to enroll a machine that's already managed at this address (by an

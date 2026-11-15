@@ -113,32 +113,44 @@ services:
       # this mapping explicitly; it is a no-op where the name already resolves.
       - "host.docker.internal:host-gateway"
     volumes:
-      # The platform host's OWN /etc/hosts, read-only. Enrollment lets an
-      # operator type a host NAME and leave the address blank -- and a
-      # container's /etc/hosts is its own, so without this the names that
-      # machine resolves perfectly well are unknown in here. Read for lookups
-      # during enrollment and nothing else; the Controller never writes it.
+      # The SERVER's /etc, read-only -- the DIRECTORY, not the single files
+      # this used to mount. Enrollment lets an operator type a host NAME and
+      # leave the address blank, and a container's own /etc/hosts is Docker's
+      # (the container id, host.docker.internal, ip6 boilerplate), so the
+      # names the server resolves perfectly well are unknown in here without
+      # this. Read for lookups during enrollment and nothing else; the
+      # Controller never writes it.
       #
-      # A bind-mounted single FILE does not follow a rename, so an editor that
-      # replaces /etc/hosts rather than editing it in place leaves this showing
-      # the old contents until the container is recreated. The console's
-      # "Names the Controller knows" is the copy that does not have that
-      # problem, and it wins over this one.
-      - /etc/hosts:/host/etc/hosts:ro
-      # The host's RESOLVER CONFIG, so enrollment can resolve a name the way
-      # this machine does rather than the way a container does -- its DNS
-      # servers, its search domains. Read for lookups and nothing else.
+      # The directory is the whole point. A bind mount of a FILE is bound to
+      # that file's INODE, not its name -- so the moment somebody edits
+      # /etc/hosts with vim or sed -i, both of which write a new file and
+      # rename it over the old one, this container goes on reading the inode
+      # that is no longer /etc/hosts. Forever, and without any sign of it:
+      # the mount still reports present and still reads fine, it is just
+      # answering about a file that no longer exists. Mounting the directory
+      # resolves the name on every open, so an edit on the server shows up
+      # here immediately.
       #
-      # BOTH files, because on a systemd-resolved host -- Ubuntu, Debian, most
-      # of the fleet -- /etc/resolv.conf says `nameserver 127.0.0.53`, the stub
-      # listener. In here 127.0.0.53 is this container's loopback, where
-      # nothing answers. The real upstream servers are in the run file, and
-      # that is the one worth having; the other is the fallback for hosts
-      # without systemd-resolved. Missing files are tolerated: a bind mount of
-      # a path that does not exist makes Docker create a DIRECTORY, which the
-      # parser then reads as "no servers" rather than failing.
-      - /run/systemd/resolve/resolv.conf:/host/run/resolv.conf:ro
-      - /etc/resolv.conf:/host/etc/resolv.conf:ro
+      # It also brings /host/etc/resolv.conf, which is the fallback resolver
+      # config for hosts without systemd-resolved.
+      #
+      # Read-only, and the Controller runs as uid 10001 (see the Dockerfile),
+      # so /etc/shadow (0640 root:shadow) and the host keys stay unreadable.
+      - /etc:/host/etc:ro
+      # systemd-resolved's REAL upstream servers, so enrollment resolves a
+      # name the way this machine does -- its DNS servers, its search
+      # domains. On a systemd-resolved host (Ubuntu, Debian, most of the
+      # fleet) /etc/resolv.conf says `nameserver 127.0.0.53`, the stub
+      # listener, and in here 127.0.0.53 is this container's own loopback
+      # where nothing answers. The upstreams live here instead.
+      #
+      # The directory again, and for a sharper version of the same reason:
+      # resolved rewrites resolv.conf by rename on every network change, so a
+      # file mount freezes the server list at whatever it was when the
+      # container was created. Where there is no systemd-resolved, Docker
+      # creates an empty directory and the resolver falls through to
+      # /host/etc/resolv.conf.
+      - /run/systemd/resolve:/host/run/systemd-resolve:ro
       - sysible-data:/data   # DB, certs, API key, cookie secret, portal files
 
 volumes:

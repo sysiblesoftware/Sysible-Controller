@@ -200,6 +200,9 @@ export const api = {
   removeName: (name) =>
     req("/api/names/entry?name=" + encodeURIComponent(name), { method: "DELETE" }),
   checkName: (name) => req("/api/names/check?name=" + encodeURIComponent(name)),
+  // The server's own /etc/hosts, verbatim, so the enrollment list can offer
+  // the list the operator already keeps instead of asking for it again.
+  serverHosts: () => req("/api/names/server-hosts"),
   saveNames: (text) =>
     req("/api/names", { method: "PUT", body: { text }, timeout: 30000 }),
   environments: () => req("/api/environments"),

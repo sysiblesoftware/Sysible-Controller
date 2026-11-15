@@ -1077,6 +1077,18 @@ tr:hover td { background: var(--row-hover); }
 .enroll-split { display: grid; grid-template-columns: minmax(0, 760px) minmax(320px, 420px);
   gap: var(--sp-4); align-items: start; }
 .enroll-main { min-width: 0; }
+/* The two steps of enrolling, which used to be two separate panels. A numbered
+   rule rather than a nested fieldset: the panel already has a border, and a
+   border inside a border reads as two forms again. */
+.enroll-step { display: flex; align-items: center; gap: var(--sp-1);
+  margin: var(--sp-3) 0 var(--sp-1); padding-top: var(--sp-2);
+  border-top: 1px solid var(--border); font-size: var(--fs-sm);
+  font-weight: 600; letter-spacing: .02em; color: var(--text); }
+.enroll-step:first-of-type { margin-top: var(--sp-2); border-top: 0; padding-top: 0; }
+.enroll-step .step-n { display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: var(--r-pill); flex: 0 0 auto;
+  background: var(--accent); color: var(--on-accent);
+  font-size: var(--fs-xs); font-weight: 700; }
 .enroll-aside { min-width: 0; position: sticky; top: 12px; }
 @media (max-width: 1180px) {
   .enroll-split { grid-template-columns: minmax(0, 760px); }

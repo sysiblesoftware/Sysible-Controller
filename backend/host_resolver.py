@@ -55,11 +55,23 @@ def host_resolv_paths() -> list:
 
     systemd-resolved's upstream list before /etc/resolv.conf, because the
     latter is the stub pointer on exactly the hosts this is for.
+
+    DIRECTORY mounts first, single-FILE mounts after. systemd-resolved
+    rewrites resolv.conf by renaming a new file over the old one on every
+    network change, and a bind mount of a single file is bound to the inode,
+    not the name -- so a file mount freezes at whatever the servers were when
+    the container was created. The file paths stay in the list because a
+    Controller that has not been recreated since this changed still has them,
+    and a frozen list of servers still beats no list at all.
     """
     explicit = os.getenv("SYSIBLE_HOST_RESOLV")
     if explicit:
         return [p for p in explicit.split(":") if p]
-    return ["/host/run/resolv.conf", "/host/etc/resolv.conf"]
+    return [
+        "/host/run/systemd-resolve/resolv.conf",   # dir mount of /run/systemd/resolve
+        "/host/run/resolv.conf",                   # the older single-file mount
+        "/host/etc/resolv.conf",                   # dir mount of /etc, or a file mount
+    ]
 
 
 def parse_resolv(text: str) -> tuple:
@@ -120,6 +132,12 @@ def _usable(servers: list) -> tuple:
 
 def host_config() -> dict:
     """What the host's resolver is set up to do, as this container can see it."""
+    # A file whose every nameserver is loopback does not end the search. On a
+    # systemd-resolved host /etc/resolv.conf is the 127.0.0.53 stub, which in
+    # here means THIS container -- and the real upstreams are in a different
+    # file further down the list. Returning the stub because it was found
+    # first would be reporting the one answer that cannot work.
+    stub = None
     for path in host_resolv_paths():
         try:
             with open(path, encoding="utf-8", errors="replace") as fh:
@@ -130,8 +148,16 @@ def host_config() -> dict:
         if not servers:
             continue
         usable, skipped = _usable(servers)
-        return {"path": path, "servers": usable, "skipped": skipped,
-                "search": search[:MAX_SEARCH], "present": True}
+        found = {"path": path, "servers": usable, "skipped": skipped,
+                 "search": search[:MAX_SEARCH], "present": True}
+        if usable:
+            return found
+        # Keep the first one, so "only loopback servers" is still what gets
+        # reported when no file anywhere has anything better.
+        if stub is None:
+            stub = found
+    if stub is not None:
+        return stub
     return {"path": "", "servers": [], "skipped": [], "search": [], "present": False}
 
 

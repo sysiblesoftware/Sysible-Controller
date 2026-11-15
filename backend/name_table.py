@@ -54,13 +54,108 @@ def host_hosts_path() -> str:
 def local_hosts_path() -> str:
     """This process's own /etc/hosts.
 
-    Readable in every deployment, with nothing to mount and nothing to set up.
-    In a container it holds whatever `extra_hosts:` put there, plus anything
-    the operator added -- and NATIVELY it is the platform host's own file, so
-    a Controller installed on the metal reads exactly the list the question
-    was about without any of the rest of this.
+    NATIVELY this is the server's own file and there is nothing more to do.
+    In a CONTAINER it is Docker's: the container id pointing at its bridge
+    address, the bridge gateway as `host.docker.internal`, and the ip6-*
+    boilerplate. See server_hosts_path for why that is not offered.
     """
     return os.getenv("SYSIBLE_LOCAL_HOSTS_FILE", "/etc/hosts")
+
+
+def in_container() -> bool:
+    """Whether this Controller is running inside a container.
+
+    One definition, shared with the resolver, because the two have to agree:
+    the resolver skips loopback nameservers in a container for exactly the
+    reason this module skips the container's own /etc/hosts -- in here, those
+    name this container and not the machine the operator means.
+    """
+    from backend import host_resolver
+    return host_resolver.in_container()
+
+
+def server_hosts_path() -> str:
+    """The SERVER's /etc/hosts -- the machine the Controller runs on.
+
+    There is one hosts file worth showing an operator, and it is the server's.
+    Where it lives is the only thing that changes:
+
+      in a container   the read-only bind mount of the host's file. The
+                       container's OWN /etc/hosts is Docker's, and every name
+                       in it is wrong for this purpose: the container id names
+                       this container, `host.docker.internal` names the
+                       Controller's own host -- enrolling that would point the
+                       Controller at the machine it is running on, with SSH
+                       listening -- and ip6-localnet names nothing at all.
+
+      natively         /etc/hosts, which IS the server's file. No mount, no
+                       difference, and nothing to explain.
+    """
+    return host_hosts_path() if in_container() else local_hosts_path()
+
+
+# A real /etc holds at least one of these, and a single-file bind mount never
+# creates one. Their presence under /host/etc is the difference between "the
+# whole directory is mounted" and "one file is mounted", which is the
+# difference between an edit on the server arriving here and an edit on the
+# server never arriving here again.
+_WHOLE_ETC_MARKERS = ("os-release", "passwd", "hostname", "fstab", "group")
+
+
+def server_hosts_is_live() -> bool:
+    """Whether an edit to the server's /etc/hosts reaches this Controller.
+
+    Natively: always, there is no mount in the way.
+
+    In a container it depends entirely on HOW the file was mounted, and the
+    two look identical from in here until it has cost somebody an afternoon:
+
+      -v /etc:/host/etc:ro
+          A DIRECTORY. /host/etc/hosts is resolved through it on every open,
+          so whatever the server's file says right now is what we read.
+
+      -v /etc/hosts:/host/etc/hosts:ro
+          A single FILE, and a bind mount of a file is bound to its INODE,
+          not to its name. vim, sed -i, and every other editor that writes a
+          temporary file and renames it over the original give /etc/hosts a
+          new inode -- and this container goes on reading the old one, with
+          the content it had when the container was created, forever. The
+          mount still reports as present and still reads fine. It is simply
+          answering a question about a file that no longer exists.
+
+    This is reported rather than worked around because it CANNOT be worked
+    around from inside: the old inode is the only thing we were given.
+    """
+    if not in_container():
+        return True
+    parent = os.path.dirname(server_hosts_path()) or "/"
+    for marker in _WHOLE_ETC_MARKERS:
+        if os.path.exists(os.path.join(parent, marker)):
+            return True
+    return False
+
+
+def stale_mount_note() -> str:
+    """What to do about a single-file mount, or "" when there is nothing to say."""
+    if server_hosts_is_live():
+        return ""
+    return ("it is bind-mounted a file at a time, so an edit made with vim or "
+            "sed -i on the server will never reach this container \u2014 mount the "
+            "directory instead (/etc:/host/etc:ro) and recreate the Controller")
+
+
+def read_server_hosts() -> str:
+    """The server's /etc/hosts, verbatim, or "" when there is nothing to read.
+
+    Verbatim and not rebuilt from build(): this is the text an operator picks
+    hosts out of, and a rebuilt version would have silently dropped the
+    comments that say what each block of it is for.
+    """
+    try:
+        with open(server_hosts_path(), encoding="utf-8", errors="replace") as fh:
+            return fh.read(MAX_BYTES)
+    except OSError:
+        return ""
 
 
 def own_table_path() -> str:
@@ -142,8 +237,7 @@ def _table_for(path: str) -> dict:
 def _source_specs():
     return (
         ("own", own_table_path(), "This Controller's own list"),
-        ("host", host_hosts_path(), "The platform host's /etc/hosts"),
-        ("local", local_hosts_path(), "The Controller's own /etc/hosts"),
+        ("server", server_hosts_path(), "The server's /etc/hosts"),
     )
 
 
@@ -192,13 +286,22 @@ def sources() -> list:
     out = []
     for key, path, label in _source_specs():
         table = _table_for(path)
-        out.append({
+        row = {
             "key": key,
             "path": path,
             "label": label,
             "present": _stamp(path) is not None,
             "names": len(table),
-        })
+        }
+        if key == "server":
+            # Whether an edit on the server reaches us, and what to do when it
+            # does not. A present-but-frozen mount is the failure that reads
+            # like every other failure, so it is reported in its own field
+            # rather than left for someone to infer from a name count.
+            row["live"] = server_hosts_is_live()
+            row["stale_note"] = stale_mount_note()
+            row["in_container"] = in_container()
+        out.append(row)
     return out
 
 
@@ -246,7 +349,7 @@ def diagnose(name: str) -> str:
     manages to be accurate and useless at the same time.
     """
     srcs = {s["key"]: s for s in sources()}
-    host, own = srcs["host"], srcs["own"]
+    server, own = srcs["server"], srcs["own"]
 
     def _n(k):
         return f"{k} name" + ("" if k == 1 else "s")
@@ -256,11 +359,20 @@ def diagnose(name: str) -> str:
         bits.append("this Controller's own list holds " + _n(own["names"]))
     else:
         bits.append("this Controller's own list is empty")
-    if host["present"]:
-        bits.append("the platform host's /etc/hosts is mounted and lists "
-                    + _n(host["names"]))
+
+    if not server["present"]:
+        if server["in_container"]:
+            bits.append(f"nothing is mounted at {server['path']}")
+        else:
+            bits.append(f"there is no {server['path']}")
+    elif not server["live"]:
+        # The one case where a name count is actively misleading: the count is
+        # real, and it is the count from whenever this container was created.
+        bits.append("the server's /etc/hosts reads as " + _n(server["names"])
+                    + " here, but " + stale_mount_note())
     else:
-        bits.append(f"nothing is mounted at {host['path']}")
+        bits.append("the server's /etc/hosts lists " + _n(server["names"]))
+
     bits.append(host_dns_note())
     return (f"Right now {bits[0]}, {bits[1]}, and {bits[2]} \u2014 "
             f"nothing here names '{name}'.")

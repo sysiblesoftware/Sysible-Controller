@@ -10,8 +10,7 @@ import { confirmDialog } from "../confirmDialog.js";
 // Short names for the hosts-list "From" column; the full label is the title.
 const SRC_SHORT = {
   own: "this list",
-  host: "host /etc/hosts",
-  local: "container /etc/hosts",
+  server: "server /etc/hosts",
 };
 
 function fmtSeen(v) {
@@ -44,7 +43,9 @@ export default function HostEnrollment() {
   // Push enrollment: the Controller reaches OUT to the host. Everything the
   // backend needs is here — name, address, an account and its password, used
   // once and never stored.
-  const [push, setPush] = useState({ name: "", ip: "", username: "root", password: "", environment: "" });
+  // The "add one host" line. It writes into the SAME list the file and the
+  // server's /etc/hosts write into, so one host and forty take one code path.
+  const [push, setPush] = useState({ name: "", ip: "" });
   // Bulk enrollment from a hosts file. `rows` is every line the Controller read
   // back, skipped ones included — a 40-line file that yields 12 candidates has
   // to be able to say where the other 28 went.
@@ -54,6 +55,7 @@ export default function HostEnrollment() {
   const [bulkName, setBulkName] = useState({});   // line -> edited name
   const [bulkCreds, setBulkCreds] = useState({ username: "root", password: "", environment: "" });
   const [bulkProgress, setBulkProgress] = useState(null);
+  const [serverHosts, setServerHosts] = useState(null);
   // The names this Controller can turn into addresses by itself.
   const [namesText, setNamesText] = useState("");
   const [namesSaved, setNamesSaved] = useState("");   // what is stored, to spot edits
@@ -303,10 +305,69 @@ export default function HostEnrollment() {
   // candidate is posted back through the ordinary one-host route below, so a
   // bulk import gets the same duplicate-IP check, host limit and superuser gate
   // that typing one in by hand does.
-  async function previewHostsFile() {
+  // What the Enroll button will act on. At component scope because the button
+  // has to know how many there are to label itself, and a second copy of this
+  // filter living next to the button is how the label and the action drift.
+  // A mount frozen at container-creation time reads perfectly and serves the
+  // file as it was then, forever. Saying nothing is how "I added it to the
+  // hosts file and it is still not here" stays unanswerable.
+  const staleServerHosts = useMemo(() => {
+    const src = (namesSources || []).find((x) => x.key === "server");
+    return src && src.present ? (src.stale_note || "") : "";
+  }, [namesSources]);
+
+  const picked = useMemo(
+    () => (bulkRows || []).filter((r) => r.enrollable && bulkPick[r.line]),
+    [bulkRows, bulkPick]);
+
+  async function addToList() {
+    const name = push.name.trim(), addr = push.ip.trim();
+    if (!name && !addr) return;
+    // An /etc/hosts-style line when there is an address, the bare name when
+    // there is not, an address on its own when that is all there is -- the
+    // three shapes the list already understands, so typing one host and
+    // pasting a file end up in the same parser and the same preview.
+    const line = addr ? `${addr}  ${name}`.trim() : name;
+    const next = (bulkText.trim() ? bulkText.replace(/\s*$/, "\n") : "") + line + "\n";
+    setBulkText(next);
+    setPush({ name: "", ip: "" });
+    await previewHostsFile(next);
+  }
+
+  async function loadServerHosts() {
+    setErr(""); setMsg(""); setBusy("server-hosts");
+    try {
+      const d = await api.serverHosts();
+      setServerHosts(d);
+      if (!d.text || !d.text.trim()) {
+        setErr(d.present
+          ? `${d.path} is there but has nothing in it.`
+          : `The Controller cannot read ${d.path}.` +
+            (d.in_container
+              ? " Mount the server's /etc into the Controller " +
+                "(/etc:/host/etc:ro) and recreate it."
+              : ""));
+        return;
+      }
+      setBulkText(d.text);
+      await previewHostsFile(d.text);
+      // A mount frozen at container-creation time reads perfectly and serves
+      // yesterday's file, so saying nothing here is how "I added it and it is
+      // still not there" becomes unanswerable.
+      if (d.stale_note) setErr(`That is ${d.path}, but ${d.stale_note}.`);
+    } catch (e) {
+      setErr(e.message || "Could not read the server's hosts file.");
+    } finally { setBusy(""); }
+  }
+
+  async function previewHostsFile(text) {
+    // The text, not the state: addToList and "use the server's hosts file"
+    // have it in hand and setState has not landed yet. Reading the state here
+    // previewed the list as it was one host ago.
+    const body = text === undefined ? bulkText : text;
     setErr(""); setMsg(""); setBusy("bulk-read");
     try {
-      const d = await api.hostsFilePreview(bulkText);
+      const d = await api.hostsFilePreview(body);
       const rows = (d && d.rows) || [];
       setBulkRows(rows);
       const pick = {}, names = {};
@@ -318,7 +379,7 @@ export default function HostEnrollment() {
       });
       setBulkPick(pick); setBulkName(names);
       if (!rows.some((r) => r.enrollable)) {
-        setErr("Nothing in that file can be enrolled — see the reasons below.");
+        setErr("Nothing in that list can be enrolled — see the reasons beside each line.");
       }
     } catch (e) {
       setErr(e.message || "Could not read that file.");
@@ -327,7 +388,6 @@ export default function HostEnrollment() {
   }
 
   async function enrollPicked() {
-    const picked = (bulkRows || []).filter((r) => r.enrollable && bulkPick[r.line]);
     if (!picked.length) { setErr("Tick at least one host."); return; }
     if (!bulkCreds.password) { setErr("Enter the SSH password to use."); return; }
     if (!(await confirmDialog(
@@ -693,105 +753,76 @@ export default function HostEnrollment() {
       {tab === "enroll" && (
       <div className="enroll-split">
       <div className="enroll-main">
-        {/* PUSH enrollment, first: it is the only path that needs nothing on the
-            target beforehand. Everything below this asks the operator to already
-            have a shell on the machine they are enrolling — which is the thing
-            enrolment is supposed to give them. */}
+        {/* ONE way in, not two. This was a "from here" form and a "from a
+            hosts file" form side by side, which is the same job described
+            twice: both end at the same api.enrollSsh, both need the same SSH
+            account, and an operator with one host to add had to decide which
+            half of the page was for them. Now there is one list -- a typed
+            host is a one-line list -- and one set of credentials under it. */}
         <fieldset className="tool-group-box" style={{ marginTop: 0 }}>
-          <legend>Enroll a host from here</legend>
+          <legend>Enroll hosts</legend>
           <p className="faint" style={{ marginTop: 0 }}>
-            The Controller connects to the host over SSH, installs its own key, and enrolls the
-            agent. The password is used once to install that key and is never stored — every
-            later connection uses the key.
+            One host or forty, the same way. The Controller connects to each over SSH,
+            installs its own key and enrolls the agent. The password is used once per
+            host to install that key and is never stored — every later connection uses
+            the key.
           </p>
-          <form onSubmit={async (e) => {
-            e.preventDefault();
-            setErr(""); setMsg(""); setBusy("push");
-            try {
-              const r = await api.enrollSsh({
-                name: push.name.trim(), ip: push.ip.trim(),
-                username: push.username.trim(), password: push.password,
-                environment: push.environment,
-              });
-              setMsg(r?.detail || `${push.name.trim()} enrolled.`);
-              // Clear the password even on success: it has done its one job, and
-              // leaving it in a field is leaving a credential on screen.
-              setPush((p) => ({ ...p, name: "", ip: "", password: "" }));
-              load();
-            } catch (e2) {
-              setErr(e2.message || "Enrollment failed.");
-            } finally { setBusy(""); }
-          }}>
-            <div className="group-fields">
-              <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Host name</span>
-                <input value={push.name} required autoComplete="off" placeholder="web-01"
-                       onChange={(e) => setPush({ ...push, name: e.target.value })} /></label></div>
-              <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Address <span className="faint" style={{ fontWeight: 400 }}>(optional)</span></span>
-                <input value={push.ip} autoComplete="off"
-                       placeholder="blank = use the host name"
-                       onChange={(e) => setPush({ ...push, ip: e.target.value })} /></label></div>
-            </div>
-            <div className="group-fields">
-              <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>SSH user</span>
-                <input value={push.username} required autoComplete="off"
-                       onChange={(e) => setPush({ ...push, username: e.target.value })} /></label></div>
-              <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Password</span>
-                <input type="password" value={push.password} required autoComplete="new-password"
-                       onChange={(e) => setPush({ ...push, password: e.target.value })} /></label></div>
-            </div>
-            <div className="group-fields">
-              <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Environment</span>
-                <select value={push.environment}
-                        onChange={(e) => setPush({ ...push, environment: e.target.value })}>
-                  <option value="">(unassigned)</option>
-                  {envs.map((x) => <option key={x} value={x}>{x}</option>)}
-                </select></label></div>
-            </div>
-            <div className="row" style={{ marginTop: 10, alignItems: "center", gap: 10 }}>
-              <button className="btn" type="submit" disabled={busy === "push"}>
-                {busy === "push" ? "Enrolling…" : "Enroll host"}
-              </button>
-              <span className="faint" style={{ fontSize: 12 }}>
-                Leave the address blank when the name already resolves here. Needs SSH
-                reachable from the Controller, and an account that can write its own{" "}
-                <code>~/.ssh/authorized_keys</code>.
-              </span>
-            </div>
-          </form>
-        </fieldset>
 
-        {/* The same thing for a list. One at a time is the right shape for the
-            first host and the wrong one for the fortieth, and the list an
-            operator already has is almost always /etc/hosts. */}
-        <fieldset className="tool-group-box">
-          <legend>Enroll several from a hosts file</legend>
-          <p className="faint" style={{ marginTop: 0 }}>
-            One host per line. An <code>/etc/hosts</code>-style{" "}
-            <code>address name</code> pair, or <strong>just the name</strong> if it is
-            already in this host&rsquo;s <code>/etc/hosts</code> or DNS — the Controller
-            resolves it the same way the rest of the machine does. An address on its own
-            works too. Nothing is enrolled until you pick.
-          </p>
-          <div className="row" style={{ gap: 8, alignItems: "center", marginBottom: 8 }}>
+          <div className="enroll-step"><span className="step-n">1</span> Which hosts</div>
+
+          {/* Typing one host and pasting forty are the same thing: this writes
+              an /etc/hosts-style line into the list below, so there is one
+              parser, one preview and one code path to get wrong. */}
+          <div className="row" style={{ gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+            <label className="field" style={{ marginTop: 0, flex: "1 1 180px", minWidth: 150 }}>
+              <span>Host name</span>
+              <input value={push.name} autoComplete="off" placeholder="web-01"
+                     onChange={(e) => setPush({ ...push, name: e.target.value })}
+                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addToList(); } }} />
+            </label>
+            <label className="field" style={{ marginTop: 0, flex: "1 1 180px", minWidth: 150 }}>
+              <span>Address <span className="faint" style={{ fontWeight: 400 }}>(optional)</span></span>
+              <input value={push.ip} autoComplete="off" placeholder="blank = look the name up"
+                     onChange={(e) => setPush({ ...push, ip: e.target.value })}
+                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addToList(); } }} />
+            </label>
+            <button className="btn sm" type="button"
+                    disabled={!push.name.trim() && !push.ip.trim()}
+                    onClick={addToList}>Add</button>
+          </div>
+
+          <div className="row" style={{ gap: 8, alignItems: "center", marginTop: 10,
+                                        flexWrap: "wrap" }}>
+            {/* The list an operator wants is nearly always the one the server
+                already keeps, and the Controller can read it directly. Asking
+                them to go and fetch it by hand was asking them to do this. */}
+            <button className="btn sm ghost" type="button" disabled={busy === "server-hosts"}
+                    onClick={loadServerHosts}>
+              {busy === "server-hosts" ? "Reading…" : "Use the server's hosts file"}
+            </button>
+            <span className="faint" style={{ fontSize: 12 }}>or</span>
             <input type="file" accept=".txt,.hosts,text/plain,application/octet-stream"
                    onChange={async (e) => {
                      const f = e.target.files && e.target.files[0];
                      if (!f) return;
                      if (f.size > 1000000) { setErr("That file is larger than 1 MB."); return; }
-                     setBulkText(await f.text());
-                     setBulkRows(null);
+                     const text = await f.text();
+                     setBulkText(text);
                      // Let the same file be chosen again after an edit.
                      e.target.value = "";
+                     await previewHostsFile(text);
                    }} />
           </div>
-          <textarea value={bulkText} rows={7} spellCheck={false}
-                    placeholder={"# names alone, if they already resolve here\nweb-01\nweb-02\n\n# or an address and its names, as in /etc/hosts\n192.168.155.135  ubuntu-lab\n10.0.0.5         db.internal db"}
-                    style={{ width: "100%", fontFamily: "ui-monospace, monospace", fontSize: 12.5 }}
+
+          <textarea value={bulkText} rows={6} spellCheck={false}
+                    placeholder={"# one host per line — a name on its own if it already resolves\nweb-01\n\n# or an address and its names, as in /etc/hosts\n192.168.155.135  ubuntu-lab\n10.0.0.5         db.internal db"}
+                    style={{ width: "100%", marginTop: 8, fontFamily: "ui-monospace, monospace",
+                             fontSize: 12.5 }}
                     onChange={(e) => { setBulkText(e.target.value); setBulkRows(null); }} />
           <div className="row" style={{ marginTop: 8, gap: 10, alignItems: "center" }}>
             <button className="btn sm" type="button"
                     disabled={!bulkText.trim() || busy === "bulk-read"}
-                    onClick={previewHostsFile}>
+                    onClick={() => previewHostsFile()}>
               {busy === "bulk-read" ? "Reading…" : "Read the list"}
             </button>
             {bulkRows && (
@@ -800,81 +831,90 @@ export default function HostEnrollment() {
                 can be enrolled.
               </span>
             )}
+            {!bulkRows && bulkText.trim() && (
+              <span className="faint" style={{ fontSize: 12 }}>
+                Nothing is enrolled until you read the list and pick.
+              </span>
+            )}
           </div>
 
           {bulkRows && bulkRows.length > 0 && (
-            <>
-              <table className="table" style={{ marginTop: 12, fontSize: 13 }}>
-                <thead><tr>
-                  <th style={{ width: 28 }}></th>
-                  <th>Connect to</th><th>Enroll as</th><th>From the file</th>
-                </tr></thead>
-                <tbody>
-                  {bulkRows.map((r) => (
-                    <tr key={r.line} style={{ opacity: r.enrollable ? 1 : 0.55 }}>
-                      <td>
-                        {r.enrollable ? (
-                          <input type="checkbox" checked={!!bulkPick[r.line]}
-                                 onChange={(e) => setBulkPick({ ...bulkPick, [r.line]: e.target.checked })} />
-                        ) : null}
-                      </td>
-                      <td><code>{r.target || r.address || "—"}</code></td>
-                      <td>
-                        {r.enrollable ? (
-                          <input value={bulkName[r.line] ?? r.name} autoComplete="off"
-                                 style={{ width: "100%", maxWidth: 220 }}
-                                 onChange={(e) => setBulkName({ ...bulkName, [r.line]: e.target.value })} />
-                        ) : <span className="faint">—</span>}
-                      </td>
-                      <td className="faint" style={{ fontSize: 12 }}>
-                        {/* Why a line is not on offer, in place of the line
-                            itself. A filter that drops entries without saying
-                            which, or why, is the one an operator stops trusting. */}
-                        {r.skip_reason
-                          ? <span>{r.skip_reason}</span>
-                          : r.conflict
-                            ? <span style={{ color: "var(--amber, #e0a83b)" }}>{r.conflict}</span>
-                            : <span>{(r.names || []).join(" ") || "—"}</span>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-
-              <div className="group-fields" style={{ marginTop: 10 }}>
-                <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>SSH user</span>
-                  <input value={bulkCreds.username} autoComplete="off"
-                         onChange={(e) => setBulkCreds({ ...bulkCreds, username: e.target.value })} /></label></div>
-                <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Password</span>
-                  <input type="password" value={bulkCreds.password} autoComplete="new-password"
-                         onChange={(e) => setBulkCreds({ ...bulkCreds, password: e.target.value })} /></label></div>
-              </div>
-              <div className="group-fields">
-                <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Environment</span>
-                  <select value={bulkCreds.environment}
-                          onChange={(e) => setBulkCreds({ ...bulkCreds, environment: e.target.value })}>
-                    <option value="">(unassigned)</option>
-                    {envs.map((x) => <option key={x} value={x}>{x}</option>)}
-                  </select></label></div>
-              </div>
-              <div className="row" style={{ marginTop: 10, gap: 10, alignItems: "center" }}>
-                <button className="btn" type="button" disabled={busy === "bulk-enroll"}
-                        onClick={enrollPicked}>
-                  {busy === "bulk-enroll"
-                    ? "Enrolling…"
-                    : `Enroll ${bulkRows.filter((r) => r.enrollable && bulkPick[r.line]).length} host(s)`}
-                </button>
-                {bulkProgress && (
-                  <span className="faint" style={{ fontSize: 12 }}>
-                    {bulkProgress.done} of {bulkProgress.total} — {bulkProgress.current}…
-                  </span>
-                )}
-                <span className="faint" style={{ fontSize: 12 }}>
-                  One password for the batch, used once per host and never stored.
-                </span>
-              </div>
-            </>
+            <table className="table" style={{ marginTop: 12, fontSize: 13 }}>
+              <thead><tr>
+                <th style={{ width: 28 }}></th>
+                <th>Connect to</th><th>Enroll as</th><th>From the list</th>
+              </tr></thead>
+              <tbody>
+                {bulkRows.map((r) => (
+                  <tr key={r.line} style={{ opacity: r.enrollable ? 1 : 0.55 }}>
+                    <td>
+                      {r.enrollable ? (
+                        <input type="checkbox" checked={!!bulkPick[r.line]}
+                               onChange={(e) => setBulkPick({ ...bulkPick, [r.line]: e.target.checked })} />
+                      ) : null}
+                    </td>
+                    <td><code>{r.target || r.address || "—"}</code></td>
+                    <td>
+                      {r.enrollable ? (
+                        <input value={bulkName[r.line] ?? r.name} autoComplete="off"
+                               style={{ width: "100%", maxWidth: 220 }}
+                               onChange={(e) => setBulkName({ ...bulkName, [r.line]: e.target.value })} />
+                      ) : <span className="faint">—</span>}
+                    </td>
+                    <td className="faint" style={{ fontSize: 12 }}>
+                      {/* Why a line is not on offer, in place of the line
+                          itself. A filter that drops entries without saying
+                          which, or why, is the one an operator stops trusting. */}
+                      {r.skip_reason
+                        ? <span>{r.skip_reason}</span>
+                        : r.conflict
+                          ? <span className="warn-text">{r.conflict}</span>
+                          : <span>{(r.names || []).join(" ") || "—"}</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
+
+          <div className="enroll-step"><span className="step-n">2</span> How to connect</div>
+          <p className="faint" style={{ marginTop: 0, fontSize: 12 }}>
+            One account for the batch, used once per host and never stored. It needs SSH
+            reachable from the Controller and permission to write its own{" "}
+            <code>~/.ssh/authorized_keys</code>.
+          </p>
+          <div className="group-fields">
+            <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>SSH user</span>
+              <input value={bulkCreds.username} autoComplete="off"
+                     onChange={(e) => setBulkCreds({ ...bulkCreds, username: e.target.value })} /></label></div>
+            <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Password</span>
+              <input type="password" value={bulkCreds.password} autoComplete="new-password"
+                     onChange={(e) => setBulkCreds({ ...bulkCreds, password: e.target.value })} /></label></div>
+          </div>
+          <div className="group-fields">
+            <div className="group-field"><label className="field" style={{ marginTop: 0 }}><span>Environment</span>
+              <select value={bulkCreds.environment}
+                      onChange={(e) => setBulkCreds({ ...bulkCreds, environment: e.target.value })}>
+                <option value="">(unassigned)</option>
+                {envs.map((x) => <option key={x} value={x}>{x}</option>)}
+              </select></label></div>
+          </div>
+          <div className="row" style={{ marginTop: 10, gap: 10, alignItems: "center" }}>
+            <button className="btn" type="button"
+                    disabled={busy === "bulk-enroll" || !picked.length}
+                    onClick={enrollPicked}>
+              {busy === "bulk-enroll"
+                ? "Enrolling…"
+                : picked.length === 1
+                  ? `Enroll ${(bulkName[picked[0].line] || picked[0].name) || "1 host"}`
+                  : `Enroll ${picked.length} hosts`}
+            </button>
+            {bulkProgress && (
+              <span className="faint" style={{ fontSize: 12 }}>
+                {bulkProgress.done} of {bulkProgress.total} — {bulkProgress.current}…
+              </span>
+            )}
+          </div>
         </fieldset>
 
         <fieldset className="tool-group-box"><legend>Download the agent bundle</legend>
@@ -983,9 +1023,17 @@ export default function HostEnrollment() {
             <button className="btn sm" type="button"
                     disabled={!addName.trim() || !addAddr.trim() || busy === "add-name"}
                     onClick={addEntry}>
-              {busy === "add-name" ? "Adding…" : "Add"}
+              {busy === "add-name" ? "Adding…" : "Add name"}
             </button>
           </div>
+
+          {staleServerHosts && (
+            <p className="warn-text" style={{ fontSize: 12, marginTop: 0 }}>
+              The server&rsquo;s <code>/etc/hosts</code> is readable here, but{" "}
+              {staleServerHosts}. Until then, names added to it on the server will
+              not appear in this list — the ones added here will.
+            </p>
+          )}
 
           {namesEntries === null ? (
             <div className="faint" style={{ fontSize: 12 }}>Loading…</div>
@@ -1056,11 +1104,11 @@ export default function HostEnrollment() {
                     {src.label} (<code>{src.path}</code>) —{" "}
                     {src.present
                       ? `${src.names} name${src.names === 1 ? "" : "s"}`
-                      : (src.key === "host"
+                      : (src.key === "server" && src.in_container
                           ? (<>not mounted. Add{" "}
-                             <code>/etc/hosts:/host/etc/hosts:ro</code> to the
-                             controller service&rsquo;s <code>volumes:</code> and
-                             recreate it, and these names arrive by themselves.</>)
+                             <code>/etc:/host/etc:ro</code> to the controller
+                             service&rsquo;s <code>volumes:</code> and recreate it,
+                             and these names arrive by themselves.</>)
                           : "not present")}
                   </li>
                 ))}

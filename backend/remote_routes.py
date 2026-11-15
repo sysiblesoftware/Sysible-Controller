@@ -654,8 +654,12 @@ def _ip_owner(ip: str, exclude_name=None):
     # only thing stopping one box becoming two rows, missed exactly the case
     # that made it easy to create.
     mine = {ip} | _resolve_addrs(ip)
+    # Host names are case-insensitive, here as in DNS. Comparing exactly meant
+    # that re-enrolling "Ubuntu-Lab" over the record "ubuntu-lab" failed the
+    # exclusion and came back 409 against the host's own record.
+    skip = (exclude_name or "").strip().lower()
     for n, h in (load_hosts() or {}).items():
-        if n == exclude_name:
+        if skip and n.strip().lower() == skip:
             continue
         theirs = {_norm_ip(h.get("ip")), _norm_ip(h.get("addr"))} - {""}
         if theirs & mine:
@@ -664,7 +668,7 @@ def _ip_owner(ip: str, exclude_name=None):
         from backend.db import list_agents
         for a in list_agents():
             owner = a.get("hostname") or a.get("host_id")
-            if owner != exclude_name and _norm_ip(a.get("ip")) == ip:
+            if (owner or "").strip().lower() != skip and _norm_ip(a.get("ip")) == ip:
                 return owner
     except Exception:
         pass
@@ -1152,16 +1156,28 @@ def hosts_file_preview(body: dict = Body(...)):
         # The TARGET, not the address: a bare-name line has no address, and
         # checking "" against the inventory would match nothing and quietly
         # offer a machine that is already managed.
-        owner = _ip_owner(row.get("target") or row["address"])
+        #
+        # exclude_name, exactly as /enroll-ssh passes it. Without it this
+        # preview was STRICTER than the route it previews: a line naming a
+        # host that is already enrolled under that same name came back
+        # "already managed as 'ubuntu-lab'" and unticked, while posting it to
+        # /enroll-ssh would have been accepted. Re-enrolling a host under its
+        # own name is how an operator repairs one whose key is broken, and the
+        # screen was refusing it on the route's behalf -- so a file of hosts
+        # that were all already enrolled read "0 of 1 can be enrolled" with no
+        # way forward anywhere on the page.
+        owner = _ip_owner(row.get("target") or row["address"],
+                          exclude_name=row["name"])
         if owner:
             row["enrollable"] = False
             row["skip"] = "managed"
             row["skip_reason"] = f"already managed as '{owner}'"
         elif row["name"].lower() in existing_names:
-            # Same name, different address. Not refused -- the operator may well
-            # be re-pointing a host that moved -- but it must not be ticked by
-            # default and then silently overwrite the record.
-            row["conflict"] = f"a host called '{row['name']}' already exists"
+            # Offered, but never ticked by default: it replaces the key on a
+            # machine that is already being managed, which is a thing to mean
+            # rather than a thing to miss.
+            row["conflict"] = (f"'{row['name']}' is already enrolled \u2014 "
+                               f"enrolling again replaces its key")
 
     usable = [r for r in rows if r["enrollable"]]
     return {
@@ -1196,9 +1212,13 @@ def enroll_ssh(body: EnrollSSHRequest):
                     # have it -- that look identical from the console and are
                     # fixed four different ways.
                     f"{name_table.diagnose(target)} "
-                    f"Either give the address, or add it to the Hosts list "
-                    f"beside this form \u2014 that is read before anything else "
-                    f"and takes effect at once."))
+                    # The panel this names has to be the panel that exists.
+                    # It was 'Hosts list' in a column beside the form; it is a
+                    # fold under the form now, and the fold opens itself when
+                    # this message appears.
+                    f"Either give the address, or add it under 'Names this "
+                    f"Controller can resolve' below \u2014 that is read before "
+                    f"anything else and takes effect at once."))
 
     # Refuse to enroll a machine that's already managed at this address (by an
     # agent or another SSH host). Same physical box, two records = the

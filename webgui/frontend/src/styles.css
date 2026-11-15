@@ -1070,16 +1070,12 @@ tr:hover td { background: var(--row-hover); }
 .badge.ok { background: var(--green-bg, rgba(106,176,76,.16)); color: var(--green-bright); }
 .badge.warn { background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red); }
 
-/* Host Enrollment: the forms, and beside them the list of names they resolve
-   against. Two columns while there is room for the list to be READABLE next to
-   a 760px form; one below the other when there is not, because a 200px-wide
-   table of addresses is worse than a table further down the page. */
-.enroll-split { display: grid; grid-template-columns: minmax(0, 760px) minmax(320px, 420px);
-  gap: var(--sp-4); align-items: start; }
+/* Host Enrollment: ONE column. The list of names the forms resolve against
+   used to sit beside them as a second panel, where it restated what the form
+   already showed and offered a second box to paste a hosts file into. It is a
+   fold under the form now, opened by the failure it answers. */
+.enroll-one { max-width: 980px; }
 .enroll-main { min-width: 0; }
-/* The two steps of enrolling, which used to be two separate panels. A numbered
-   rule rather than a nested fieldset: the panel already has a border, and a
-   border inside a border reads as two forms again. */
 .enroll-step { display: flex; align-items: center; gap: var(--sp-1);
   margin: var(--sp-3) 0 var(--sp-1); padding-top: var(--sp-2);
   border-top: 1px solid var(--border); font-size: var(--fs-sm);
@@ -1089,11 +1085,6 @@ tr:hover td { background: var(--row-hover); }
   width: 20px; height: 20px; border-radius: var(--r-pill); flex: 0 0 auto;
   background: var(--accent); color: var(--on-accent);
   font-size: var(--fs-xs); font-weight: 700; }
-.enroll-aside { min-width: 0; position: sticky; top: 12px; }
-@media (max-width: 1180px) {
-  .enroll-split { grid-template-columns: minmax(0, 760px); }
-  .enroll-aside { position: static; max-width: 760px; }
-}
-/* A table that fits in the aside: the default row padding turns 12 names into
-   a scroll of its own. */
+/* A table that fits inside the fold: the default row padding turns 12 names
+   into a scroll of its own. */
 table.compact th, table.compact td { padding: 3px 6px; font-size: var(--fs-sm); }

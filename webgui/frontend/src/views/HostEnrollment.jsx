@@ -65,7 +65,10 @@ export default function HostEnrollment() {
   const [namesEntries, setNamesEntries] = useState(null);
   const [addName, setAddName] = useState("");
   const [addAddr, setAddAddr] = useState("");
-  const [namesOpen, setNamesOpen] = useState(false);
+  // The names fold. Shut by default -- it was a whole second panel restating
+  // the list above it -- and opened by the one thing it is for: a name that
+  // will not resolve, or a hosts file this container can no longer see.
+  const [namesFoldOpen, setNamesFoldOpen] = useState(false);
   const [portPort, setPortPort] = useState("");
   const [portalBusy, setPortalBusy] = useState("");
   const [tab, setTab] = useState("hosts");
@@ -315,6 +318,15 @@ export default function HostEnrollment() {
     const src = (namesSources || []).find((x) => x.key === "server");
     return src && src.present ? (src.stale_note || "") : "";
   }, [namesSources]);
+
+  // Open it on the failure it answers, rather than leaving an operator to
+  // find a closed fold while the error tells them to use what is inside it.
+  useEffect(() => {
+    if (staleServerHosts) setNamesFoldOpen(true);
+  }, [staleServerHosts]);
+  useEffect(() => {
+    if (/resolve/i.test(err || "")) setNamesFoldOpen(true);
+  }, [err]);
 
   const picked = useMemo(
     () => (bulkRows || []).filter((r) => r.enrollable && bulkPick[r.line]),
@@ -751,7 +763,7 @@ export default function HostEnrollment() {
 
       {/* ============================ TAB: ENROLL A HOST ============================ */}
       {tab === "enroll" && (
-      <div className="enroll-split">
+      <div className="enroll-one">
       <div className="enroll-main">
         {/* ONE way in, not two. This was a "from here" form and a "from a
             hosts file" form side by side, which is the same job described
@@ -917,97 +929,29 @@ export default function HostEnrollment() {
           </div>
         </fieldset>
 
-        <fieldset className="tool-group-box"><legend>Download the agent bundle</legend>
-          <p className="faint" style={{ marginTop: 0 }}>
-            The ready-to-run bundle, built on demand — each download bakes in a fresh, one-time enrollment token.
-            Copy it to the target host, unzip, and run <code>./run_agent.sh</code>.
-          </p>
-          <button className="btn sm" disabled={busy === "bundle"}
-            onClick={async () => {
-              // POST (not a plain <a href> GET): building the bundle mints a fresh
-              // one-time enrollment token, so it must NOT be triggerable by a
-              // top-level navigation that SameSite=Lax would authorize. Fetch as a
-              // blob and save it, mirroring Settings' "Regenerate agent bundle".
-              setErr(""); setMsg(""); setBusy("bundle");
-              try {
-                const res = await fetch(api.agentBundleUrl(), { method: "POST", credentials: "include" });
-                if (!res.ok) {
-                  let d = ""; try { d = (await res.json()).detail || ""; } catch { /* not JSON */ }
-                  throw new Error(d || `Bundle download failed (HTTP ${res.status}).`);
-                }
-                const blob = await res.blob();
-                const cd = res.headers.get("Content-Disposition") || "";
-                const m = /filename="?([^"]+)"?/.exec(cd);
-                const name = (m && m[1]) || "sysible-agent-bundle.zip";
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url; a.download = name; document.body.appendChild(a); a.click();
-                a.remove(); URL.revokeObjectURL(url);
-              } catch (e) { setErr(e.message); }
-              finally { setBusy(""); }
-            }}>
-            {busy === "bundle" ? "Building…" : "Download Agent Bundle"}
-          </button>
-        </fieldset>
-
-        <fieldset className="tool-group-box"><legend>Headless install (curl one-liner)</legend>
-          <p className="faint" style={{ marginTop: 0 }}>
-            For terminal-only hosts: downloads, unzips, and runs the installer in one shot, authenticating with the
-            portal login (curl -u). Replace <code>&lt;password&gt;</code> with the real portal password; <code>-k</code> skips
-            the self-signed-cert check; the install step needs sudo.
-          </p>
-          {curlIp && curlHostName && (
-            <label className="faint" style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-              <input type="checkbox" checked={curlUseIp} onChange={(e) => setCurlUseIp(e.target.checked)} />
-              Address the controller by IP ({curlIp}) instead of hostname ({curlHostName}) — use this when the
-              target host has no DNS for the hostname.
-            </label>
-          )}
-          <div className="cmd-preview" style={{ whiteSpace: "pre-wrap" }}>{curlCmd}</div>
-          <button className="btn sm ghost" style={{ marginTop: 8 }}
-                  onClick={() => navigator.clipboard?.writeText(curlCmd).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })}>
-            {copied ? "Copied ✓" : "Copy to Clipboard"}
-          </button>
-          <p className="faint" style={{ marginTop: 10 }}>
-            The curl download needs the Webserver Portal {portal.running
-              ? <>running (it is) with a login set.</>
-              : <>running — start it and set a login on the <button className="linklike" onClick={() => setTab("portal")}>Webserver Portal</button> tab.</>}
-          </p>
-        </fieldset>
-
-        <fieldset className="tool-group-box"><legend>Mass enrollment (Ansible ad-hoc)</legend>
-          <p className="faint" style={{ marginTop: 0 }}>
-            Enroll a whole inventory group at once — the headless install above, run across every host by Ansible.
-            Replace <code>&lt;group&gt;</code> and <code>&lt;inventory&gt;</code> with your target group and inventory
-            file, and <code>&lt;password&gt;</code> with the real portal password. <code>--become</code> handles privilege
-            escalation (so no <code>sudo</code> in the command); each host pulls its own fresh one-time enrollment token.
-          </p>
-          <div className="cmd-preview" style={{ whiteSpace: "pre-wrap" }}>{ansibleCmd}</div>
-          <button className="btn sm ghost" style={{ marginTop: 8 }}
-                  onClick={() => navigator.clipboard?.writeText(ansibleCmd).then(() => { setCopiedAnsible(true); setTimeout(() => setCopiedAnsible(false), 1500); })}>
-            {copiedAnsible ? "Copied ✓" : "Copy to Clipboard"}
-          </button>
-          <p className="faint" style={{ marginTop: 10 }}>
-            Needs Ansible on the control node with SSH reach to the group, plus the Webserver Portal {portal.running
-              ? <>running (it is) with a login set.</>
-              : <>running with a login set — configure it on the <button className="linklike" onClick={() => setTab("portal")}>Webserver Portal</button> tab.</>}
-            {" "}Add <code>-u</code>/<code>--ask-become-pass</code> or <code>-e</code> vars as your SSH access requires.
-          </p>
-        </fieldset>
-      </div>
-
-      {/* ---- the hosts list, beside the forms rather than below them ----
-          It is what the forms on the left are ABOUT: the left column turns a
-          name into a managed host, and this is the list of names it has to
-          work with. Below the fold it was a thing to be told about in an
-          error message; here it is a thing to look at while typing. */}
-      <aside className="enroll-aside">
+        {/* Folded away, not deleted. As a second panel beside the form it was
+            mostly a restatement of the one above it -- the same names, the
+            same addresses, a second box to paste a hosts file into -- competing
+            for attention with the thing an operator came here to do. What it
+            is actually FOR is the case where a name will not resolve, so it
+            opens by itself when that happens and stays shut otherwise. */}
         <fieldset className="tool-group-box">
-          <legend>Hosts list</legend>
-          <p className="faint" style={{ marginTop: 0, fontSize: 12 }}>
-            Every name this Controller can turn into an address. Leave a form&rsquo;s
-            Address blank and the name is looked up here. Nothing outside this
-            Controller is changed.
+          <legend>Names this Controller can resolve</legend>
+          <details open={namesFoldOpen}
+                   onToggle={(e) => setNamesFoldOpen(e.target.open)}>
+          {/* The count and nothing else: the legend above already says what
+              they are, and a summary that repeats it is the redundancy this
+              fold was made to remove. */}
+          <summary style={{ cursor: "pointer" }}>
+            {namesEntries === null
+              ? "Loading\u2026"
+              : `${namesEntries.length} name${namesEntries.length === 1 ? "" : "s"}`}
+            {staleServerHosts ? " \u2014 and a problem reading the server's file" : ""}
+          </summary>
+          <p className="faint" style={{ fontSize: 12 }}>
+            Leave a host&rsquo;s Address blank above and the name is looked up here,
+            then in the server&rsquo;s <code>/etc/hosts</code>, then through the
+            server&rsquo;s DNS. Nothing outside this Controller is changed.
           </p>
 
           <div className="row" style={{ gap: 6, alignItems: "center", marginBottom: 8,
@@ -1092,11 +1036,11 @@ export default function HostEnrollment() {
             </div>
           )}
 
-          <details style={{ marginTop: 12 }} open={namesOpen}
-                   onToggle={(e) => setNamesOpen(e.target.open)}>
-            <summary className="faint" style={{ fontSize: 12, cursor: "pointer" }}>
-              Paste a hosts file, and where these names come from
-            </summary>
+          <div style={{ marginTop: 12, borderTop: "1px solid var(--border)",
+                        paddingTop: 10 }}>
+            <p className="faint" style={{ fontSize: 12, marginTop: 0 }}>
+              Where these names come from, and a hosts file to paste over them:
+            </p>
             {namesSources && namesSources.length > 0 && (
               <ul className="faint" style={{ fontSize: 11.5, marginTop: 8, paddingLeft: 18 }}>
                 {namesSources.map((src) => (
@@ -1137,9 +1081,88 @@ export default function HostEnrollment() {
               link-local and multicast addresses are dropped: they never name a
               machine to manage.
             </p>
+          </div>
           </details>
         </fieldset>
-      </aside>
+        <fieldset className="tool-group-box"><legend>Download the agent bundle</legend>
+          <p className="faint" style={{ marginTop: 0 }}>
+            The ready-to-run bundle, built on demand — each download bakes in a fresh, one-time enrollment token.
+            Copy it to the target host, unzip, and run <code>./run_agent.sh</code>.
+          </p>
+          <button className="btn sm" disabled={busy === "bundle"}
+            onClick={async () => {
+              // POST (not a plain <a href> GET): building the bundle mints a fresh
+              // one-time enrollment token, so it must NOT be triggerable by a
+              // top-level navigation that SameSite=Lax would authorize. Fetch as a
+              // blob and save it, mirroring Settings' "Regenerate agent bundle".
+              setErr(""); setMsg(""); setBusy("bundle");
+              try {
+                const res = await fetch(api.agentBundleUrl(), { method: "POST", credentials: "include" });
+                if (!res.ok) {
+                  let d = ""; try { d = (await res.json()).detail || ""; } catch { /* not JSON */ }
+                  throw new Error(d || `Bundle download failed (HTTP ${res.status}).`);
+                }
+                const blob = await res.blob();
+                const cd = res.headers.get("Content-Disposition") || "";
+                const m = /filename="?([^"]+)"?/.exec(cd);
+                const name = (m && m[1]) || "sysible-agent-bundle.zip";
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url; a.download = name; document.body.appendChild(a); a.click();
+                a.remove(); URL.revokeObjectURL(url);
+              } catch (e) { setErr(e.message); }
+              finally { setBusy(""); }
+            }}>
+            {busy === "bundle" ? "Building…" : "Download Agent Bundle"}
+          </button>
+        </fieldset>
+
+        <fieldset className="tool-group-box"><legend>Headless install (curl one-liner)</legend>
+          <p className="faint" style={{ marginTop: 0 }}>
+            For terminal-only hosts: downloads, unzips, and runs the installer in one shot, authenticating with the
+            portal login (curl -u). Replace <code>&lt;password&gt;</code> with the real portal password; <code>-k</code> skips
+            the self-signed-cert check; the install step needs sudo.
+          </p>
+          {curlIp && curlHostName && (
+            <label className="faint" style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+              <input type="checkbox" checked={curlUseIp} onChange={(e) => setCurlUseIp(e.target.checked)} />
+              Address the controller by IP ({curlIp}) instead of hostname ({curlHostName}) — use this when the
+              target host has no DNS for the hostname.
+            </label>
+          )}
+          <div className="cmd-preview" style={{ whiteSpace: "pre-wrap" }}>{curlCmd}</div>
+          <button className="btn sm ghost" style={{ marginTop: 8 }}
+                  onClick={() => navigator.clipboard?.writeText(curlCmd).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })}>
+            {copied ? "Copied ✓" : "Copy to Clipboard"}
+          </button>
+          <p className="faint" style={{ marginTop: 10 }}>
+            The curl download needs the Webserver Portal {portal.running
+              ? <>running (it is) with a login set.</>
+              : <>running — start it and set a login on the <button className="linklike" onClick={() => setTab("portal")}>Webserver Portal</button> tab.</>}
+          </p>
+        </fieldset>
+
+        <fieldset className="tool-group-box"><legend>Mass enrollment (Ansible ad-hoc)</legend>
+          <p className="faint" style={{ marginTop: 0 }}>
+            Enroll a whole inventory group at once — the headless install above, run across every host by Ansible.
+            Replace <code>&lt;group&gt;</code> and <code>&lt;inventory&gt;</code> with your target group and inventory
+            file, and <code>&lt;password&gt;</code> with the real portal password. <code>--become</code> handles privilege
+            escalation (so no <code>sudo</code> in the command); each host pulls its own fresh one-time enrollment token.
+          </p>
+          <div className="cmd-preview" style={{ whiteSpace: "pre-wrap" }}>{ansibleCmd}</div>
+          <button className="btn sm ghost" style={{ marginTop: 8 }}
+                  onClick={() => navigator.clipboard?.writeText(ansibleCmd).then(() => { setCopiedAnsible(true); setTimeout(() => setCopiedAnsible(false), 1500); })}>
+            {copiedAnsible ? "Copied ✓" : "Copy to Clipboard"}
+          </button>
+          <p className="faint" style={{ marginTop: 10 }}>
+            Needs Ansible on the control node with SSH reach to the group, plus the Webserver Portal {portal.running
+              ? <>running (it is) with a login set.</>
+              : <>running with a login set — configure it on the <button className="linklike" onClick={() => setTab("portal")}>Webserver Portal</button> tab.</>}
+            {" "}Add <code>-u</code>/<code>--ask-become-pass</code> or <code>-e</code> vars as your SSH access requires.
+          </p>
+        </fieldset>
+      </div>
+
       </div>
       )}
 

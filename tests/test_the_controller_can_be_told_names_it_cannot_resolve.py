@@ -292,15 +292,26 @@ def test_the_failure_no_longer_gives_advice_that_cannot_be_taken(tmp_path, monke
     assert "own list" in msg, "the Controller's own list is not accounted for"
     assert "/etc/hosts" in msg, "the server's hosts file is not accounted for"
     assert "DNS" in msg or "resolver" in msg, "DNS is not accounted for"
-    assert "Hosts list" in msg, "the message does not say where the fix is"
+    import re as _re
+    assert _re.search(r"'([^']+)'", msg), "the message does not say where the fix is"
 
 
-def test_the_console_offers_the_list_the_message_points_at():
-    """The panel the failure names has to be the panel that exists. It was
-    renamed to "Hosts list" and the message still pointed at the old one."""
+def test_the_console_offers_the_list_the_message_points_at(tmp_path, monkeypatch):
+    """The panel the failure names has to be the panel that EXISTS.
+
+    Asserted by reading the name out of the message the backend really
+    produces and looking for it on the screen, rather than by writing the
+    name down twice. It has been wrong twice already -- once when the panel
+    was renamed to "Hosts list", once when it stopped being a panel at all --
+    and both times the message went on confidently directing people to
+    something that was not there."""
     import re
+    msg = _unresolvable_message(tmp_path, monkeypatch)
+    named = re.findall(r"'([^']+)'", msg)
     legends = set(re.findall(r"<legend>([^<]+)</legend>", VIEW))
-    assert "Hosts list" in legends, f"no such panel; legends are {sorted(legends)}"
+    assert legends & set(named), (
+        f"the message points at {named}, and the console's panels are "
+        f"{sorted(legends)}")
     assert "api.addName" in VIEW and "api.saveNames" in VIEW
 
 
@@ -774,19 +785,26 @@ def test_the_entry_routes_check_that_anyone_is_signed_in(method, path):
 
 
 # ---- where it sits on the page ---------------------------------------------
-def test_the_hosts_list_is_beside_the_forms_not_below_them():
-    css = (REPO / "webgui" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
-    assert "enroll-aside" in VIEW, "the hosts list is no longer in its own column"
-    assert "<aside" in VIEW
+def test_the_hosts_list_is_a_fold_under_the_form_not_a_second_panel():
+    """It used to be a column of its own beside the form. Reported: "the hosts
+    list is kind of redundant" -- and it was, once the form itself could read
+    the server's hosts file: the same names, the same addresses, and a second
+    box to paste a hosts file into, competing with the thing an operator came
+    to the page to do.
+
+    Folded, not deleted. What it is FOR is the one case where a name will not
+    resolve, so it opens itself when that happens."""
     import re
-    m = re.search(r"\.enroll-split\s*\{([^}]*)\}", css)
-    assert m, "the two-column layout is gone from the stylesheet"
-    cols = re.search(r"grid-template-columns:([^;]*);", m.group(1))
-    assert cols and cols.group(1).count("minmax") == 2, \
-        f"enroll-split is not two columns: {m.group(1)}"
-    # ...and ONE column when there is not room for the list to be readable.
-    assert re.search(r"@media[^{]*max-width:\s*11\d\dpx[^{]*\{[^}]*\.enroll-split", css, re.S), \
-        "nothing collapses the split on a narrow window"
+    css = (REPO / "webgui" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    assert "enroll-aside" not in VIEW and "<aside" not in VIEW, \
+        "the hosts list is a second column again"
+    assert "enroll-split" not in css, "the two-column layout is back in the stylesheet"
+    assert "namesFoldOpen" in VIEW, "the fold has no open/shut state"
+    # The point of folding it: it opens on the failure it answers, rather than
+    # leaving someone to find a shut fold while the error names what is inside.
+    opener = re.search(r"useEffect\(\(\) => \{\s*if \(/resolve/i\.test\(err[^}]*\}", VIEW)
+    assert opener, "nothing opens the fold when a name fails to resolve"
+    assert "setNamesFoldOpen(true)" in opener.group(0)
 
 
 def test_an_unexpected_names_response_does_not_blank_the_console():

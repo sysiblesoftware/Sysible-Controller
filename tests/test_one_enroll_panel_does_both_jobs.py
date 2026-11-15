@@ -121,7 +121,11 @@ import HostEnrollment from "./views/HostEnrollment.jsx";
 createRoot(document.getElementById("root")).render(<HostEnrollment />);
 """
 
-_HTML = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+# data-skin="brand", exactly as webgui/frontend/index.html sets it. Without it
+# every token falls back to the dead "Slate" defaults and the page renders in a
+# palette the product has not shipped for months -- which makes any visual
+# check of this harness a check of the wrong thing.
+_HTML = ('<!doctype html><html lang="en" data-skin="brand"><head><meta charset="utf-8">'
          '<title>Host Enrollment</title><link rel="stylesheet" href="./styles.css">'
          '</head><body><div id="root"></div><script src="./app.js"></script></body></html>')
 

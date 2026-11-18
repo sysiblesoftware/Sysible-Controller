@@ -178,6 +178,12 @@ export const api = {
   authMode: () => req("/api/auth-mode"),
   edition: () => req("/api/edition"),
   hosts: () => req("/api/hosts"),
+  // Remove ONE SSH host record, leaving any agent for the same box alone. The
+  // route has existed and been superuser-gated since pure-SSH hosts became
+  // deletable; nothing on any screen called it, so the only way to clear one
+  // stale record was DELETE /api/ssh-hosts, which forgets every one of them.
+  forgetHost: (name) =>
+    req("/api/ssh-host/" + encodeURIComponent(name), { method: "DELETE" }),
   // PUSH enrollment: the Controller SSHes OUT to the host and installs its own
   // key, using the password once and never storing it. The backend route and the
   // BFF have existed all along (/remote/enroll-ssh, /api/enroll-ssh) — there was

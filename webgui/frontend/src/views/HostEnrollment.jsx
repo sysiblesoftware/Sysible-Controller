@@ -25,6 +25,15 @@ const fmtTime = fmtSeen;
 
 export default function HostEnrollment() {
   const [agents, setAgents] = useState([]);
+  // Hosts the Controller knows ONLY over SSH -- a host record with no agent
+  // reporting. This screen listed /agents alone, so a host enrolled over SSH
+  // whose agent never checked in was absent from the one page whose job is to
+  // list enrolled hosts, while the topology drew it, Flashback counted it and
+  // the enroll form refused it as "already managed". Three screens, three
+  // answers. /api/hosts is the Controller's OWN merge of both lists and marks
+  // each entry's kind, so this takes the "ssh" ones rather than re-deriving a
+  // match here and getting a fourth answer.
+  const [sshOnly, setSshOnly] = useState([]);
   const [envs, setEnvs] = useState([]);
   const [sudoDefaults, setSudoDefaults] = useState({});
   const [edition, setEdition] = useState({});
@@ -97,6 +106,10 @@ export default function HostEnrollment() {
     // post-action refresh shouldn't paint a red error over an action that
     // actually succeeded (you'd see the green "done" and a scary timeout at once).
     api.agents().then((d) => setAgents(d.agents || [])).catch((e) => { if (surfaceErr) setErr(e.message); });
+    api.hosts()
+      .then((d) => setSshOnly((Array.isArray(d?.hosts) ? d.hosts : [])
+                              .filter((h) => h && h.kind === "ssh")))
+      .catch(() => {});
     api.environments().then((d) => setEnvs(d.environments || [])).catch(() => {});
     api.envSudoDefaults().then((d) => setSudoDefaults(d || {})).catch(() => {});
     api.edition().then(setEdition).catch(() => {});
@@ -219,11 +232,30 @@ export default function HostEnrollment() {
   }
   const fname = (f) => (typeof f === "string" ? f : (f.name || f.filename || ""));
 
+  // Every host this Controller considers enrolled, from both of its lists.
+  // Agents first, so a host that has both keeps the agent row it has always
+  // had; /api/hosts has already collapsed those duplicates and calls them
+  // "merged", so nothing here is listed twice.
+  const rows = useMemo(() => [
+    ...agents,
+    ...sshOnly.map((h) => ({
+      ssh_only: true,
+      // Prefixed, so it can never collide with a real host_id and can never be
+      // posted to an agent route by accident.
+      host_id: "ssh:" + (h.id || h.label),
+      ssh_name: h.label || h.id,
+      hostname: h.label || h.id,
+      address: h.address || "",
+      environment: h.environment || "",
+      online: null,
+    })),
+  ], [agents, sshOnly]);
+
   const groups = useMemo(() => {
     const m = {};
-    for (const a of agents) (m[a.environment || "Unassigned"] ||= []).push(a);
+    for (const a of rows) (m[a.environment || "Unassigned"] ||= []).push(a);
     return Object.entries(m).sort(([a], [b]) => a.localeCompare(b));
-  }, [agents]);
+  }, [rows]);
 
   const idOf = (a) => a.host_id || a.id;
   const toggle = (id) => setChecked((c) => c.includes(id) ? c.filter((x) => x !== id) : [...c, id]);
@@ -507,6 +539,17 @@ export default function HostEnrollment() {
     }, `Revoked ${ids.length} host(s).`, `Revoking ${ids.length} host(s)…`);
   }
 
+  async function forgetSshHost(a, e) {
+    e.preventDefault(); e.stopPropagation();
+    const name = a.ssh_name;
+    if (!(await confirmDialog(
+      `Forget ${name}?\n\nThis removes the Controller's SSH record for it. ` +
+      `Nothing on the host itself is touched, and no agent is disenrolled — ` +
+      `this is the record that was making the host count as managed.`))) return;
+    await run(async () => { await api.forgetHost(name); },
+              `Forgot the SSH record for ${name}.`, "forget-" + name);
+  }
+
   async function revokeHost(a, e) {
     if (e) { e.preventDefault(); e.stopPropagation(); }
     const name = a.hostname || a.host_id;
@@ -616,11 +659,15 @@ export default function HostEnrollment() {
             <button className="btn ghost sm" onClick={load}>Refresh</button>
           </div>
           <div style={{ flex: 1, overflowY: "auto" }}>
-            {agents.length === 0 && <div className="faint" style={{ padding: 8 }}>No hosts enrolled yet — use the “Enroll a Host” tab.</div>}
+            {rows.length === 0 && <div className="faint" style={{ padding: 8 }}>No hosts enrolled yet — use the “Enroll a Host” tab.</div>}
             {groups.map(([env, list]) => {
               const open = !collapsed[env];
-              const groupIds = list.map((a) => idOf(a));
-              const allInGroup = groupIds.every((id) => checked.includes(id));
+              // Only agent rows. The bulk actions below all post to agent
+              // routes, so ticking an SSH-only row would send "ssh:web-01" to
+              // an endpoint that takes a host_id.
+              const groupIds = list.filter((a) => !a.ssh_only).map((a) => idOf(a));
+              const allInGroup = groupIds.length > 0
+                && groupIds.every((id) => checked.includes(id));
               return (
                 <div className="env-group" key={env}>
                   <div className="env-head" onClick={() => setCollapsed((c) => ({ ...c, [env]: open }))}>
@@ -641,28 +688,41 @@ export default function HostEnrollment() {
                   </div>
                   {open && list.map((a) => (
                     <label className="host-row he-host" key={idOf(a)}>
-                      <input type="checkbox" checked={checked.includes(idOf(a))} onChange={() => toggle(idOf(a))} />
-                      <span className={"dot " + (a.online === false ? "bad" : a.online === true ? "ok" : "")}
-                            title={a.online === false ? "Offline" : a.online === true ? "Online" : ""} />
+                      {a.ssh_only
+                        // No checkbox: every bulk action below is an agent
+                        // route. A spacer, so the rows still line up.
+                        ? <span style={{ width: 13, flex: "0 0 13px" }} />
+                        : <input type="checkbox" checked={checked.includes(idOf(a))} onChange={() => toggle(idOf(a))} />}
+                      <span className={"dot " + (a.ssh_only ? "warn" : a.online === false ? "bad" : a.online === true ? "ok" : "")}
+                            title={a.ssh_only ? "Enrolled over SSH; no agent has reported"
+                                   : a.online === false ? "Offline" : a.online === true ? "Online" : ""} />
                       <span className="he-host-body">
-                        <span className="he-host-name">{a.hostname || a.host_id}
-                          {a.is_controller && <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "var(--accent, #3d7dd8)", color: "#fff" }} title="This host is the Sysible controller itself">controller</span>}
-                          {a.requires_sudo_password && <span className="badge" style={{ marginLeft: 6, fontSize: 10 }}>pw-sudo</span>}
-                          {a.revoked && <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "var(--red, #e05656)", color: "#fff" }} title="Agent secret revoked — re-enroll to restore">revoked</span>}
-                          {!a.revoked && a.integrity_quarantined && <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "var(--amber, #e0a93c)", color: "#1a2744" }} title={(a.integrity_detail || []).join("\n") || "Integrity mismatch — dispatch paused"}>⚠ quarantined</span>}
+                        <span className="he-host-name">{a.hostname || a.host_id}{" "}
+                          {a.is_controller && <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "var(--accent, #3d7dd8)", color: "#fff" }} title="This host is the Sysible controller itself">controller</span>}{" "}
+                          {a.requires_sudo_password && <span className="badge" style={{ marginLeft: 6, fontSize: 10 }}>pw-sudo</span>}{" "}
+                          {a.revoked && <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "var(--red, #e05656)", color: "#fff" }} title="Agent secret revoked — re-enroll to restore">revoked</span>}{" "}
+                          {a.ssh_only && <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "var(--amber, #e0a83b)", color: "#1a2744" }}
+                                               title="The Controller has an SSH record for this host, but no agent has ever reported from it. Everything that needs the agent — health, terminals, updates, config backup — is unavailable until one does.">no agent</span>}
+                          {!a.revoked && !a.ssh_only && a.integrity_quarantined && <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "var(--amber, #e0a93c)", color: "#1a2744" }} title={(a.integrity_detail || []).join("\n") || "Integrity mismatch — dispatch paused"}>⚠ quarantined</span>}
                         </span>
                         <span className="he-host-meta">{a.address || a.ip || "—"}
-                          {a.last_seen != null ? ` · seen ${fmtSeen(a.last_seen)}` : ""}</span>
+                          {a.ssh_only
+                            ? " · SSH only — no agent has reported"
+                            : a.last_seen != null ? ` · seen ${fmtSeen(a.last_seen)}` : ""}</span>
                       </span>
                       <span className="he-host-actions" style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
                         {a.revoked &&
-                          <button className="btn ghost sm" title="Un-revoke in place, keeping the existing secret — the still-installed agent resumes immediately (no re-enroll)" onClick={(e) => restoreHost(a, e)}>Restore</button>}
+                          <button className="btn ghost sm" title="Un-revoke in place, keeping the existing secret — the still-installed agent resumes immediately (no re-enroll)" onClick={(e) => restoreHost(a, e)}>Restore</button>}{" "}
                         {!a.revoked && a.integrity_quarantined &&
                           <button className="btn ghost sm" title="Rebaseline: clear the quarantine and resume dispatch (use after a legitimate change)" onClick={(e) => resumeHost(a, e)}>Resume</button>}
-                        {!a.revoked &&
+                        {!a.revoked && !a.ssh_only &&
                           <button className="btn ghost sm" title="Mint a single-use token bound to THIS host to re-enroll it after a reinstall that wiped its agent secret (a plain token can't re-bind an existing host)" onClick={(e) => reissueHost(a, e)}>Reissue</button>}
-                        {!a.revoked &&
+                        {!a.revoked && !a.ssh_only &&
                           <button className="btn outline-danger sm" title="Hard lock-out: revoke this agent's secret until re-enrolled" onClick={(e) => revokeHost(a, e)}>Revoke</button>}
+                        {a.ssh_only &&
+                          <button className="btn outline-danger sm"
+                                  title="Remove this Controller's SSH record for the host. Nothing on the host is touched, and nothing else is removed — this is the one record that was making the host count as managed."
+                                  onClick={(e) => forgetSshHost(a, e)}>Forget</button>}
                       </span>
                     </label>
                   ))}

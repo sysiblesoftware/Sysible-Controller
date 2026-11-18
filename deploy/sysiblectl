@@ -1044,6 +1044,125 @@ _slop_upstream_status() {
   done
 }
 
+# WHERE OTHER MACHINES REACH THIS ONE.
+#
+# Every health check in here is against 127.0.0.1. That is the right probe for
+# "is the service up" and the wrong one for the only question an operator has
+# after moving the box to a different network, or plugging it into a different
+# one: what do I type into a browser? A status page that is entirely green on
+# loopback is exactly what a machine nothing can reach also prints -- which is
+# how "health: OK" and "I can't reach SLOP" end up true at the same time.
+#
+# Addresses, not advice: the box knows what it is reachable at, and reading it
+# out beats an operator guessing from a bookmark that worked last week.
+_addresses_status() {
+  _hdr "Reached from another machine at"
+  local port; port="$(_p_port slop)"
+  local shown=0 ifn addr
+
+  # "I could not look" and "there is nothing to find" are different answers,
+  # and reporting the first as the second would send an operator to check a
+  # network adapter that is working perfectly.
+  if ! command -v ip >/dev/null 2>&1; then
+    _warn "  cannot tell: this machine has no 'ip' command (install iproute2)."
+    _warn "    Meanwhile: 'hostname -I' prints the same addresses."
+    return 0
+  fi
+
+  # Skip loopback and skip this host's OWN private bridges. docker0 and virbr0
+  # have addresses, and printing 172.17.0.1 as somewhere to point a browser
+  # sends people down a hole: nothing outside this machine can route to it.
+  while read -r ifn addr; do
+    [[ -z "$addr" ]] && continue
+    case "$ifn" in docker*|br-*|veth*|virbr*|lo) continue ;; esac
+    shown=1
+    if [[ "$port" == "443" ]]; then
+      printf '  https://%s/   (on %s)\n' "$addr" "$ifn"
+    else
+      printf '  https://%s:%s/   (on %s)\n' "$addr" "$port" "$ifn"
+    fi
+  done < <(ip -4 -o addr show scope global 2>/dev/null \
+           | awk '{split($4,a,"/"); print $2" "a[1]}')
+
+  if [[ $shown -eq 0 ]]; then
+    _err "  nothing. This machine has no address on any network."
+    _warn "    Its adapter is down or has no lease: check 'ip -4 addr' and the VM's"
+    _warn "    network setting. Until it has one, only this console can reach SLOP."
+    return 0
+  fi
+  _warn "  The certificate is self-signed, so a browser will warn once before letting you in."
+
+  # Listening on every interface, or only on loopback? The difference is a
+  # console that works perfectly in here and from nowhere else, with every
+  # check above still green.
+  if command -v ss >/dev/null 2>&1; then
+    local binds
+    binds="$(ss -H -ltn 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" {print $4}')"
+    if [[ -z "$binds" ]]; then
+      _err "  ...but nothing is listening on port $port, so none of those answer."
+      _warn "    fix: $(basename "$0") slop start"
+    elif ! grep -qE '^(0\.0\.0\.0|\*|\[::\]):' <<< "$binds"; then
+      _err "  ...but port $port is bound to $(tr '\n' ' ' <<< "$binds")only."
+      _warn "    Published that way it answers on this machine and no other. Check the"
+      _warn "    ports: lines in the SLOP compose file for a 127.0.0.1 prefix."
+    else
+      _ok "  port $port is open on every interface"
+    fi
+  fi
+}
+
+# TWO DEPLOYMENTS ON ONE HOST, FIGHTING OVER THREE NAMES.
+#
+# The installer can leave a box with both layouts: the standalone app checkouts
+# AND the platform's integrated stack, which use the same container names.
+# Whichever came up first owns `sysible-controller`, and the other one's `up`
+# dies with
+#
+#   Conflict. The container name "/sysible-controller" is already in use
+#
+# -- a daemon error that names neither deployment and suggests nothing.
+#
+# The quiet version is worse, and is what this check is really for. Nothing
+# fails: the Controller that is running belongs to the standalone project, so
+# every change shipped into the platform's apps/ is built into an image that
+# can never start, `status` is green on both, and the fix an operator just
+# installed is nowhere on their screen. That one cost days.
+#
+# Told apart by compose's own label rather than by guessing at project names
+# from directories, which COMPOSE_PROJECT_NAME is free to override.
+_split_deployment_status() {
+  local gw slopproj app cname proj split=""
+  gw="$(_p_container slop)"
+  docker inspect "$gw" >/dev/null 2>&1 || return 0          # no platform here
+  slopproj="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' \
+              "$gw" 2>/dev/null || true)"
+  [[ -z "$slopproj" ]] && return 0                          # not compose-managed
+
+  for app in controller slep connect; do
+    cname="$(_p_container "$app")"
+    docker inspect "$cname" >/dev/null 2>&1 || continue
+    proj="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' \
+            "$cname" 2>/dev/null || true)"
+    [[ -z "$proj" || "$proj" == "$slopproj" ]] && continue
+    split="$split $app"
+  done
+  [[ -z "$split" ]] && return 0
+
+  _hdr "Two deployments on one host"
+  _err " These are running from their OWN checkouts, not from the platform:$split"
+  _warn "   The platform's copies of them cannot start while these hold the names,"
+  _warn "   so anything installed into the platform is built and never run — with"
+  _warn "   every check on this page still green."
+  # The same advice either way: only the path differs. Removing the container
+  # that holds the name is NOT the fix -- the volumes are per-project too, so
+  # that is "delete your enrolled hosts" in two words.
+  local tool="tools/migrate-to-integrated" slopdir
+  slopdir="$(_find_slop_dir 2>/dev/null)" && tool="$slopdir/tools/migrate-to-integrated"
+  _warn "   fix, data and all: sudo $tool --dry-run"
+  _warn "   then the same without --dry-run. It copies each app's volume into the"
+  _warn "   platform's BEFORE anything starts, and --rollback puts it back."
+}
+
 p_status() {
   local p="$1"
   _hdr "$(_p_pretty "$p")"
@@ -1052,7 +1171,8 @@ p_status() {
   else docker ps -a --filter "name=^/$(_p_container "$p")$" --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null | tail -n +1; fi
   _warn_half_recreated "$p" || true
   _health "$p" || true
-  [[ "$p" == "slop" ]] && { _slop_upstream_status; _flashback_status; }
+  [[ "$p" == "slop" ]] && { _slop_upstream_status; _flashback_status; \
+                           _split_deployment_status; _addresses_status; }
   return 0
 }
 
@@ -1085,7 +1205,21 @@ _flashback_status() {
   _hdr "Sysible Flashback (config backup)"
 
   local up; up="$(docker inspect -f '{{.State.Status}}' "$fbc" 2>/dev/null || echo unknown)"
-  printf '  container: %s\n' "$up"
+  if [[ "$up" == "running" ]]; then
+    _ok "  container: running"
+  else
+    # NAME THE CAUSE HERE. The reachability probe below used to run anyway,
+    # fail the only way it can against a container that is not listening, and
+    # report "controller -> Flashback: UNREACHABLE (URLError) -- backups cannot
+    # be delivered" -- a true sentence about the network, printed four lines
+    # under "container: exited", that sends an operator looking for a routing
+    # problem they do not have.
+    _err "  container: $up — Flashback is not running, so nothing can reach it."
+    local exitc; exitc="$(docker inspect -f '{{.State.ExitCode}}' "$fbc" 2>/dev/null || true)"
+    [[ -n "$exitc" && "$exitc" != "0" ]] && \
+      _warn "    it exited $exitc; its last words: $(basename "$0") slop logs"
+    _warn "    fix: $(basename "$0") slop start"
+  fi
 
   # Both halves of the token. Flashback FAILS CLOSED without one, so an unset
   # token means every snapshot is refused — silently, from the console's side.
@@ -1119,7 +1253,10 @@ _flashback_status() {
 
   # Does the Controller ACTUALLY reach it? The wiring can be perfect and the URL
   # still point at the container's own loopback instead of the host.
-  if [[ -n "$ctok" && -n "$curl_url" ]] && docker inspect "$ctlc" >/dev/null 2>&1; then
+  # Only when there is something to reach. Probing a stopped container tells
+  # you it is stopped, in a vocabulary that makes it sound like it is not.
+  if [[ "$up" == "running" && -n "$ctok" && -n "$curl_url" ]] \
+     && docker inspect "$ctlc" >/dev/null 2>&1; then
     local code
     # The URL is PASSED IN, not re-read from the container's environment.
     # $curl_url was already resolved under either spelling; reading

@@ -50,10 +50,23 @@ def test_the_model_still_refuses_an_address_it_could_not_safely_use():
         EnrollSSHRequest(name="web-01", ip="-oProxyCommand=touch /tmp/x", password="x")
 
 
-def test_the_form_no_longer_marks_the_address_required():
+def test_the_address_is_optional_and_the_console_says_so():
+    """A name the Controller can already resolve needs no address. That used
+    to be an "(optional)" label on a field of its own; the field is gone --
+    there is one list, which takes a bare name or an address and a name -- so
+    what has to carry it now is the list's own example."""
+    import re
     assert 'value={push.ip} required' not in VIEW, \
         "the address field is still required in the console"
-    assert "(optional)" in VIEW, "nothing tells the operator it can be left out"
+    m = re.search(r"value=\{bulkText\}(.*?)/>", VIEW, re.S)
+    assert m, "the enroll list is gone or no longer in the expected shape"
+    ph = re.search(r'placeholder=\{"((?:[^"\\]|\\.)*)"\}', m.group(1), re.S)
+    assert ph, "the list offers no example at all"
+    example = ph.group(1).encode().decode("unicode_escape")
+    assert re.search(r"(?m)^[a-z][\w.-]*\s*$", example), \
+        f"no bare-name line, so nothing shows an address can be left out: {example}"
+    assert "resolve" in example, \
+        f"the example never says WHEN a name is enough on its own: {example}"
 
 
 # ---- resolution ------------------------------------------------------------

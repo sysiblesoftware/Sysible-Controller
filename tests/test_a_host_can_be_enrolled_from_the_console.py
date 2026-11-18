@@ -113,9 +113,29 @@ class TestTheConsoleCanActuallyReachIt:
         assert "Which hosts" in VIEW and "How to connect" in VIEW, \
             "the one panel no longer says which hosts, then how to connect"
 
-    def test_there_is_somewhere_to_type_an_address(self):
-        """The literal complaint."""
-        assert "push.ip" in VIEW and "push.name" in VIEW
+    def test_there_is_somewhere_to_give_an_address(self):
+        """The literal complaint that started this screen: a host whose name
+        the Controller cannot resolve needs an address typed somewhere.
+
+        That used to be a field of its own. It is a line in the list now --
+        `192.168.155.135  ubuntu-lab`, exactly as /etc/hosts spells it -- so
+        what is asserted is that the list SAYS so. An input whose format
+        nobody can see is an input nobody can use, and removing the labelled
+        field without showing the format would be the worse half of this
+        change on its own."""
+        # The ENROLL list's own placeholder, not "/etc/hosts appears
+        # somewhere in the file" -- it appears in half the comments, so that
+        # assertion passed with the example gone.
+        m = re.search(r"value=\{bulkText\}(.*?)/>", VIEW, re.S)
+        assert m, "the enroll list is gone or no longer in the expected shape"
+        ph = re.search(r'placeholder=\{"(.*?)"\}', m.group(1), re.S)
+        assert ph, f"the list offers no example of what to type: {m.group(1)[:200]}"
+        example = ph.group(1)
+        assert "/etc/hosts" in example, example
+        assert re.search(r"\d+\.\d+\.\d+\.\d+", example), \
+            f"no address-and-name example to copy: {example}"
+        assert "push.name" not in VIEW and "push.ip" not in VIEW, \
+            "the separate Host name / Address pair is back"
 
     def test_the_password_field_is_masked(self):
         m = re.search(r'value=\{bulkCreds\.password\}[^/]*', VIEW, re.S)

@@ -276,3 +276,79 @@ def test_ssh_only_hosts_are_not_called_no_hosts(tmp_path_factory):
                         [MERGED_HOSTS[2]]))
     assert "No hosts enrolled yet" not in out["body"], out["body"][:300]
     assert any("ubuntu-lab" in r["name"] for r in out["rows"]), out["rows"]
+
+
+# ---- disenroll has to undo what enroll did ---------------------------------
+#
+# Reported: "I manually enrolled ubuntu then disenrolled it. When I go back
+# it's still stuck in the controller db or something?" -- and the enroll
+# screen answered "already managed as 'ubuntu'" for the same address.
+#
+# Enrolling over SSH writes TWO records: the SSH host record, under the name
+# the operator typed, and the agent. Disenroll removed one. The controller's
+# own cleanup forgets an SSH record only when the agent's hostname AND ip both
+# match it, which is right for the auto-created shadow it was written for and
+# never matches a record named by hand -- a box enrolled as "ubuntu" whose
+# agent calls itself "ubuntu-lab" misses on the hostname every time.
+
+DISENROLL_AGENTS = [
+    {"host_id": "h-ubu", "hostname": "ubuntu-lab", "ip": "192.168.155.135",
+     "environment": "", "online": True},
+]
+DISENROLL_HOSTS = [
+    {"kind": "agent", "id": "h-ubu", "label": "ubuntu-lab",
+     "address": "192.168.155.135", "environment": "", "has_agent": True},
+    # The operator's own SSH record, under the name THEY typed, at the same
+    # address. A different name, so hostname-matching cannot find it.
+    {"kind": "ssh", "id": "ubuntu", "label": "ubuntu",
+     "address": "192.168.155.135", "environment": "", "has_agent": False},
+    # A different machine, which must not be touched.
+    {"kind": "ssh", "id": "other-box", "label": "other-box",
+     "address": "10.0.0.77", "environment": "", "has_agent": False},
+]
+
+_DISENROLL_STUB = _STUB_API.replace(
+    "  forgetHost: (n) =>",
+    "  removeHost: (id) => { calls.push([\"removeHost\", id]); return Promise.resolve({}); },\n"
+    "  forgetHost: (n) =>")
+
+
+@pytest.fixture(scope="module")
+def disenrolled(tmp_path_factory):
+    tmp = tmp_path_factory.mktemp("disenroll")
+    global _STUB_API
+    keep, _STUB_API = _STUB_API, _DISENROLL_STUB
+    try:
+        page = _build(tmp, DISENROLL_AGENTS, DISENROLL_HOSTS)
+    finally:
+        _STUB_API = keep
+
+    def act(pg):
+        pg.locator(".he-host input[type=checkbox]").first.check()
+        pg.get_by_role("button", name="Disenroll Host(s)").click()
+
+    return _drive(page, after=act)
+
+
+def test_disenrolling_removes_the_agent(disenrolled):
+    assert ["removeHost", "h-ubu"] in disenrolled["calls"], disenrolled["calls"]
+
+
+def test_disenrolling_also_forgets_the_ssh_record_at_that_address(disenrolled):
+    """The record that was blocking re-enrollment. Matched on ADDRESS against
+    the Controller's merged list -- not on the agent's idea of its own name,
+    which is the match that could never succeed here."""
+    assert ["forget", "ubuntu"] in disenrolled["calls"], disenrolled["calls"]
+
+
+def test_a_different_machine_is_left_alone(disenrolled):
+    forgotten = [c[1] for c in disenrolled["calls"] if c[0] == "forget"]
+    assert "other-box" not in forgotten, forgotten
+
+
+def test_the_confirm_says_the_ssh_record_goes_too(disenrolled):
+    """Removing a connection record an operator did not ask about, without
+    saying so, is the mirror of the bug."""
+    assert disenrolled["confirms"], "it disenrolled without asking"
+    msg = disenrolled["confirms"][0]
+    assert "ubuntu" in msg and "enrolled again" in msg, msg

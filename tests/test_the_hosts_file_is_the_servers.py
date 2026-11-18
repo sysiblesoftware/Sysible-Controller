@@ -281,12 +281,12 @@ def test_the_console_warns_when_the_mount_is_frozen():
 
 
 def test_the_preview_is_given_the_text_not_left_to_read_state():
-    """React state is not set by the time the caller returns. addToList and
-    "use the server's hosts file" both have the new text in hand, and a
-    preview that read bulkText instead would have shown the list as it was one
-    host ago -- which looks exactly like Add not working."""
+    """React state is not set by the time the caller returns. "Use the
+    server's hosts file" has the new text in hand, and a preview that read
+    bulkText instead would have shown the list as it was one edit ago -- which
+    looks exactly like the button doing nothing."""
     import re
-    for fn in ("addToList", "loadServerHosts"):
+    for fn in ("loadServerHosts",):
         m = re.search(r"async function " + fn + r"\(\)[\s\S]*?\n  \}", VIEW)
         assert m, f"{fn} is gone or no longer in the expected shape"
         calls = re.findall(r"previewHostsFile\(([^)]*)\)", m.group(0))

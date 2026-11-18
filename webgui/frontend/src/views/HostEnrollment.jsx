@@ -52,9 +52,6 @@ export default function HostEnrollment() {
   // Push enrollment: the Controller reaches OUT to the host. Everything the
   // backend needs is here — name, address, an account and its password, used
   // once and never stored.
-  // The "add one host" line. It writes into the SAME list the file and the
-  // server's /etc/hosts write into, so one host and forty take one code path.
-  const [push, setPush] = useState({ name: "", ip: "" });
   // Bulk enrollment from a hosts file. `rows` is every line the Controller read
   // back, skipped ones included — a 40-line file that yields 12 candidates has
   // to be able to say where the other 28 went.
@@ -364,20 +361,6 @@ export default function HostEnrollment() {
     () => (bulkRows || []).filter((r) => r.enrollable && bulkPick[r.line]),
     [bulkRows, bulkPick]);
 
-  async function addToList() {
-    const name = push.name.trim(), addr = push.ip.trim();
-    if (!name && !addr) return;
-    // An /etc/hosts-style line when there is an address, the bare name when
-    // there is not, an address on its own when that is all there is -- the
-    // three shapes the list already understands, so typing one host and
-    // pasting a file end up in the same parser and the same preview.
-    const line = addr ? `${addr}  ${name}`.trim() : name;
-    const next = (bulkText.trim() ? bulkText.replace(/\s*$/, "\n") : "") + line + "\n";
-    setBulkText(next);
-    setPush({ name: "", ip: "" });
-    await previewHostsFile(next);
-  }
-
   async function loadServerHosts() {
     setErr(""); setMsg(""); setBusy("server-hosts");
     try {
@@ -405,9 +388,9 @@ export default function HostEnrollment() {
   }
 
   async function previewHostsFile(text) {
-    // The text, not the state: addToList and "use the server's hosts file"
-    // have it in hand and setState has not landed yet. Reading the state here
-    // previewed the list as it was one host ago.
+    // The text, not the state: "use the server's hosts file" and the file
+    // picker have it in hand and setState has not landed yet. Reading the
+    // state here previewed the list as it was one edit ago.
     const body = text === undefined ? bulkText : text;
     setErr(""); setMsg(""); setBusy("bulk-read");
     try {
@@ -481,10 +464,33 @@ export default function HostEnrollment() {
 
   async function disenrollChecked() {
     if (checked.length === 0) { setErr("Check one or more hosts first."); return; }
-    if (!(await confirmDialog(`Disenroll ${checked.length} host(s)? This removes them from the controller. Each agent keeps running on its host until you stop/uninstall it there (run disenroll_agent.sh on the host), and can re-enroll unless you Force Delete (which purges its enrollment token).\n\nNote: a graceful disenroll waits for each host's agent to tear itself down — for OFFLINE hosts use Force Delete instead, it's immediate.`))) return;
+    // The SSH record and the agent are two records, and "Disenroll" removed
+    // one of them. The controller's own cleanup only forgets an SSH record
+    // whose hostname AND ip both match the agent -- which is right for the
+    // auto-created shadow it was written for, and never matches the record an
+    // operator's own SSH enrollment created under a name they chose. So a host
+    // enrolled as "ubuntu" and disenrolled came back as "already managed as
+    // 'ubuntu'" at the same address, with the blocking record on no screen and
+    // no way to remove just that one.
+    //
+    // Matched on ADDRESS, against the Controller's own merged host list, which
+    // has already decided what counts as one machine -- there is no new idea of
+    // host identity here. Done from the console rather than widening the
+    // agent-triggered deletion: this runs because an operator ticked a row and
+    // confirmed, so none of it rests on what an agent says it is called.
+    const addrsOf = (r) => [r.address, r.ip].filter(Boolean).map(String);
+    const goneAddrs = new Set(
+      rows.filter((r) => checked.includes(idOf(r))).flatMap(addrsOf));
+    const strays = sshOnly.filter((h) => addrsOf(h).some((a) => goneAddrs.has(a)));
+    if (!(await confirmDialog(`Disenroll ${checked.length} host(s)? This removes them from the controller. Each agent keeps running on its host until you stop/uninstall it there (run disenroll_agent.sh on the host), and can re-enroll unless you Force Delete (which purges its enrollment token).${strays.length ? `\n\nThe SSH connection record${strays.length === 1 ? "" : "s"} for the same address (${strays.map((h) => h.label || h.id).join(", ")}) ${strays.length === 1 ? "is" : "are"} removed too, so the host can be enrolled again.` : ""}\n\nNote: a graceful disenroll waits for each host's agent to tear itself down — for OFFLINE hosts use Force Delete instead, it's immediate.`))) return;
     const ids = [...checked];
     await run(async () => {
       const failures = await bulkOp(ids, (id) => api.removeHost(id));
+      // 404 is the ordinary answer here: the controller's own cleanup got to
+      // it first. Only a real failure is worth a word.
+      for (const h of strays) {
+        try { await api.forgetHost(h.label || h.id); } catch { /* already gone */ }
+      }
       setChecked([]);
       summarize(ids, failures, "Disenrolled");
     }, `Disenrolled ${ids.length} host(s).`, `Disenrolling ${ids.length} host(s)…`);
@@ -834,7 +840,7 @@ export default function HostEnrollment() {
         <fieldset className="tool-group-box" style={{ marginTop: 0 }}>
           <legend>Enroll hosts</legend>
           <p className="faint" style={{ marginTop: 0 }}>
-            One host or forty, the same way. The Controller connects to each over SSH,
+            One host per line, one host or forty. The Controller connects to each over SSH,
             installs its own key and enrolls the agent. The password is used once per
             host to install that key and is never stored — every later connection uses
             the key.
@@ -842,27 +848,15 @@ export default function HostEnrollment() {
 
           <div className="enroll-step"><span className="step-n">1</span> Which hosts</div>
 
-          {/* Typing one host and pasting forty are the same thing: this writes
-              an /etc/hosts-style line into the list below, so there is one
-              parser, one preview and one code path to get wrong. */}
-          <div className="row" style={{ gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
-            <label className="field" style={{ marginTop: 0, flex: "1 1 180px", minWidth: 150 }}>
-              <span>Host name</span>
-              <input value={push.name} autoComplete="off" placeholder="web-01"
-                     onChange={(e) => setPush({ ...push, name: e.target.value })}
-                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addToList(); } }} />
-            </label>
-            <label className="field" style={{ marginTop: 0, flex: "1 1 180px", minWidth: 150 }}>
-              <span>Address <span className="faint" style={{ fontWeight: 400 }}>(optional)</span></span>
-              <input value={push.ip} autoComplete="off" placeholder="blank = look the name up"
-                     onChange={(e) => setPush({ ...push, ip: e.target.value })}
-                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addToList(); } }} />
-            </label>
-            <button className="btn sm" type="button"
-                    disabled={!push.name.trim() && !push.ip.trim()}
-                    onClick={addToList}>Add</button>
-          </div>
-
+          {/* ONE input. There was a Host name + Address pair with an Add
+              button sitting on top of a box that takes exactly "address name"
+              lines -- two ways to say the same thing, one of which only wrote
+              into the other. Reported as what it was: "what is the point of
+              the hostname field when you're putting a list with the IP and
+              hostname?". The box below takes one line or forty, and the name
+              each host is enrolled under is editable per row in the table once
+              the list is read, which is a better place for it than a field
+              that applies to whichever host you happen to be typing. */}
           <div className="row" style={{ gap: 8, alignItems: "center", marginTop: 10,
                                         flexWrap: "wrap" }}>
             {/* The list an operator wants is nearly always the one the server
@@ -887,7 +881,7 @@ export default function HostEnrollment() {
           </div>
 
           <textarea value={bulkText} rows={6} spellCheck={false}
-                    placeholder={"# one host per line — a name on its own if it already resolves\nweb-01\n\n# or an address and its names, as in /etc/hosts\n192.168.155.135  ubuntu-lab\n10.0.0.5         db.internal db"}
+                    placeholder={"web-01\n\n# a name on its own, if this machine can already resolve it.\n# Otherwise an address and its names, as in /etc/hosts:\n192.168.155.135  ubuntu-lab\n10.0.0.5         db.internal db\n\n# An address on its own works too."}
                     style={{ width: "100%", marginTop: 8, fontFamily: "ui-monospace, monospace",
                              fontSize: 12.5 }}
                     onChange={(e) => { setBulkText(e.target.value); setBulkRows(null); }} />

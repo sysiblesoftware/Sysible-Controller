@@ -589,7 +589,17 @@ def test_the_bulk_placeholder_is_a_file_the_parser_would_accept():
     bad = [r for r in rows if not r["enrollable"]]
     assert not bad, f"the example contains lines the parser rejects: {bad}"
     assert rows, "the example parses to nothing at all"
-    assert text.lstrip().startswith("#"), "the explaining line is not a comment"
+    # EVERY line is either something the parser accepts or a comment. It used
+    # to be "the first line is a comment", which was a fact about the shape
+    # the example happened to have rather than about it being copyable -- and
+    # it failed the moment the example led with the simplest case instead of
+    # with prose about it.
+    for line in text.splitlines():
+        body = line.split("#", 1)[0].strip()
+        if not body:
+            continue
+        assert hosts_file.parse(body), \
+            f"a line of the example is not something the parser accepts: {line!r}"
 
 
 def test_the_check_result_uses_classes_the_stylesheet_actually_defines():

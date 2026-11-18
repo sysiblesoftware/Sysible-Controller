@@ -181,22 +181,28 @@ def one_host(page_dir):
 
         out["panels"] = pg.locator("legend").all_text_contents()
         out["passwords_before"] = pg.locator("input[type=password]").count()
+        out["host_name_fields"] = pg.locator(".enroll-main").get_by_label(
+            "Host name").count()
+        # Scoped to the Enroll hosts panel. The names fold below it has a
+        # textarea too -- for replacing the Controller's name lookup table,
+        # which is a different job and is shut by default.
+        out["textareas"] = pg.locator(
+            ".enroll-main fieldset").first.locator("textarea").count()
 
         main = pg.locator(".enroll-main")
-        main.get_by_label("Host name").fill("ubuntu-lab")
-        main.get_by_label("Address", exact=False).first.fill("192.168.155.135")
-        main.get_by_role("button", name="Add", exact=True).click()
+        # ONE host, typed where forty would be pasted. There is no second place
+        # to type it any more: a Host name + Address pair sitting on top of a
+        # box that takes "address name" lines was two ways to say one thing.
+        main.locator("fieldset").first.locator("textarea").fill(
+            "192.168.155.135  ubuntu-lab")
+        main.get_by_role("button", name="Read the list").click()
         pg.wait_for_timeout(400)
 
         out["rows"] = _rows(pg)
-        out["textarea"] = pg.locator("textarea").first.input_value()
-        out["name_field_after_add"] = main.get_by_label("Host name").input_value()
+        out["textarea"] = main.locator(
+            "fieldset").first.locator("textarea").input_value()
         out["enroll_label"] = main.get_by_role(
             "button", name="Enroll", exact=False).last.text_content()
-        # Two buttons called "Add" on one screen -- one adds a host to enrol,
-        # one adds a name to the lookup table -- was itself the ambiguity this
-        # merge was meant to remove. The aside's now says "Add name".
-        out["add_buttons"] = pg.get_by_role("button", name="Add", exact=True).count()
 
         main.get_by_label("SSH user").fill("ops")
         main.locator("input[type=password]").last.fill("hunter2")
@@ -244,9 +250,15 @@ def test_the_enroll_tab_has_a_single_enroll_panel(one_host):
     assert enroll == ["Enroll hosts"], enroll
 
 
-def test_only_one_button_on_the_screen_is_called_add(one_host):
-    assert one_host["add_buttons"] == 1, (
-        "two buttons called Add on one screen, doing different things")
+def test_there_is_one_place_to_say_which_hosts(one_host):
+    """Reported: "what is the point of the hostname field when you're putting
+    a list with the IP and hostname?". There was a Host name + Address pair
+    with an Add button on top of a box that takes exactly those lines, and the
+    pair only wrote into the box. The box is the input."""
+    assert one_host["host_name_fields"] == 0, \
+        "the Host name field is back beside the list that already takes names"
+    assert one_host["textareas"] == 1, \
+        f"{one_host['textareas']} places to type a host list; there is one list"
 
 
 def test_there_is_one_set_of_credentials(one_host):
@@ -258,17 +270,9 @@ def test_there_is_one_set_of_credentials(one_host):
 
 
 # ---- the one-host path -----------------------------------------------------
-def test_adding_one_host_writes_it_into_the_list(one_host):
-    assert one_host["textarea"].strip() == "192.168.155.135  ubuntu-lab"
-
-
-def test_adding_one_host_shows_it_as_a_row_already_ticked(one_host):
+def test_one_typed_host_shows_as_a_row_already_ticked(one_host):
     assert one_host["rows"] == [
         {"ticked": True, "addr": "192.168.155.135", "name": "ubuntu-lab"}]
-
-
-def test_the_add_fields_clear_so_the_next_host_can_be_typed(one_host):
-    assert one_host["name_field_after_add"] == ""
 
 
 def test_the_button_names_the_single_host_rather_than_counting_it(one_host):

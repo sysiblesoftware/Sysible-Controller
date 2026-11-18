@@ -525,27 +525,31 @@ _slop_seed_cross_app_env() {
     _ok "  recorded this checkout ($slopdir) so Administration can update SLOP itself"
   fi
 
-  # ---- Flashback's agent port must LISTEN where the Controller dials ---------
+  # ---- the agent ports must LISTEN where the Controller dials ---------------
   #
-  # The Controller reaches Flashback at host.docker.internal, which resolves to
-  # the docker bridge gateway. Flashback's compose used to bind that port to the
-  # host's LOOPBACK instead — a different interface — so every snapshot and every
-  # restore poll was refused, and a fleet of healthy agents captured nothing while
-  # the console showed them all politely asking. Seed the real gateway address so
-  # the two ends agree, and ask docker for it rather than assuming 172.17.0.1: a
-  # host with a customised bridge subnet has a different one and fails identically.
-  local fbbind
-  fbbind="$(_bl_pick AGENT_BIND "$(cat "$envf" 2>/dev/null || true)")"
-  if [[ -z "$fbbind" ]]; then
-    fbbind="$(docker network inspect bridge \
-              -f '{{ range .IPAM.Config }}{{ .Gateway }}{{ end }}' 2>/dev/null \
-              | awk '{print $1}' || true)"
-    [[ -n "$fbbind" ]] || fbbind="172.17.0.1"
-    _env_upsert "$envf" SYSIBLE_FLASHBACK_AGENT_BIND "$fbbind"
-    _warn "  Flashback's agent port had no bind address — set to $fbbind (the docker bridge"
-    _warn "  gateway), which is where the Controller dials. It was previously bound to the"
-    _warn "  host's loopback, which no container can reach, so nothing could ever be captured."
-  fi
+  # The Controller reaches Flashback and Baseline at host.docker.internal, which
+  # resolves to the docker bridge gateway. Their compose used to bind those ports
+  # to the host's LOOPBACK instead — a different interface — so every snapshot and
+  # every restore poll was refused, and a fleet of healthy agents captured nothing
+  # while the console showed them all politely asking.
+  #
+  # SEEDING IT ONCE IS NOT ENOUGH, and that was the bug. A bridge gateway is not a
+  # fixed property of a host: docker hands it out, and a network that is removed
+  # and recreated — which `docker network prune`, a daemon restart with a changed
+  # config, or a migration between layouts all do — can come back on a different
+  # subnet. The address recorded at install time then names no interface at all,
+  # and publishing a port on an address the host does not have is not a warning,
+  # it is a container that CANNOT START:
+  #
+  #   Error starting userland proxy: listen tcp4 172.17.0.1:8771:
+  #   bind: cannot assign requested address
+  #
+  # Flashback and Baseline are the only two services in the stack that publish on
+  # a bridge address, which is why they are the two that go dark together while
+  # everything else stays green. So this VALIDATES what is recorded rather than
+  # trusting it, and repairs it when the address has gone.
+  _repair_agent_bind flashback SYSIBLE_FLASHBACK_AGENT_BIND "$envf" "Flashback"
+  _repair_agent_bind baseline  SYSIBLE_BASELINE_AGENT_BIND  "$envf" "Baseline"
 
   # ---- SSO: the secret and each app's trust flag ----------------------------
   #
@@ -1161,6 +1165,75 @@ _split_deployment_status() {
   _warn "   fix, data and all: sudo $tool --dry-run"
   _warn "   then the same without --dry-run. It copies each app's volume into the"
   _warn "   platform's BEFORE anything starts, and --rollback puts it back."
+}
+
+# Is this address actually ON this host? Three answers, not two: "yes", "no",
+# and "I cannot tell" — because re-seeding a perfectly good address because the
+# box has no iproute2 would break the thing it is trying to fix.
+#   0 = assigned here   1 = not assigned here   2 = could not look
+_addr_is_local() {
+  local a="$1"
+  [[ -n "$a" ]] || return 2
+  if command -v ip >/dev/null 2>&1; then
+    ip -4 -o addr show 2>/dev/null | awk '{split($4,x,"/"); print x[1]}' \
+      | grep -qxF "$a" && return 0
+    return 1
+  fi
+  if command -v hostname >/dev/null 2>&1 && hostname -I >/dev/null 2>&1; then
+    tr ' ' '\n' <<< "$(hostname -I)" | grep -qxF "$a" && return 0
+    # hostname -I does not list bridge gateways on every distribution, so a miss
+    # here is not proof of absence.
+    return 2
+  fi
+  return 2
+}
+
+# What the agent ports should bind to: the docker bridge gateway, asked of
+# docker rather than assumed to be 172.17.0.1 — a host with a customised bridge
+# subnet has a different one and fails identically.
+_bridge_gateway() {
+  docker network inspect bridge \
+    -f '{{ range .IPAM.Config }}{{ .Gateway }}{{ end }}' 2>/dev/null \
+    | awk '{print $1}' || true
+}
+
+# Seed a missing agent bind address, and REPLACE one that no longer names an
+# interface on this host. See the long comment at the call site.
+_repair_agent_bind() {   # _repair_agent_bind <app> <KEY> <envfile> <Pretty>
+  local app="$1" key="$2" envf="$3" pretty="$4"
+  local cur want st
+  cur="$(sed -n "s/^${key}=//p" "$envf" 2>/dev/null | tail -n1 || true)"
+
+  if [[ -n "$cur" ]]; then
+    # `cmd || st=$?`, NOT `cmd; case $?`. This script runs under `set -e`, so a
+    # bare call to a function that returns non-zero ends the run -- and the
+    # non-zero here is "the address is gone", which is the one case this exists
+    # for. Written the obvious way, the repair aborted the update it was part
+    # of, at exactly the moment it had found the problem.
+    st=0; _addr_is_local "$cur" || st=$?
+    case $st in
+      0) return 0 ;;                       # fine, leave it alone
+      2) return 0 ;;                       # cannot tell: changing it would be a guess
+    esac
+    want="$(_bridge_gateway || true)"
+    if [[ -z "$want" || "$want" == "$cur" ]]; then
+      _err "  ${pretty}'s agent port is bound to $cur, which is not an address on this"
+      _err "  host — its container cannot start at all ('cannot assign requested address')."
+      _warn "    docker could not offer a replacement; check 'docker network inspect bridge'."
+      return 0
+    fi
+    _env_upsert "$envf" "$key" "$want"
+    _warn "  ${pretty}'s agent port was bound to $cur, which is no longer an address on"
+    _warn "  this host — so its container could not start at all. Re-pointed at $want,"
+    _warn "  the docker bridge gateway, which is where the Controller dials."
+    return 0
+  fi
+
+  want="$(_bridge_gateway || true)"; [[ -n "$want" ]] || want="172.17.0.1"
+  _env_upsert "$envf" "$key" "$want"
+  _warn "  ${pretty}'s agent port had no bind address — set to $want (the docker bridge"
+  _warn "  gateway), which is where the Controller dials. Bound to the host's loopback"
+  _warn "  instead, no container can reach it and nothing is ever captured."
 }
 
 p_status() {

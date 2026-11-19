@@ -314,6 +314,13 @@ Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 {_AGENT_INSTALL_DIR}/agent.py
 Restart=always
 RestartSec=5
+# ...except when the agent says an operator has to act. It exits 78 (EX_CONFIG)
+# for the two states no restart can resolve: no enrollment token, and a
+# controller that no longer recognises this host (disenrolled, or its database
+# reset). Both clear the local state and spend the token, so relaunching every
+# five seconds forever only buries the one line that says what to do. Stopped
+# and failed, `systemctl status` shows the reason.
+RestartPreventExitStatus=78
 User=root
 
 [Install]

@@ -645,6 +645,26 @@ def get_enroll_token():
     return os.getenv("SYSIBLE_ENROLL_TOKEN")
 
 
+# An exit code systemd can tell apart from a crash.
+#
+# The agent exits deliberately in two places: it has no enrollment token, and
+# the controller does not recognise its host_id any more (disenrolled, or the
+# database was reset). Neither is retryable -- the state is already cleared,
+# the token is already spent, and only an operator with a fresh bundle can fix
+# it. Exiting 1 made those indistinguishable from a crash, and the unit's
+# Restart=always then relaunched the process every few seconds forever: a host
+# that had simply been disenrolled sat in `activating (auto-restart)` burning
+# 150ms of CPU per attempt, with the one line explaining what to do scrolling
+# past in the journal between restarts.
+#
+# 78 is EX_CONFIG from sysexits(3) -- "the configuration is wrong" -- and the
+# unit file names it in RestartPreventExitStatus, so systemd stops and leaves
+# the unit failed, where `systemctl status` shows the reason instead of a
+# stopwatch. Ordinary crashes keep exiting non-78 and keep being retried,
+# which is what Restart=always is for.
+EXIT_NEEDS_OPERATOR = 78
+
+
 # =========================================================
 # REGISTER
 # =========================================================
@@ -654,9 +674,10 @@ def register():
     if not token:
         print(
             "[agent] no enrollment token found - set SYSIBLE_ENROLL_TOKEN "
-            "or pass it as the first argument"
+            "or pass it as the first argument. Nothing will change until one "
+            "is supplied, so this agent is stopping rather than restarting."
         )
-        sys.exit(1)
+        sys.exit(EXIT_NEEDS_OPERATOR)
 
     state = load_state() or {}
     # A machine-derived, deterministic id when we have no persisted one, so a
@@ -2545,7 +2566,7 @@ def loop(state):
                 "won't be accepted again."
             )
             clear_state()
-            sys.exit(1)
+            sys.exit(EXIT_NEEDS_OPERATOR)
         except Exception:
             # Catch-all so an unexpected error - a heartbeat/fetch
             # hiccup under heavy load, a transient JSON/parsing error,

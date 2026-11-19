@@ -61,6 +61,14 @@ export default function HostEnrollment() {
   const [bulkName, setBulkName] = useState({});   // line -> edited name
   const [bulkCreds, setBulkCreds] = useState({ username: "root", password: "", environment: "" });
   const [bulkProgress, setBulkProgress] = useState(null);
+  // What the last enrollment run actually did, host by host. The only record
+  // of a failure used to be one red box holding every error at once, replaced
+  // by the next thing that happened -- so "it did not work" had no detail to
+  // go with it, and a 40-host run reported a number. Written as the run goes,
+  // so a long one can be watched rather than waited out.
+  const [runLog, setRunLog] = useState([]);
+  const [otherWaysOpen, setOtherWaysOpen] = useState(false);
+  const [copiedLog, setCopiedLog] = useState(false);
   const [serverHosts, setServerHosts] = useState(null);
   // The names this Controller can turn into addresses by itself.
   const [namesText, setNamesText] = useState("");
@@ -425,6 +433,13 @@ export default function HostEnrollment() {
     setErr(""); setMsg(""); setBusy("bulk-enroll");
     const done = [], failed = [];
     setBulkProgress({ done: 0, total: picked.length, current: "" });
+    setRunLog(picked.map((r) => ({
+      name: (bulkName[r.line] || r.name).trim(),
+      target: r.target || r.address || "",
+      state: "waiting", detail: "", at: null,
+    })));
+    const mark = (i, patch) => setRunLog((l) =>
+      l.map((e, n) => (n === i ? { ...e, ...patch } : e)));
     // Serial, not the concurrency bulkOp uses elsewhere. Each of these opens an
     // SSH session and runs a command on a different machine; eight at once is
     // eight passwords in flight and eight ways for a half-finished enrollment to
@@ -433,6 +448,7 @@ export default function HostEnrollment() {
       const r = picked[i];
       const name = (bulkName[r.line] || r.name).trim();
       setBulkProgress({ done: i, total: picked.length, current: name });
+      mark(i, { state: "running", at: Date.now() });
       try {
         await api.enrollSsh({
           // The TARGET. A line that was just a name has no address, and sending
@@ -442,8 +458,11 @@ export default function HostEnrollment() {
           environment: bulkCreds.environment,
         });
         done.push(name);
+        mark(i, { state: "ok", detail: "enrolled", at: Date.now() });
       } catch (e) {
-        failed.push(`${name}: ${e.message || "failed"}`);
+        const why = e.message || "failed";
+        failed.push(`${name}: ${why}`);
+        mark(i, { state: "fail", detail: why, at: Date.now() });
       }
     }
     setBulkProgress(null);
@@ -452,7 +471,8 @@ export default function HostEnrollment() {
     // the report that sends someone hunting through the activity log.
     if (done.length) setMsg(`Enrolled ${done.length} of ${picked.length} host(s).`);
     if (failed.length) {
-      setErr(`${failed.length} failed:\n` + failed.join("\n"));
+      setErr(`${failed.length} of ${picked.length} failed — each one, and why, ` +
+             `is in the run log below.`);
     } else {
       // Only on a clean run: leaving the list up after a partial failure is how
       // someone re-runs it and re-enrolls the ones that already worked.
@@ -981,6 +1001,67 @@ export default function HostEnrollment() {
               </span>
             )}
           </div>
+
+          {/* THE RUN LOG. One line per host, written as the run goes. What
+              this replaces is a count and a red box: "Enrolled 11 of 12" told
+              an operator a number, and the twelfth host's reason arrived mixed
+              in with everyone else's and vanished on the next click. The
+              controller's reasons are already specific -- "SSH authentication
+              failed", "Could not reach host: ...", a host-key mismatch -- they
+              just had nowhere to be read. */}
+          {runLog.length > 0 && (
+            <div className="run-log" style={{ marginTop: 12 }}>
+              <div className="row" style={{ alignItems: "center", gap: 10,
+                                            marginBottom: 6 }}>
+                <strong style={{ fontSize: "var(--fs-sm)" }}>Run log</strong>
+                <span className="faint" style={{ fontSize: 12 }}>
+                  {runLog.filter((e) => e.state === "ok").length} enrolled,{" "}
+                  {runLog.filter((e) => e.state === "fail").length} failed
+                </span>
+                <button className="btn sm ghost" type="button" style={{ marginLeft: "auto" }}
+                        title="Copy every line, to paste into a ticket or a message"
+                        onClick={() => {
+                          const text = runLog.map((e) =>
+                            `${e.state}\t${e.name}\t${e.target}\t${e.detail}`).join("\n");
+                          navigator.clipboard?.writeText(text);
+                          setCopiedLog(true);
+                          setTimeout(() => setCopiedLog(false), 1500);
+                        }}>
+                  {copiedLog ? "Copied" : "Copy"}
+                </button>
+                <button className="btn sm ghost" type="button"
+                        onClick={() => setRunLog([])}>Clear</button>
+              </div>
+              <table className="compact" style={{ width: "100%" }}>
+                <tbody>
+                  {runLog.map((e, i) => (
+                    <tr key={i}>
+                      <td style={{ width: 18 }}>
+                        <span className={"dot " + (e.state === "ok" ? "ok"
+                          : e.state === "fail" ? "bad"
+                          : e.state === "running" ? "warn" : "")}
+                          title={e.state} />
+                      </td>
+                      <td style={{ fontFamily: "ui-monospace, monospace" }}>{e.name}</td>
+                      <td className="faint" style={{ fontFamily: "ui-monospace, monospace" }}>
+                        {e.target || "—"}</td>
+                      <td className={e.state === "fail" ? "warn-text" : "faint"}
+                          style={{ fontSize: 12 }}>
+                        {e.state === "running" ? "connecting…"
+                          : e.state === "waiting" ? "queued"
+                          : e.detail || e.state}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="faint" style={{ fontSize: 11.5, marginTop: 6 }}>
+                Every attempt, including the ones that failed, is also written to
+                the Controller&rsquo;s activity log, with the account that made it —
+                this table goes when the page does, that one does not.
+              </p>
+            </div>
+          )}
         </fieldset>
 
         {/* Folded away, not deleted. As a second panel beside the form it was
@@ -1138,6 +1219,19 @@ export default function HostEnrollment() {
           </div>
           </details>
         </fieldset>
+        {/* Three always-open panels for three ways in, under the one an
+            operator came here to use. They are not redundant -- a host with no
+            inbound SSH needs the bundle, a terminal-only host needs the curl
+            line, a whole inventory needs the Ansible one -- but they are
+            REFERENCE, wanted once and then not again, and leaving them open
+            made the page four screens long. */}
+        <fieldset className="tool-group-box">
+          <legend>Other ways to enroll</legend>
+          <details open={otherWaysOpen}
+                   onToggle={(e) => setOtherWaysOpen(e.target.open)}>
+          <summary style={{ cursor: "pointer" }}>
+            A bundle to copy, a curl one-liner, or Ansible across an inventory
+          </summary>
         <fieldset className="tool-group-box"><legend>Download the agent bundle</legend>
           <p className="faint" style={{ marginTop: 0 }}>
             The ready-to-run bundle, built on demand — each download bakes in a fresh, one-time enrollment token.
@@ -1214,6 +1308,8 @@ export default function HostEnrollment() {
               : <>running with a login set — configure it on the <button className="linklike" onClick={() => setTab("portal")}>Webserver Portal</button> tab.</>}
             {" "}Add <code>-u</code>/<code>--ask-become-pass</code> or <code>-e</code> vars as your SSH access requires.
           </p>
+        </fieldset>
+          </details>
         </fieldset>
       </div>
 

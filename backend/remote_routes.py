@@ -1188,8 +1188,67 @@ def hosts_file_preview(body: dict = Body(...)):
     }
 
 
+def _enrollment_actor(request):
+    """Who to attribute an enrollment to, best effort and never raising."""
+    try:
+        token = request.headers.get("X-Sysible-Admin-Token") if request else None
+        if token:
+            from backend.db import resolve_admin_token
+            admin = resolve_admin_token(token)
+            if admin and admin.get("username"):
+                return admin["username"]
+    except Exception:
+        pass
+    return "superuser"
+
+
+def _log_enrollment(request, body, outcome, detail):
+    """Put every enrollment ATTEMPT in the activity log, not just the ones that
+    worked.
+
+    An enrollment that fails is the single most common thing an operator needs
+    to look at afterwards, and until now it existed only as a red line in one
+    browser tab until the next click replaced it. The console shows a live run
+    log too, but that one goes when the page does -- this is the copy that is
+    still there tomorrow, and the one that says WHO tried.
+
+    Never raises. A controller that could not write the audit row must not
+    turn a successful enrollment into a failure, nor a failed one into a 500
+    that hides the real reason.
+    """
+    try:
+        from backend.db import log_activity
+        target = (getattr(body, "ip", "") or getattr(body, "name", "") or "?")
+        note = f"SSH enrollment {outcome}"
+        if detail:
+            note += f" \u2014 {str(detail)[:400]}"
+        log_activity(_enrollment_actor(request), getattr(body, "name", "") or target,
+                     note, f"ssh {getattr(body, 'username', '?')}@{target}")
+    except Exception as exc:                                  # noqa: BLE001
+        print(f"[controller] could not log the enrollment attempt: {exc}")
+
+
 @router.post("/enroll-ssh", dependencies=[Depends(require_superuser)])
-def enroll_ssh(body: EnrollSSHRequest):
+def enroll_ssh(body: EnrollSSHRequest, request: Request = None):
+    """Enroll over SSH, and write down what happened either way.
+
+    A thin wrapper so that EVERY exit from the work below -- the eight
+    different HTTPExceptions it can raise, and anything unforeseen -- is
+    recorded. Auditing inside the function would have meant eight call sites
+    and a ninth failure mode nobody wrote a line for."""
+    try:
+        out = _enroll_ssh(body)
+    except HTTPException as e:
+        _log_enrollment(request, body, "failed", e.detail)
+        raise
+    except Exception as e:                                    # noqa: BLE001
+        _log_enrollment(request, body, "failed", f"{type(e).__name__}: {e}")
+        raise
+    _log_enrollment(request, body, "succeeded", "")
+    return out
+
+
+def _enroll_ssh(body: EnrollSSHRequest):
     from backend.edition import enforce_host_limit
     enforce_host_limit(body.name)
 

@@ -71,18 +71,32 @@ def test_each_unfixable_state_exits_with_that_code(why):
         f"{why!r} still exits {m.group(1)}, which systemd will retry forever")
 
 
-def test_an_ordinary_failure_is_still_retried():
+def test_the_agent_only_ever_says_stop_or_try_again():
     """The guard must not turn every failure terminal. A heartbeat that times
     out under load is exactly what Restart=always is for, and a host that goes
     quiet because its agent gave up on one bad request is worse than the loop
-    this fixes."""
-    assert "sys.exit(EXIT_NEEDS_OPERATOR)" in SRC
-    others = [m for m in re.findall(r"sys\.exit\(([^)]*)\)", SRC)
-              if m.strip() not in ("EXIT_NEEDS_OPERATOR", "0")]
-    assert not others, (
-        f"other hard exits that systemd WILL retry: {others} -- if one of them "
-        f"is also unfixable it needs the same code, and if it is not it should "
-        f"not be a hard exit")
+    this fixes.
+
+    So the agent has a vocabulary of exactly two words for systemd: 78 means
+    stop, nothing here can change by trying again; 1 means try again, and the
+    unit's Restart=always IS the retry. A third number would be a third
+    meaning systemd has no instruction for -- it would be retried, silently,
+    whatever it was supposed to mean."""
+    codes = {m.strip() for m in re.findall(r"sys\.exit\(([^)]*)\)", SRC)}
+    assert "EXIT_NEEDS_OPERATOR" in codes, "nothing stops any more"
+    extra = codes - {"EXIT_NEEDS_OPERATOR", "0", "1"}
+    assert not extra, (
+        f"exits systemd has no instruction for: {sorted(extra)} -- stop is 78, "
+        f"try again is 1")
+
+
+def test_try_again_is_used_where_asking_again_can_help():
+    """Exit 1 is not a leftover: it is the answer to a controller that is
+    busy or paused, both of which resolve without anyone visiting the host."""
+    assert "sys.exit(1)" in SRC
+    i = SRC.index("except requests.exceptions.HTTPError:")
+    assert "sys.exit(1)" in SRC[i:i + 800], \
+        "the retryable enrollment refusal no longer exits with the retry code"
 
 
 def test_the_agent_says_it_is_stopping_rather_than_restarting():

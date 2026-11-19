@@ -677,6 +677,56 @@ def get_enroll_token():
 # which is what Restart=always is for.
 EXIT_NEEDS_OPERATOR = 78
 
+# WHICH REFUSALS ARE WORTH ASKING AGAIN ABOUT, and which are a decision.
+#
+# Seen on a host that restarted 164 times in fourteen minutes:
+#
+#     requests.exceptions.HTTPError: 403 Invalid or expired token
+#     sysible-agent.service: Main process exited, code=exited, status=1/FAILURE
+#     sysible-agent.service: Scheduled restart job, restart counter is at 164.
+#
+# The enrollment token is SINGLE USE. Once it is spent no amount of asking
+# again will revive it, and the agent asked again every five seconds, forever,
+# printing a twenty-line Python traceback each time. Nothing in register()
+# handled a refusal at all: the HTTPError simply escaped main().
+#
+# The rule is the controller's own choice of status code, not a list of
+# message strings that would drift from it: 429 means it is busy and 503 means
+# enrollment is paused by an administrator -- both say come back later, and
+# both will be answered differently without anyone touching this host. Every
+# other refusal is a decision about this host (token spent, host revoked,
+# already enrolled, network not permitted) that only an operator can change.
+RETRYABLE_ENROLL_STATUS = (429, 503)
+
+
+def _enrollment_refused(exc):
+    """Say what a refused enrollment means, and stop if asking again cannot help.
+
+    Returns for a refusal worth retrying, so the caller re-raises and the
+    process exits non-78 -- which systemd restarts, and that restart IS the
+    retry. Never returns for the rest: it exits 78, which the unit's
+    RestartPreventExitStatus stops."""
+    r = getattr(exc, "response", None)
+    status = getattr(r, "status_code", None)
+    detail = str(exc).split(" ", 1)[-1] if str(exc) else ""
+
+    if status in RETRYABLE_ENROLL_STATUS:
+        print(f"[agent] the controller is not accepting enrollments right now "
+              f"({detail}). Trying again shortly.", file=sys.stderr)
+        return
+
+    print(f"[agent] the controller refused this enrollment: {detail}",
+          file=sys.stderr)
+    if status == 403 and "token" in detail.lower():
+        print("[agent] an enrollment token can be used ONCE. Download a fresh "
+              "agent bundle from the Controller (Host Enrollment -> Download "
+              "Agent Bundle) and run ./run_agent.sh again, or enrol this host "
+              "from the console over SSH.", file=sys.stderr)
+    print("[agent] nothing about this changes by asking again, so this agent "
+          "is stopping rather than restarting.", file=sys.stderr)
+    sys.exit(EXIT_NEEDS_OPERATOR)
+
+
 # The uninstaller, as run_agent.sh installs it beside this file.
 UNINSTALL_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "disenroll_agent.sh")
@@ -758,7 +808,11 @@ def register():
         payload["prev_agent_secret"] = state["agent_secret"]
 
     r = _request("POST", "/agents/enroll", json=payload, timeout=15)
-    _raise_with_detail(r)
+    try:
+        _raise_with_detail(r)
+    except requests.exceptions.HTTPError as exc:
+        _enrollment_refused(exc)
+        raise
     data = r.json()
 
     state = {
@@ -2663,7 +2717,15 @@ def main():
     state = load_state()
 
     if not state or "agent_secret" not in state:
-        state = register()
+        try:
+            state = register()
+        except requests.exceptions.HTTPError:
+            # _enrollment_refused has already said what happened in one line,
+            # and decided whether asking again can help. Letting the exception
+            # out of main() printed a twenty-line traceback on top of it,
+            # every five seconds, which is how the one line that mattered
+            # became the hardest thing in the journal to find.
+            sys.exit(1)
 
     loop(state)
 

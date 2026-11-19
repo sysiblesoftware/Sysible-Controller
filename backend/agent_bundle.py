@@ -386,6 +386,13 @@ cp -f ./agent.py {_AGENT_INSTALL_DIR}/agent.py
 # installed so the controller can seal a baseline and detect tampering.
 cp -f ./agent_integrity.py {_AGENT_INSTALL_DIR}/agent_integrity.py
 cp -f ./flashback_restore.py {_AGENT_INSTALL_DIR}/flashback_restore.py
+# The uninstaller goes ON THE HOST, not just in whatever directory the bundle
+# happened to be unzipped into. Every instruction for removing the agent named
+# a file that was never installed, so "run disenroll_agent.sh" meant "find the
+# zip you used months ago" -- and the agent could not take itself off the host
+# when the controller told it to, for want of a script sitting next to it.
+cp -f ./disenroll_agent.sh {_AGENT_INSTALL_DIR}/disenroll_agent.sh
+chmod 755 {_AGENT_INSTALL_DIR}/disenroll_agent.sh
 cp -f ./sysible_agent.env {_AGENT_INSTALL_DIR}/sysible_agent.env
 chmod 600 {_AGENT_INSTALL_DIR}/sysible_agent.env
 
@@ -468,6 +475,24 @@ def _disenroll_script() -> str:
 set -e
 cd "$(dirname "${{BASH_SOURCE[0]}}")"
 
+# --local-only: skip step 1. The CONTROLLER started this teardown (it answered
+# an agent 410 Disenrolled), so there is nobody left to notify -- and the
+# credentials to notify them with are about to be deleted. Without the flag a
+# self-uninstall would spend ten seconds posting a disenroll for a host the
+# controller has already removed, and print a scary failure when it 404s.
+NOTIFY_CONTROLLER=1
+for arg in "$@"; do
+  case "$arg" in
+    --local-only|--no-notify) NOTIFY_CONTROLLER=0 ;;
+    -h|--help)
+      echo "usage: $0 [--local-only]"
+      echo "  --local-only  remove the agent from this host without telling the"
+      echo "                controller (use when the controller already knows)"
+      exit 0 ;;
+    *) echo "unknown argument: $arg (try --help)" >&2; exit 2 ;;
+  esac
+done
+
 STATE_FILE="/var/lib/sysible/agent_state.json"
 ENV_FILE="{_AGENT_INSTALL_DIR}/sysible_agent.env"
 CERT_FILE="{_CERT_INSTALL_PATH}"
@@ -485,7 +510,10 @@ fi
 #    otherwise the controller would keep showing this host as enrolled
 #    forever with no local trace left to fix it.
 # --------------------------------------------------------
-if [[ -f "$STATE_FILE" ]]; then
+if [[ "$NOTIFY_CONTROLLER" -eq 0 ]]; then
+  echo "Removing this agent (the controller already knows - not notifying it)."
+  NOTIFY_OK=1
+elif [[ -f "$STATE_FILE" ]]; then
   echo "Notifying controller..."
 {_PIP_INSTALL_BLOCK}
   if python3 - "$STATE_FILE" "$ENV_FILE" "$CERT_FILE" <<'PYEOF'

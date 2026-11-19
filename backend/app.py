@@ -416,6 +416,19 @@ def verify_agent(host_id: str, agent_secret: str):
     """Authenticate a request as coming from a previously-enrolled agent."""
 
     if not agent_exists(host_id):
+        # TWO DIFFERENT ANSWERS, and the difference is the whole point.
+        #
+        # 410 means we let this host go on purpose, and the agent takes itself
+        # off the machine. 404 means we have never heard of it, which is also
+        # what a controller whose database was reset or restored from backup
+        # says to a perfectly healthy fleet -- so that one must never trigger
+        # an uninstall. Only a host_id with a tombstone gets the 410.
+        from backend.db import disenrollment_record
+        gone = disenrollment_record(host_id)
+        if gone:
+            raise HTTPException(
+                status_code=410,
+                detail="Disenrolled — this host was removed from the controller.")
         raise HTTPException(status_code=404, detail="Unknown host_id")
 
     # Revoked hosts are locked out regardless of a correct secret, until an admin
@@ -1029,6 +1042,12 @@ def enroll(req: EnrollRequest, request: Request):
             agent_secret,
             req.ip
         )
+        # It is enrolled again, so it is no longer one we let go. Without this
+        # the host_id -- which is machine-derived, so a re-enroll lands on the
+        # same one -- would meet its own tombstone on the first heartbeat and
+        # uninstall itself seconds after an operator put it back.
+        from backend.db import clear_disenrollment
+        clear_disenrollment(host_id)
 
         # A bundle minted for a specific environment (e.g. SLEP building VMs INTO a
         # chosen Controller environment) stamps that environment on the token; apply

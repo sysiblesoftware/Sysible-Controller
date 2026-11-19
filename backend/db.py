@@ -120,6 +120,26 @@ def init_db():
     )
     """)
 
+    # WHO WE LET GO, as opposed to who we have never heard of.
+    #
+    # An agent that is told "Unknown host_id" cannot tell a deliberate
+    # disenrollment from a controller whose database was reset or restored
+    # from a backup, and those need opposite responses: one means take
+    # yourself off this host, the other means sit still and wait for someone.
+    # Acting on the ambiguous answer would mean a restored backup uninstalling
+    # the agent from every host in the fleet.
+    #
+    # So a deliberate removal leaves a row here, and only a host_id with a row
+    # is ever told to uninstall itself. A fresh or restored database has no
+    # rows, so every agent gets the cautious answer.
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS disenrolled_agents (
+        host_id TEXT PRIMARY KEY,
+        hostname TEXT,
+        at REAL
+    )
+    """)
+
     # Migration for databases created before agent_secret existed.
     try:
         cur.execute("ALTER TABLE agents ADD COLUMN agent_secret TEXT")
@@ -958,6 +978,39 @@ def set_agent_sudo_password_required(host_id, required):
     return changed > 0
 
 
+def record_disenrollment(host_id, hostname=None):
+    """Remember that THIS controller deliberately let this host go."""
+    with contextlib.closing(_connect()) as conn:
+        conn.execute(
+            "INSERT INTO disenrolled_agents (host_id, hostname, at) VALUES (?,?,?) "
+            "ON CONFLICT(host_id) DO UPDATE SET hostname=excluded.hostname, "
+            "at=excluded.at",
+            (host_id, hostname, time.time()))
+        conn.commit()
+
+
+def disenrollment_record(host_id):
+    """{"host_id","hostname","at"} if we let this host go, else None."""
+    with contextlib.closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT host_id, hostname, at FROM disenrolled_agents WHERE host_id=?",
+            (host_id,)).fetchone()
+    if not row:
+        return None
+    return {"host_id": row[0], "hostname": row[1], "at": row[2]}
+
+
+def clear_disenrollment(host_id):
+    """Forget it, because the host is enrolled again.
+
+    Without this a host that re-enrolls onto the same machine-derived id would
+    be handed its own tombstone on the first heartbeat and uninstall itself,
+    seconds after an operator had deliberately put it back."""
+    with contextlib.closing(_connect()) as conn:
+        conn.execute("DELETE FROM disenrolled_agents WHERE host_id=?", (host_id,))
+        conn.commit()
+
+
 def delete_agent(host_id):
     # closing(): four writes under the single WAL writer during the busy
     # enroll/disenroll path — release the connection even if one raises "database
@@ -966,6 +1019,21 @@ def delete_agent(host_id):
     with contextlib.closing(_connect()) as conn:
         cur = conn.cursor()
 
+        # The tombstone goes down in the same transaction as the delete. A
+        # disenroll that removed the row and failed to record it would leave
+        # the agent in the ambiguous case forever -- running, unwanted, and
+        # told only that nobody knows it.
+        cur.execute(
+            "INSERT INTO disenrolled_agents (host_id, hostname, at) "
+            "SELECT host_id, hostname, ? FROM agents WHERE host_id=? "
+            "ON CONFLICT(host_id) DO UPDATE SET at=excluded.at",
+            (time.time(), host_id)
+        )
+        cur.execute(
+            "INSERT OR IGNORE INTO disenrolled_agents (host_id, hostname, at) "
+            "VALUES (?, NULL, ?)",
+            (host_id, time.time())
+        )
         cur.execute(
             "DELETE FROM agents WHERE host_id=?",
             (host_id,)

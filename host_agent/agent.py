@@ -531,6 +531,19 @@ def _local_ip():
         s.close()
 
 
+class DisenrolledError(Exception):
+    """The controller says it REMOVED this host on purpose (HTTP 410).
+
+    Different from UnknownHostError on purpose, and the difference decides
+    whether this agent deletes itself. "Unknown host_id" is also what a
+    controller whose database was reset or restored from a backup says to a
+    healthy fleet; uninstalling on that would strip every host in it. 410 is
+    only ever answered for a host_id the controller has a record of letting
+    go, so it is safe to act on -- and what the operator asked for when they
+    pressed Disenroll is that nothing be left behind.
+    """
+
+
 class UnknownHostError(Exception):
     """Raised when the controller responds 404 "Unknown host_id" - this
     agent's enrollment no longer exists on the controller (disenrolled
@@ -664,6 +677,48 @@ def get_enroll_token():
 # which is what Restart=always is for.
 EXIT_NEEDS_OPERATOR = 78
 
+# The uninstaller, as run_agent.sh installs it beside this file.
+UNINSTALL_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "disenroll_agent.sh")
+
+
+def self_uninstall():
+    """Take this agent off the host, leaving nothing behind. True if started.
+
+    DETACHED, and that is not tidiness: the script's second step is
+    `systemctl disable --now sysible-agent`, which stops the very process that
+    launched it. In its own session it survives its own first move. Nothing is
+    waited on for the same reason -- by the time it matters this process is
+    gone.
+
+    stdout and stderr are INHERITED rather than thrown away. systemd has them
+    pointed at the journal, journald holds the far end, and the teardown keeps
+    writing there after the unit is stopped -- so `journalctl -t
+    sysible-agent` still says what was removed, and says it if something
+    could not be. A removal nobody can read afterwards is how a half-removed
+    host becomes a mystery.
+    """
+    if not os.path.exists(UNINSTALL_SCRIPT):
+        print("[agent] the controller disenrolled this host, but",
+              UNINSTALL_SCRIPT, "is not installed, so nothing could be removed"
+              " automatically. Re-download the agent bundle and run"
+              " 'sudo ./disenroll_agent.sh' on this host.", file=sys.stderr)
+        return False
+    try:
+        subprocess.Popen(
+            # --local-only: the controller started this, so there is nobody to
+            # tell, and the credentials to tell them with are about to be
+            # deleted anyway.
+            ["bash", UNINSTALL_SCRIPT, "--local-only"],
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as e:
+        print("[agent] could not start", UNINSTALL_SCRIPT, "-", e, file=sys.stderr)
+        return False
+    print("[agent] disenrolled by the controller - removing this agent from the host")
+    return True
+
 
 # =========================================================
 # REGISTER
@@ -746,6 +801,9 @@ def _raise_with_detail(r):
         detail = r.json().get("detail")
     except (ValueError, AttributeError):
         pass
+
+    if r.status_code == 410 and str(detail or "").startswith("Disenrolled"):
+        raise DisenrolledError(detail)
 
     if r.status_code == 404 and detail == "Unknown host_id":
         raise UnknownHostError(detail)
@@ -1596,12 +1654,13 @@ def _heartbeat_loop(state):
     keeps reporting in no matter how long a task takes.
 
     Best-effort: any error is logged and retried on the next tick. The task loop
-    remains the single authority for enrollment/exit (UnknownHostError), so this
-    thread just swallows everything and keeps the pulse going."""
+    remains the single authority for enrollment/exit (UnknownHostError and
+    DisenrolledError), so this thread just swallows everything and keeps the
+    pulse going."""
     while True:
         try:
             heartbeat(state)
-        except Exception as e:               # incl. UnknownHostError — the task loop handles exit
+        except Exception as e:               # incl. the two exit signals — the task loop handles those
             print("[agent] heartbeat thread:", e)
         time.sleep(_current_poll_delay())
 
@@ -2535,7 +2594,7 @@ def loop(state):
                                          task.get("become_password"),
                                          want_root=bool(task.get("want_root")))
                     send_result(state, task_id, result)
-                except UnknownHostError:
+                except (UnknownHostError, DisenrolledError):
                     raise
                 except Exception as e:
                     # One malformed/failing task (e.g. missing
@@ -2556,6 +2615,15 @@ def loop(state):
                                          "returncode": 1})
                         except Exception:
                             pass
+        except DisenrolledError:
+            # The controller says it removed this host deliberately. That is
+            # the one answer worth acting on: take the agent off the machine,
+            # service and files and all, which is what pressing Disenroll was
+            # asking for. Local state goes first so that a teardown that
+            # somehow fails still cannot leave a credentialed agent behind.
+            clear_state()
+            self_uninstall()
+            sys.exit(EXIT_NEEDS_OPERATOR)
         except UnknownHostError:
             print(
                 f"[agent] controller no longer recognizes host_id {state['host_id']} "

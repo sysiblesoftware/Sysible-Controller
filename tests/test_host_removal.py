@@ -26,7 +26,13 @@ class TestHostRemoval:
         controller.delete(f"/agents/{host_id}", headers=superuser_headers)
         r = controller.post("/agents/heartbeat",
                             json={"host_id": host_id, "agent_secret": secret})
-        assert r.status_code in (401, 403, 404)  # zombie rejected (record + secret gone)
+        # Rejected, and TOLD WHY: 410 Gone is the answer a host we removed on
+        # purpose gets, and the agent acts on it by taking itself off the
+        # machine. 401/403/404 would also be rejections, which is all this
+        # asserted before -- but a zombie that is merely refused keeps
+        # heartbeating forever, which is the state this test was written for.
+        assert r.status_code == 410, r.text
+        assert r.json()["detail"].startswith("Disenrolled"), r.text
         # And it cannot re-create its record by heartbeating (only enroll can).
         assert not db.agent_exists(host_id)
 

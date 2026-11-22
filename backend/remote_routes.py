@@ -179,8 +179,33 @@ def _reaper_loop():
 # an orphaned paramiko client + channel + transport thread alive for the whole
 # process lifetime if no further terminal is ever opened. daemon=True so it
 # never blocks shutdown; started once at import.
-_REAPER_THREAD = threading.Thread(target=_reaper_loop, name="sysible-term-reaper", daemon=True)
-_REAPER_THREAD.start()
+
+
+# ---------------------------------------------------------------------------
+# Background loops: on in the service, off in a test process.
+#
+# These start at import, so anything that imports this module -- a test, a
+# migration script, `python -c "import backend.remote_routes"` -- gets long-lived threads that
+# touch the database. The test suite re-points db.DB_PATH at a temp file and
+# its autouse fixture UNLINKS that file and its -wal/-shm sidecars before every
+# test. Deleting a WAL index out from under an open connection is explicitly
+# unsafe in SQLite: the running thread keeps the old -shm mmap'd, and reading
+# through that stale mapping once the file is recreated raises SIGBUS, which
+# kills the whole process. Two full runs of the suite died that way, at
+# db.py:71 (PRAGMA journal_mode=WAL) with sysible-task-reclaim as the other
+# thread -- a crash with no failing test, and so nothing to read.
+#
+# Default is ON, so the service is unchanged. tests/conftest.py sets the
+# variable before importing anything.
+# ---------------------------------------------------------------------------
+def _background_loops_enabled() -> bool:
+    return os.getenv("SYSIBLE_DISABLE_BACKGROUND_LOOPS", "").strip().lower() \
+        not in ("1", "true", "yes", "on")
+
+_REAPER_THREAD = threading.Thread(target=_reaper_loop, name="sysible-term-reaper",
+                                  daemon=True)
+if _background_loops_enabled():
+    _REAPER_THREAD.start()
 
 
 # =========================================================

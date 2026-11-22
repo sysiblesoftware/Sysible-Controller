@@ -1759,7 +1759,31 @@ def _prime_caches_loop():
             pass
 
 
-if os.getenv("SYSIBLE_BACKGROUND_PRIME", "1").lower() not in ("0", "false", "no", "off"):
+
+
+# ---------------------------------------------------------------------------
+# Background loops: on in the service, off in a test process.
+#
+# These start at import, so anything that imports this module -- a test, a
+# migration script, `python -c "import webgui.server"` -- gets long-lived threads that
+# touch the database. The test suite re-points db.DB_PATH at a temp file and
+# its autouse fixture UNLINKS that file and its -wal/-shm sidecars before every
+# test. Deleting a WAL index out from under an open connection is explicitly
+# unsafe in SQLite: the running thread keeps the old -shm mmap'd, and reading
+# through that stale mapping once the file is recreated raises SIGBUS, which
+# kills the whole process. Two full runs of the suite died that way, at
+# db.py:71 (PRAGMA journal_mode=WAL) with sysible-task-reclaim as the other
+# thread -- a crash with no failing test, and so nothing to read.
+#
+# Default is ON, so the service is unchanged. tests/conftest.py sets the
+# variable before importing anything.
+# ---------------------------------------------------------------------------
+def _background_loops_enabled() -> bool:
+    return os.getenv("SYSIBLE_DISABLE_BACKGROUND_LOOPS", "").strip().lower() \
+        not in ("1", "true", "yes", "on")
+
+if _background_loops_enabled() \
+        and os.getenv("SYSIBLE_BACKGROUND_PRIME", "1").lower() not in ("0", "false", "no", "off"):
     threading.Thread(target=_prime_caches_loop, name="sysible-cache-prime", daemon=True).start()
 
 
@@ -2089,6 +2113,8 @@ def _start_scheduler():
     if _SCHED_STARTED:
         return
     _SCHED_STARTED = True
+    if not _background_loops_enabled():
+        return
     import threading
     threading.Thread(target=_scheduler_loop, name="sysible-scheduler", daemon=True).start()
 
@@ -2492,6 +2518,8 @@ def _start_alerts():
     if _ALERTS_STARTED:
         return
     _ALERTS_STARTED = True
+    if not _background_loops_enabled():
+        return
     import threading
     threading.Thread(target=_alerts_loop, name="sysible-alerts", daemon=True).start()
 

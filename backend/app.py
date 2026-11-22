@@ -405,8 +405,32 @@ def _address_watch_loop():
             print(f"[controller] address watch: {_exc}")
 
 
-threading.Thread(target=_address_watch_loop, name="sysible-address-watch",
-                 daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
+# Background loops: on in the service, off in a test process.
+#
+# These start at import, so anything that imports this module -- a test, a
+# migration script, `python -c "import backend.app"` -- gets long-lived threads that
+# touch the database. The test suite re-points db.DB_PATH at a temp file and
+# its autouse fixture UNLINKS that file and its -wal/-shm sidecars before every
+# test. Deleting a WAL index out from under an open connection is explicitly
+# unsafe in SQLite: the running thread keeps the old -shm mmap'd, and reading
+# through that stale mapping once the file is recreated raises SIGBUS, which
+# kills the whole process. Two full runs of the suite died that way, at
+# db.py:71 (PRAGMA journal_mode=WAL) with sysible-task-reclaim as the other
+# thread -- a crash with no failing test, and so nothing to read.
+#
+# Default is ON, so the service is unchanged. tests/conftest.py sets the
+# variable before importing anything.
+# ---------------------------------------------------------------------------
+def _background_loops_enabled() -> bool:
+    return os.getenv("SYSIBLE_DISABLE_BACKGROUND_LOOPS", "").strip().lower() \
+        not in ("1", "true", "yes", "on")
+
+if _background_loops_enabled():
+    threading.Thread(target=_address_watch_loop, name="sysible-address-watch",
+                     daemon=True).start()
 
 
 app.include_router(remote_router, dependencies=[Depends(require_api_key_or_gateway)])
@@ -1265,7 +1289,9 @@ def _task_reclaim_loop():
             pass
 
 
-threading.Thread(target=_task_reclaim_loop, name="sysible-task-reclaim", daemon=True).start()
+if _background_loops_enabled():
+    threading.Thread(target=_task_reclaim_loop, name="sysible-task-reclaim",
+                     daemon=True).start()
 
 
 def _sweep_become(now=None):

@@ -27,6 +27,16 @@ os.environ["SYSIBLE_HOSTS_FILE"] = str(_TMP / "hosts.json")
 os.environ["SYSIBLE_INTEGRITY_STATE"] = str(_TMP / "integrity.json")
 # Keep the login throttle small window so rate-limit tests are fast/deterministic.
 os.environ.setdefault("SYSIBLE_WEBGUI_LOGIN_MAX_ATTEMPTS", "8")
+# No background loops in a test process. The apps start them AT IMPORT, and
+# _isolate below unlinks the SQLite file and its -wal/-shm sidecars before every
+# test. Deleting a WAL index under an open connection is explicitly unsafe in
+# SQLite: the loop thread keeps the old -shm mmap'd, and reading through that
+# stale mapping after the file is recreated raises SIGBUS and takes the whole
+# process down -- no failing test, no traceback in the report, just a dead run.
+# Seen twice on full runs, at db.py's `PRAGMA journal_mode=WAL` with
+# sysible-task-reclaim as the other thread. Nothing here asserts on those loops;
+# the tests that cover their work call the functions directly.
+os.environ["SYSIBLE_DISABLE_BACKGROUND_LOOPS"] = "1"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

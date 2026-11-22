@@ -117,6 +117,16 @@ def _ctrl_path(url: str) -> str:
     return url
 
 
+SSO_SECRET = "sso-secret"
+GOOD_FB = {"X-Sysible-Auth": SSO_SECRET, "X-Sysible-User": "chris", "X-Sysible-Role": "superuser"}
+# The same request without the gateway's proof. Every assertion made with
+# GOOD_FB is only worth something if this one is refused -- otherwise the
+# headers are decoration and the test is measuring a fallback.
+NO_PROOF_FB = {"X-Sysible-User": "chris", "X-Sysible-Role": "superuser"}
+READ_ONLY_FB = {"X-Sysible-Auth": SSO_SECRET, "X-Sysible-User": "ana",
+                "X-Sysible-Role": "auditor"}
+
+
 def _load_flashback(tmp_path):
     """The real Flashback app, its store, AND the controller-client module the
     RUNNING APP holds.
@@ -134,6 +144,21 @@ def _load_flashback(tmp_path):
         pytest.skip("the SLOP checkout is not next to this repo")
     os.environ["SYSIBLE_FLASHBACK_DATA"] = str(tmp_path / "fbdata")
     os.environ["SYSIBLE_FLASHBACK_AGENT_TOKEN"] = TOKEN
+    # THE GATEWAY, configured the way the compose file configures it.
+    #
+    # Without these two, Flashback decides it is running standalone and hands
+    # every browser request the local dev identity instead of reading the
+    # headers -- so the X-Sysible-* headers below were never looked at, and
+    # "the operator presses Back up now" was being proved by a fallback that
+    # production never uses. It passed only because that fallback used to
+    # default to superuser; the day it was hardened to auditor (rightly: an
+    # unauthenticated mode must not be an administrator) this test started
+    # failing, and had been skipped often enough that nobody saw it.
+    #
+    # Read at import time, so they have to be set before the module below is
+    # loaded, not poked onto it afterwards.
+    os.environ["SYSIBLE_FLASHBACK_TRUST_GATEWAY_AUTH"] = "1"
+    os.environ["SYSIBLE_SSO_SHARED_SECRET"] = SSO_SECRET
     saved = {k: v for k, v in sys.modules.items() if k == "backend" or k.startswith("backend.")}
     for k in saved:
         del sys.modules[k]
@@ -163,7 +188,6 @@ def _agent_module():
         sys.path.remove(AGENT_DIR)
 
 
-GOOD_FB = {"X-Sysible-Auth": "sso-secret", "X-Sysible-User": "chris", "X-Sysible-Role": "superuser"}
 
 
 # ---- the chain, end to end --------------------------------------------------
@@ -249,3 +273,27 @@ def test_the_poll_itself_marks_the_agent_as_capture_capable(chain):
         pytest.skip("the poll-times endpoint needs the backend API key in this environment")
     hosts = after.json().get("hosts") or after.json()
     assert chain.host_id in str(hosts), (before.text, after.text)
+
+
+# ---- the identity those assertions rest on ---------------------------------
+def test_without_the_gateways_proof_nothing_is_granted(chain):
+    """GOOD_FB is only evidence if this is refused. Flashback trusts the
+    X-Sysible-* headers because the gateway stamps them and proves it with a
+    shared secret; a request that reaches it directly carries no proof."""
+    r = chain.fb.post(f"/api/hosts/{chain.host_id}/backup-now", headers=NO_PROOF_FB)
+    assert r.status_code == 401, r.text
+
+
+def test_a_forged_proof_is_not_accepted(chain):
+    bad = dict(GOOD_FB, **{"X-Sysible-Auth": SSO_SECRET + "x"})
+    r = chain.fb.post(f"/api/hosts/{chain.host_id}/backup-now", headers=bad)
+    assert r.status_code == 401, r.text
+
+
+def test_a_read_only_role_cannot_ask_for_a_backup(chain):
+    """An auditor is oversight. Requesting a capture changes what the fleet
+    does, so it needs an operator -- and this is the assertion that broke when
+    the unauthenticated fallback stopped calling itself a superuser."""
+    r = chain.fb.post(f"/api/hosts/{chain.host_id}/backup-now", headers=READ_ONLY_FB)
+    assert r.status_code == 403, r.text
+    assert "operator or superuser" in r.json()["detail"]

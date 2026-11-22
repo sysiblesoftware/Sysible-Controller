@@ -75,6 +75,15 @@ class EnrollSSHRequest(BaseModel):
     password: str
     environment: str = ""
     relay: Optional[str] = None      # relay opt-in; enroll + manage via the jump box
+    # Put the AGENT on the host too, not just the controller's SSH key.
+    #
+    # Default on, because that is what the console's one-click "Enroll host"
+    # has always claimed to do and what an operator means by an enrolled host:
+    # health, terminals, updates and config backup all ride the agent, and a
+    # host with only a key has none of them. Off is the older behaviour and
+    # still a real case -- a box deliberately managed over SSH alone, or one
+    # whose agent is installed some other way.
+    install_agent: bool = True
 
     @field_validator("name")
     @classmethod

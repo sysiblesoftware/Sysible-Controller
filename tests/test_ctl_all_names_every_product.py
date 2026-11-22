@@ -23,6 +23,7 @@ operator would have seen.
 import os
 import re
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -57,12 +58,28 @@ exit 0
 
 @pytest.fixture()
 def ctl(tmp_path):
-    """The real CLI, with a fake docker and nothing else on PATH to find."""
+    """The real CLI, with a fake docker and nothing else on PATH to find.
+
+    The script is RUN FROM A COPY under tmp_path, not from the repo. It looks
+    for a product's checkout in four places, and the fourth is beside its own
+    repo -- `$(dirname "$_CTL_REPO")/$repo` -- which is a real layout and
+    exactly the one this working tree is in. Run from deploy/, "this product
+    is not installed" quietly became "...unless somebody has cloned it next
+    door", and the test passed or failed on what else happened to be checked
+    out beside it. SYSIBLE_SRC_DIR and HOME were already controlled; this is
+    the path that was not.
+    """
     bindir = tmp_path / "bin"
     bindir.mkdir()
     d = bindir / "docker"
     d.write_text(FAKE_DOCKER)
     d.chmod(0o755)
+
+    repo = tmp_path / "repo"
+    (repo / "deploy").mkdir(parents=True)
+    ctl_copy = repo / "deploy" / "sysiblectl"
+    ctl_copy.write_text(Path(CTL).read_text(encoding="utf-8"), encoding="utf-8")
+    ctl_copy.chmod(0o755)
 
     def _run(*args, **env):
         e = {"PATH": f"{bindir}:/usr/bin:/bin",
@@ -72,8 +89,8 @@ def ctl(tmp_path):
              # puts a checkout there on purpose.
              "SYSIBLE_SRC_DIR": str(tmp_path / "src")}
         e.update({k: str(v) for k, v in env.items()})
-        r = subprocess.run(["bash", CTL, *args], capture_output=True, text=True,
-                           env=e, timeout=180)
+        r = subprocess.run(["bash", str(ctl_copy), *args], capture_output=True,
+                           text=True, env=e, timeout=180)
         return r.returncode, r.stdout + r.stderr
     return _run
 

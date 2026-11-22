@@ -1248,6 +1248,127 @@ def enroll_ssh(body: EnrollSSHRequest, request: Request = None):
     return out
 
 
+# =========================================================
+# PUT THE AGENT ON THE HOST
+# =========================================================
+# The gap this closes, which is the whole reason "enrolment" has not been
+# working: this route installed the controller's SSH KEY and nothing else. Its
+# own header still says so -- "the GUI calls this Connect Host, reserving
+# 'enroll' for the token-based host_agent flow" -- but the console's tab is
+# "Enroll a Host" and its first line promises it "installs its own key and
+# enrolls the agent". It did not. One click produced a host record, a key, and
+# a machine with no agent: no health, no terminal, no updates, no config
+# backup. The console then listed it as "SSH only -- no agent", which read as
+# a failure of the agent rather than of the thing that was supposed to install
+# it.
+#
+# So the promise is made true. The bundle is the SAME one the download button
+# mints -- one function, one single-use token, one host-cap check -- pushed
+# over the connection we already have open and authenticated.
+_AGENT_PUSH_TIMEOUT_S = 300
+
+
+def _push_agent_over_ssh(client, body, target):
+    """Install the agent on a host we have just installed our key on.
+
+    Returns a dict describing what happened. Raises HTTPException only when
+    the agent could NOT be installed, because a host that has to be enrolled
+    again is better than a host that is quietly half-enrolled -- which is the
+    state this whole function exists to stop producing.
+    """
+    from backend.db import get_controller_config
+    from backend.agent_bundle import mint_agent_bundle, bundle_addresses
+
+    config = get_controller_config()
+    addresses = bundle_addresses(config)
+    if not addresses:
+        raise HTTPException(
+            status_code=500,
+            detail="This Controller has no address to give the agent, so the "
+                   "agent would have nowhere to report to. Set the Controller's "
+                   "address under Settings and enroll again.")
+    filename, zip_bytes = mint_agent_bundle(
+        addresses, config["port"], environment=body.environment or "")
+
+    # /tmp, and a name nobody can predict: the zip carries a single-use
+    # enrollment token, and a fixed path in a world-writable directory is one
+    # unprivileged local user away from being read before we unpack it.
+    import secrets
+    workdir = f"/tmp/.sysible-enroll-{secrets.token_hex(8)}"
+    remote_zip = f"{workdir}/{filename}"
+
+    try:
+        sftp = client.open_sftp()
+    except Exception as exc:                                   # noqa: BLE001
+        raise HTTPException(
+            status_code=400,
+            detail=f"The key went on, but SFTP is not available on {target}, so "
+                   f"the agent could not be copied over ({exc}). Enable the "
+                   f"sftp subsystem, or install the agent from the bundle.")
+    try:
+        sftp.mkdir(workdir)
+        sftp.chmod(workdir, 0o700)
+        with sftp.file(remote_zip, "wb") as fh:
+            fh.write(zip_bytes)
+    except Exception as exc:                                   # noqa: BLE001
+        raise HTTPException(
+            status_code=400,
+            detail=f"The key went on, but the agent bundle could not be written "
+                   f"to {workdir} on {target}: {exc}")
+    finally:
+        try:
+            sftp.close()
+        except Exception:                                      # noqa: BLE001
+            pass
+
+    # python3 unpacks it, not `unzip`: the agent needs python3 anyway, and
+    # unzip is absent from plenty of minimal images -- which would have turned
+    # "your host has no unzip" into "enrollment failed" with no way to tell.
+    # One command that cleans up after ITSELF, whatever happens, and still
+    # reports the installer's exit code. The zip carries a live single-use
+    # enrollment token; a second exec to tidy up would not run if this one
+    # died, and after sudo the unpacked files are root-owned, so a later
+    # unprivileged rm could not have removed them anyway.
+    q_dir, q_zip = shlex.quote(workdir), shlex.quote(remote_zip)
+    run = (
+        f"cd {q_dir} && "
+        f"python3 -c 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(\".\")' "
+        f"{q_zip} && chmod +x run_agent.sh && ./run_agent.sh; "
+        f"rc=$?; cd /; rm -rf {q_dir}; exit $rc"
+    )
+    needs_sudo = (body.username or "").strip() != "root"
+    if needs_sudo:
+        # -S reads the password from stdin; -p '' keeps the prompt out of the
+        # output we show the operator. It never appears in the command line,
+        # so it is not in the remote process table or anybody's shell history.
+        run = f"sudo -S -p '' bash -lc {shlex.quote(run)}"
+
+    out, rc = "", None
+    try:
+        stdin, stdout, stderr = client.exec_command(run, timeout=_AGENT_PUSH_TIMEOUT_S)
+        if needs_sudo:
+            stdin.write((body.password or "") + "\n")
+            stdin.flush()
+        out = (stdout.read().decode(errors="replace")
+               + stderr.read().decode(errors="replace"))
+        rc = stdout.channel.recv_exit_status()
+    except Exception as exc:                                   # noqa: BLE001
+        raise HTTPException(
+            status_code=400,
+            detail=f"The key went on, but running the agent installer on {target} "
+                   f"failed: {exc}")
+
+    if rc != 0:
+        tail = "\n".join([ln for ln in out.splitlines() if ln.strip()][-12:])
+        raise HTTPException(
+            status_code=400,
+            detail=(f"The controller's key is installed on {target}, but the agent "
+                    f"installer exited {rc}. Nothing was enrolled. The last of its "
+                    f"output:\n{tail or '(it printed nothing)'}"))
+    return {"installed": True, "bundle": filename,
+            "output_tail": "\n".join(out.splitlines()[-5:])}
+
+
 def _enroll_ssh(body: EnrollSSHRequest):
     from backend.edition import enforce_host_limit
     enforce_host_limit(body.name)
@@ -1319,6 +1440,7 @@ def _enroll_ssh(body: EnrollSSHRequest):
                          "user": body.username,
                          "relay": getattr(body, "relay", None)})
 
+    agent_result = None
     try:
         _ssh_connect(
             client, target, proxy=proxy,
@@ -1332,6 +1454,21 @@ def _enroll_ssh(body: EnrollSSHRequest):
 
         if exit_status != 0:
             raise HTTPException(status_code=400, detail=stderr.read().decode(errors="replace"))
+
+        # THE AGENT, on the connection we already have, and BEFORE the host
+        # record is written. If it cannot go on, nothing is written down: an
+        # operator re-enrolling a host that failed is a far better place to be
+        # than one holding a record for a machine that is managed in name only
+        # -- the "SSH only, no agent" row that made enrollment look broken for
+        # a week. The key stays on the host either way, which is harmless and
+        # makes the retry cheaper.
+        #
+        # Here rather than after the `finally` below, because that finally
+        # closes this connection: pushing the bundle afterwards would have
+        # meant opening a second one, with a password we have promised to use
+        # exactly once.
+        if getattr(body, "install_agent", True):
+            agent_result = _push_agent_over_ssh(client, body, target)
 
     except paramiko.BadHostKeyException as e:
         # This IP is already pinned in known_hosts with a DIFFERENT key than the
@@ -1387,7 +1524,7 @@ def _enroll_ssh(body: EnrollSSHRequest):
         }
         save_hosts(hosts)
 
-    return {"enrolled": True, "host": body.name}
+    return {"enrolled": True, "host": body.name, "agent": agent_result}
 
 
 # =========================================================

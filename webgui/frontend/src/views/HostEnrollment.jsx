@@ -450,7 +450,7 @@ export default function HostEnrollment() {
       setBulkProgress({ done: i, total: picked.length, current: name });
       mark(i, { state: "running", at: Date.now() });
       try {
-        await api.enrollSsh({
+        const r = await api.enrollSsh({
           // The TARGET. A line that was just a name has no address, and sending
           // "" would enroll nothing -- the Controller resolves the name itself.
           name, ip: r.target || r.address,
@@ -458,7 +458,16 @@ export default function HostEnrollment() {
           environment: bulkCreds.environment,
         });
         done.push(name);
-        mark(i, { state: "ok", detail: "enrolled", at: Date.now() });
+        // What the host actually got. "enrolled" alone was true of a host
+        // that received a key and no agent, which is the state that made
+        // enrollment look broken while reporting success.
+        mark(i, {
+          state: "ok",
+          detail: r && r.agent && r.agent.installed
+            ? "enrolled — key and agent installed"
+            : "enrolled — SSH key only, no agent",
+          at: Date.now(),
+        });
       } catch (e) {
         const why = e.message || "failed";
         failed.push(`${name}: ${why}`);

@@ -23,6 +23,7 @@ So the list is now asked of compose, and the hard-coded table is only the
 fallback for when compose cannot be reached.
 """
 import os
+import sys
 import re
 import subprocess
 import textwrap
@@ -31,9 +32,14 @@ import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CTL = os.path.join(os.path.dirname(HERE), "deploy", "sysiblectl")
-# The SLOP checkout, when it happens to sit alongside this one.
-SLOP_COMPOSE = os.path.join(os.path.dirname(os.path.dirname(HERE)),
-                            "slop", "docker-compose.yml")
+# The SLOP checkout, when it happens to sit alongside this one. Resolved by
+# looking rather than guessed: this used to hardcode "<parent>/slop", and the
+# checkout is called sysible-linux-operations-platform, so the comparison below
+# skipped on every machine that had both repositories.
+sys.path.insert(0, HERE)
+from _slop import slop_file                                   # noqa: E402
+_SLOP_COMPOSE = slop_file("docker-compose.yml")
+SLOP_COMPOSE = str(_SLOP_COMPOSE) if _SLOP_COMPOSE else ""
 
 
 @pytest.fixture
@@ -105,7 +111,7 @@ def test_backup_writes_one_tarball_per_volume(lib, tmp_path):
         assert vol in calls, f"backup never touched {vol}:\n{calls}"
 
 
-@pytest.mark.skipif(not os.path.exists(SLOP_COMPOSE),
+@pytest.mark.skipif(not SLOP_COMPOSE,
                     reason="the SLOP checkout is not alongside this one")
 def test_the_fallback_matches_the_real_slop_compose_file(lib):
     """When both repositories are checked out together — a developer machine,

@@ -28,7 +28,10 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-SLOP = Path("/home/user/sysible-linux-operations-platform")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _slop import slop_dir                                    # noqa: E402
+
+SLOP = slop_dir() or Path("/nonexistent")
 BASELINE_DIR = SLOP / "baseline"
 TOKEN = "b" * 64
 

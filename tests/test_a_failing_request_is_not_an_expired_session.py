@@ -25,6 +25,7 @@ Run: pytest tests/
 """
 import re
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -32,7 +33,14 @@ REPO = Path(__file__).resolve().parents[1]
 API = (REPO / "webgui" / "frontend" / "src" / "api.js").read_text(encoding="utf-8")
 APP = (REPO / "webgui" / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
 SERVER = (REPO / "webgui" / "server.py").read_text(encoding="utf-8")
-CADDY = Path("/home/user/slop/gateway/Caddyfile")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _slop import slop_file                                   # noqa: E402
+
+# Was hardcoded to /home/user/slop/gateway/Caddyfile -- a path that does not
+# exist, so this gateway check skipped everywhere while reporting it as the
+# machine's fault.
+_CADDY = slop_file("gateway", "Caddyfile")
+CADDY = _CADDY if _CADDY else Path("/nonexistent/Caddyfile")
 
 
 def _bounce_condition():

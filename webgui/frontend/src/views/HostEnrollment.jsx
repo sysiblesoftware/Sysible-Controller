@@ -450,7 +450,11 @@ export default function HostEnrollment() {
       setBulkProgress({ done: i, total: picked.length, current: name });
       mark(i, { state: "running", at: Date.now() });
       try {
-        const r = await api.enrollSsh({
+        // NOT `r`: the loop above already binds that to the row being
+        // enrolled, and re-declaring it in the same block is a SyntaxError
+        // that takes the whole bundle down -- no enrollments at all, which is
+        // what the browser tests caught.
+        const res = await api.enrollSsh({
           // The TARGET. A line that was just a name has no address, and sending
           // "" would enroll nothing -- the Controller resolves the name itself.
           name, ip: r.target || r.address,
@@ -463,7 +467,7 @@ export default function HostEnrollment() {
         // enrollment look broken while reporting success.
         mark(i, {
           state: "ok",
-          detail: r && r.agent && r.agent.installed
+          detail: res && res.agent && res.agent.installed
             ? "enrolled — key and agent installed"
             : "enrolled — SSH key only, no agent",
           at: Date.now(),

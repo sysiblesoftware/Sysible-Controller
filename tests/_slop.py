@@ -20,12 +20,29 @@ import pathlib
 
 _REPO = pathlib.Path(__file__).resolve().parents[1]
 
-_CANDIDATES = (
-    _REPO.parent / "sysible-linux-operations-platform",
-    _REPO.parent / "slop",
-    pathlib.Path("/home/user/sysible-linux-operations-platform"),
-    pathlib.Path("/home/user/slop"),
-    pathlib.Path("/opt/sysible-src/sysible-linux-operations-platform"),
+# Beside this repo, ABOVE it, and the conventional absolute locations. Above
+# matters because this repo is also vendored INTO SLOP, at <slop>/apps/
+# controller -- and in that tree every check that looked only beside itself
+# found apps/ and gave up. That is the tree SLOP builds and ships from, so the
+# cross-app checks were skipping in exactly the place they count.
+# BESIDE this repo, or ABOVE it. Both are relationships to this checkout.
+#
+# Above matters because this repo is also vendored INTO SLOP, at
+# <slop>/apps/controller -- and in that tree every check that looked only
+# beside itself found apps/ and gave up. That is the tree SLOP builds and ships
+# from, so the cross-app checks were skipping in exactly the place they count.
+#
+# What is NOT here is a list of absolute guesses. /home/user/sysible-linux-
+# operations-platform was one of the hardcodes this module replaced, and
+# keeping it as a fallback brings the bug back in a quieter form: a second
+# checkout anywhere on a machine that also has one at /home/user would compare
+# itself against THAT tree and report on a directory it has no relationship
+# to. The installer's own layout needs no special case -- it puts both
+# checkouts side by side, which the first rule already covers.
+_CANDIDATES = tuple(
+    [_REPO.parent / "sysible-linux-operations-platform",
+     _REPO.parent / "slop"]
+    + list(_REPO.parents)
 )
 
 
@@ -40,9 +57,10 @@ def slop_dir():
         p = pathlib.Path(env)
         return p if p.is_dir() else None
     for cand in _CANDIDATES:
-        # docker-compose.yml marks the real root, not just a directory that
-        # happens to carry the name.
-        if (cand / "docker-compose.yml").is_file():
+        # What marks the real root is its CONTENT, not its name: an ancestor
+        # walk passes through directories that carry neither.
+        if (cand / "docker-compose.yml").is_file() \
+                and (cand / "flashback" / "backend" / "store.py").is_file():
             return cand
     return None
 

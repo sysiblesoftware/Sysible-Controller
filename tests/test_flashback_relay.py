@@ -37,10 +37,18 @@ def _find_flashback() -> str:
     """
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     parent = os.path.dirname(here)
+    sys.path.insert(0, os.path.join(here, "tests"))
+    from _slop import slop_dir
+    shared = slop_dir()
     named = os.environ.get("SYSIBLE_SLOP_DIR", "")
     for cand in ([os.path.join(named, "flashback")] if named else []) + [
+            # Covers the vendored layout, where SLOP is ABOVE this repo rather
+            # than beside it; the walk below only ever looked sideways.
+            os.path.join(str(shared), "flashback") if shared else "",
             os.path.join(parent, "sysible-linux-operations-platform", "flashback"),
             os.path.join(parent, "slop", "flashback")]:
+        if not cand:
+            continue
         if os.path.isfile(os.path.join(cand, "backend", "store.py")):
             return cand
     try:

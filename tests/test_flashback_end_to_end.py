@@ -28,8 +28,11 @@ import pytest
 
 from tests.conftest import key_headers as _key
 from tests.test_flashback_relay import TOKEN
-
-FB_DIR = "/home/user/sysible-linux-operations-platform/flashback"
+# Resolved, not hardcoded. This file carried
+# "/home/user/sysible-linux-operations-platform/flashback" as a literal, so the
+# whole end-to-end chain skipped on any machine that put the checkout anywhere
+# else -- including the vendored tree, where it sits above this repo.
+from tests.test_flashback_relay import FB_DIR
 AGENT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "host_agent")
 
 

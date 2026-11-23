@@ -215,12 +215,7 @@ export default function ToolRunner({ openTool, openTab, openPrefill, onConsumed,
   }
 
   return (
-    // tools-page: scopes the field-calming scrim below. The topographic field is
-    // a PLATFORM brand element -- the portal, the sign-in page, Flashback and the
-    // Visualizer all draw the same one -- so it is settled here rather than
-    // turned down globally, which would make this one app disagree with the
-    // others about what the background is.
-    <div className="tools-page">
+    <div>
       <input className="search-bar" placeholder='Search tools… e.g. "users", "firewall", "raid", "certificates"'
              value={q} onChange={(e) => setQ(e.target.value)} />
       {searching

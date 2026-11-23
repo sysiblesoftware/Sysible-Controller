@@ -47,12 +47,6 @@ def _block(selector: str) -> dict:
 DARK = _block(':root[data-skin="brand"]')
 LIGHT = _block(':root[data-theme="light"]')
 BASE = _block(":root,")
-# Radius and spacing are NOT palette decisions and no longer live in a palette
-# block. They used to sit inside the brand skin, which meant data-skin="base"
-# resolved `gap: var(--sp-3)` and `border-radius: var(--r-md)` to nothing and
-# rendered the tool grid as one slab of square, gapless cards. Only index.html
-# hard-coding data-skin="brand" kept that from ever being seen.
-SCALE = _block(":root {")
 
 
 def tok(theme: dict, name: str) -> str:
@@ -71,10 +65,7 @@ SPACE = ["--sp-0", "--sp-1", "--sp-2", "--sp-3", "--sp-4"]
 
 @pytest.mark.parametrize("name", TYPE + RADII + SPACE)
 def test_every_scale_step_is_defined(name):
-    """In a block EVERY skin inherits, or in the one that is actually rendered.
-    A step defined in neither resolves to nothing wherever it is used."""
-    assert name in DARK or name in SCALE, \
-        f"{name} is defined in no block that the rendered skin inherits"
+    assert name in DARK, f"{name} is not defined in the rendered token block"
 
 
 def test_the_type_steps_are_far_enough_apart_to_read_as_different():

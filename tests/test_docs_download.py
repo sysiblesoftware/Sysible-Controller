@@ -1,7 +1,9 @@
 """
 Offline documentation download (web console BFF).
 
-The left-rail "Documentation" item links to GET /api/docs/download, which serves
+The left-rail "Documentation" item links to GET /api/docs/view. This endpoint is
+the DOWNLOAD beside it; the rail pointed here once, which is what this said.
+GET /api/docs/download serves
 the bundled, self-contained HTML manual so an operator can save it and read it
 without network access. Verify it is login-gated, streams the file, and rejects
 an unknown selector.

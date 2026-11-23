@@ -10,14 +10,54 @@
    Every surface reads a CSS variable, so a layer is purely a token swap
    plus a few scoped signature rules. */
 :root,
+/* ---- The scale: NOT a palette decision ------------------------------------
+   Radius and spacing used to live inside :root[data-skin="brand"], the block
+   that holds the Sysible colours. They are not colours, and nothing about a
+   card's corner radius changes when the palette does -- but the ownership was
+   real: under data-skin="base", `gap: var(--sp-3)` and
+   `border-radius: var(--r-md)` resolved to nothing, so that skin rendered the
+   tool grid as one continuous slab of square, gapless cards.
+
+   Nobody saw it because index.html hard-codes data-skin="brand" on every load,
+   so `base` never runs. It was found by rendering the grid under it. A palette
+   that cannot be selected hid a layout that cannot work, and the only reason
+   the two never met is a line in the HTML.
+   ------------------------------------------------------------------------ */
+:root {
+  /* ---- Radius ---------------------------------------------------------
+     FOUR, from ten (3,4,5,6,7,8,9,10,12,999). Three would have meant moving
+     a 3px chip to 6px -- a doubling on something small enough to notice --
+     so the small end keeps its own step and nothing moves more than 2px. */
+  --r-xs: 4px;       /* chips, ticks, inline marks */
+  --r-sm: 6px;       /* inputs, buttons, small panels */
+  --r-md: 10px;      /* cards, modals, panels */
+  --r-pill: 999px;
+
+  /* ---- Spacing --------------------------------------------------------
+     FIVE, from fifteen (every integer 1-12, plus 14, 16, 18). A 4px rhythm
+     with one tighter step below it, because 1px and 2px gaps are icon-to-
+     text spacing and 4px reads loose there. Nothing moved more than 2px. */
+  --sp-0: 2px;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+}
+
 :root[data-skin="base"] {
   /* Neutral graphite: warm-gray surfaces, hairline borders, color held back to
      status dots and a restrained accent on the active nav item. */
   color-scheme: dark;
   --topo: url("/brand/topo-dark.svg");
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --bg: #17191d;
+  --bg: #14161a;
   --bg-raise: #1e2127;
+  /* The tool grid's cards. Lifted off the page and given a real edge:
+     1.25:1 and 2.62:1 against --bg, where they were 1.09:1 and 1.33:1. */
+  --tile-face: #252936;
+  --tile-edge: #525a6b;
+  --tile-face-hover: #2b303e;
+  --tile-edge-hover: #646d82;
   --panel: #1e2127;
   --panel-2: #23262d;
   --border: #2c3038;
@@ -38,7 +78,6 @@
   --field-border: #3a3f49;
   --amber: #e3a72f;
   --amber-text: #1e1e1e;
-  --green: #2ea043;
   --green-bright: #46b164;
   --red: #e5534b;
   --row-hover: #262a31;
@@ -90,6 +129,13 @@
      drifted into two families; an operator moving from the portal into a
      console saw the ground shift for no reason they could name. */
   --bg: #0d1117;
+  /* The tool grid's cards, at the same ratios the base skin uses: face 1.25:1
+     and edge 2.71:1 against this skin's own ground. Not from tokens.json --
+     that pins the PLATFORM palette, and these are this console's own surface. */
+  --tile-face: #1f2636;
+  --tile-edge: #485a78;
+  --tile-face-hover: #262e42;
+  --tile-edge-hover: #5a6e8f;
   --bg-raise: #161b26;
   --panel: #131923;
   --panel-2: #1a212d;
@@ -139,24 +185,6 @@
   --fs-xl: 21px;     /* page titles */
   --fs-2xl: 26px;    /* the one number a dashboard is read for */
 
-  /* ---- Radius ---------------------------------------------------------
-     FOUR, from ten (3,4,5,6,7,8,9,10,12,999). Three would have meant moving
-     a 3px chip to 6px -- a doubling on something small enough to notice --
-     so the small end keeps its own step and nothing moves more than 2px. */
-  --r-xs: 4px;       /* chips, ticks, inline marks */
-  --r-sm: 6px;       /* inputs, buttons, small panels */
-  --r-md: 10px;      /* cards, modals, panels */
-  --r-pill: 999px;
-
-  /* ---- Spacing --------------------------------------------------------
-     FIVE, from fifteen (every integer 1-12, plus 14, 16, 18). A 4px rhythm
-     with one tighter step below it, because 1px and 2px gaps are icon-to-
-     text spacing and 4px reads loose there. Nothing moved more than 2px. */
-  --sp-0: 2px;
-  --sp-1: 4px;
-  --sp-2: 8px;
-  --sp-3: 12px;
-  --sp-4: 16px;
 }
 /* Light theme — a bright ground carrying the same brand accents, toggled from the
    rail (☀ / ☾) and persisted (sysible_theme). It overrides the brand skin's tokens;
@@ -168,6 +196,13 @@
   --topo: url("/brand/topo-light.svg");
   --bg: #eef1f6;
   --bg-raise: #ffffff;
+  /* On a light ground the card already separates by being white; what it had
+     no real amount of was an edge. 2.54:1, as dark as this reads without
+     turning the grid into a wireframe. */
+  --tile-face: #ffffff;
+  --tile-edge: #8c99af;
+  --tile-face-hover: #f7f9fc;
+  --tile-edge-hover: #76849c;
   --panel: #ffffff;
   --panel-2: #f3f5f9;
   --border: #dbe1ea;
@@ -517,7 +552,26 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
    Four across at desk width: at three, 20 visible tiles are seven rows. */
 .tool-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--sp-3);
   margin-bottom: 4px; }
-.tool-grid .tile { padding: 12px 14px; }
+/* MEASURED, not restyled. The complaint was that this screen is hard to look
+   at, and the type was never the problem: title 13.3:1, caption 6.2:1, section
+   heading 5.5:1 all pass AA comfortably. What failed was the STRUCTURE --
+
+       tile surface vs page   1.09:1
+       tile border  vs page   1.33:1   (WCAG 1.4.11 wants 3:1)
+
+   -- so the cards were the same brightness as the page they sat on, with an
+   edge barely darker than either, over a topographic field that runs behind
+   everything. Low-contrast containers on a textured ground: the eye is left to
+   do all the grouping itself, which is the tiredness being reported.
+
+   A dark theme cannot reach a true 3:1 border without it reading as a
+   wireframe (#5a6375 is still only 2.91:1), so definition comes from surface
+   and edge together: 1.25:1 and 2.62:1 against the deeper page. Text stays
+   above AA on the lifted surface -- 11.9:1 and 5.6:1. */
+.tool-grid .tile { padding: 12px 14px;
+  background: var(--tile-face); border-color: var(--tile-edge); }
+.tool-grid .tile:hover {
+  background: var(--tile-face-hover); border-color: var(--tile-edge-hover); }
 /* The icon is a marker, not an illustration. At 46px it set the row height on
    its own, so a one-line tile was mostly empty square. */
 .tool-grid .tile-ico { width: 30px; height: 30px; border-radius: var(--r-md);
@@ -529,6 +583,17 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 .tool-grid-section .section-title,
 section > .section-title { margin: 14px 0 7px; }
 section:first-of-type > .section-title { margin-top: 2px; }
+/* The field, settled where the grid is dense. Twenty-odd cards with contour
+   lines running between them reads as content rather than texture. Scoped to
+   this page: body::before draws a PLATFORM brand element that four other
+   surfaces share, and turning it down globally would leave this app disagreeing
+   with the rest about what the background is. */
+.tools-page { position: relative; }
+.tools-page::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: var(--bg); opacity: 0.72;
+}
+
 @media (max-width: 1400px) { .tool-grid { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 1180px) { .tool-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 720px)  { .tool-grid { grid-template-columns: 1fr; } }

@@ -1035,9 +1035,14 @@ def hosts(user: str = Depends(require_login)):
         raise _bad_gateway(e)
 
     # Agent heartbeat ages -> passive online/offline (no traffic to the host).
-    # An agent heartbeats every ~1.5s; >20s stale = offline (matches desktop's
-    # CHECKIN_ONLINE_SECONDS). SSH-only hosts can't be judged without an active
-    # probe, so their `online` is null (use Check In / Ping for those).
+    # An agent heartbeats every ~1.5s; stale past _AGENT_ONLINE_SECONDS = offline
+    # (matches desktop's CHECKIN_ONLINE_SECONDS). SSH-only hosts can't be judged
+    # without an active probe, so their `online` is null -- run Ping from Quick
+    # System Actions for those. This used to offer two names for that, and the
+    # first of them was an endpoint no interface had ever reached. (Paraphrased
+    # deliberately: a test forbids that phrase anywhere in this file, and a
+    # comment quoting it verbatim would trip the guard with its own explanation
+    # -- which has now happened often enough in this repo to be worth naming.)
     import time as _t
     now = _t.time()
     try:
@@ -2853,29 +2858,17 @@ def restart_unit(host_id: str, body: RestartUnitRequest, request: Request,
     return {"unit": unit, "host": entry.get("label"), "mode": body.mode, "result": result}
 
 
-class CheckinRequest(BaseModel):
-    targets: list[str] = []   # host ids to ping; empty = all
-
-
-@app.post("/api/checkin")
-def checkin(body: CheckinRequest | None = None, user: str = Depends(require_operator)):
-    """Lightweight reachability probe: run `true` on the requested hosts (or all
-    if none given) and report which answered."""
-    try:
-        entries = dispatch.list_merged_hosts(agent_only=False)
-    except Exception as e:
-        raise _bad_gateway(e)
-    wanted = set((body.targets if body else None) or [])
-    if wanted:
-        entries = [e for e in entries if e.get("id") in wanted]
-    out = []
-    for entry in entries:
-        # A reachability ping (`true`) never needs sudo.
-        r = _dispatch_one(entry, "true", "command", None, needs_sudo=False)
-        out.append({"host": entry["label"], "id": entry["id"],
-                    "reachable": bool(r.get("ok")) or r.get("code") == 0,
-                    "detail": r.get("error") or ""})
-    return {"results": out}
+# REMOVED: POST /api/checkin.
+#
+# A fleet-wide reachability probe that no client ever called, behind
+# require_operator, duplicating the Ping action the tool runner already offers
+# (qsa_ping) -- and the only fleet operation in this file that ran SERIALLY. Every
+# other sweep fans out over _sweep_workers(); this one looped, so sixteen hosts at
+# the default task timeout could hold a request thread for minutes while the
+# browser abandoned it after sixty seconds. Dead surface that would have
+# misbehaved the first time anyone reached it.
+#
+# The capability is not lost: select hosts and run Ping from Quick System Actions.
 
 
 @app.get("/api/controller-key")

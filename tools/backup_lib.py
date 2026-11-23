@@ -157,11 +157,15 @@ def create_backup(dest_dir, roots=None, label=None, now=None, sanitize=False):
         try:
             from backend import secret_vault
             if not secret_vault.is_encrypting_at_rest():
+                # Consequence first. The usual cause is the deliberately-degraded
+                # mode, but this is also reached when the vault could not be
+                # inspected at all, and naming a cause that was never established
+                # sends the operator to check a setting that is not the problem.
                 manifest["warnings"].append(
-                    "at-rest encryption is DEGRADED (no key + SYSIBLE_SECRET_REQUIRED=0): "
-                    "the database in this sanitized bundle may contain PLAINTEXT secrets "
-                    "(e.g. sudo/become passwords). Treat this bundle as sensitive despite "
-                    "--sanitize.")
+                    "at-rest encryption is NOT CONFIRMED active: the database in this "
+                    "sanitized bundle may contain PLAINTEXT secrets (e.g. sudo/become "
+                    "passwords). Treat this bundle as sensitive despite --sanitize. "
+                    "Usual cause: no master key and SYSIBLE_SECRET_REQUIRED=0.")
         except Exception:
             pass
     try:

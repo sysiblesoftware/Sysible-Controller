@@ -291,11 +291,16 @@ def is_encrypting_at_rest() -> bool:
     write rather than persisting plaintext. False only in the deliberately-degraded
     combination (no resolvable key AND SYSIBLE_SECRET_REQUIRED=0), where DB-embedded
     secrets may be cleartext. The sanitized migration export consults this so it warns
-    instead of claiming the bundle is safe to move around."""
+    instead of claiming the bundle is safe to move around.
+
+    FALSE when the question cannot be answered. True here means "no warning", so an
+    exception used to assert that a vault nobody could inspect was safe -- and the
+    operator carried away a bundle that may hold plaintext sudo passwords. "Could
+    not check" is not "checked and fine"; the only safe direction is the warning."""
     try:
         return bool(_fernet()) or _strict_required()
     except Exception:
-        return True
+        return False
 
 
 class EncryptionUnavailable(RuntimeError):

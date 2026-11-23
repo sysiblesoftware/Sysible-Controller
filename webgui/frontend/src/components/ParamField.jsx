@@ -101,6 +101,17 @@ function RemoteSelect({ p, value, onChange, targets }) {
             onChange={(e) => onChange(p.name, e.target.value)}
           />
           {loading && <span className="spin" />}
+          {/* The same capability where the menu cannot be offered. Across 16
+              hosts there is no one list to choose from, so this is the ONLY
+              route to "every VM" — and it was a word buried in 11px grey text
+              under the field. */}
+          {cur !== "all" && (
+            <button type="button" className="btn ghost sm"
+                    title="Act on every VM on each selected host"
+                    onClick={() => onChange(p.name, "all")}>
+              All VMs
+            </button>
+          )}
           {listUsable && (
             <button type="button" className="btn ghost sm"
                     title="Choose from the VMs on the selected host"
@@ -109,7 +120,13 @@ function RemoteSelect({ p, value, onChange, targets }) {
             </button>
           )}
         </div>
-        {hint && <div className="faint" style={{ fontSize: 11, marginTop: 3 }}>{hint}</div>}
+        {cur === "all" && (
+          <div className="faint" style={{ fontSize: 11, marginTop: 3 }}>
+            Every VM on {targets.length === 1 ? "the selected host"
+              : `all ${targets.length} selected hosts`}.
+          </div>
+        )}
+        {hint && cur !== "all" && <div className="faint" style={{ fontSize: 11, marginTop: 3 }}>{hint}</div>}
       </>
     );
   }
@@ -119,6 +136,16 @@ function RemoteSelect({ p, value, onChange, targets }) {
       <select value={cur} style={{ flex: 1 }}
               onChange={(e) => onChange(p.name, e.target.value)} disabled={loading}>
         <option value="">{loading ? "Loading VMs…" : "— choose a VM —"}</option>
+        {/* EVERY VM, as something you can pick. The backend has taken "all"
+            since this field was written (cmd_vm_action branches on it and
+            loops over `virsh list --all --name`), but the only way to reach it
+            was to know the magic word and type it — in a field whose whole
+            visible affordance is a menu of individual names. Reported as
+            "there is no way to shutdown all the vms from the single field",
+            which was true of the interface and never true of the API. */}
+        {!loading && options.length > 1 && (
+          <option value="all">All VMs on this host ({options.length})</option>
+        )}
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
       </select>
       <button type="button" className="btn ghost sm" title="Refresh the VM list"

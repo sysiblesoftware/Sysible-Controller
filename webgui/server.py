@@ -1090,7 +1090,7 @@ def hosts(user: str = Depends(require_login)):
         ls = last_seen.get(agent_id) if agent_id else None
         online = None
         if agent_id is not None:
-            online = bool(ls and (now - ls) <= 20)
+            online = bool(ls and (now - ls) <= _AGENT_ONLINE_SECONDS)
         pc = posture_by_id.get(e["id"])
         reasons = (_host_critical_reasons(pc.get("flags") or {}, e["label"],
                                           e.get("environment") or "", supps)
@@ -1326,6 +1326,12 @@ def _cache_covers(cache, fleet_ids):
     return {h.get("id") for h in (cache.get("hosts") or [])} == fleet_ids
 
 
+# One definition of "recently heard from", used everywhere a screen decides
+# whether a host is online. It was a bare `20` repeated at each site, which is
+# how two screens come to disagree about the same fleet.
+_AGENT_ONLINE_SECONDS = float(os.getenv("SYSIBLE_AGENT_ONLINE_SECONDS", "20"))
+
+
 def _sweep_workers(n):
     """Concurrency for fleet sweeps (health / posture / metrics). Higher than the
     old fixed 12 so a 20+ host fleet completes in far fewer waves — each worker
@@ -1383,7 +1389,7 @@ def _fleet_health_sweep(force_live=False):
         # reading up with the agent inventory (agents are keyed by host_id).
         base["agent_id"] = aid
         ls = last_seen.get(aid) if aid else None
-        online = (bool(ls and (now - ls) <= 20)) if aid else None
+        online = (bool(ls and (now - ls) <= _AGENT_ONLINE_SECONDS)) if aid else None
         # Don't probe an agent host we already know is offline — avoids waiting
         # out the task timeout on a host that won't answer.
         if aid is not None and not online:
@@ -1619,7 +1625,7 @@ def _probe_posture(e, cmd, last_seen, now):
     elif e["kind"] == "merged":
         aid = (e.get("agent_entry") or {}).get("id") or e["id"]
     ls = last_seen.get(aid) if aid else None
-    online = (bool(ls and (now - ls) <= 20)) if aid else None
+    online = (bool(ls and (now - ls) <= _AGENT_ONLINE_SECONDS)) if aid else None
     if aid is not None and not online:
         return {**base, "online": False, "ok": False, "error": "offline",
                 "posture": None, "flags": {}, "limited": False}
@@ -1849,12 +1855,12 @@ def _parse_updates(text):
     return None
 
 
-def _probe_updates(e, cmd, last_seen, now, poll_timeout=60):
+def _probe_updates(e, cmd, last_seen, now, poll_timeout=60, exec_timeout=None):
     base = {"id": e.get("id"), "host": e.get("label"),
             "environment": e.get("environment") or "Unassigned"}
     aid = e["id"] if e["kind"] == "agent" else (e.get("agent_entry") or {}).get("id") if e["kind"] == "merged" else None
     ls = last_seen.get(aid) if aid else None
-    online = (bool(ls and (now - ls) <= 20)) if aid else None
+    online = (bool(ls and (now - ls) <= _AGENT_ONLINE_SECONDS)) if aid else None
     if aid is not None and not online:
         return {**base, "online": False, "error": "offline", "mgr": None,
                 "total": None, "security": None, "reboot": None}
@@ -1865,14 +1871,56 @@ def _probe_updates(e, cmd, last_seen, now, poll_timeout=60):
         return {**base, "online": True, "error": "integrity-quarantined", "mgr": None,
                 "total": None, "security": None, "reboot": None}
     pe = _tokenless_entry(e)
+    # BOUNDED. This sweep used to pass no exec_timeout at all, so the agent was
+    # allowed its 1800s default while the console waited 60s -- the one sweep in
+    # the product that both overran most often and left its overrun running.
     r = _dispatch_one(pe, cmd, "command", None, None, None, needs_sudo=False,
-                      poll_timeout=poll_timeout)
+                      poll_timeout=poll_timeout, exec_timeout=exec_timeout)
     u = _parse_updates((r.get("stdout") or "") + "\n" + (r.get("stderr") or ""))
     if not u:
         return {**base, "online": True if r.get("ok") else online,
                 "error": r.get("error") or "no update data returned",
                 "mgr": None, "total": None, "security": None, "reboot": None}
     return {**base, "online": True, "error": None, **u}
+
+
+def _with_live_reachability(hosts):
+    """Re-judge `online` from the CURRENT heartbeat, however old the scan is.
+
+    The patch sweep is cached for 15 minutes because counting packages is heavy.
+    Reachability is not: it is one instant inventory call. Serving it from the
+    same cache meant the patch screen could say "2 offline" while the dashboard's
+    Online tile -- which reads the live inventory -- said 0 of 16 offline, for up
+    to a quarter of an hour. Two screens, one fleet, opposite answers, and no way
+    for the operator to tell which to believe.
+
+    Package counts are allowed to age; that is what the scan timestamp is for. A
+    host's reachability is not, so it is refreshed on every return.
+
+    A row skipped BECAUSE it was unreachable keeps that as its reason, reworded:
+    the scan really did skip it, and saying "offline" about a host that is
+    answering right now is the contradiction itself. It is the scan that is out
+    of date, not the host that is down.
+    """
+    try:
+        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+    except Exception:
+        return hosts                      # no inventory: leave the scan's own verdict
+    import time as _t
+    now = _t.time()
+    out = []
+    for h in hosts:
+        aid = h.get("id")
+        ls = last_seen.get(aid) if aid else None
+        if aid is None or aid not in last_seen:
+            out.append(h)                 # SSH-only, or no longer enrolled
+            continue
+        live = bool(ls and (now - ls) <= _AGENT_ONLINE_SECONDS)
+        row = {**h, "online": live}
+        if live and h.get("error") == "offline":
+            row["error"] = "not scanned — the host was unreachable when this ran"
+        out.append(row)
+    return out
 
 
 @app.get("/api/fleet-updates")
@@ -1893,10 +1941,12 @@ def fleet_updates(refresh: int = 0, live: int = 0, user: str = Depends(require_l
             and _cache_covers(_UPDATES_CACHE, _fleet_ids)
 
     if _fresh():
-        return {"hosts": _UPDATES_CACHE["hosts"], "cached": True, "ts": _UPDATES_CACHE["ts"]}
+        return {"hosts": _with_live_reachability(_UPDATES_CACHE["hosts"]),
+                "cached": True, "ts": _UPDATES_CACHE["ts"]}
     with _UPDATES_LOCK:
         if _fresh():
-            return {"hosts": _UPDATES_CACHE["hosts"], "cached": True, "ts": _UPDATES_CACHE["ts"]}
+            return {"hosts": _with_live_reachability(_UPDATES_CACHE["hosts"]),
+                    "cached": True, "ts": _UPDATES_CACHE["ts"]}
         try:
             # Dashboard patch rollup is agent-only (SSH-only hosts live in
             # Sysible Connect, not the fleet updates rollup).
@@ -1912,12 +1962,22 @@ def fleet_updates(refresh: int = 0, live: int = 0, user: str = Depends(require_l
         # A live refresh runs `dnf makecache` / `apt-get update` / `zypper refresh`
         # first, which alone can exceed the default 60s on a slow mirror — give the
         # live path a longer poll so it returns real counts instead of "timed out".
-        ptmo = int(os.getenv("SYSIBLE_UPDATE_PROBE_TIMEOUT", "180")) if live else 60
+        # The plain path was a hardcoded 60 while the live path had already been
+        # raised to 180 for exactly this reason. "Fast" is a claim about cached
+        # repo metadata, not a measurement: `dnf check-update` and `zypper lu`
+        # routinely pass 60s on a host with a cold page cache, and a fleet where
+        # most rows read "timed out waiting for agent" is worth more seconds than
+        # a fleet that answers quickly and wrongly. Tunable either way.
+        ptmo = int(os.getenv("SYSIBLE_UPDATE_PROBE_TIMEOUT", "180")) if live \
+            else int(os.getenv("SYSIBLE_UPDATE_PROBE_TIMEOUT_FAST", "90"))
         with concurrent.futures.ThreadPoolExecutor(max_workers=_sweep_workers(len(entries))) as ex:
-            hosts = list(ex.map(lambda e: _probe_updates(e, cmd, last_seen, now, ptmo), entries)) if entries else []
+            hosts = list(ex.map(lambda e: _probe_updates(e, cmd, last_seen, now, ptmo, ptmo),
+                                entries)) if entries else []
         _UPDATES_CACHE["hosts"] = hosts
         _UPDATES_CACHE["ts"] = now
-        return {"hosts": hosts, "cached": False, "ts": now}
+        # Same path for a fresh scan: judged moments ago, so this is a no-op --
+        # but one code path means the two can never drift into disagreeing.
+        return {"hosts": _with_live_reachability(hosts), "cached": False, "ts": now}
 
 
 # ----------------------------------------------------------------------
@@ -2423,7 +2483,7 @@ def _alerts_gather_hosts():
     def probe(e):
         aid = e["id"] if e["kind"] == "agent" else (e.get("agent_entry") or {}).get("id") if e["kind"] == "merged" else None
         ls = last_seen.get(aid) if aid else None
-        online = (bool(ls and (now - ls) <= 20)) if aid else None
+        online = (bool(ls and (now - ls) <= _AGENT_ONLINE_SECONDS)) if aid else None
         base = {"id": e.get("id"), "host": e.get("label"), "online": online,
                 "disk": None, "failed": None, "mem": None, "load1": None, "oom": None}
         if aid is not None and not online:
@@ -4010,7 +4070,7 @@ def agents(user: str = Depends(require_login)):
         rows = api.get_agents() or []
         for a in rows:
             ls = a.get("last_seen")
-            a["online"] = bool(ls and (now - ls) <= 20)
+            a["online"] = bool(ls and (now - ls) <= _AGENT_ONLINE_SECONDS)
         return {"agents": rows}
 
     return _wrap(_with_online)
@@ -4310,7 +4370,7 @@ def fleet_query(body: FleetQueryRequest, user: str = Depends(require_operator)):
                 "value": None, "present": False}
         aid = e["id"] if e["kind"] == "agent" else (e.get("agent_entry") or {}).get("id") if e["kind"] == "merged" else None
         ls = last_seen.get(aid) if aid else None
-        if aid is not None and not (ls and (now - ls) <= 20):
+        if aid is not None and not (ls and (now - ls) <= _AGENT_ONLINE_SECONDS):
             return {**base, "error": "offline"}
         if e.get("integrity_quarantined"):
             return {**base, "error": "integrity-quarantined"}
@@ -4463,6 +4523,49 @@ def files_compare(body: CompareRequest, request: Request, user: str = Depends(re
             "unreadable": unreadable, "errors": errors, "identical": identical}
 
 
+# How long the console waits, and how long the host is allowed to work, are ONE
+# decision. They were two, and in four of five call sites the console gave up
+# first: 8s of patience for 60s of granted work, 20s for 60s, 30s for 60s. The
+# patch sweep -- the heaviest read-only sweep in the product -- granted the
+# agent's full 1800s default and waited 60s for it.
+#
+# That mismatch does not just mislabel a slow host. _host_bounded below spells
+# out why: the agent's task loop is SERIAL, so an abandoned probe keeps running
+# and blocks every task queued behind it ON THAT HOST. The console then reports
+# the next sweep as "timed out waiting for agent" too, and the one after that --
+# a cascade that spreads across the fleet and does not clear, which reads to an
+# operator as "the agent is timing out on almost every host".
+#
+# The margin covers the agent picking the task up (one poll, ~1.5s healthy),
+# uploading the result, and the console's own 0.5s poll granularity.
+_DISPATCH_MARGIN_S = 5.0
+_DISPATCH_EXEC_FLOOR_S = 5.0
+
+
+def _reconcile_timeouts(poll_timeout, exec_timeout):
+    """Make the agent give up BEFORE the console stops listening.
+
+    Returns the pair to actually use. Only touches calls that asked for a bounded
+    probe: a mutating action deliberately leaves exec_timeout unset so it can run
+    as long as it legitimately needs, and bounding those here would kill real work.
+
+    Shrinks the host's budget to fit the wait rather than the reverse, because
+    then the agent's own `timeout` fires first: the task ENDS, the result is a
+    true statement about the host, and the serial queue is freed. Stretching the
+    wait instead would leave the console correct and the queue still blocked.
+    """
+    if not exec_timeout:
+        return poll_timeout, exec_timeout
+    wait = float(poll_timeout) if poll_timeout else float(
+        os.getenv("SYSIBLE_WEBGUI_TASK_TIMEOUT", "60"))
+    budget = min(float(exec_timeout),
+                 max(_DISPATCH_EXEC_FLOOR_S, wait - _DISPATCH_MARGIN_S))
+    # When the wait is so short that even the floor does not fit, the wait is
+    # what gives: a probe allowed less than the floor is not worth dispatching.
+    wait = max(wait, budget + _DISPATCH_MARGIN_S)
+    return wait, budget
+
+
 def _host_bounded(command, secs):
     """Wrap a read-only recon command so it self-terminates on the host after
     `secs`, instead of potentially occupying the agent's SERIAL task loop for the
@@ -4501,6 +4604,7 @@ def _dispatch_one(entry, command, kind, become_password=None, token=None, descri
     held during the (bounded) poll loop."""
     label = entry["label"]
     env = entry.get("environment") or "Unassigned"
+    poll_timeout, exec_timeout = _reconcile_timeouts(poll_timeout, exec_timeout)
     if exec_timeout:
         command = _host_bounded(command, exec_timeout)
     try:

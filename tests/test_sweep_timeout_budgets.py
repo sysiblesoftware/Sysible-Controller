@@ -13,6 +13,14 @@ budget, returned at 75s with the data.
 
 These two numbers live in different languages in different files, which is
 exactly how they drifted apart. This test reads both and holds them together.
+
+There is a THIRD link below these two, and it broke the same way:
+
+    browser abort  >  server wait  >  host-side budget granted to the agent
+
+The server-vs-agent half is held by
+test_the_console_waits_as_long_as_it_told_the_agent_to_work. Whenever a budget
+here moves, that chain is what it has to stay inside.
 """
 import re
 from pathlib import Path
@@ -31,9 +39,17 @@ def _js_const(name):
 
 
 def _server_live_probe_budget():
-    """The per-host budget the updates sweep gives itself on a live refresh."""
+    """The per-host budget the updates sweep gives itself, live and plain.
+
+    Both branches are env-backed now. The plain one was a bare `60` while the
+    live one already had a variable, and 60s was where nine of sixteen hosts
+    reported "timed out waiting for agent" — so it became tunable too, which
+    this has to keep reading.
+    """
     m = re.search(r'ptmo = int\(os\.getenv\("SYSIBLE_UPDATE_PROBE_TIMEOUT",\s*"(\d+)"\)\)'
-                  r'\s*if live else\s*(\d+)', SERVER.read_text())
+                  r'\s*if live\s*\\?\s*\n?\s*else int\(os\.getenv\('
+                  r'"SYSIBLE_UPDATE_PROBE_TIMEOUT_FAST",\s*"(\d+)"\)\)',
+                  SERVER.read_text())
     assert m, "the updates sweep no longer states its per-host probe budget"
     return int(m.group(1)), int(m.group(2))     # (live, plain) seconds
 

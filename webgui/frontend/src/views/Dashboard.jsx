@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { searchTasks } from "../featureSearch.js";
-import { hasUpdates } from "../updates.js";
+import { hasUpdates, isUnknown } from "../updates.js";
 import SuppressMenu from "../components/SuppressMenu.jsx";
 import { findSupp, describeSupp } from "../suppress.js";
 import { isAutomationActor } from "./LiveActivity.jsx";
@@ -378,15 +378,21 @@ function SuppressedPanel({ items, canAct, onOpenHost, onRemove }) {
 // "nothing needs patching". An indicator that disappears when it has nothing to
 // say cannot be trusted when it says nothing.
 function PatchCard({ patch, err, onOpen }) {
-  const { state, withUpd, sec, reboot } = patch;
-  const clear = state === "ready" && withUpd === 0;
+  const { state, withUpd, sec, reboot, unknown = 0 } = patch;
+  // GREEN IS A CLAIM ABOUT EVERY HOST. It used to need only withUpd === 0, so a
+  // fleet where most hosts never answered showed a green zero -- the scan having
+  // failed and the fleet being patched produce the same number.
+  const clear = state === "ready" && withUpd === 0 && unknown === 0;
   const title = state === "error"
     ? `Patch status could not be read: ${err}. Click to open Update Hosts.`
     : state !== "ready"
       ? "Scanning the fleet for pending updates… click to open Update Hosts"
-      : withUpd === 0
-        ? "Every host reports no pending updates. Click to open Update Hosts."
-        : `${withUpd} host(s) have updates pending. Click to open Update Hosts.`;
+      : unknown > 0
+        ? `${unknown} host(s) did not return a result, so this count does not cover them. `
+          + `Click to open Update Hosts.`
+        : withUpd === 0
+          ? "Every host reports no pending updates. Click to open Update Hosts."
+          : `${withUpd} host(s) have updates pending. Click to open Update Hosts.`;
   return (
     <div className="metric" style={{ cursor: "pointer" }} onClick={onOpen} title={title}>
       <div className="label">Needs patching</div>
@@ -408,6 +414,11 @@ function PatchCard({ patch, err, onOpen }) {
             {reboot > 0 && (
               <span style={{ fontSize: 14, fontWeight: 400, color: VERDICT_COLOR.WARNING }}>
                 {" "}· {reboot} reboot
+              </span>
+            )}
+            {unknown > 0 && (
+              <span style={{ fontSize: 14, fontWeight: 400, color: VERDICT_COLOR.WARNING }}>
+                {" "}· {unknown} unscanned
               </span>
             )}
           </>
@@ -867,8 +878,12 @@ export default function Dashboard({ role, edition, onOpen }) {
   }, [filteredFleet, analysis]);
 
   const patch = useMemo(() => {
-    let withUpd = 0, sec = 0, reboot = 0;
+    let withUpd = 0, sec = 0, reboot = 0, unknown = 0;
     for (const h of updates) {
+      // Not "a host with nothing to install". The scan did not come back, so
+      // this host contributes to no count here -- least of all to the zero this
+      // tile prints in green.
+      if (isUnknown(h)) { unknown++; continue; }
       if (hasUpdates(h)) withUpd++;
       sec += h.security || 0;
       if (h.reboot) reboot++;
@@ -876,7 +891,7 @@ export default function Dashboard({ role, edition, onOpen }) {
     // `scanned` is what the tile shows a NUMBER for. It is not "updates.length > 0":
     // a fleet that is fully patched reports every host with total 0, and a sweep
     // that has not run yet reports nothing at all — those must not look the same.
-    return { withUpd, sec, reboot, scanned: updState === "ready", state: updState };
+    return { withUpd, sec, reboot, unknown, scanned: updState === "ready", state: updState };
   }, [updates, updState]);
 
   // Ranked triage list: every host with something wrong, worst first, each with

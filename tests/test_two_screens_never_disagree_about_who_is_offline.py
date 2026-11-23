@@ -100,6 +100,26 @@ def test_both_return_paths_go_through_it():
         f"found {block.count('_with_live_reachability')} of 3")
 
 
+def test_the_posture_sweep_does_not_cache_reachability_either():
+    """Found by scanning for the same shape, not by a second report.
+
+    _POSTURE_CACHE holds rows for five minutes and each one carries `online`,
+    so a host briefly stale during one sweep read as offline -- with no posture
+    at all -- for the next five minutes. Worse than the patch screen: the
+    dashboard grades remediation ELIGIBILITY from this flag, so a host that was
+    answering again could not be acted on until the cache turned over.
+
+    Posture findings are slow-moving and belong in a cache. Reachability does
+    not.
+    """
+    block = SRC[SRC.index('@app.get("/api/fleet-posture")'):]
+    block = block[:block.index("def _probe_metrics") if "def _probe_metrics" in block
+                  else block.index("\n@app.")]
+    assert block.count("_with_live_reachability") == 3, (
+        "not every return of the posture sweep re-judges reachability: "
+        f"found {block.count('_with_live_reachability')} of 3")
+
+
 def test_the_online_window_is_defined_once():
     """It was a bare `20` repeated at six sites. Six copies of the rule that
     decides who is offline is how two screens come to disagree in the first

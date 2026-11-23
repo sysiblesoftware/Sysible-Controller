@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
-import { hasUpdates, hostsWithUpdates } from "../updates.js";
+import { hasUpdates, hostsWithUpdates, isUnknown } from "../updates.js";
 import HostResults from "../components/HostResults.jsx";
 
 const C = { sec: "#e06c6c", upd: "#e0a83a", ok: "#4ec07a", reboot: "#e0a83a", faint: "#7a7a7a" };
@@ -207,14 +207,17 @@ export default function Updates({ role }) {
 
   const hosts = data.hosts;
   const summary = useMemo(() => {
-    let withUpd = 0, sec = 0, reboot = 0, offline = 0;
+    let withUpd = 0, sec = 0, reboot = 0, offline = 0, unknown = 0;
     for (const h of hosts) {
       if (h.online === false) { offline++; continue; }
+      // A host whose scan did not come back is not a host with nothing to
+      // install. Counted BEFORE the others, and never added to them.
+      if (isUnknown(h)) { unknown++; continue; }
       if (hasUpdates(h)) withUpd++;
       sec += h.security || 0;
       if (h.reboot) reboot++;
     }
-    return { withUpd, sec, reboot, offline, total: hosts.length };
+    return { withUpd, sec, reboot, offline, unknown, total: hosts.length };
   }, [hosts]);
 
   const groups = useMemo(() => {
@@ -357,7 +360,12 @@ export default function Updates({ role }) {
     <div>
       <div className="spread" style={{ marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
         <div className="row" style={{ gap: 16, flexWrap: "wrap", alignItems: "baseline" }}>
-          {summary.total > 0 && summary.withUpd === 0 && summary.sec === 0 && summary.reboot === 0 ? (
+          {/* "All up to date" is a claim about every host, so it may only appear
+              when every host actually answered. summary.unknown is what makes
+              that checkable; without it this fired over a fleet two thirds of
+              which had timed out. */}
+          {summary.total > 0 && summary.unknown === 0 && summary.withUpd === 0
+            && summary.sec === 0 && summary.reboot === 0 ? (
             <span style={{ color: C.ok, fontWeight: 600 }}>
               ✓ All {summary.total - summary.offline} host{(summary.total - summary.offline) === 1 ? "" : "s"} up to date
             </span>
@@ -367,6 +375,13 @@ export default function Updates({ role }) {
               <span><b style={{ fontSize: 18, color: summary.sec ? C.sec : undefined }}>{summary.sec}</b> <span className="faint">security</span></span>
               <span><b style={{ fontSize: 18, color: summary.reboot ? C.reboot : undefined }}>{summary.reboot}</b> <span className="faint">need reboot</span></span>
             </>
+          )}
+          {summary.unknown > 0 && (
+            <span title="These hosts did not return a result, so their patch state is not known — they are not counted as up to date."
+                  style={{ color: C.upd }}>
+              <b style={{ fontSize: 18 }}>{summary.unknown}</b>{" "}
+              <span className="faint">not scanned</span>
+            </span>
           )}
           {summary.offline > 0 && <span className="faint">{summary.offline} offline</span>}
         </div>

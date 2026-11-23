@@ -1702,13 +1702,15 @@ def fleet_posture(refresh: int = 0, user: str = Depends(require_login)):
             and _cache_covers(_POSTURE_CACHE, _fleet_ids)
 
     if _fresh():
-        return {"hosts": _POSTURE_CACHE["hosts"], "cached": True, "ts": _POSTURE_CACHE["ts"]}
+        return {"hosts": _with_live_reachability(_POSTURE_CACHE["hosts"]),
+                "cached": True, "ts": _POSTURE_CACHE["ts"]}
 
     with _POSTURE_LOCK:
         # Re-check: another request may have just completed the sweep while we
         # waited for the lock, in which case serve its result instead of re-sweeping.
         if _fresh():
-            return {"hosts": _POSTURE_CACHE["hosts"], "cached": True, "ts": _POSTURE_CACHE["ts"]}
+            return {"hosts": _with_live_reachability(_POSTURE_CACHE["hosts"]),
+                    "cached": True, "ts": _POSTURE_CACHE["ts"]}
         try:
             # Dashboard Compliance strip is agent-only (SSH-only hosts live in
             # Sysible Connect, not the fleet posture rollup).
@@ -1725,7 +1727,12 @@ def fleet_posture(refresh: int = 0, user: str = Depends(require_login)):
             hosts = list(ex.map(lambda e: _probe_posture(e, cmd, last_seen, now), entries)) if entries else []
         _POSTURE_CACHE["hosts"] = hosts
         _POSTURE_CACHE["ts"] = now
-        return {"hosts": hosts, "cached": False, "ts": now}
+        # Posture findings are slow-moving and the five-minute cache is right for
+        # them. Reachability is not: a host briefly stale during one sweep was
+        # reported offline, with no posture at all, for the next five minutes --
+        # and the dashboard grades eligibility from THIS flag, so a host that was
+        # answering again could not be acted on. Same shape as the patch sweep.
+        return {"hosts": _with_live_reachability(hosts), "cached": False, "ts": now}
 
 
 def _prime_caches_loop():

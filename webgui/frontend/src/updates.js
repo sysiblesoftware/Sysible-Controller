@@ -39,3 +39,38 @@ export function hostsWithUpdates(hosts) {
 export function countWithUpdates(hosts) {
   return hostsWithUpdates(hosts).length;
 }
+
+// ---------------------------------------------------------------------------
+// ...and what counts as "we do not KNOW whether this host has updates".
+//
+// There was no such idea here, so there was no way to say it. A host whose scan
+// failed comes back with total: null and security: null, and every reader did
+// `(h.total || 0) > 0` — which is false, the same answer a fully patched host
+// gives. The two were indistinguishable, so:
+//
+//   * "N hosts with updates" counted a fleet nobody could scan as a fleet with
+//     nothing to install;
+//   * the Dashboard's patch tile showed "Needs patching 0" for the same reason;
+//   * and Update Hosts printed "All N hosts up to date" whenever that zero met
+//     a zero security count and no reboot flag.
+//
+// Observed with nine of sixteen hosts reading "timed out waiting for agent":
+// the header said 0 and 0, and only a single stray reboot flag on one unrelated
+// host kept the all-clear banner from appearing over a fleet that was two
+// thirds unscanned. On a PATCH COMPLIANCE screen that is the worst available
+// failure — not a missing number, but a green one.
+//
+// Offline is NOT unknown. It has its own count and its own row treatment, and
+// folding it in here would double-report it.
+
+/** True when this host's patch state was never established. */
+export function isUnknown(h) {
+  if (!h) return true;
+  if (h.online === false) return false;      // offline: separately counted
+  return h.total == null && h.security == null;
+}
+
+/** How many reachable hosts came back without a usable answer. */
+export function countUnknown(hosts) {
+  return (hosts || []).filter(isUnknown).length;
+}

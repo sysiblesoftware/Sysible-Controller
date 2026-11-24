@@ -636,9 +636,15 @@ def cmd_update_status(refresh: bool = False) -> str:
     refresh=True ("live"): force a metadata refresh first (dnf makecache / zypper
     refresh / apt-get update) so the counts are current. Slower and hits the
     mirrors, so it's opt-in from the UI."""
-    prep = ""
+    # EVERY count below is read out of human-facing output with awk/grep on
+    # English words -- dnf's Obsoleting/Last/Security/Loaded/Dependencies, and
+    # zypper's "needed". Package managers translate those. On a host whose
+    # locale is not English the filters stop matching and the host reports 0
+    # updates: not an error, a clean bill of health it never earned. (The
+    # memory probe in this same file already pins LANG for exactly this reason.)
+    prep = "export LC_ALL=C LANGUAGE=C\n"
     if refresh:
-        prep = (
+        prep += (
             "if command -v dnf >/dev/null 2>&1; then dnf -q makecache --refresh >/dev/null 2>&1; "
             "elif command -v yum >/dev/null 2>&1; then yum -q makecache >/dev/null 2>&1; "
             "elif command -v zypper >/dev/null 2>&1; then zypper --non-interactive -q refresh >/dev/null 2>&1; "
@@ -659,9 +665,15 @@ def cmd_update_status(refresh: bool = False) -> str:
         "elif command -v yum >/dev/null 2>&1; then mgr=yum; "
         "total=$(yum -q check-update 2>/dev/null | awk 'NF>=3 && $1!~/^(Obsoleting|Last|Security|Loaded|Dependencies)/{c++} END{print c+0}'); "
         "sec=$(yum -q --security check-update 2>/dev/null | awk 'NF>=3 && $1!~/^(Obsoleting|Last|Security|Loaded|Dependencies)/{c++} END{print c+0}'); "
+        # --no-refresh, on BOTH paths. This is documented as the fast, read-only
+        # branch, but zypper refreshes a stale repo on its own before answering
+        # a query -- so the "use what is already downloaded" path went to the
+        # mirrors anyway, which is why SUSE hosts were the slow ones and the
+        # ones that timed out. On the live path the explicit `zypper refresh`
+        # above has already run, so without this the metadata is fetched TWICE.
         "elif command -v zypper >/dev/null 2>&1; then mgr=zypper; "
-        "total=$(zypper --non-interactive -q list-updates 2>/dev/null | grep -cE '^v \\|'); "
-        "sec=$(zypper --non-interactive -q list-patches --category security 2>/dev/null | grep -cE '\\| *needed'); "
+        "total=$(zypper --non-interactive --no-refresh -q list-updates 2>/dev/null | grep -cE '^v \\|'); "
+        "sec=$(zypper --non-interactive --no-refresh -q list-patches --category security 2>/dev/null | grep -cE '\\| *needed'); "
         "elif command -v apt-get >/dev/null 2>&1; then mgr=apt; "
         "up=$(apt-get -s -o Debug::NoLocking=true upgrade 2>/dev/null | grep '^Inst '); "
         "total=$(printf '%s\\n' \"$up\" | grep -c '^Inst '); "

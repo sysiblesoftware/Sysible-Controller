@@ -528,6 +528,65 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 .tool-grid-section .section-title,
 section > .section-title { margin: 14px 0 7px; }
 section:first-of-type > .section-title { margin-top: 2px; }
+/* ---- Tool-grid cards: lifted off the page ---------------------------------
+   MEASURED, not restyled. The screen was reported as hard to look at, and the
+   type was never the problem -- title 13.3:1, caption 6.2:1, section heading
+   5.5:1 all pass AA comfortably. What failed was the STRUCTURE:
+
+                     card face vs page    card edge vs page
+       base               1.09:1               1.33:1
+       brand              1.10:1               1.42:1
+       light              1.13:1               1.16:1
+
+   Cards the same brightness as the page they sit on, edged in something barely
+   different from either, over a topographic field that runs behind everything.
+   Low-contrast containers on a textured ground leave the eye to do all the
+   grouping itself, which is the tiredness being reported.
+
+   A dark theme cannot reach WCAG 1.4.11's 3:1 for a boundary without the edge
+   reading as a wireframe (#5a6375 is still only 2.91:1 on this ground), so
+   definition comes from face and edge together. On the light skin the card is
+   already white and cannot lift; there it is the edge that was missing.
+
+   NOTHING SHARED IS TOUCHED. These are new blocks and a new rule: no existing
+   selector is edited, no palette block is split, the scale stays where it is,
+   and the brand field behind the page is left alone. The previous attempt at
+   this changed --bg, moved the scale out of the brand block, and anchored its
+   insert on the second line of `:root,\n:root[data-skin="base"] {` -- which
+   split that selector, dropped its bare :root arm, and left 36 tokens
+   undefined under the skin the app actually sets, --font among them.
+   ------------------------------------------------------------------------ */
+:root,
+:root[data-skin="base"] {
+  --tile-face: #242831;        /* 1.19:1 on --bg, was 1.09:1 */
+  --tile-edge: #525a6b;        /* 2.54:1 on --bg, was 1.33:1 */
+  --tile-face-hover: #2b3040;
+  --tile-edge-hover: #646d82;
+}
+:root[data-skin="brand"] {
+  --tile-face: #1b2230;        /* 1.19:1 */
+  --tile-edge: #485a78;        /* 2.71:1 */
+  --tile-face-hover: #222b3c;
+  --tile-edge-hover: #5a6e8f;
+}
+/* After the skins on purpose: same specificity, so the later block is the one
+   that answers when a document carries both data-skin and data-theme. */
+:root[data-theme="light"] {
+  --tile-face: #ffffff;        /* the card was already white; it is the edge */
+  --tile-edge: #8c99af;        /* 2.54:1 on --bg, was 1.16:1 */
+  --tile-face-hover: #f7f9fc;
+  --tile-edge-hover: #76849c;
+}
+
+.tool-grid .tile {
+  background: var(--tile-face);
+  border-color: var(--tile-edge);
+}
+.tool-grid .tile:hover {
+  background: var(--tile-face-hover);
+  border-color: var(--tile-edge-hover);
+}
+
 @media (max-width: 1400px) { .tool-grid { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 1180px) { .tool-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 720px)  { .tool-grid { grid-template-columns: 1fr; } }

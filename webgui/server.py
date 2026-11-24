@@ -1045,10 +1045,7 @@ def hosts(user: str = Depends(require_login)):
     # -- which has now happened often enough in this repo to be worth naming.)
     import time as _t
     now = _t.time()
-    try:
-        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
-    except Exception:
-        last_seen = {}
+    last_seen = _agent_last_seen()
 
     # When each agent last asked for config-backup work. Flashback reads this to
     # explain a host that never captures: an agent that has NEVER polled is
@@ -1337,6 +1334,32 @@ def _cache_covers(cache, fleet_ids):
 _AGENT_ONLINE_SECONDS = float(os.getenv("SYSIBLE_AGENT_ONLINE_SECONDS", "20"))
 
 
+def _agent_last_seen():
+    """{host_id: last_seen} for every agent, or None when it could not be read.
+
+    NONE IS NOT AN EMPTY FLEET, and that distinction is the whole point. Six
+    callers used to write this as
+
+        try:    last_seen = {... for a in api.get_agents()}
+        except: last_seen = {}
+
+    while every liveness gate reads a missing entry as "offline". So one failed
+    call to the controller -- a restart, a blip, a timeout -- did not degrade a
+    sweep, it INVERTED it: every host came back marked unreachable, every probe
+    was skipped, and for the patch sweep that verdict was then cached for
+    fifteen minutes. Reported as sixteen of sixteen hosts reading "not scanned",
+    directly beneath a strip saying 16/16 agents online.
+
+    With None, callers do not gate on liveness at all. Probing a host that turns
+    out to be down costs one timeout; skipping a fleet that is up fills the
+    screen with confident wrong answers and caches them.
+    """
+    try:
+        return {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
+    except Exception:
+        return None
+
+
 def _sweep_workers(n):
     """Concurrency for fleet sweeps (health / posture / metrics). Higher than the
     old fixed 12 so a 20+ host fleet completes in far fewer waves — each worker
@@ -1359,10 +1382,7 @@ def _fleet_health_sweep(force_live=False):
     except Exception as e:
         raise _bad_gateway(e)
 
-    try:
-        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
-    except Exception:
-        last_seen = {}
+    last_seen = _agent_last_seen()
     # Latest per-host health the agents reported on heartbeat. This is what lets
     # the sweep serve most hosts WITHOUT a live probe: a host whose agent reported
     # health recently (sysd present, ts fresh) is graded from that reading; only
@@ -1393,11 +1413,11 @@ def _fleet_health_sweep(force_live=False):
         # entry id is the label, so the dashboard needs the agent id to line this
         # reading up with the agent inventory (agents are keyed by host_id).
         base["agent_id"] = aid
-        ls = last_seen.get(aid) if aid else None
-        online = (bool(ls and (now - ls) <= _AGENT_ONLINE_SECONDS)) if aid else None
+        ls = (last_seen or {}).get(aid) if aid else None
+        online = None if last_seen is None else ((bool(ls and (now - ls) <= _AGENT_ONLINE_SECONDS)) if aid else None)
         # Don't probe an agent host we already know is offline — avoids waiting
         # out the task timeout on a host that won't answer.
-        if aid is not None and not online:
+        if last_seen is not None and aid is not None and not online:
             return {**base, "online": False, "ok": False, "verdict": "OFFLINE", "error": "offline"}
         # FAST PATH: an online host whose agent reported health on a recent
         # heartbeat is graded from that reading — no live probe, no agent
@@ -1629,9 +1649,9 @@ def _probe_posture(e, cmd, last_seen, now):
         aid = e["id"]
     elif e["kind"] == "merged":
         aid = (e.get("agent_entry") or {}).get("id") or e["id"]
-    ls = last_seen.get(aid) if aid else None
-    online = (bool(ls and (now - ls) <= _AGENT_ONLINE_SECONDS)) if aid else None
-    if aid is not None and not online:
+    ls = (last_seen or {}).get(aid) if aid else None
+    online = None if last_seen is None else ((bool(ls and (now - ls) <= _AGENT_ONLINE_SECONDS)) if aid else None)
+    if last_seen is not None and aid is not None and not online:
         return {**base, "online": False, "ok": False, "error": "offline",
                 "posture": None, "flags": {}, "limited": False}
     # Quarantined agents get no tasks — fail fast so one can't stall the sweep.
@@ -1722,10 +1742,7 @@ def fleet_posture(refresh: int = 0, user: str = Depends(require_login)):
             entries = dispatch.list_merged_hosts(agent_only=True)
         except Exception as e:
             raise _bad_gateway(e)
-        try:
-            last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
-        except Exception:
-            last_seen = {}
+        last_seen = _agent_last_seen()
         now = _t.time()
         cmd = _posture_command()
         with concurrent.futures.ThreadPoolExecutor(max_workers=_sweep_workers(len(entries))) as ex:
@@ -1817,10 +1834,7 @@ def host_posture(host_id: str, user: str = Depends(require_login)):
     entry = next((e for e in entries if str(e.get("id")) == str(host_id)), None)
     if entry is None:
         raise HTTPException(status_code=404, detail="Host not found")
-    try:
-        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
-    except Exception:
-        last_seen = {}
+    last_seen = _agent_last_seen()
     result = _probe_posture(entry, _posture_command(), last_seen, _t.time())
     # _probe_posture already derives hypervisor/vms from the live posture stream
     # (covers SSH hosts). Prefer the fast heartbeat health reading when it has a
@@ -1871,9 +1885,9 @@ def _probe_updates(e, cmd, last_seen, now, poll_timeout=60, exec_timeout=None):
     base = {"id": e.get("id"), "host": e.get("label"),
             "environment": e.get("environment") or "Unassigned"}
     aid = e["id"] if e["kind"] == "agent" else (e.get("agent_entry") or {}).get("id") if e["kind"] == "merged" else None
-    ls = last_seen.get(aid) if aid else None
-    online = (bool(ls and (now - ls) <= _AGENT_ONLINE_SECONDS)) if aid else None
-    if aid is not None and not online:
+    ls = (last_seen or {}).get(aid) if aid else None
+    online = None if last_seen is None else ((bool(ls and (now - ls) <= _AGENT_ONLINE_SECONDS)) if aid else None)
+    if last_seen is not None and aid is not None and not online:
         return {**base, "online": False, "error": "offline", "mgr": None,
                 "total": None, "security": None, "reboot": None}
     # A quarantined agent is handed no tasks, so probing it just spins to the
@@ -1923,7 +1937,7 @@ def _with_live_reachability(hosts):
     out = []
     for h in hosts:
         aid = h.get("id")
-        ls = last_seen.get(aid) if aid else None
+        ls = (last_seen or {}).get(aid) if aid else None
         if aid is None or aid not in last_seen:
             out.append(h)                 # SSH-only, or no longer enrolled
             continue
@@ -1965,10 +1979,7 @@ def fleet_updates(refresh: int = 0, live: int = 0, user: str = Depends(require_l
             entries = dispatch.list_merged_hosts(agent_only=True)
         except Exception as e:
             raise _bad_gateway(e)
-        try:
-            last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
-        except Exception:
-            last_seen = {}
+        last_seen = _agent_last_seen()
         now = _t.time()
         cmd = api.cmd_update_status(refresh=bool(live))
         # A live refresh runs `dnf makecache` / `apt-get update` / `zypper refresh`
@@ -2485,20 +2496,17 @@ def _alerts_gather_hosts():
     import concurrent.futures
     import time as _t
     entries = dispatch.list_merged_hosts(agent_only=False)
-    try:
-        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
-    except Exception:
-        last_seen = {}
+    last_seen = _agent_last_seen()
     now = _t.time()
     cmd = api.cmd_metrics_snapshot()
 
     def probe(e):
         aid = e["id"] if e["kind"] == "agent" else (e.get("agent_entry") or {}).get("id") if e["kind"] == "merged" else None
-        ls = last_seen.get(aid) if aid else None
-        online = (bool(ls and (now - ls) <= _AGENT_ONLINE_SECONDS)) if aid else None
+        ls = (last_seen or {}).get(aid) if aid else None
+        online = None if last_seen is None else ((bool(ls and (now - ls) <= _AGENT_ONLINE_SECONDS)) if aid else None)
         base = {"id": e.get("id"), "host": e.get("label"), "online": online,
                 "disk": None, "failed": None, "mem": None, "load1": None, "oom": None}
-        if aid is not None and not online:
+        if last_seen is not None and aid is not None and not online:
             base["online"] = False
             return base
         pe = _tokenless_entry(e)
@@ -4359,18 +4367,15 @@ def fleet_query(body: FleetQueryRequest, user: str = Depends(require_operator)):
     # them and spinning the poll deadline (~60s each) — one unreachable host must
     # not stall the whole query or amber-inflate the "matched" denominator.
     import time as _t
-    try:
-        last_seen = {a.get("host_id"): a.get("last_seen") for a in api.get_agents()}
-    except Exception:
-        last_seen = {}
+    last_seen = _agent_last_seen()
     now = _t.time()
 
     def probe(e):
         base = {"host": e.get("label"), "env": e.get("environment") or "Unassigned",
                 "value": None, "present": False}
         aid = e["id"] if e["kind"] == "agent" else (e.get("agent_entry") or {}).get("id") if e["kind"] == "merged" else None
-        ls = last_seen.get(aid) if aid else None
-        if aid is not None and not (ls and (now - ls) <= _AGENT_ONLINE_SECONDS):
+        ls = (last_seen or {}).get(aid) if aid else None
+        if last_seen is not None and aid is not None and not (ls and (now - ls) <= _AGENT_ONLINE_SECONDS):
             return {**base, "error": "offline"}
         if e.get("integrity_quarantined"):
             return {**base, "error": "integrity-quarantined"}

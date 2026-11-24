@@ -350,6 +350,14 @@ input[type="checkbox"]:checked::after {
   border: solid var(--on-accent); border-width: 0 2px 2px 0; transform: rotate(45deg);
 }
 input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Radios never got the same escape, so `width: 100%` above stretched each one
+   across its whole field and pushed its label to the far edge. Left native
+   (they are rare and the UA ring reads fine on both themes) but sized. */
+input[type="radio"] {
+  width: 15px; height: 15px; margin: 0; flex: 0 0 auto; padding: 0;
+  border: none; background: none; accent-color: var(--accent);
+  cursor: pointer; vertical-align: middle;
+}
 label.field { display: block; margin: 12px 0 0; }
 label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim); font-size: var(--fs-sm); }
 .checkrow { display: flex; align-items: center; gap: var(--sp-2); margin-top: 12px; }
@@ -364,7 +372,12 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
   padding: 6px 11px; border: 1px solid var(--border-strong); border-radius: var(--r-pill);
   background: var(--field); font-size: var(--fs-sm); cursor: pointer; white-space: nowrap;
 }
-.target-chip input { width: auto; margin: 0; }
+/* `width: auto` here used to ALSO override the custom checkbox's own 15px
+   above (same specificity, later in the file), collapsing every host
+   checkbox to a ~2px sliver that overlapped its label. The rule above
+   already opts checkboxes out of `width: 100%`, so this only needs the
+   margin reset. */
+.target-chip input { margin: 0; }
 .target-chip:hover { background: var(--row-hover); }
 .error-box { background: rgba(229,83,75,0.12); border: 1px solid rgba(229,83,75,0.4);
   color: var(--error-text); padding: 9px 11px; border-radius: var(--r-sm); margin-top: 12px; font-size: var(--fs-sm); }
@@ -1028,6 +1041,30 @@ tr:hover td { background: var(--row-hover); }
   max-width: 62ch; }
 .pf-field > input, .pf-field > select { margin-top: 0; }
 .pf-field .checkrow { margin-bottom: 2px; }
+
+/* VM picker (Containers & VMs -> the VM-name field).
+   The rows were unreadable: the global `input, select, textarea { width: 100% }`
+   above applies to checkboxes too, so each control stretched the full width of
+   the field and shoved the VM name hard against the right edge, one tall row
+   per VM. `.target-chip input` already had to opt out of that rule the same
+   way. Sizing lives here rather than inline so the list looks like the rest of
+   the app's lists. */
+.vm-pick { max-height: 228px; overflow-y: auto;
+  background: var(--field); border: 1px solid var(--border); border-radius: var(--r-xs); }
+.vm-pick-host { position: sticky; top: 0; z-index: 1;
+  background: var(--panel); border-bottom: 1px solid var(--border);
+  padding: 4px 9px; font-size: var(--fs-xs); color: var(--text-dim);
+  letter-spacing: .03em; text-transform: uppercase; }
+.vm-pick .checkrow { margin: 0; gap: var(--sp-1);
+  padding: 3px 9px; cursor: pointer; }
+.vm-pick .checkrow:hover { background: var(--row-hover); }
+.vm-pick .checkrow span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: var(--fs-sm); }
+/* Ticked rows are tinted, but the NAME stays --text: accent-on-accent-soft
+   measures 4.39:1 composited, under AA for text this size. The tint and
+   the tick say 'selected' without putting the name near the floor. */
+.vm-pick .checkrow.on { background: var(--accent-soft); }
+.vm-pick-note { padding: 4px 9px; font-size: var(--fs-xs); color: var(--text-dim); }
 
 /* ── Sysible D3lorean — config history browser ─────────────────────────── */
 .d3l { display: flex; flex-direction: column; gap: 0; }

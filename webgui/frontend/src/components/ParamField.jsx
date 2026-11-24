@@ -137,9 +137,24 @@ function RemoteSelect({ p, value, onChange, targets }) {
 
   // ---- typing, or nothing to list -----------------------------------------
   if (manual || (!loading && !every.length)) {
+    // SAY WHY. _VIRSH exits with "virsh (libvirt) is not installed on this
+    // host", which is the whole answer -- those hosts are not hypervisors, so
+    // there is nothing to pick and nothing to type either. The old wording
+    // ("Could not list VMs on arch-01, arch-02, arch-03. Type a name instead.")
+    // threw that away and then advised typing a name that would fail on every
+    // one of them.
+    const noHyp = Object.keys(failed).filter((h) =>
+      /not installed|not found|no such file/i.test(failed[h] || ""));
+    const otherFail = Object.keys(failed).filter((h) => !noHyp.includes(h));
     const why = loading ? "Reading the VMs on the selected host(s)…"
-      : Object.keys(failed).length ? `Could not list VMs on ${Object.keys(failed).join(", ")}. Type a name instead.`
-        : every.length ? "" : "No VMs found on the selected host(s) — type a name if you know it.";
+      : noHyp.length && !otherFail.length && !every.length
+        ? `${noHyp.join(", ")} ${noHyp.length === 1 ? "is" : "are"} not running libvirt, `
+          + `so ${noHyp.length === 1 ? "it has" : "they have"} no VMs. Check a host that does.`
+        : otherFail.length
+          ? `Could not list VMs on ${otherFail.join(", ")} (${failed[otherFail[0]]}).`
+          : noHyp.length
+            ? `Not running libvirt: ${noHyp.join(", ")}.`
+            : every.length ? "" : "No VMs found on the selected host(s) — type a name if you know it.";
     return (
       <>
         <div className="row" style={{ gap: 6, alignItems: "center" }}>
@@ -187,27 +202,26 @@ function RemoteSelect({ p, value, onChange, targets }) {
         <button type="button" className="btn ghost sm" onClick={() => setManual(true)}
                 title="Type a name instead">✎</button>
       </div>
-      <div className="vm-pick" style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--border)",
-                                        borderRadius: 6, padding: "4px 2px" }}>
+      <div className="vm-pick">
         {hosts.map((h) => (
           <div key={h}>
             {hosts.length > 1 && (
-              <div className="faint" style={{ fontSize: 11, padding: "4px 8px 2px" }}>
-                {h}{byHost[h].length ? "" : " — no VMs"}
-              </div>
+              <div className="vm-pick-host">{h}{byHost[h].length ? "" : " — no VMs"}</div>
             )}
             {byHost[h].map((v) => (
-              <label key={h + "/" + v} className="checkrow" style={{ padding: "2px 8px" }}>
+              <label key={h + "/" + v}
+                     className={"checkrow" + (chosen.has(v) ? " on" : "")}>
                 <input type={multi ? "checkbox" : "radio"} name={multi ? undefined : "vmpick_" + p.name}
                        checked={chosen.has(v)} onChange={() => toggle(v)} />
-                <span className="mono" style={{ fontSize: 12.5 }}>{v}</span>
+                <span className="mono">{v}</span>
               </label>
             ))}
           </div>
         ))}
-        {Object.entries(failed).map(([h, why]) => (
-          <div key={"f" + h} className="faint" style={{ fontSize: 11, padding: "4px 8px" }}>
-            {h || "a host"} — {why}
+        {Object.entries(failed).map(([h, w]) => (
+          <div key={"f" + h} className="vm-pick-note">
+            {h || "a host"} — {/not installed|not found|no such file/i.test(w || "")
+              ? "not running libvirt" : w}
           </div>
         ))}
       </div>

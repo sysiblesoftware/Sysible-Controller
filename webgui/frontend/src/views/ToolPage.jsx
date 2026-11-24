@@ -252,8 +252,29 @@ export default function ToolPage({ tool, hosts, onRefreshHosts, prefill }) {
 // buttons. Param-less groups are just a button row.
 function GroupSection({ title, desc, acts, targets, gkey, gval, setGParam, runningAction, onRun }) {
   const sharedParams = useMemo(() => {
+    // FIRST-WINS was arbitrary. One field is rendered for a param several
+    // actions share, so whichever action happened to be registered first
+    // decided what the field could do -- and if that one was the narrower, the
+    // others silently lost capability. The VM-name field came out single-select
+    // for the whole group because one of its actions took a single name.
+    //
+    // Merge by WIDENING: a field shared by actions must accommodate the most
+    // permissive of them, and the builders on the other side have to cope with
+    // what it can then hold.
     const seen = new Map();
-    for (const a of acts) for (const p of a.params) if (!seen.has(p.name)) seen.set(p.name, p);
+    for (const a of acts) {
+      for (const p of a.params) {
+        const had = seen.get(p.name);
+        if (!had) { seen.set(p.name, p); continue; }
+        seen.set(p.name, {
+          ...had,
+          multi: had.multi === true || p.multi === true,
+          required: had.required === true && p.required === true,
+          // the fuller explanation, rather than whichever came first
+          help: (p.help || "").length > (had.help || "").length ? p.help : had.help,
+        });
+      }
+    }
     return [...seen.values()];
   }, [acts]);
 

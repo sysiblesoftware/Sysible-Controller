@@ -144,14 +144,25 @@ def test_a_vm_is_a_checkbox_when_the_field_takes_several():
         "there is no way to select more than one, or to unselect one of many"
 
 
-def test_a_single_value_field_cannot_be_handed_a_list():
-    """vm_info takes exactly one domain; three ticked boxes would be quoted as
-    one name. The answer is on the param, not inferred from its help text."""
+def test_a_field_marked_multi_is_backed_by_something_that_takes_several():
+    """The flag is a PROMISE to the browser: tick as many as you like. It used
+    to be set per action, so the field could offer more than the command behind
+    it could accept -- three ticked boxes arriving as one quoted name.
+
+    vm_info was the single-value one, and because the group renders ONE field
+    for the name, its narrowness decided what vm_action got too. It now takes
+    several; this checks the promise and the command still agree, for every
+    action, rather than re-stating today's answer for two of them.
+    """
     from webgui import actions
-    spec = actions.get("vm_action")
-    info = actions.get("vm_info")
-    assert next(x for x in spec.params if x.name == "name").multi is True
-    assert next(x for x in info.params if x.name == "name").multi is False
+    for name in ("vm_action", "vm_info"):
+        spec = actions.get(name)
+        pr = next(x for x in spec.params if x.name == "name")
+        assert pr.multi is True, f"{name} narrows the field the whole group shares"
+        args = {p.name: ("start" if p.name == "action" else "a-1 b-2 c-3") for p in spec.params}
+        built = spec.build(args)
+        assert "for vm in a-1 b-2 c-3" in built, \
+            f"{name} offers a multi field but builds a command for one name:\n{built}"
     assert '"multi": pr.multi' in (REPO / "webgui" / "actions.py").read_text(encoding="utf-8"), \
         "the flag never reaches the browser"
 
@@ -181,3 +192,142 @@ def test_a_host_that_could_not_be_asked_is_not_shown_as_empty():
     # Anchored on the hook's own line: "useEffect" alone matches the import.
     block = FIELD[FIELD.index("async function load()"):FIELD.index("\n  useEffect(")]
     assert "row.ok" in block, "a failed listing is treated as an empty one"
+
+# ---- when the checked hosts are not hypervisors ------------------------------
+def test_a_host_without_libvirt_is_told_apart_from_a_failure():
+    """Three arch hosts checked, and the field said "Could not list VMs on
+    arch-01, arch-02, arch-03. Type a name instead." Both halves were wrong:
+    _VIRSH exits with "virsh (libvirt) is not installed on this host", so the
+    reason was known and thrown away -- and typing a name is useless advice
+    when no checked host runs VMs at all."""
+    block = FIELD[FIELD.index("// ---- typing, or nothing to list"):]
+    block = block[:block.index("// ---- the list")]
+    assert "noHyp" in block, "the no-hypervisor case is not told apart"
+    assert "not running libvirt" in block, "it does not say what is actually wrong"
+    assert "Check a host that does" in block, \
+        "it still advises typing a name no checked host could match"
+
+
+def test_a_real_failure_still_shows_its_reason():
+    """A host that HAS libvirt and failed for some other reason must not be
+    folded into the tidy message."""
+    block = FIELD[FIELD.index("// ---- typing, or nothing to list"):]
+    block = block[:block.index("// ---- the list")]
+    assert "otherFail" in block
+    assert "failed[otherFail[0]]" in block, "a real failure loses its reason"
+
+
+def test_three_vms_at_once_is_what_the_field_produces():
+    """The direct question: how do I shut down three at a time. Ticking three
+    boxes yields three names, and _split_targets takes them."""
+    from client import _api_containers as c
+    cmd = c.cmd_vm_action("shutdown", "web-1 db-1 cache-1")
+    assert "for vm in web-1 db-1 cache-1" in cmd, cmd
+    # ...and each host only acts on the ones it has, so three VMs spread over
+    # two hypervisors is one run, not two failures.
+    assert "grep -Fxq" in cmd
+
+
+def test_the_all_vms_control_is_gated_on_the_param_not_guessed():
+    block = FIELD[FIELD.index("// ---- typing, or nothing to list"):]
+    block = block[:block.index("// ---- the list")]
+    assert "p.multi === true" in block, \
+        "the All VMs control is offered on fields that cannot hold a list"
+
+
+# ---- "if I select sysible-virt it shows them but's awful" -------------------
+# The list finally appeared and was unreadable: every tickbox was stretched the
+# width of the field with the VM name shoved against the far edge, and the
+# tickboxes themselves were radios -- one VM at a time -- in a field whose whole
+# point was picking several.
+TOOLPAGE = (REPO / "webgui" / "frontend" / "src" / "views" / "ToolPage.jsx").read_text(encoding="utf-8")
+CSS = (REPO / "webgui" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+
+
+def _rules(css):
+    """(selector, body) for every rule, comments stripped. Good enough for a
+    flat stylesheet with no nesting, which is what this one is."""
+    import re
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    return [(m.group(1).strip(), m.group(2)) for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", css)]
+
+
+def test_a_tickbox_is_never_collapsed_to_a_sliver():
+    """`.target-chip input { width: auto }` was written to escape the
+    `input, select, textarea { width: 100% }` rule -- but it ALSO beat the
+    custom checkbox's own `width: 15px` (same specificity, later in the file),
+    leaving a 0-wide content box with only its 1.5px borders drawn. Every host
+    checkbox was a 2px sliver sitting on top of its own label.
+
+    The base rules already opt tickboxes out of the full-width rule, so no rule
+    further down may set `width` on something that can match one.
+    """
+    import re
+    rules = _rules(CSS)
+    # the two rules that legitimately SIZE a tickbox; everything after them that
+    # touches width is overriding the size rather than setting it.
+    canonical = ('input[type="checkbox"]', 'input[type="radio"]')
+    base = max(i for i, (sel, _) in enumerate(rules) if sel in canonical)
+    offenders = []
+    for sel, body in rules[base + 1:]:
+        # a selector that can match a tickbox: ends at a bare `input`, or names one
+        if not re.search(r'(^|[\s>+~])input\s*$|input\[type="(checkbox|radio)"\]', sel):
+            continue
+        if re.search(r"(^|;)\s*width\s*:", body):
+            offenders.append(f"{sel} {{{body.strip()}}}")
+    assert not offenders, (
+        "these re-introduce a width on a tickbox and will collapse or stretch it:\n  "
+        + "\n  ".join(offenders))
+
+
+def test_a_radio_is_sized_too():
+    """Only checkboxes had been opted out of `width: 100%`. A radio took the
+    full width of its field, which is exactly what the VM list looked like."""
+    sizes = [b for s, b in _rules(CSS) if s == 'input[type="radio"]']
+    assert sizes, 'input[type="radio"] has no rule, so it inherits width: 100%'
+    assert "width" in sizes[0], "the radio rule must pin a width or the 100% above wins"
+
+
+def test_a_field_two_actions_share_is_as_wide_as_the_widest():
+    """One field is rendered for a param several actions share, so a first-wins
+    merge let whichever action was registered first decide what everyone got.
+    The VM field came out single-select for the whole group because one action
+    on it took a single name."""
+    import re
+    body = TOOLPAGE[TOOLPAGE.index("const sharedParams"):]
+    body = body[:body.index("}, [acts])")]
+    body = "\n".join(l for l in body.split("\n") if not l.strip().startswith("//"))
+    assert "if (!seen.has(p.name)) seen.set(p.name, p)" not in body, \
+        "first-wins is back: a narrow action silently narrows the shared field"
+    assert re.search(r"multi:\s*had\.multi === true \|\| p\.multi === true", body), \
+        "the merged field must take the WIDER multi of the actions sharing it"
+
+
+@pytest.mark.skipif(not SH, reason="no sh on this machine")
+def test_asking_about_three_vms_asks_about_three(tmp_path):
+    """vm_info took exactly one name, which is what made the shared field
+    single-select. Widening the field is only safe if the thing behind it can
+    take what the field now holds."""
+    from client import _api_containers as c
+    bin_dir, log = _fake_virsh(tmp_path, ["web-1", "db-1", "cache-1"])
+    cmd = c.cmd_vm_info("web-1 db-1 cache-1")
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"}
+    p = subprocess.run([SH, "-c", cmd], capture_output=True, text=True, env=env, timeout=60)
+    acted = [a for a in log.read_text().split("\n") if a.strip()] if log.exists() else []
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert acted == ["dominfo web-1", "dominfo db-1", "dominfo cache-1"], acted
+
+
+@pytest.mark.skipif(not SH, reason="no sh on this machine")
+def test_vm_info_skips_the_vms_this_host_does_not_have(tmp_path):
+    """Same rule as vm_action: a host answers for what it owns and says which it
+    skipped, rather than erroring once per VM that was never its to describe."""
+    from client import _api_containers as c
+    bin_dir, log = _fake_virsh(tmp_path, ["web-1"])
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"}
+    p = subprocess.run([SH, "-c", c.cmd_vm_info("web-1 elsewhere-1")],
+                       capture_output=True, text=True, env=env, timeout=60)
+    acted = [a for a in log.read_text().split("\n") if a.strip()] if log.exists() else []
+    assert acted == ["dominfo web-1"], acted
+    assert "not on this host: elsewhere-1" in p.stdout
+    assert p.returncode == 0, "it had one of them, so it is not a failure"

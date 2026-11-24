@@ -1495,8 +1495,8 @@ _register(Action(name="vm_action", tool="Containers & VMs", label="Run action",
                   help="pick VMs on the checked hosts, or type names / 'all'")],
     build=lambda p: api.cmd_vm_action(_s(p, "action", "start"), _s(p, "name"))))
 _register(Action(name="vm_info", tool="Containers & VMs", label="VM info",
-    params=[Param("name", "VM name", type="select-remote", source="vm_names",
-                  help="pick a VM on the selected host, or type a name")],
+    params=[Param("name", "VM name", type="select-remote", source="vm_names", multi=True,
+                  help="pick VMs on the checked hosts, or type names")],
     build=lambda p: api.cmd_vm_info(_s(p, "name"))))
 
 # ---- Directory Services (advanced) -----------------------------------

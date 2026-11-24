@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../api.js";
-import { fleetCounts } from "../fleet.js";
+import { agentHealthCounts } from "../fleet.js";
 
 // The fleet, at the top of every screen.
 //
@@ -23,7 +23,7 @@ export default function FleetPulse({ onOpen }) {
     const tick = async () => {
       try {
         const d = await api.agents();
-        if (alive) setState({ kind: "ok", counts: fleetCounts(d.agents || []) });
+        if (alive) setState({ kind: "ok", counts: agentHealthCounts(d.agents || []) });
       } catch (e) {
         if (alive) setState({ kind: "err", why: e.message || String(e) });
       }
@@ -57,18 +57,26 @@ export default function FleetPulse({ onOpen }) {
                 `Could not read the agent inventory: ${state.why}`);
   }
 
-  const { total, online, offline } = state.counts;
+  const { total, healthy, silent, quarantined } = state.counts;
   if (!total) {
     return chip("idle", "none enrolled", "No agents are enrolled on this controller");
   }
-  // Every agent silent is its own thing: it usually means the controller's
-  // address moved, not that a whole fleet died at once.
-  const allSilent = online === 0;
-  const tone = allSilent ? "bad" : offline ? "warn" : "ok";
-  const title = allSilent
-    ? "No agent has reported in. Every host is silent — check the controller's address."
-    : offline
-      ? `${online} of ${total} agents have reported in recently; ${offline} have not.`
-      : `All ${total} agents have reported in recently.`;
-  return chip(tone, `${online} of ${total} online`, title);
+  // Nothing healthy is its own thing. A whole fleet does not fail at once;
+  // every agent silent usually means the controller's address moved.
+  const tone = healthy === 0 ? "bad" : healthy < total ? "warn" : "ok";
+  // The chip stays short; the reason belongs in the tooltip, where there is
+  // room to say what is actually wrong and why it matters.
+  const why = [];
+  if (silent) {
+    why.push(silent === total
+      ? `all ${silent} silent — no agent has reported in, which usually means the controller's address moved`
+      : `${silent} silent (no recent heartbeat)`);
+  }
+  if (quarantined) {
+    why.push(`${quarantined} quarantined — reporting in, but the controller hands them no work until their integrity baseline is re-sealed`);
+  }
+  const title = why.length
+    ? `${healthy} of ${total} agents healthy. ` + why.join("; ") + "."
+    : `All ${total} agents are reporting in and able to take work.`;
+  return chip(tone, `${healthy} of ${total} healthy`, title);
 }

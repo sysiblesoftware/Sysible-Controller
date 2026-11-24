@@ -35,7 +35,7 @@ def _ask(expr, inventory):
     """Run the real module rather than pattern-match it."""
     probe = REPO / "tests" / ".fleet_probe.mjs"
     probe.write_text(
-        f'import {{ fleetCounts, isOnline }} from {json.dumps(str(FLEET_JS))};\n'
+        f'import {{ fleetCounts, isOnline, agentHealth, agentHealthCounts }} from {json.dumps(str(FLEET_JS))};\n'
         f'const inv = {json.dumps(inventory)};\n'
         f'console.log(JSON.stringify({expr}));\n')
     try:
@@ -115,7 +115,7 @@ def test_a_failed_poll_says_so_rather_than_showing_zero():
 
 def test_every_agent_silent_is_its_own_message():
     """Sixteen hosts do not go down together; the controller's address moved."""
-    assert "allSilent" in PULSE
+    assert "silent === total" in PULSE, "the all-silent case is no longer singled out"
     assert "address" in PULSE, "it does not suggest what that usually means"
 
 
@@ -133,8 +133,8 @@ def test_the_number_has_a_noun():
     number was -- "16 of what, measured how" is not a status display."""
     assert "fleet-chip-label" in PULSE, "the count carries no label"
     assert ">Agents<" in PULSE, "the label does not name what is being counted"
-    assert "of ${total} online" in PULSE, \
-        "the value does not read as a sentence (e.g. '14 of 16 online')"
+    assert "of ${total} healthy" in PULSE, \
+        "the value does not read as a sentence (e.g. '14 of 16 healthy')"
 
 
 def test_it_is_a_control_not_a_run_of_text():
@@ -164,3 +164,49 @@ def test_an_unreadable_inventory_is_not_zero_online():
     code = "\n".join(l for l in err.splitlines() if not l.strip().startswith("//"))
     assert "status unavailable" in code
     assert "online" not in code, "the error state claims something about the hosts"
+
+# ---- health is wider than reachability --------------------------------------
+@pytest.mark.skipif(not NODE, reason="node is not on this machine")
+def test_a_quarantined_agent_is_not_healthy():
+    """THE CASE THE WIDENING IS FOR. The controller hands a quarantined agent no
+    tasks at all -- _probe_updates and _probe_posture both fail it fast rather
+    than wait out the deadline -- so it heartbeats on schedule, counted as
+    online, and runs nothing anyone asks of it."""
+    inv = [{"host_id": "a", "online": True},
+           {"host_id": "b", "online": True, "integrity_quarantined": True}]
+    assert _ask("agentHealthCounts(inv, 0)", inv) == {
+        "total": 2, "healthy": 1, "silent": 0, "quarantined": 1}
+
+
+@pytest.mark.skipif(not NODE, reason="node is not on this machine")
+def test_a_silent_agent_that_is_also_quarantined_is_counted_once():
+    """Counting it twice would put the breakdown above the fleet size."""
+    inv = [{"host_id": "a", "online": False, "integrity_quarantined": True}]
+    got = _ask("agentHealthCounts(inv, 0)", inv)
+    assert got == {"total": 1, "healthy": 0, "silent": 1, "quarantined": 0}, got
+    assert got["silent"] + got["quarantined"] + got["healthy"] == got["total"]
+
+
+@pytest.mark.skipif(not NODE, reason="node is not on this machine")
+def test_a_revoked_agent_is_in_no_count_at_all():
+    inv = [{"host_id": "a", "online": True},
+           {"host_id": "b", "online": True, "revoked": True}]
+    assert _ask("agentHealthCounts(inv, 0)", inv)["total"] == 1
+
+
+def test_the_chip_says_why_rather_than_only_how_many():
+    """A number that has gone amber is not actionable on its own. The chip stays
+    short; the tooltip has room to say what is wrong and why it matters."""
+    assert "quarantined" in PULSE and "silent" in PULSE
+    assert "hands them no work" in PULSE, \
+        "it does not say what being quarantined costs the operator"
+
+
+def test_version_is_not_guessed():
+    """The console only learns the expected agent version from the response to
+    an update-agents POST, so "out of date" cannot be answered from the
+    inventory. Inventing it would be worse than leaving it out."""
+    fleet = (SRC / "fleet.js").read_text(encoding="utf-8")
+    code = "\n".join(l for l in fleet.splitlines() if not l.strip().startswith("//"))
+    assert "agent_version" not in code, \
+        "health is being derived from a version the payload cannot settle"

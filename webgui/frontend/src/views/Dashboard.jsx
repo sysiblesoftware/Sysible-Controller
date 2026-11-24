@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { searchTasks } from "../featureSearch.js";
 import { hasUpdates, isUnknown } from "../updates.js";
+import { enrolled as enrolledAgents, isOnline } from "../fleet.js";
 import SuppressMenu from "../components/SuppressMenu.jsx";
 import { findSupp, describeSupp } from "../suppress.js";
 import { isAutomationActor } from "./LiveActivity.jsx";
@@ -633,11 +634,14 @@ export default function Dashboard({ role, edition, onOpen }) {
     // "enrolled". Online = heartbeat within the stale window (the same 20s the
     // sweep uses); a quarantined host still heartbeats, so it stays online/
     // enrolled instead of vanishing.
-    const inv = (inventory || []).filter((a) => !a.revoked);
+    // The shared source, not a local copy: /api/agents already carries the
+    // server's own aged `online` flag, computed from the window an operator can
+    // tune. Re-deriving it here from a constant of our own is how this screen
+    // comes to disagree with the rest of the product about who is up.
+    const inv = enrolledAgents(inventory);
     const now = Date.now() / 1000;
-    const STALE = 20;
     const total = inv.length;
-    const online = inv.filter((a) => a.last_seen && (now - a.last_seen) <= STALE).length;
+    const online = inv.filter((a) => isOnline(a, now)).length;
     const offline = total - online;
     const envs = new Set(inv.map((a) => a.environment || "Unassigned")).size;
     return { total, online, offline, envs };
@@ -656,13 +660,12 @@ export default function Dashboard({ role, edition, onOpen }) {
   const hostLists = useMemo(() => {
     // Same instant inventory as the counts above, so a drill-down always matches
     // its tile (online/offline by heartbeat last_seen, not the probe sweep).
-    const inv = (inventory || []).filter((a) => !a.revoked);
+    const inv = enrolledAgents(inventory);
     const now = Date.now() / 1000;
-    const STALE = 20;
     const mk = (a) => ({ id: a.host_id, host: a.hostname || a.host_id, env: a.environment || "Unassigned", ctrl: !!a.is_controller });
     const online = [], offline = [];
     for (const a of inv) {
-      if (a.last_seen && (now - a.last_seen) <= STALE) online.push(mk(a));
+      if (isOnline(a, now)) online.push(mk(a));
       else offline.push(mk(a));
     }
     // Offline FIRST in the combined drill-down: the tile's big number is how many

@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import { api, apiUrl, setUnauthorizedHandler } from "./api.js";
 import Logo from "./Logo.jsx";
+import FleetPulse from "./components/FleetPulse.jsx";
 import Login from "./views/Login.jsx";
 import Setup from "./views/Setup.jsx";
 import ForcePasswordChange from "./views/ForcePasswordChange.jsx";
@@ -549,6 +550,11 @@ export default function App() {
             <h2 style={{ margin: 0 }}>{view === "host" ? (target?.label || "Host Posture") : (view ? SECTIONS[view] : "Dashboard")}</h2>
           </div>
           <div className="row" style={{ alignItems: "center", gap: 12, minWidth: 0 }}>
+            {/* On EVERY view and for every role, including the auditor: whether
+                agents are reporting in is read-only fleet state, and it used to
+                live only on the Dashboard — a navigation away from anyone in
+                the middle of doing something to the fleet. */}
+            <FleetPulse onOpen={() => go(null)} />
             {view === null && isSuper && <UpdatesBadge onOpen={() => go("settings", { tab: "controller" })} />}
             <div className="main-top-sub">{view ? "" : `Signed in as ${user}${role ? ` · ${role}` : ""}`}</div>
           </div>

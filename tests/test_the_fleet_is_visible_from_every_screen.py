@@ -161,7 +161,11 @@ def test_it_is_a_bar_of_its_own_not_another_item_in_the_header():
     css = (REPO / "webgui" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
     block = css[css.index(".fleet-bar {"):]
     block = block[:block.index("}")]
-    assert "width: 100%" in block, "a bar that is not full width is still a chip"
+    # NOT `width: 100%`: with horizontal margins that overflows the column by
+    # exactly the margins. `display: flex` makes it block-level, so it fills
+    # what is left after them.
+    assert "display: flex" in block, "a bar that does not fill its row is still a chip"
+    assert "width: 100%" not in block, "width:100% plus margins overflows the column"
     assert "r-pill" not in block, "it is a pill again"
     app = (REPO / "webgui" / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
     # It must sit OUTSIDE .main-top, or it is back in the title row. Walk the
@@ -255,3 +259,32 @@ def test_version_is_not_guessed():
     code = "\n".join(l for l in fleet.splitlines() if not l.strip().startswith("//"))
     assert "agent_version" not in code, \
         "health is being derived from a version the payload cannot settle"
+
+
+def test_the_bar_lines_up_with_the_page_it_sits_on():
+    """Reported as "the boundary is off". It sat BETWEEN .main-top and
+    .main-scroll, which each carried the main column's gutter as a literal of
+    their own -- so the bar got neither and ran the full width of the column,
+    26px proud of the title above it and the cards below it on both sides.
+
+    The gutter is one named value now, and all three use it."""
+    css = (REPO / "webgui" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    assert re.search(r"--gutter:\s*\d+px", css), "the main gutter has no name"
+
+    def horiz(selector, prop):
+        block = css[css.index(selector + " {") + len(selector) + 2:]
+        block = block[:block.index("}")]
+        m = re.search(prop + r":\s*([^;]+);", block)
+        assert m, f"{selector} has no {prop}"
+        parts = m.group(1).split()
+        return parts[1] if len(parts) >= 2 else parts[0]
+
+    gutters = {
+        ".main-top": horiz(".main-top", "padding"),
+        ".main-scroll": horiz(".main-scroll", "padding"),
+        ".fleet-bar": horiz(".fleet-bar", "margin"),
+    }
+    assert len(set(gutters.values())) == 1, \
+        f"the bar does not line up with the column it sits in: {gutters}"
+    assert gutters[".fleet-bar"] == "var(--gutter)", \
+        f"the gutter is a literal again: {gutters['.fleet-bar']}"

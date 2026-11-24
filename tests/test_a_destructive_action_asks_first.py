@@ -218,3 +218,46 @@ def test_the_prompt_says_everything_when_the_target_is_all(tmp_path):
     msg = json.loads(out.stdout.strip())
     assert "EVERY ONE" in msg, f"'all' did not read as everything:\n{msg}"
     assert "1 host (only-host)" in msg, f"singular host reads wrong:\n{msg}"
+
+
+# ---- "or any other critical infra" ------------------------------------------
+def test_locking_yourself_out_of_a_host_also_warns():
+    """Swept the catalog for select fields offering a destructive choice with
+    no warning on it. One real find, the rest regex noise (installing mkfs
+    TOOLS, RECOVERING deleted files, `reset-failed`, and a restart that says
+    in its own description it does not drop sessions).
+
+    A base nft chain with policy `drop` discards every packet no rule accepts,
+    including the SSH session the operator is holding the host with -- and
+    unlike the others there is no getting back in to undo it. Its siblings
+    fw_close_port and fw_off are both marked; this one was not."""
+    from webgui import actions
+    pr = next(p for p in actions.get("fw_nft_add_chain").params if p.name == "policy")
+    assert "drop" in pr.danger_values, "a default-drop chain runs with no warning"
+    assert "SSH" in pr.danger_values["drop"], \
+        "the warning does not say what you actually lose"
+    assert "accept" not in pr.danger_values, "the safe policy must not prompt"
+
+
+def test_no_select_field_offers_an_unguarded_destructive_choice():
+    """The sweep itself, kept: a new action with a `delete`/`drop`/`rm` option
+    and no warning on it fails here rather than being found in production.
+
+    Action-level `danger` counts as covered -- proc_kill's KILL signal is
+    guarded that way, and the whole action is destructive, so it is the right
+    level for it."""
+    import re
+    from webgui import actions
+    bad = re.compile(r"^(rm|delete|destroy|remove|wipe|format|mkfs|undefine|purge|erase|drop)$", re.I)
+    missing = []
+    for a in actions._ACTIONS.values():
+        if a.danger or a.hidden:
+            continue
+        for pr in a.params:
+            if pr.type != "select":
+                continue
+            for opt in pr.options or []:
+                if bad.match(str(opt)) and str(opt) not in (pr.danger_values or {}):
+                    missing.append(f"{a.name}.{pr.name} = {opt!r}")
+    assert not missing, (
+        "these destructive choices run with no warning:\n  " + "\n  ".join(missing))

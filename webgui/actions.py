@@ -1163,7 +1163,17 @@ _register(Action(name="fw_nft_add_chain", tool="Firewall Administration", label=
     params=[Param("family", "Family", type="select", options=["inet", "ip", "ip6"], default="inet"),
             Param("table", "Table"), Param("chain", "Chain"),
             Param("hook", "Hook", required=False), Param("priority", "Priority", default="0", required=False),
-            Param("policy", "Policy", type="select", options=["accept", "drop"], default="accept")],
+            Param("policy", "Policy", type="select", options=["accept", "drop"], default="accept",
+                  danger_values={
+                      # Its siblings fw_close_port and fw_off are both danger=True.
+                      # A BASE chain whose policy is drop discards everything no
+                      # rule explicitly accepts -- including the SSH session you
+                      # are holding the host with.
+                      "drop": "A base chain with this policy discards every packet no rule "
+                              "explicitly accepts. On a remote host that includes your own SSH "
+                              "session, and you will not be able to get back in to undo it. "
+                              "Make sure an accept rule for your access already exists.",
+                  })],
     build=lambda p: api.cmd_nft_add_chain(_s(p, "family", "inet"), _s(p, "table"), _s(p, "chain"),
         _s(p, "hook"), _s(p, "priority", "0") or "0", _s(p, "policy", "accept"))))
 _register(Action(name="fw_nft_add_rule", tool="Firewall Administration", label="nft: add rule",

@@ -27,6 +27,46 @@ _VIRSH = (
 _CONTAINER_ACTIONS = {"start", "stop", "restart", "rm", "pause", "unpause"}
 _VM_ACTIONS = {"start", "shutdown", "reboot", "destroy", "suspend", "resume"}
 
+# A domain that is ALREADY in the state you asked for is not a failure.
+#
+# `virsh destroy` on a stopped domain says "Requested operation is not valid:
+# domain is not running" and exits non-zero. Ask for it across a fleet that is
+# already powered off and every row comes back red -- fifteen identical errors
+# whose actual meaning is "they were all already off". The one thing the
+# operator wants to know, whether the fleet is now in the state they asked for,
+# is the one thing that output does not say.
+#
+# So the already-there cases are recognised and reported as such. They do not
+# set rc: a real failure still has to stay visible, which is the whole reason
+# these are worth separating out.
+_ALREADY = {
+    # action: (grep -E pattern on virsh's stderr, what to say instead)
+    "destroy": ("domain is not running", "already stopped"),
+    "shutdown": ("domain is not running", "already stopped"),
+    "start": ("domain is already (running|active)", "already running"),
+    "suspend": ("domain is not running", "not running, so nothing to suspend"),
+    "resume": ("domain is not running", "not running, so nothing to resume"),
+    "reboot": ("domain is not running", "not running, so nothing to reboot"),
+}
+
+
+def _vm_step(action: str) -> str:
+    """Shell for ONE domain in `$vm`: run it, and tell 'already there' from a
+    real error. Written once; both the named-list and the 'all' loop use it."""
+    pat, said = _ALREADY.get(action, ("", ""))
+    run = f'out=$(virsh {action} "$vm" 2>&1); st=$?'
+    if not pat:
+        return (f'{run}; [ "$st" -eq 0 ] || rc=1; '
+                f'echo "== {action} $vm =="; [ -n "$out" ] && echo "$out"; :')
+    return (
+        f'{run}; '
+        f'if [ "$st" -eq 0 ]; then echo "== {action} $vm =="; '
+        f'[ -n "$out" ] && echo "$out"; :; '
+        # already in the requested state: say so, and do NOT fail the run
+        f'elif printf "%s" "$out" | grep -Eqi {shlex.quote(pat)}; then '
+        f'skipped=$((skipped+1)); echo "-- {said}: $vm"; '
+        f'else rc=1; echo "== {action} $vm =="; echo "$out"; fi')
+
 
 def cmd_container_runtime() -> str:
     return (
@@ -122,10 +162,13 @@ def cmd_vm_action(action: str, name: str) -> str:
         # The while-loop is the RHS of the pipe (a subshell), so `exit "$rc"` must
         # be INSIDE the brace group for the pipeline's status to reflect it.
         return _VIRSH + (
-            'virsh list --all --name 2>/dev/null | { rc=0; while IFS= read -r vm; do '
-            '[ -n "$vm" ] || continue; '
-            f'echo "== {action} $vm =="; virsh {action} "$vm" 2>&1 || rc=1; '
-            f'done; echo "{action}: requested on all VMs."; exit "$rc"; }}'
+            'virsh list --all --name 2>/dev/null | { rc=0; n=0; skipped=0; '
+            'while IFS= read -r vm; do '
+            '[ -n "$vm" ] || continue; n=$((n+1)); '
+            + _vm_step(action) + '; '
+            f'done; echo "{action}: $n VM(s)'
+            '$([ "$skipped" -gt 0 ] && echo ", $skipped already there")'
+            '$([ "$rc" -ne 0 ] && echo ", some failed")."; exit "$rc"; }'
         )
     targets = _split_targets(name)
     quoted = " ".join(shlex.quote(t) for t in targets)
@@ -141,16 +184,18 @@ def cmd_vm_action(action: str, name: str) -> str:
     # grep -Fxq: fixed string, whole line, so `web` never matches `web-1`.
     # `--` so a domain whose name begins with a dash is not read as a flag.
     return _VIRSH + (
-        f'have=$(virsh list --all --name 2>/dev/null); rc=0; n=0; '
+        f'have=$(virsh list --all --name 2>/dev/null); rc=0; n=0; skipped=0; '
         f'for vm in {quoted}; do '
         f'if printf "%s\\n" "$have" | grep -Fxq -- "$vm"; then '
-        f'n=$((n+1)); echo "== {action} $vm =="; virsh {action} "$vm" 2>&1 || rc=1; '
+        f'n=$((n+1)); ' + _vm_step(action) + '; '
         f'else echo "-- not on this host: $vm"; fi; '
         f'done; '
         # Nothing matched is a failure, not a quiet success: the operator asked
         # for something and this host did none of it.
         f'[ "$n" -gt 0 ] || rc=1; '
-        f'echo "{action}: requested on $n of {len(targets)} VM(s) on this host."; '
+        f'echo "{action}: $n of {len(targets)} VM(s) on this host'
+        '$([ "$skipped" -gt 0 ] && echo \", $skipped already there\")'
+        '$([ \"$rc\" -ne 0 ] && echo \", some failed\")."; '
         f'exit "$rc"'
     )
 

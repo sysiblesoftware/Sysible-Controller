@@ -143,6 +143,37 @@ export default function ToolPage({ tool, hosts, onRefreshHosts, prefill }) {
       } catch (e) { setErr(e.message); return; }
     }
 
+    // A PARAM VALUE can be the destructive part. `danger` is per-ACTION, and
+    // "Run action" is the same action whether it starts a VM or cuts its power,
+    // so the whole-action flag was never set on it -- `destroy` across a fleet
+    // and `rm` on a container both ran with no confirmation at all.
+    //
+    // The old prompt also said only "Run action on 3 host(s)?", which names
+    // neither the operation nor what it does. For something irreversible that
+    // is not a confirmation, it is a formality.
+    // action.params, NOT the merged sharedParams: that lives in GroupSection,
+    // a different component, so reading it here throws at runtime -- and a
+    // bundler will not tell you. The action being run carries its own params.
+    const perilous = [];
+    for (const p of action.params) {
+      const chosen = built[p.name];
+      const what = p.danger_values && p.danger_values[chosen];
+      if (what) perilous.push({ value: chosen, what });
+    }
+    if (perilous.length && !built.allow_critical) {
+      const subject = (built.name || "").trim();
+      const count = subject && !/^(all|\*)$/i.test(subject)
+        ? `${subject.split(/[\s,]+/).filter(Boolean).length} selected`
+        : "EVERY ONE";
+      if (!window.confirm(
+            `⚠  ${perilous.map((x) => x.value.toUpperCase()).join(" + ")}\n\n`
+            + perilous.map((x) => x.what).join("\n\n")
+            + `\n\nRunning on: ${count}, across `
+            + (targets.length === 1 ? `1 host (${targets[0]})`
+                                    : `${targets.length} hosts (${targets.join(", ")})`)
+            + `.\n\nProceed?`)) return;
+    }
+
     if (action.danger && !built.allow_critical &&
         !window.confirm(`${action.label} on ${targets.length} host(s)?`)) return;
 

@@ -40,6 +40,18 @@ class Param:
     # For type == "select-remote": the (hidden) action whose per-host stdout —
     # one value per line — populates the dropdown for the single selected host.
     source: str = ""
+    # Which of `options` are DESTRUCTIVE, and what each one actually does.
+    #
+    # `danger` lives on the Action, which is all-or-nothing -- and the action
+    # that force-powers off a VM is the same one that starts it. Flagging the
+    # whole action would prompt before `start`, which trains people to click
+    # through the prompt; flagging none of it is how `destroy` and `rm` came to
+    # run on a fleet with no confirmation at all.
+    #
+    # The text is the consequence, in the operator's words, not the verb again:
+    # "destroy" sounds like it deletes the VM (it does not -- that is
+    # `undefine`) and gives no hint that it is an unclean power cut.
+    danger_values: dict = field(default_factory=dict)   # value -> what it does
     # For type == "select-remote": may this field hold MORE THAN ONE value?
     # vm_action takes a list (and 'all'); vm_info takes exactly one domain and
     # would be handed "a b c" as a single name if the picker let you check
@@ -692,7 +704,11 @@ _register(Action(name="cont_images", tool="Containers & VMs", label="List images
     params=[], build=lambda p: api.cmd_list_images()))
 _register(Action(name="cont_action", tool="Containers & VMs", label="Run action",
     params=[Param("action", "Action", type="select",
-                  options=["start", "stop", "restart", "rm", "pause", "unpause"], default="start"),
+                  options=["start", "stop", "restart", "rm", "pause", "unpause"], default="start",
+                  danger_values={
+                      "rm": "DELETES the container. Anything written inside it that is not "
+                            "on a mounted volume goes with it, and this cannot be undone.",
+                  }),
             Param("name", "Container(s) — one or more, or 'all'")],
     build=lambda p: api.cmd_container_action(_s(p, "action", "start"), _s(p, "name"))))
 _register(Action(name="cont_logs", tool="Containers & VMs", label="Container logs",
@@ -1490,7 +1506,17 @@ _register(Action(name="vm_names", tool="Containers & VMs", label="List VM names"
     hidden=True, params=[], build=lambda p: api.cmd_list_vm_names()))
 _register(Action(name="vm_action", tool="Containers & VMs", label="Run action",
     params=[Param("action", "Action", type="select",
-                  options=["start", "shutdown", "destroy", "reboot", "suspend", "resume"], default="start"),
+                  options=["start", "shutdown", "destroy", "reboot", "suspend", "resume"], default="start",
+                  danger_values={
+                      # It does NOT delete the VM -- that is `undefine` -- but
+                      # nothing in the word says so, and nothing says it is an
+                      # unclean stop either.
+                      "destroy": "Cuts the power to the VM immediately, like pulling the plug. "
+                                 "The guest gets no chance to flush its disks, so unsaved work is "
+                                 "lost and its filesystem can need a repair on next boot. "
+                                 "(It does NOT delete the VM — use shutdown for a clean stop.)",
+                      "reboot": "Reboots the guest now. Anyone using it loses their session.",
+                  }),
             Param("name", "VM name", type="select-remote", source="vm_names", multi=True,
                   help="pick VMs on the checked hosts, or type names / 'all'")],
     build=lambda p: api.cmd_vm_action(_s(p, "action", "start"), _s(p, "name"))))
@@ -1956,6 +1982,7 @@ def catalog():
                     "name": pr.name, "label": pr.label, "type": pr.type,
                     "default": pr.default, "required": pr.required,
                     "options": pr.options, "source": pr.source, "multi": pr.multi,
+                    "danger_values": pr.danger_values,
                     "help": pr.help,
                     "placeholder": _placeholder_for(pr),
                 }

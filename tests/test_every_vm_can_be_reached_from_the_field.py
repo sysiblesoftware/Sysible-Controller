@@ -109,9 +109,34 @@ def test_a_domain_whose_name_starts_with_a_dash(tmp_path):
 
 def test_all_still_means_every_vm_on_the_host():
     from client import _api_containers as c
-    cmd = c.cmd_vm_action("shutdown", "all")
-    assert "virsh list --all --name" in cmd
-    assert "|| rc=1" in cmd, "one failing domain aborts the rest"
+    assert "virsh list --all --name" in c.cmd_vm_action("shutdown", "all")
+
+
+@pytest.mark.skipif(not SH, reason="no sh on this machine")
+def test_one_failing_domain_does_not_abort_the_rest(tmp_path):
+    """This used to look for the literal `|| rc=1`, which stopped existing when
+    the loop learned to tell an already-stopped domain from a broken one. The
+    property it was after is worth keeping, so it is EXECUTED now: the domain
+    in the middle fails, the ones either side are still acted on, and the run
+    as a whole still reports failure."""
+    from client import _api_containers as c
+    b = tmp_path / "bin"; b.mkdir()
+    log = tmp_path / "acted"
+    (b / "virsh").write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"list\" ]; then printf '%s\\n' a-1 bad-1 z-1; exit 0; fi\n"
+        'if [ "$2" = "bad-1" ]; then echo "error: access denied" >&2; exit 1; fi\n'
+        'echo "$1 $2" >> ' + str(log) + "\n"
+        "exit 0\n")
+    (b / "virsh").chmod(0o755)
+    env = {**os.environ, "PATH": f"{b}:{os.environ.get('PATH', '/usr/bin:/bin')}"}
+    r = subprocess.run([SH, "-c", c.cmd_vm_action("shutdown", "all")],
+                       capture_output=True, text=True, env=env, timeout=60)
+    acted = [x for x in log.read_text().split("\n") if x.strip()] if log.exists() else []
+    assert acted == ["shutdown a-1", "shutdown z-1"], \
+        f"the failure in the middle stopped the loop: {acted}"
+    assert r.returncode != 0, "a failed domain was reported as a clean run"
+    assert "access denied" in r.stdout + r.stderr
 
 
 @pytest.mark.parametrize("word", ["all", "ALL", "*"])

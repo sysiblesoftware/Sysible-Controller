@@ -200,6 +200,72 @@ def cmd_vm_action(action: str, name: str) -> str:
     )
 
 
+def cmd_vm_delete(name: str, remove_storage: bool = False) -> str:
+    """Delete VMs: `virsh undefine`, optionally with their disks.
+
+    Asked for as "I should be able to delete the VMs from the VM panel". The
+    panel could start, stop, force-off and inspect a VM but not remove one, so
+    the last step of decommissioning a host meant going to a shell.
+
+    Three things this has to get right, none of them obvious from the verb:
+
+    RUNNING DOMAINS. `undefine` on a running domain does NOT stop it. It
+    removes the persistent definition and leaves the domain running as a
+    TRANSIENT one -- so it vanishes from `virsh list --all`, keeps its RAM and
+    CPU, and disappears for good at the next host reboot with no config to
+    recreate it from. That is the worst outcome available here, so a running
+    domain is refused and told to stop first rather than quietly half-deleted.
+
+    UEFI. A domain with an nvram file fails to undefine without --nvram, with
+    an error most people read as a permissions problem. Retried with the flag
+    rather than handed back.
+
+    STORAGE. Disks are kept unless asked for. `--remove-all-storage` deletes
+    every writable volume libvirt can see for that domain, which is not
+    something to default to -- and not something to do quietly either, so each
+    deleted disk is named in the output.
+    """
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("VM (domain) name is required (one or more, or 'all').")
+    targets = _split_targets(name)
+    flags = " --remove-all-storage" if remove_storage else ""
+    # The disks are listed BEFORE the undefine: afterwards there is no domain
+    # left to ask, so an operator who wanted to know what went has no way back.
+    show = ('echo "   disks:"; virsh domblklist "$vm" --details 2>/dev/null '
+            '| awk \'$2=="disk"{print "     " $4}\'; ') if remove_storage else ""
+    body = (
+        'state=$(virsh domstate "$vm" 2>/dev/null); '
+        'case "$state" in *running*|*paused*) '
+        'rc=1; echo "-- still $state: $vm (stop it first — undefining a running '
+        'domain leaves it running with no definition to restart it from)"; '
+        'continue;; esac; '
+        f'echo "== delete $vm =="; {show}'
+        f'out=$(virsh undefine "$vm"{flags} 2>&1); st=$?; '
+        # UEFI domains need --nvram; the bare error does not say so.
+        'if [ "$st" -ne 0 ] && printf "%s" "$out" | grep -qi nvram; then '
+        f'out=$(virsh undefine "$vm"{flags} --nvram 2>&1); st=$?; fi; '
+        'if [ "$st" -eq 0 ]; then n=$((n+1)); echo "   deleted"; '
+        'else rc=1; echo "$out"; fi')
+    if name.lower() in ("all", "*"):
+        return _VIRSH + (
+            'virsh list --all --name 2>/dev/null | { rc=0; n=0; '
+            'while IFS= read -r vm; do [ -n "$vm" ] || continue; '
+            + body + '; done; '
+            'echo "delete: $n VM(s) removed'
+            '$([ "$rc" -ne 0 ] && echo ", some skipped or failed")."; exit "$rc"; }')
+    quoted = " ".join(shlex.quote(t) for t in targets)
+    return _VIRSH + (
+        f'have=$(virsh list --all --name 2>/dev/null); rc=0; n=0; '
+        f'for vm in {quoted}; do '
+        f'if printf "%s\\n" "$have" | grep -Fxq -- "$vm"; then ' + body + '; '
+        f'else echo "-- not on this host: $vm"; fi; done; '
+        f'[ "$n" -gt 0 ] || rc=1; '
+        f'echo "delete: $n of {len(targets)} VM(s) removed on this host'
+        '$([ "$rc" -ne 0 ] && echo \", some skipped or failed\")."; '
+        f'exit "$rc"')
+
+
 def cmd_vm_info(name: str) -> str:
     """Domain info for one VM or several.
 

@@ -52,6 +52,16 @@ class Param:
     # "destroy" sounds like it deletes the VM (it does not -- that is
     # `undefine`) and gives no hint that it is an unclean power cut.
     danger_values: dict = field(default_factory=dict)   # value -> what it does
+    # What an option is CALLED in the UI, when the value sent to the host is a
+    # poor name for it. Reported as "the destroy action doesn't actually destroy
+    # the VM" -- and it does not: libvirt's `destroy` is a force power-off, and
+    # the thing that deletes a VM is `undefine`. The word belongs to virsh's
+    # vocabulary, not the operator's, and now that the panel has a real Delete
+    # VM beside it, a "destroy" that does not delete is worse than unhelpful.
+    #
+    # The VALUE is unchanged: it is what goes to virsh, and saved schedules
+    # already hold it. Only the label differs.
+    option_labels: dict = field(default_factory=dict)   # value -> label shown
     # For type == "select-remote": may this field hold MORE THAN ONE value?
     # vm_action takes a list (and 'all'); vm_info takes exactly one domain and
     # would be handed "a b c" as a single name if the picker let you check
@@ -1517,6 +1527,10 @@ _register(Action(name="vm_names", tool="Containers & VMs", label="List VM names"
 _register(Action(name="vm_action", tool="Containers & VMs", label="Run action",
     params=[Param("action", "Action", type="select",
                   options=["start", "shutdown", "destroy", "reboot", "suspend", "resume"], default="start",
+                  option_labels={
+                      "destroy": "force off (destroy)",
+                      "shutdown": "shutdown (graceful)",
+                  },
                   danger_values={
                       # It does NOT delete the VM -- that is `undefine` -- but
                       # nothing in the word says so, and nothing says it is an
@@ -1530,6 +1544,19 @@ _register(Action(name="vm_action", tool="Containers & VMs", label="Run action",
             Param("name", "VM name", type="select-remote", source="vm_names", multi=True,
                   help="pick VMs on the checked hosts, or type names / 'all'")],
     build=lambda p: api.cmd_vm_action(_s(p, "action", "start"), _s(p, "name"))))
+# Asked for as "I should be able to delete the VMs from the VM panel". The panel
+# could start, stop, force-off and inspect a VM but never remove one.
+#
+# danger at the ACTION level, unlike vm_action: every path through this deletes
+# something. There is no safe choice to leave unprompted.
+_register(Action(name="vm_delete", tool="Containers & VMs", label="Delete VM", danger=True,
+    params=[Param("name", "VM name", type="select-remote", source="vm_names", multi=True,
+                  help="pick the VMs to delete on the checked hosts"),
+            Param("storage", "Also delete their disk images", type="checkbox",
+                  default=False, required=False,
+                  help="off: the definition goes, the disks stay and can be re-attached. "
+                       "on: every writable volume libvirt can see for the VM is deleted too")],
+    build=lambda p: api.cmd_vm_delete(_s(p, "name"), _b(p, "storage"))))
 _register(Action(name="vm_info", tool="Containers & VMs", label="VM info",
     params=[Param("name", "VM name", type="select-remote", source="vm_names", multi=True,
                   help="pick VMs on the checked hosts, or type names")],
@@ -1713,7 +1740,7 @@ _LAYOUT: dict[str, list] = {
     ],
     "Containers & VMs": [
         ("Containers", "Containers", ["cont_runtime", "cont_list", "cont_images", "cont_logs", "cont_action", "cont_prune"]),
-        ("Virtual Machines", "Virtual Machines", ["vm_list", "vm_info", "vm_action"]),
+        ("Virtual Machines", "Virtual Machines", ["vm_list", "vm_info", "vm_action", "vm_delete"]),
     ],
     "Directory Services (Active Directory / LDAP)": [
         ("Active Directory", "Active Directory", ["dir_prepare_ad", "dir_install_ad", "dir_realm_status", "dir_join_ad", "dir_leave_ad", "dir_realm_permit", "dir_mkhomedir"]),
@@ -1993,6 +2020,7 @@ def catalog():
                     "default": pr.default, "required": pr.required,
                     "options": pr.options, "source": pr.source, "multi": pr.multi,
                     "danger_values": pr.danger_values,
+                    "option_labels": pr.option_labels,
                     "help": pr.help,
                     "placeholder": _placeholder_for(pr),
                 }

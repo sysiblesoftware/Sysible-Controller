@@ -23,7 +23,12 @@ export default function ParamField({ p, value, onChange, targets = [] }) {
       </span>
       {p.type === "select" ? (
         <select value={value ?? ""} onChange={(e) => onChange(p.name, e.target.value)}>
-          {(p.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
+          {/* The VALUE is what the host receives; the label is what the option
+              is called. `destroy` is libvirt's word for a force power-off and
+              was read as deleting the VM, which it does not do. */}
+          {(p.options || []).map((o) => (
+            <option key={o} value={o}>{(p.option_labels && p.option_labels[o]) || o}</option>
+          ))}
         </select>
       ) : p.type === "select-remote" ? (
         <RemoteSelect p={p} value={value} onChange={onChange} targets={targets} />

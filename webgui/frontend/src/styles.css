@@ -602,6 +602,36 @@ section:first-of-type > .section-title { margin-top: 2px; }
   border-color: var(--tile-edge-hover);
 }
 
+/* ---- The fleet chip in the top bar ----------------------------------------
+   It began as a dot, a number and "/ 16 agents" in 12px, sitting beside the
+   "Signed in as ..." line -- two runs of small grey text with nothing to tell
+   them apart. Reported as not looking like anything, and as not saying what
+   the number was.
+
+   So: a container, so it reads as a status element rather than stray text; its
+   own label, so the number has a noun; and the state in the dot AND the value,
+   so it does not depend on colour alone. --panel-2 / --border-strong rather
+   than new tokens: every skin already defines them. */
+.fleet-chip {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  padding: 4px 10px; border-radius: var(--r-pill);
+  background: var(--panel-2); border: 1px solid var(--border-strong);
+  font-size: var(--fs-xs); font-family: inherit; color: var(--text-dim);
+  cursor: pointer; white-space: nowrap;
+}
+.fleet-chip:hover { border-color: var(--btn-border); }
+.fleet-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
+.fleet-chip-label {
+  font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-faint);
+}
+.fleet-chip-value { color: var(--text); }
+.fleet-chip.ok   .dot { background: var(--green); }
+.fleet-chip.warn .dot { background: var(--amber); }
+.fleet-chip.warn .fleet-chip-value { color: var(--amber); }
+.fleet-chip.bad  .dot { background: var(--red); }
+.fleet-chip.bad  .fleet-chip-value { color: var(--red); }
+
 @media (max-width: 1400px) { .tool-grid { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 1180px) { .tool-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 720px)  { .tool-grid { grid-template-columns: 1fr; } }

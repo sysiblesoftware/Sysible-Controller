@@ -33,43 +33,42 @@ export default function FleetPulse({ onOpen }) {
     return () => { alive = false; clearInterval(t); };
   }, []);
 
+  // LABELLED. The first version was a dot, a number, and "/ 16 agents" set in
+  // 12px beside the sign-in line -- reported as not looking like anything and
+  // not saying what the number was. A count with no noun is a riddle: 16 of
+  // what, measured how. So it carries its own label, reads as a sentence, and
+  // sits in a chip rather than floating as stray text next to other stray text.
+  const chip = (tone, value, title) => (
+    <button type="button" className={"fleet-chip " + tone} onClick={onOpen}
+            title={title} aria-label={"Agents: " + value}>
+      <span className="dot" />
+      <span className="fleet-chip-label">Agents</span>
+      <span className="fleet-chip-value">{value}</span>
+    </button>
+  );
+
   if (state.kind === "loading") {
-    return <span className="faint" style={{ fontSize: 12 }}>
-      <span className="spin" style={{ marginRight: 6 }} />fleet…
-    </span>;
+    return chip("idle", "checking…", "Reading the agent inventory");
   }
   if (state.kind === "err") {
-    return (
-      <span className="pulse-bad" title={`Could not read the agent inventory: ${state.why}`}
-            style={{ fontSize: 12, color: "var(--red)" }}>
-        ⚠ fleet status unavailable
-      </span>
-    );
+    // Not "0 online". The inventory could not be read, which says nothing at
+    // all about the hosts.
+    return chip("bad", "status unavailable",
+                `Could not read the agent inventory: ${state.why}`);
   }
 
   const { total, online, offline } = state.counts;
   if (!total) {
-    return <span className="faint" style={{ fontSize: 12 }}>no agents enrolled</span>;
+    return chip("idle", "none enrolled", "No agents are enrolled on this controller");
   }
   // Every agent silent is its own thing: it usually means the controller's
   // address moved, not that a whole fleet died at once.
   const allSilent = online === 0;
-  const colour = allSilent ? "var(--red)" : offline ? "var(--amber)" : "var(--green)";
-  return (
-    <span
-      role={onOpen ? "button" : undefined}
-      onClick={onOpen}
-      title={allSilent
-        ? `No agent has reported in. Every host is silent — check the controller's address.`
-        : offline
-          ? `${online} of ${total} agents reporting in; ${offline} not.`
-          : `All ${total} agents reporting in.`}
-      style={{ fontSize: 12, cursor: onOpen ? "pointer" : undefined,
-               display: "inline-flex", alignItems: "center", gap: 6 }}>
-      <span className="dot" style={{ background: colour }} />
-      <span style={{ color: colour }}>{online}</span>
-      <span className="faint">/ {total} agents</span>
-      {offline > 0 && <span className="faint">· {offline} silent</span>}
-    </span>
-  );
+  const tone = allSilent ? "bad" : offline ? "warn" : "ok";
+  const title = allSilent
+    ? "No agent has reported in. Every host is silent — check the controller's address."
+    : offline
+      ? `${online} of ${total} agents have reported in recently; ${offline} have not.`
+      : `All ${total} agents have reported in recently.`;
+  return chip(tone, `${online} of ${total} online`, title);
 }

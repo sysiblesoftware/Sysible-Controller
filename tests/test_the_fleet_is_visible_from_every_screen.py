@@ -125,3 +125,42 @@ def test_it_uses_the_instant_inventory_not_a_sweep():
     assert "api.agents()" in PULSE
     for heavy in ("fleetHealth", "fleetPosture", "fleetUpdates", "runTool"):
         assert heavy not in PULSE, f"the strip polls {heavy}"
+
+# ---- and it says what it is -------------------------------------------------
+def test_the_number_has_a_noun():
+    """It was a dot, a number and "/ 16 agents" in 12px beside the sign-in
+    line. Reported as not looking like anything and as not saying what the
+    number was -- "16 of what, measured how" is not a status display."""
+    assert "fleet-chip-label" in PULSE, "the count carries no label"
+    assert ">Agents<" in PULSE, "the label does not name what is being counted"
+    assert "of ${total} online" in PULSE, \
+        "the value does not read as a sentence (e.g. '14 of 16 online')"
+
+
+def test_it_is_a_control_not_a_run_of_text():
+    """A chip, so it separates from the 'Signed in as ...' text it sits beside
+    -- which was two runs of small grey with nothing to tell them apart."""
+    assert '"fleet-chip ' in PULSE, "there is no container"
+    assert "<button" in PULSE, "a clickable status is not a button"
+    css = (REPO / "webgui" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    assert ".fleet-chip {" in css, "the chip has no styling"
+    assert "border-radius: var(--r-pill)" in css[css.index(".fleet-chip {"):][:400]
+
+
+def test_the_state_is_not_carried_by_colour_alone():
+    """A red dot and a green dot are the same dot to a good share of
+    operators. The VALUE says it too: '0 of 16 online' reads without colour."""
+    assert "status unavailable" in PULSE and "none enrolled" in PULSE
+    assert "aria-label" in PULSE, "the state is not exposed to a screen reader"
+
+
+def test_an_unreadable_inventory_is_not_zero_online():
+    """The distinction this whole session keeps turning on."""
+    err = PULSE[PULSE.index('if (state.kind === "err")'):]
+    err = err[:err.index("const { total")]
+    # Comments are not code. The comment in that block says Not "0 online",
+    # which is exactly the string this looks for -- a guard tripped by its own
+    # explanation, for the third time in this session.
+    code = "\n".join(l for l in err.splitlines() if not l.strip().startswith("//"))
+    assert "status unavailable" in code
+    assert "online" not in code, "the error state claims something about the hosts"

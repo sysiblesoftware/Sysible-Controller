@@ -131,20 +131,39 @@ def test_the_number_has_a_noun():
     """It was a dot, a number and "/ 16 agents" in 12px beside the sign-in
     line. Reported as not looking like anything and as not saying what the
     number was -- "16 of what, measured how" is not a status display."""
-    assert "fleet-chip-label" in PULSE, "the count carries no label"
-    assert ">Agents<" in PULSE, "the label does not name what is being counted"
+    assert "fleet-status-label" in PULSE, "the count carries no label"
+    assert "Agents ·" in PULSE, "the label does not name what is being counted"
     assert "of ${total} healthy" in PULSE, \
         "the value does not read as a sentence (e.g. '14 of 16 healthy')"
 
 
-def test_it_is_a_control_not_a_run_of_text():
-    """A chip, so it separates from the 'Signed in as ...' text it sits beside
-    -- which was two runs of small grey with nothing to tell them apart."""
-    assert '"fleet-chip ' in PULSE, "there is no container"
+def test_it_belongs_to_the_bar_it_sits_in():
+    """It had a bordered, filled pill -- reported as looking way out of place,
+    and it was: .target-chip is the only pill in this stylesheet and it is a
+    selectable host token inside a form box, not a header status. So the header
+    grew a shape nothing else in the console uses, between a large bold title
+    and quiet grey meta.
+
+    It is a peer of the "Signed in as ..." text now: same size, same voice. Still
+    a button, because it is still clickable."""
+    assert '"fleet-status ' in PULSE, "it lost its own class"
     assert "<button" in PULSE, "a clickable status is not a button"
     css = (REPO / "webgui" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
-    assert ".fleet-chip {" in css, "the chip has no styling"
-    assert "border-radius: var(--r-pill)" in css[css.index(".fleet-chip {"):][:400]
+    block = css[css.index(".fleet-status {"):]
+    block = block[:block.index("}")]
+    assert "border: none" in block, "it is wearing a border again"
+    assert "r-pill" not in block, "it is a pill again"
+    assert "var(--fs-sm)" in block, \
+        "it is not set at the size of the meta text it stands beside"
+
+
+def test_the_meta_does_not_crowd_the_page_title():
+    """.main-top is a plain flex row, so the title, the indicator and
+    "Signed in as ..." all packed against the left edge. Quiet grey text got
+    away with that; anything with a shape did not."""
+    css = (REPO / "webgui" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    assert ".main-top > .row:last-child { margin-left: auto; }" in css, \
+        "the top-bar meta is not pushed away from the title"
 
 
 def test_the_state_is_not_carried_by_colour_alone():

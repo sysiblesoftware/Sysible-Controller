@@ -39,11 +39,11 @@ export default function FleetPulse({ onOpen }) {
   // what, measured how. So it carries its own label, reads as a sentence, and
   // sits in a chip rather than floating as stray text next to other stray text.
   const chip = (tone, value, title) => (
-    <button type="button" className={"fleet-chip " + tone} onClick={onOpen}
+    <button type="button" className={"fleet-status " + tone} onClick={onOpen}
             title={title} aria-label={"Agents: " + value}>
       <span className="dot" />
-      <span className="fleet-chip-label">Agents</span>
-      <span className="fleet-chip-value">{value}</span>
+      <span className="fleet-status-label">Agents ·</span>
+      <span className="fleet-status-value">{value}</span>
     </button>
   );
 

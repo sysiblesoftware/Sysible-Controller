@@ -33,39 +33,63 @@ export default function FleetPulse({ onOpen }) {
     return () => { alive = false; clearInterval(t); };
   }, []);
 
-  // LABELLED. The first version was a dot, a number, and "/ 16 agents" set in
-  // 12px beside the sign-in line -- reported as not looking like anything and
-  // not saying what the number was. A count with no noun is a riddle: 16 of
-  // what, measured how. So it carries its own label, reads as a sentence, and
-  // sits in a chip rather than floating as stray text next to other stray text.
-  const chip = (tone, value, title) => (
-    <button type="button" className={"fleet-status " + tone} onClick={onOpen}
-            title={title} aria-label={"Agents: " + value}>
-      <span className="dot" />
-      <span className="fleet-status-label">Agents ·</span>
-      <span className="fleet-status-value">{value}</span>
+  // A BAR, finally. Three earlier versions were all the same mistake at
+  // different sizes — a scrap of text beside the sign-in line. A dot and
+  // "16 / 16 agents" read as nothing; a label named it; a pill was out of
+  // place; dropping the pill left something reported as wimpy and as saying
+  // nothing beyond "healthy". It was: one adjective, with the breakdown in a
+  // tooltip nobody opens.
+  const shell = (tone, body, title) => (
+    <button type="button" className={"fleet-bar " + tone} onClick={onOpen} title={title}>
+      {body}
     </button>
+  );
+  const head = (value, unit) => (
+    <div className="fleet-bar-head">
+      <div className="fleet-bar-k">Agent health</div>
+      <div className="fleet-bar-n">{value}{unit ? <small> {unit}</small> : null}</div>
+    </div>
   );
 
   if (state.kind === "loading") {
-    return chip("idle", "checking…", "Reading the agent inventory");
+    return shell("", <>{head("—", "reading the inventory…")}</>, "Reading the agent inventory");
   }
   if (state.kind === "err") {
-    // Not "0 online". The inventory could not be read, which says nothing at
+    // Not "0 healthy". The inventory could not be read, which says nothing at
     // all about the hosts.
-    return chip("bad", "status unavailable",
-                `Could not read the agent inventory: ${state.why}`);
+    return shell("bad",
+      <>{head("—", "status unavailable")}
+       <div className="fleet-bar-note">
+         The agent inventory could not be read, so this says nothing about the
+         fleet. {state.why}
+       </div></>,
+      `Could not read the agent inventory: ${state.why}`);
   }
 
   const { total, healthy, silent, quarantined } = state.counts;
   if (!total) {
-    return chip("idle", "none enrolled", "No agents are enrolled on this controller");
+    return shell("",
+      <>{head(0, "agents enrolled")}
+       <div className="fleet-bar-note">No agents are enrolled on this controller yet.</div></>,
+      "No agents are enrolled on this controller");
   }
+
   // Nothing healthy is its own thing. A whole fleet does not fail at once;
   // every agent silent usually means the controller's address moved.
   const tone = healthy === 0 ? "bad" : healthy < total ? "warn" : "ok";
-  // The chip stays short; the reason belongs in the tooltip, where there is
-  // room to say what is actually wrong and why it matters.
+  const pct = (n) => `${(n / total) * 100}%`;
+  // Every segment is also a named count below — the bar is a second encoding of
+  // the split, never the only one.
+  const segs = [["ok", healthy], ["warn", silent], ["bad", quarantined]]
+    .filter(([, n]) => n > 0);
+  const legend = [
+    ["ok", healthy, "healthy"],
+    ["warn", silent, "silent"],
+    ["bad", quarantined, "quarantined"],
+    // A zero only earns a slot once it has been something other than zero;
+    // otherwise a healthy fleet reads as a list of problems it does not have.
+  ].filter(([, n], i) => n > 0 || i === 0);
+
   const why = [];
   if (silent) {
     why.push(silent === total
@@ -76,7 +100,22 @@ export default function FleetPulse({ onOpen }) {
     why.push(`${quarantined} quarantined — reporting in, but the controller hands them no work until their integrity baseline is re-sealed`);
   }
   const title = why.length
-    ? `${healthy} of ${total} agents healthy. ` + why.join("; ") + "."
-    : `All ${total} agents are reporting in and able to take work.`;
-  return chip(tone, `${healthy} of ${total} healthy`, title);
+    ? `${healthy} of ${total} agents healthy. ` + why.join("; ") + ". Click to open the fleet."
+    : `All ${total} agents are reporting in and able to take work. Click to open the fleet.`;
+
+  return shell(tone,
+    <>
+      {head(healthy, `/ ${total} reporting`)}
+      <div className="fleet-bar-track">
+        {segs.map(([k, n]) => (
+          <div key={k} className={"fleet-bar-seg " + k} style={{ width: pct(n) }} />
+        ))}
+      </div>
+      <div className="fleet-bar-legend">
+        {legend.map(([k, n, word]) => (
+          <span key={k}><i className={"sw " + k} /><b>{n}</b> {word}</span>
+        ))}
+      </div>
+    </>,
+    title);
 }

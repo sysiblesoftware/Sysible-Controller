@@ -550,15 +550,20 @@ export default function App() {
             <h2 style={{ margin: 0 }}>{view === "host" ? (target?.label || "Host Posture") : (view ? SECTIONS[view] : "Dashboard")}</h2>
           </div>
           <div className="row" style={{ alignItems: "center", gap: 12, minWidth: 0 }}>
-            {/* On EVERY view and for every role, including the auditor: whether
-                agents are reporting in is read-only fleet state, and it used to
-                live only on the Dashboard — a navigation away from anyone in
-                the middle of doing something to the fleet. */}
-            <FleetPulse onOpen={() => go(null)} />
             {view === null && isSuper && <UpdatesBadge onOpen={() => go("settings", { tab: "controller" })} />}
             <div className="main-top-sub">{view ? "" : `Signed in as ${user}${role ? ` · ${role}` : ""}`}</div>
           </div>
         </div>
+        {/* On EVERY view and for every role, including the auditor: whether
+            agents are reporting in is read-only fleet state, and it used to
+            live only on the Dashboard — a navigation away from anyone in
+            the middle of doing something to the fleet.
+
+            A strip of its own, BELOW the title row. Three earlier versions sat
+            inside that row next to "Signed in as ...", and every one of them
+            read as wedged in between a large bold title and quiet grey meta
+            text. The thing asked for was a health bar; a bar needs the width. */}
+        <FleetPulse onOpen={() => go(null)} />
         <div className="main-scroll">
           {isSuper && <HealthBanner />}
           {view === null && <Dashboard role={role} edition={edition}

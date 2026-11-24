@@ -615,40 +615,72 @@ section:first-of-type > .section-title { margin-top: 2px; }
   border-color: var(--tile-edge-hover);
 }
 
-/* ---- The fleet indicator in the top bar ------------------------------------
-   Third attempt, and the first two were each half right.
+/* ---- The agent health bar --------------------------------------------------
+   Fourth attempt, and the first three were all the same mistake in different
+   sizes: a scrap of text in the header.
 
-   It began as a dot and "16 / 16 agents" in 12px beside the sign-in line:
-   unreadable as anything, and a count with no noun. Giving it a label fixed
-   that. Giving it a BORDERED PILL did not -- reported as looking way out of
-   place, and it was. Nothing else in this console wears one: .target-chip is
-   the only pill in the stylesheet and it is a selectable host token inside a
-   form box, not a status. So the header grew a bordered, filled object sitting
-   between a large bold title and quiet grey meta text, louder than either and
-   formatted like neither.
+   A dot and "16 / 16 agents" in 12px read as nothing and named nothing. A
+   label fixed the naming. A bordered pill was reported as out of place, and it
+   was -- nothing else in this console wears one. Dropping the pill left quiet
+   grey text, reported as wimpy and as saying nothing beyond "healthy", which
+   it was: one adjective, with the actual breakdown hidden in a tooltip nobody
+   opens.
 
-   The label was the part worth keeping. This drops the container and sets the
-   indicator as a PEER of the "Signed in as ..." text it stands next to -- same
-   size, same separator, same voice -- with the state carried by the dot and by
-   the words, never by a shape no other part of the console uses. */
-.fleet-status {
-  display: inline-flex; align-items: baseline; gap: var(--sp-2);
-  font-family: inherit; font-size: var(--fs-sm); color: var(--text-dim);
-  background: none; border: none; padding: 0;
-  cursor: pointer; white-space: nowrap;
+   The ask was a health BAR, and that is what this is. It states the fraction
+   at a size you can read across a room, shows the split as a proportional
+   bar, and NAMES each state with its own count beside it -- so a healthy fleet
+   still tells you how many of what, and a degraded one says how it is degraded
+   without being hovered. It is a strip of its own under the title rather than
+   another item crowded in beside the sign-in line, which is what made every
+   previous attempt look wedged in. */
+.fleet-bar {
+  display: flex; align-items: center; gap: var(--sp-4);
+  width: 100%; margin: 0 0 12px; padding: 9px 14px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-left: 3px solid var(--text-faint); border-radius: var(--r-sm);
+  font-family: inherit; text-align: left; cursor: pointer;
 }
-.fleet-status .dot {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--text-faint); align-self: center;
+.fleet-bar:hover { background: var(--row-hover); }
+.fleet-bar.ok   { border-left-color: var(--green-bright); }
+.fleet-bar.warn { border-left-color: var(--amber); }
+.fleet-bar.bad  { border-left-color: var(--red); }
+.fleet-bar-head { flex: none; }
+.fleet-bar-k {
+  font-size: var(--fs-xs); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--text-dim); white-space: nowrap;
 }
-.fleet-status-label { color: var(--text-faint); }
-.fleet-status-value { color: var(--text-dim); }
-.fleet-status:hover .fleet-status-value { color: var(--text); }
-.fleet-status.ok   .dot { background: var(--green); }
-.fleet-status.warn .dot { background: var(--amber); }
-.fleet-status.warn .fleet-status-value { color: var(--amber); }
-.fleet-status.bad  .dot { background: var(--red); }
-.fleet-status.bad  .fleet-status-value { color: var(--red); }
+.fleet-bar-n {
+  font-size: var(--fs-2xl); font-weight: 700; line-height: 1.15; color: var(--text);
+  white-space: nowrap;
+}
+.fleet-bar-n small { font-size: var(--fs-sm); font-weight: 500; color: var(--text-dim); }
+/* The bar is a SECOND encoding of the same split, never the only one: every
+   segment has a named count beside it, so none of this depends on telling
+   the colours apart. */
+.fleet-bar-track {
+  flex: 1; min-width: 60px; height: 8px; display: flex;
+  background: var(--bg-raise); border-radius: var(--r-xs); overflow: hidden;
+}
+.fleet-bar-seg { height: 100%; }
+.fleet-bar-seg.ok   { background: var(--green-bright); }
+.fleet-bar-seg.warn { background: var(--amber); }
+.fleet-bar-seg.bad  { background: var(--red); }
+.fleet-bar-legend {
+  flex: none; display: flex; gap: var(--sp-4);
+  font-size: var(--fs-sm); color: var(--text-dim); white-space: nowrap;
+}
+.fleet-bar-legend b { font-weight: 700; color: var(--text); }
+.fleet-bar-legend .sw {
+  display: inline-block; width: 8px; height: 8px; border-radius: var(--r-xs);
+  margin-right: 6px; vertical-align: middle; background: var(--text-faint);
+}
+.fleet-bar-legend .sw.ok   { background: var(--green-bright); }
+.fleet-bar-legend .sw.warn { background: var(--amber); }
+.fleet-bar-legend .sw.bad  { background: var(--red); }
+.fleet-bar-note { flex: 1; font-size: var(--fs-sm); color: var(--text-dim); }
+@media (max-width: 900px) {
+  .fleet-bar-track { display: none; }   /* the counts carry it; the bar is the extra */
+}
 
 /* The title and the meta were both packed against the left edge: .main-top is
    a plain flex row, so "Dashboard", the fleet indicator and "Signed in as ..."

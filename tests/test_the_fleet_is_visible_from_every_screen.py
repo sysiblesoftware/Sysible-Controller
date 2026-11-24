@@ -131,30 +131,53 @@ def test_the_number_has_a_noun():
     """It was a dot, a number and "/ 16 agents" in 12px beside the sign-in
     line. Reported as not looking like anything and as not saying what the
     number was -- "16 of what, measured how" is not a status display."""
-    assert "fleet-status-label" in PULSE, "the count carries no label"
-    assert "Agents ·" in PULSE, "the label does not name what is being counted"
-    assert "of ${total} healthy" in PULSE, \
-        "the value does not read as a sentence (e.g. '14 of 16 healthy')"
+    assert "fleet-bar-k" in PULSE, "the count carries no label"
+    assert "Agent health" in PULSE, "the label does not name what is being counted"
+    assert "/ ${total} reporting" in PULSE, \
+        "the value does not say what the denominator is"
 
 
-def test_it_belongs_to_the_bar_it_sits_in():
-    """It had a bordered, filled pill -- reported as looking way out of place,
-    and it was: .target-chip is the only pill in this stylesheet and it is a
-    selectable host token inside a form box, not a header status. So the header
-    grew a shape nothing else in the console uses, between a large bold title
-    and quiet grey meta.
+def test_it_says_more_than_one_adjective():
+    """Reported as wimpy and as giving "any information other than being
+    healthy" -- it was one word, with the breakdown hidden in a tooltip.
 
-    It is a peer of the "Signed in as ..." text now: same size, same voice. Still
-    a button, because it is still clickable."""
-    assert '"fleet-status ' in PULSE, "it lost its own class"
+    Every state that has agents in it is NAMED with its own count, in the
+    element itself. A healthy fleet still says how many of what; a degraded one
+    says how it is degraded without being hovered."""
+    legend = PULSE[PULSE.index("const legend = ["):]
+    legend = legend[:legend.index("];")]
+    for word in ("healthy", "silent", "quarantined"):
+        assert f'"{word}"' in legend, f"{word} has no named count of its own"
+    assert "fleet-bar-legend" in PULSE, "the counts are not rendered"
+    assert "fleet-bar-track" in PULSE, "there is no bar"
+
+
+def test_it_is_a_bar_of_its_own_not_another_item_in_the_header():
+    """Three versions sat inside the title row beside "Signed in as ...", and
+    each read as wedged in between a large bold title and quiet grey meta. The
+    thing asked for was a health bar, and a bar needs the width."""
+    assert '"fleet-bar ' in PULSE, "it lost its own class"
     assert "<button" in PULSE, "a clickable status is not a button"
     css = (REPO / "webgui" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
-    block = css[css.index(".fleet-status {"):]
+    block = css[css.index(".fleet-bar {"):]
     block = block[:block.index("}")]
-    assert "border: none" in block, "it is wearing a border again"
+    assert "width: 100%" in block, "a bar that is not full width is still a chip"
     assert "r-pill" not in block, "it is a pill again"
-    assert "var(--fs-sm)" in block, \
-        "it is not set at the size of the meta text it stands beside"
+    app = (REPO / "webgui" / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
+    # It must sit OUTSIDE .main-top, or it is back in the title row. Walk the
+    # div depth from the opening tag to find where that element actually ends;
+    # counting tags either side of it miscounts self-closing ones.
+    body = re.sub(r"\{/\*.*?\*/\}", "", app, flags=re.S)   # JSX comments are not markup
+    start = body.index('<div className="main-top">')
+    depth, closed_at = 0, None
+    for m in re.finditer(r"<div\b|</div>", body[start:]):
+        depth += 1 if m.group(0) == "<div" else -1
+        if depth == 0:
+            closed_at = start + m.end()
+            break
+    assert closed_at, "could not find the end of .main-top"
+    assert body.index("<FleetPulse", start) > closed_at, \
+        "FleetPulse is still inside the title row"
 
 
 def test_the_meta_does_not_crowd_the_page_title():
@@ -169,8 +192,11 @@ def test_the_meta_does_not_crowd_the_page_title():
 def test_the_state_is_not_carried_by_colour_alone():
     """A red dot and a green dot are the same dot to a good share of
     operators. The VALUE says it too: '0 of 16 online' reads without colour."""
-    assert "status unavailable" in PULSE and "none enrolled" in PULSE
-    assert "aria-label" in PULSE, "the state is not exposed to a screen reader"
+    assert "status unavailable" in PULSE, "the unreadable case has no words"
+    assert "agents enrolled" in PULSE, "the empty case has no words"
+    # The bar's split is colour, so every segment is also a NAMED count.
+    assert "fleet-bar-legend" in PULSE, "the split is shown only as coloured bar"
+    assert "title=" in PULSE, "the state is not exposed to a screen reader"
 
 
 def test_an_unreadable_inventory_is_not_zero_online():

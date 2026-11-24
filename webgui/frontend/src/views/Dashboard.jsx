@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
+import FleetPulse from "../components/FleetPulse.jsx";
 import { searchTasks } from "../featureSearch.js";
 import { hasUpdates, isUnknown } from "../updates.js";
 import { enrolled as enrolledAgents, isOnline } from "../fleet.js";
@@ -1033,6 +1034,7 @@ export default function Dashboard({ role, edition, onOpen }) {
         <input className="search-bar" autoFocus aria-label="Search for a task"
                placeholder='Search for a task, e.g. "create a user" or "add a repository"…'
                value={q} onChange={(e) => setQ(e.target.value)} />
+        <FleetPulse onOpen={() => {}} />
         <div className="card" style={{ padding: 6 }}>
           {results.length === 0 ? (
             <div className="empty" style={{ padding: 16 }}>No matching task. Try “create a user”, “firewall”, “restart service”…</div>
@@ -1084,6 +1086,11 @@ export default function Dashboard({ role, edition, onOpen }) {
                placeholder='Search for a task, e.g. "create a user" or "add a repository"…'
                value={q} onChange={(e) => setQ(e.target.value)} />
       )}
+
+      {/* Under the search field, not above it. OUTSIDE the role guard above:
+          that field is hidden from the read-only role, the fleet's health is
+          not. onOpen is a no-op because this IS the fleet view. */}
+      <FleetPulse onOpen={() => {}} />
 
       <div className="metric-row">
         {/* All four top-strip counts come from the SAME live fleet-health sweep

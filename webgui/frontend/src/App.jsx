@@ -562,8 +562,15 @@ export default function App() {
             A strip of its own, BELOW the title row. Three earlier versions sat
             inside that row next to "Signed in as ...", and every one of them
             read as wedged in between a large bold title and quiet grey meta
-            text. The thing asked for was a health bar; a bar needs the width. */}
-        <FleetPulse onOpen={() => go(null)} />
+            text. The thing asked for was a health bar; a bar needs the width.
+
+            The Dashboard renders its OWN, under the search field — that field
+            is the first thing on that page and the one with focus, so the bar
+            belongs beneath it rather than above it. Every other view has no
+            search field, so the bar leads the content here. Between the two,
+            every view still has it: that is what matters, not where it is
+            mounted. */}
+        {view !== null && <FleetPulse onOpen={() => go(null)} />}
         <div className="main-scroll">
           {isSuper && <HealthBanner />}
           {view === null && <Dashboard role={role} edition={edition}

@@ -644,12 +644,23 @@ section:first-of-type > .section-title { margin-top: 2px; }
    previous attempt look wedged in. */
 .fleet-bar {
   display: flex; align-items: center; gap: var(--sp-4);
-  margin: 14px var(--gutter) 0; padding: 9px 14px;
+  /* Default is INSIDE the scrolling column, which already carries the gutter
+     as padding -- on the Dashboard the bar sits under the search field, in
+     the flow of the page. 18px to match .search-bar's own bottom margin.
+     A <button> shrinks to fit even when it is block-level, so in a plain
+     block container it needs the width spelled out; that is safe here only
+     BECAUSE there is no horizontal margin to add to it. */
+  width: 100%; margin: 0 0 18px; padding: 9px 14px;
   background: var(--panel); border: 1px solid var(--border);
   border-left: 3px solid var(--text-faint); border-radius: var(--r-sm);
   font-family: inherit; text-align: left; cursor: pointer;
 }
 .fleet-bar:hover { background: var(--row-hover); }
+/* Outside the scrolling column -- every view that is not the Dashboard, where
+   the bar leads the content and has to supply the gutter itself. `.main` is a
+   flex column, so stretch already fills the width: `width: 100%` HERE would be
+   100% of the column plus the margins, overflowing by exactly the gutter. */
+.main > .fleet-bar { width: auto; margin: 14px var(--gutter) 0; }
 .fleet-bar.ok   { border-left-color: var(--green-bright); }
 .fleet-bar.warn { border-left-color: var(--amber); }
 .fleet-bar.bad  { border-left-color: var(--red); }

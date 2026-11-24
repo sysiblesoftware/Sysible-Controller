@@ -92,15 +92,36 @@ def test_the_dashboard_no_longer_keeps_its_own_copy():
 def test_the_strip_is_on_every_view_and_for_every_role():
     """Read-only fleet state. Gating it behind a view or a role puts it back
     where it was."""
-    assert "<FleetPulse" in APP, "the strip is not mounted"
-    # The WHOLE LINE, not from the tag onward: a `{view === null && ...}` guard
-    # sits BEFORE the tag, so slicing from it reads past the very thing this
-    # checks. Found by mutation -- the first version of this passed while the
-    # strip was gated to the Dashboard.
-    line = next(l for l in APP.splitlines() if "<FleetPulse" in l)
-    assert "view" not in line, f"the strip only appears on some views: {line.strip()}"
-    assert "isSuper" not in line and "isAuditor" not in line, \
-        f"the strip is gated by role: {line.strip()}"
+    # It is mounted TWICE, and the pair has to cover everything: App renders it
+    # for every view that is not the Dashboard, and the Dashboard renders its
+    # own under the search field (that field has focus and is the first thing
+    # on that page, so the bar belongs beneath it). Checking only one of them
+    # would pass while the other vanished.
+    #
+    # The WHOLE LINE, not from the tag onward: the guard sits BEFORE the tag,
+    # so slicing from it reads past the very thing this checks. Found by
+    # mutation -- the first version passed while the strip was gated to the
+    # Dashboard.
+    assert "<FleetPulse" in APP, "the strip is not mounted in App"
+    app_lines = [l for l in APP.splitlines() if "<FleetPulse" in l]
+    assert len(app_lines) == 1, f"expected one mount in App, found {len(app_lines)}"
+    app_line = app_lines[0]
+    assert "view !== null" in app_line, \
+        f"App's strip does not cover every non-Dashboard view: {app_line.strip()}"
+    assert "isSuper" not in app_line and "isAuditor" not in app_line, \
+        f"the strip is gated by role: {app_line.strip()}"
+
+    # ...and the Dashboard -- the view App leaves out -- renders its own.
+    assert "<FleetPulse" in DASH, \
+        "App skips the Dashboard and the Dashboard does not mount its own"
+    for line in (l for l in DASH.splitlines() if "<FleetPulse" in l):
+        assert "isAuditor" not in line and "isSuper" not in line, \
+            f"the Dashboard's strip is gated by role: {line.strip()}"
+    # The Dashboard returns early while a search is running; the bar must be in
+    # BOTH trees or it disappears the moment someone types.
+    assert DASH.count("<FleetPulse") == 2, (
+        "the Dashboard mounts the strip in only one of its two render paths — "
+        "it vanishes while searching")
 
 
 def test_a_failed_poll_says_so_rather_than_showing_zero():
@@ -161,11 +182,7 @@ def test_it_is_a_bar_of_its_own_not_another_item_in_the_header():
     css = (REPO / "webgui" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
     block = css[css.index(".fleet-bar {"):]
     block = block[:block.index("}")]
-    # NOT `width: 100%`: with horizontal margins that overflows the column by
-    # exactly the margins. `display: flex` makes it block-level, so it fills
-    # what is left after them.
     assert "display: flex" in block, "a bar that does not fill its row is still a chip"
-    assert "width: 100%" not in block, "width:100% plus margins overflows the column"
     assert "r-pill" not in block, "it is a pill again"
     app = (REPO / "webgui" / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
     # It must sit OUTSIDE .main-top, or it is back in the title row. Walk the
@@ -282,9 +299,59 @@ def test_the_bar_lines_up_with_the_page_it_sits_on():
     gutters = {
         ".main-top": horiz(".main-top", "padding"),
         ".main-scroll": horiz(".main-scroll", "padding"),
-        ".fleet-bar": horiz(".fleet-bar", "margin"),
+        # the one that sits outside .main-scroll and must supply its own
+        ".main > .fleet-bar": horiz(".main > .fleet-bar", "margin"),
     }
     assert len(set(gutters.values())) == 1, \
         f"the bar does not line up with the column it sits in: {gutters}"
-    assert gutters[".fleet-bar"] == "var(--gutter)", \
-        f"the gutter is a literal again: {gutters['.fleet-bar']}"
+    assert gutters[".main > .fleet-bar"] == "var(--gutter)", \
+        f"the gutter is a literal again: {gutters['.main > .fleet-bar']}"
+    # The in-column copy must NOT add one: .main-scroll already pads it, so a
+    # horizontal margin there would indent it past everything else on the page.
+    block = css[css.index(".fleet-bar {"):]
+    block = block[:block.index("}")]
+    import re as _re
+    m = _re.search(r"margin:\s*([^;]+);", block)
+    parts = m.group(1).split()
+    assert parts[1] in ("0", "auto"), \
+        f"the in-column bar adds a gutter the column already has: {m.group(1)}"
+
+
+def test_each_placement_gets_its_width_from_exactly_one_place():
+    """The pair that bites, in both directions.
+
+    A <button> shrinks to fit even when it is block-level. Inside the scrolling
+    column -- a plain block -- the bar therefore needs `width: 100%` or it
+    renders about 300px wide beside full-width cards. Outside it, `.main` is a
+    flex column and stretch already fills the width, so `width: 100%` THERE is
+    100% of the column plus the margins, overflowing by exactly the gutter.
+
+    So: in the column, width spelled out and no horizontal margin (the column's
+    padding is the gutter). Outside it, no width and the gutter as margin.
+    Getting either one backwards is a visible break, and both were made while
+    writing this.
+    """
+    css = (REPO / "webgui" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+
+    def decls(selector):
+        block = css[css.index(selector + " {") + len(selector) + 2:]
+        block = block[:block.index("}")]
+        w = re.search(r"width:\s*([^;]+);", block)
+        m = re.search(r"margin:\s*([^;]+);", block)
+        horiz = None
+        if m:
+            parts = m.group(1).split()
+            horiz = parts[1] if len(parts) >= 2 else parts[0]
+        return (w.group(1).strip() if w else None), horiz
+
+    w_in, h_in = decls(".fleet-bar")
+    assert w_in == "100%", \
+        f"the in-column bar has no width, so the button shrinks to fit: {w_in}"
+    assert h_in in ("0", "auto"), \
+        f"the in-column bar adds a gutter the column already has: {h_in}"
+
+    w_out, h_out = decls(".main > .fleet-bar")
+    assert w_out != "100%", \
+        "the outside bar sets width:100% as well as a margin — it overflows by the gutter"
+    assert h_out == "var(--gutter)", \
+        f"the outside bar does not supply the gutter it needs: {h_out}"

@@ -95,9 +95,16 @@ def test_both_return_paths_go_through_it():
     through leaves two code paths to drift apart again."""
     block = SRC[SRC.index('@app.get("/api/fleet-updates")'):]
     block = block[:block.index('# ----------------------------------------------------------------------\n# Scheduled fleet jobs')]
-    assert block.count("_with_live_reachability") == 3, (
-        "not every return of the sweep re-judges reachability: "
-        f"found {block.count('_with_live_reachability')} of 3")
+    # A fixed COUNT breaks every time a return path is added, which says
+    # nothing about whether the new one is correct -- and a stale-while-
+    # revalidate path was added for exactly that reason. Check the property
+    # instead: every return that carries hosts re-judges them.
+    import re as _re
+    returns = _re.findall(r"return \{[^}]*?\"hosts\":[^}]*?\}", block, _re.S)
+    assert returns, "no returns found -- the slice is wrong"
+    missing = [r for r in returns if "_with_live_reachability" not in r]
+    assert not missing, (
+        "a return hands back cached reachability:\n" + "\n".join(missing))
 
 
 def test_the_posture_sweep_does_not_cache_reachability_either():

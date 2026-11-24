@@ -133,14 +133,29 @@ def test_an_unreachable_controller_does_not_discard_the_cache(fleet):
     assert r["cached"] is True and len(r["hosts"]) == 16
 
 
-def test_an_expired_cache_still_re_sweeps(fleet):
-    """The age rule has to survive the new one."""
+def test_an_expired_cache_is_refreshed_without_making_the_caller_wait(fleet):
+    """The age rule has to survive the new one.
+
+    It used to re-sweep ON the caller, which is what put "scanning..." in front
+    of whoever opened the console. An expired scan is now served at once -- it
+    is complete, it just has an age -- and refreshed behind the reply. What
+    must not change is that it IS refreshed: an expiry that quietly served the
+    old rows forever would be the staleness bug this file exists to catch.
+    """
     srv._UPDATES_CACHE["hosts"] = _rows(HOSTS_16)
     srv._UPDATES_CACHE["ts"] = time.time() - (srv._UPDATES_TTL + 5)
 
     r = srv.fleet_updates(refresh=0, live=0, user="admin")
 
-    assert r["cached"] is False and len(r["hosts"]) == 16
+    assert len(r["hosts"]) == 16, "the expired scan was thrown away"
+    assert r["stale"] is True, "served an expired scan without saying so"
+    # and the refresh really runs: the stamp moves without a second request
+    for _ in range(100):
+        if srv._UPDATES_CACHE["ts"] > time.time() - srv._UPDATES_TTL:
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("an expired cache was served and never refreshed")
 
 
 def test_refresh_still_bypasses_the_cache(fleet):

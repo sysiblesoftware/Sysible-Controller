@@ -1817,6 +1817,53 @@ def _background_loops_enabled() -> bool:
     return os.getenv("SYSIBLE_DISABLE_BACKGROUND_LOOPS", "").strip().lower() \
         not in ("1", "true", "yes", "on")
 
+def _updates_prime_loop():
+    """Keep the patch-status cache warm, whether or not anyone is watching.
+
+    The health/posture primer above deliberately goes quiet when the dashboard
+    is idle — probing a fleet nobody is looking at is waste. Patch status is the
+    exception, and the reason is in the report: "when I open controller it's
+    still scanning the hosts for potential updates. Why isn't it constantly
+    scanning and updating?"
+
+    Because it never did. The scan ran only on demand, so the first person to
+    open the console after the TTL lapsed paid for the whole fleet sweep on
+    their page load, and the numbers were never fresher than the last visit.
+    An idle-gated primer cannot fix that: the gate is shut precisely while
+    nobody is there to keep it open, which is the whole of the time between
+    visits. So this one runs on a fixed cadence under the TTL, and the cache is
+    warm when someone arrives rather than because they arrived.
+
+    Off with SYSIBLE_UPDATES_PRIME=0; cadence via SYSIBLE_UPDATES_PRIME_EVERY.
+    """
+    import time as _pt
+    try:
+        every = float(os.getenv("SYSIBLE_UPDATES_PRIME_EVERY", "") or (_UPDATES_TTL * 0.67))
+    except ValueError:
+        every = _UPDATES_TTL * 0.67
+    every = max(60.0, every)
+    # Let the service settle and agents check in before the first sweep —
+    # scanning at second zero mostly measures which agents have not yet called
+    # home, and a restart would publish a fleet of "timed out" rows.
+    try:
+        warmup = float(os.getenv("SYSIBLE_UPDATES_PRIME_WARMUP", "45"))
+    except ValueError:
+        warmup = 45.0
+    _pt.sleep(max(0.0, warmup))
+    while True:
+        try:
+            if (_pt.time() - _UPDATES_CACHE["ts"]) >= every \
+                    and _claim_updates_refresh():
+                try:
+                    with _UPDATES_LOCK:
+                        _updates_sweep()
+                finally:
+                    _UPDATES_REFRESHING["on"] = False
+        except Exception:
+            pass          # best effort; the next tick tries again
+        _pt.sleep(min(every, 60.0))
+
+
 if _background_loops_enabled() \
         and os.getenv("SYSIBLE_BACKGROUND_PRIME", "1").lower() not in ("0", "false", "no", "off"):
     threading.Thread(target=_prime_caches_loop, name="sysible-cache-prime", daemon=True).start()
@@ -1859,6 +1906,84 @@ def host_posture(host_id: str, user: str = Depends(require_login)):
 _UPDATES_CACHE = {"ts": 0.0, "hosts": None}
 _UPDATES_TTL = 900.0   # patch status changes slowly; the scan is heavier
 _UPDATES_LOCK = _posture_threading.Lock()
+# One sweep at a time, whoever asked for it: a background refresh and a cold
+# page load must never fan out to the same agents at once. The agent task loop
+# is SERIAL, so a duplicate sweep does not merely waste work -- it queues behind
+# the first one on every host and delays whatever an operator runs next.
+_UPDATES_REFRESHING = {"on": False}
+# ...and the flag itself needs a lock. Test-then-set is not atomic, so two
+# operators opening the console in the same moment could both find it clear,
+# both set it, and both sweep: the second would simply block on _UPDATES_LOCK
+# and then fan out to every agent again. On a serial task loop that is a
+# duplicate round-trip queued on every host.
+_UPDATES_REFRESH_GATE = _posture_threading.Lock()
+
+
+def _claim_updates_refresh() -> bool:
+    """Become THE refresher, or return False because someone already is."""
+    with _UPDATES_REFRESH_GATE:
+        if _UPDATES_REFRESHING["on"]:
+            return False
+        _UPDATES_REFRESHING["on"] = True
+        return True
+
+
+def _updates_sweep(live: bool = False):
+    """Scan every agent host for pending updates and store the result.
+
+    Lifted out of the endpoint so the background loop runs the SAME scan rather
+    than a second implementation of it. Returns (hosts, ts). Raises on an
+    unreachable controller; the caller decides whether that is fatal.
+    """
+    import concurrent.futures
+    import time as _t
+    # Dashboard patch rollup is agent-only (SSH-only hosts live in
+    # Sysible Connect, not the fleet updates rollup).
+    entries = dispatch.list_merged_hosts(agent_only=True)
+    last_seen = _agent_last_seen()
+    now = _t.time()
+    cmd = api.cmd_update_status(refresh=bool(live))
+    # A live refresh runs `dnf makecache` / `apt-get update` / `zypper refresh`
+    # first, which alone can exceed the default 60s on a slow mirror — give the
+    # live path a longer poll so it returns real counts instead of "timed out".
+    # The plain path was a hardcoded 60 while the live path had already been
+    # raised to 180 for exactly this reason. "Fast" is a claim about cached
+    # repo metadata, not a measurement: `dnf check-update` and `zypper lu`
+    # routinely pass 60s on a host with a cold page cache, and a fleet where
+    # most rows read "timed out waiting for agent" is worth more seconds than
+    # a fleet that answers quickly and wrongly. Tunable either way.
+    ptmo = int(os.getenv("SYSIBLE_UPDATE_PROBE_TIMEOUT", "180")) if live \
+        else int(os.getenv("SYSIBLE_UPDATE_PROBE_TIMEOUT_FAST", "90"))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_sweep_workers(len(entries))) as ex:
+        hosts = list(ex.map(lambda e: _probe_updates(e, cmd, last_seen, now, ptmo, ptmo),
+                            entries)) if entries else []
+    _UPDATES_CACHE["hosts"] = hosts
+    _UPDATES_CACHE["ts"] = now
+    return hosts, now
+
+
+def _kick_updates_refresh():
+    """Refresh the patch cache behind a reply that was served stale."""
+    if not _claim_updates_refresh():
+        return
+
+    def work():
+        try:
+            with _UPDATES_LOCK:
+                _updates_sweep()
+        except Exception:
+            pass          # next tick tries again; the stale answer still stands
+        finally:
+            _UPDATES_REFRESHING["on"] = False
+    threading.Thread(target=work, name="sysible-updates-refresh", daemon=True).start()
+
+
+# Started HERE, not beside the other loops: the first thing this thread does is
+# read _UPDATES_TTL, and up there that name does not exist yet. Registering it
+# at the top of the file raced the rest of the module loading.
+if _background_loops_enabled() \
+        and os.getenv("SYSIBLE_UPDATES_PRIME", "1").lower() not in ("0", "false", "no", "off"):
+    threading.Thread(target=_updates_prime_loop, name="sysible-updates-prime", daemon=True).start()
 
 
 def _parse_updates(text):
@@ -1956,7 +2081,6 @@ def fleet_updates(refresh: int = 0, live: int = 0, user: str = Depends(require_l
     ~15 min unless ?refresh=1 (the per-host scan is heavier than posture).
     ?live=1 forces a repo-metadata refresh on each host first for current counts
     (slower); it always bypasses the cache."""
-    import concurrent.futures
     import time as _t
 
     _fleet_ids = None if (refresh or live) else _fleet_ids_or_none()
@@ -1968,39 +2092,43 @@ def fleet_updates(refresh: int = 0, live: int = 0, user: str = Depends(require_l
 
     if _fresh():
         return {"hosts": _with_live_reachability(_UPDATES_CACHE["hosts"]),
-                "cached": True, "ts": _UPDATES_CACHE["ts"]}
+                "cached": True, "stale": False, "ts": _UPDATES_CACHE["ts"]}
+
+    # STALE-WHILE-REVALIDATE. Whoever opened the console used to run the sweep
+    # themselves: the request fanned out to every agent and blocked, up to the
+    # per-host timeout, while the tile sat on "scanning...". Reported as "when I
+    # open controller it's still scanning the hosts" -- and it was, on their
+    # page load, because nothing scanned in between.
+    #
+    # An aged scan is not an absent one. Numbers from twelve minutes ago with
+    # their age shown beat a spinner that resolves in ninety seconds, so an
+    # aged-but-COMPLETE scan is served at once and refreshed behind the reply.
+    #
+    # Only when the cache does not cover the fleet does this block: a sweep
+    # missing a newly enrolled host is the bug `_cache_covers` exists to catch,
+    # and a host silently absent from a patch rollup is worse than a wait.
+    if (not refresh and not live) and _UPDATES_CACHE["hosts"] is not None \
+            and _cache_covers(_UPDATES_CACHE, _fleet_ids):
+        # Snapshot BEFORE kicking the refresh: the refresher writes to the same
+        # cache, so reading it afterwards can hand back the new scan under the
+        # old scan's "stale" label. The flag has to describe what was returned.
+        aged, aged_ts = _UPDATES_CACHE["hosts"], _UPDATES_CACHE["ts"]
+        _kick_updates_refresh()
+        return {"hosts": _with_live_reachability(aged),
+                "cached": True, "stale": True, "ts": aged_ts}
+
     with _UPDATES_LOCK:
         if _fresh():
             return {"hosts": _with_live_reachability(_UPDATES_CACHE["hosts"]),
-                    "cached": True, "ts": _UPDATES_CACHE["ts"]}
+                    "cached": True, "stale": False, "ts": _UPDATES_CACHE["ts"]}
         try:
-            # Dashboard patch rollup is agent-only (SSH-only hosts live in
-            # Sysible Connect, not the fleet updates rollup).
-            entries = dispatch.list_merged_hosts(agent_only=True)
+            hosts, now = _updates_sweep(live=bool(live))
         except Exception as e:
             raise _bad_gateway(e)
-        last_seen = _agent_last_seen()
-        now = _t.time()
-        cmd = api.cmd_update_status(refresh=bool(live))
-        # A live refresh runs `dnf makecache` / `apt-get update` / `zypper refresh`
-        # first, which alone can exceed the default 60s on a slow mirror — give the
-        # live path a longer poll so it returns real counts instead of "timed out".
-        # The plain path was a hardcoded 60 while the live path had already been
-        # raised to 180 for exactly this reason. "Fast" is a claim about cached
-        # repo metadata, not a measurement: `dnf check-update` and `zypper lu`
-        # routinely pass 60s on a host with a cold page cache, and a fleet where
-        # most rows read "timed out waiting for agent" is worth more seconds than
-        # a fleet that answers quickly and wrongly. Tunable either way.
-        ptmo = int(os.getenv("SYSIBLE_UPDATE_PROBE_TIMEOUT", "180")) if live \
-            else int(os.getenv("SYSIBLE_UPDATE_PROBE_TIMEOUT_FAST", "90"))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=_sweep_workers(len(entries))) as ex:
-            hosts = list(ex.map(lambda e: _probe_updates(e, cmd, last_seen, now, ptmo, ptmo),
-                                entries)) if entries else []
-        _UPDATES_CACHE["hosts"] = hosts
-        _UPDATES_CACHE["ts"] = now
         # Same path for a fresh scan: judged moments ago, so this is a no-op --
         # but one code path means the two can never drift into disagreeing.
-        return {"hosts": _with_live_reachability(hosts), "cached": False, "ts": now}
+        return {"hosts": _with_live_reachability(hosts), "cached": False,
+                "stale": False, "ts": now}
 
 
 # ----------------------------------------------------------------------

@@ -378,8 +378,19 @@ function SuppressedPanel({ items, canAct, onOpenHost, onRemove }) {
 // errored — and `.catch(() => {})` meant those two were indistinguishable from
 // "nothing needs patching". An indicator that disappears when it has nothing to
 // say cannot be trusted when it says nothing.
+// How long ago a scan ran, said the way a person would.
+function scanAge(ts) {
+  if (!ts) return "";
+  const s = Math.max(0, Math.round(Date.now() / 1000 - ts));
+  if (s < 90) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  return h < 36 ? `${h} h ago` : `${Math.round(h / 24)} d ago`;
+}
+
 function PatchCard({ patch, err, onOpen }) {
-  const { state, withUpd, sec, reboot, unknown = 0 } = patch;
+  const { state, withUpd, sec, reboot, unknown = 0, at = 0, stale = false } = patch;
   // GREEN IS A CLAIM ABOUT EVERY HOST. It used to need only withUpd === 0, so a
   // fleet where most hosts never answered showed a green zero -- the scan having
   // failed and the fleet being patched produce the same number.
@@ -387,22 +398,30 @@ function PatchCard({ patch, err, onOpen }) {
   const title = state === "error"
     ? `Patch status could not be read: ${err}. Click to open Update Hosts.`
     : state !== "ready"
-      ? "Scanning the fleet for pending updates… click to open Update Hosts"
+      ? "No scan has completed yet — the first one is running. Click to open Update Hosts."
       : unknown > 0
         ? `${unknown} host(s) did not return a result, so this count does not cover them. `
           + `Click to open Update Hosts.`
         : withUpd === 0
           ? "Every host reports no pending updates. Click to open Update Hosts."
           : `${withUpd} host(s) have updates pending. Click to open Update Hosts.`;
+  // The age belongs in the tooltip too: the tile shows a number, and whether
+  // that number is four minutes old or forty changes what you do about it.
+  const aged = state === "ready" && at
+    ? ` Scanned ${scanAge(at)}${stale ? "; a refresh is running now." : "."}`
+    : "";
   return (
-    <div className="metric" style={{ cursor: "pointer" }} onClick={onOpen} title={title}>
+    <div className="metric" style={{ cursor: "pointer" }} onClick={onOpen} title={title + aged}>
       <div className="label">Needs patching</div>
       <div className="value" style={clear ? { color: VERDICT_COLOR.OK } : undefined}>
         {state === "error" ? (
           <span style={{ color: VERDICT_COLOR.WARNING }}>—</span>
         ) : state !== "ready" ? (
+          // Only when there is NOTHING yet -- the very first scan after the
+          // controller started. An aged result is served complete, so this is
+          // no longer what anyone opening the console sees.
           <span className="faint" style={{ fontSize: 15, fontWeight: 400 }}>
-            <span className="spin" style={{ marginRight: 6 }} />scanning…
+            <span className="spin" style={{ marginRight: 6 }} />first scan…
           </span>
         ) : (
           <>
@@ -425,9 +444,16 @@ function PatchCard({ patch, err, onOpen }) {
           </>
         )}
       </div>
-      {state === "error" && (
+      {state === "error" ? (
         <div className="faint" style={{ fontSize: 11 }}>couldn’t read patch status</div>
-      )}
+      ) : state === "ready" && at ? (
+        // A number with no age is a claim about NOW, and this one is a claim
+        // about whenever the scan last ran. Saying so is what lets an operator
+        // tell "nothing to patch" from "nothing has been checked lately".
+        <div className="faint" style={{ fontSize: 11 }}>
+          scanned {scanAge(at)}{stale ? " · refreshing…" : ""}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -539,6 +565,8 @@ export default function Dashboard({ role, edition, onOpen }) {
   // sweep failed. A patch indicator that vanishes when it has nothing to say is
   // indistinguishable from one that says "nothing to patch".
   const [updState, setUpdState] = useState("scanning");   // scanning | ready | error
+  const [updAt, setUpdAt] = useState(0);                  // epoch seconds of the scan being shown
+  const [updStale, setUpdStale] = useState(false);        // served aged; a refresh is running
   const [updErr, setUpdErr] = useState("");
   // A cold cache makes this a full fleet sweep, which can outlast the 30s poll
   // below. Without this guard the second poll starts another one on top of the
@@ -548,7 +576,16 @@ export default function Dashboard({ role, edition, onOpen }) {
     if (updInFlight.current) return;
     updInFlight.current = true;
     api.fleetUpdates(0, 0)
-      .then((d) => { setUpdates(d.hosts || []); setUpdState("ready"); setUpdErr(""); })
+      .then((d) => {
+        setUpdates(d.hosts || []);
+        setUpdState("ready");
+        // An aged scan arrives complete, with a refresh already running behind
+        // it. The tile shows the numbers and how old they are, rather than
+        // throwing them away for a spinner.
+        setUpdAt(typeof d.ts === "number" ? d.ts : 0);
+        setUpdStale(d.stale === true);
+        setUpdErr("");
+      })
       .catch((e) => { setUpdState("error"); setUpdErr(e.message || String(e)); })
       .finally(() => { updInFlight.current = false; });
   }, []);
@@ -894,8 +931,9 @@ export default function Dashboard({ role, edition, onOpen }) {
     // `scanned` is what the tile shows a NUMBER for. It is not "updates.length > 0":
     // a fleet that is fully patched reports every host with total 0, and a sweep
     // that has not run yet reports nothing at all — those must not look the same.
-    return { withUpd, sec, reboot, unknown, scanned: updState === "ready", state: updState };
-  }, [updates, updState]);
+    return { withUpd, sec, reboot, unknown, scanned: updState === "ready", state: updState,
+             at: updAt, stale: updStale };
+  }, [updates, updState, updAt, updStale]);
 
   // Ranked triage list: every host with something wrong, worst first, each with
   // its specific reasons. Built from the health + posture data already loaded —

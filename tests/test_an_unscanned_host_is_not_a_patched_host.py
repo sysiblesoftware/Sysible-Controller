@@ -85,7 +85,9 @@ def test_the_dashboard_tile_does_not_paint_an_unscanned_fleet_green():
 
 def test_the_dashboard_loop_skips_unknown_hosts():
     block = DASH[DASH.index("const patch = useMemo"):]
-    block = block[:block.index("}, [updates, updState]);")]
+    # End at the useMemo's dependency list WHATEVER it holds. Pinning the exact
+    # list meant adding one dependency broke a test about something else.
+    block = block[:re.search(r"\}, \[updates[^\]]*\]\);", block).start()]
     assert "isUnknown(h)" in block and "continue" in block, \
         "unscanned hosts still count toward the tile's zero"
 

@@ -65,9 +65,30 @@ def test_having_no_rows_is_not_the_same_as_having_nothing_to_patch(src):
     assert "updates.length" not in m.group(1)
 
 
-@pytest.mark.parametrize("state", ["scanning", "ready", "error"])
-def test_every_state_is_represented(card, state):
-    assert state in card, f"the tile cannot show the {state} state"
+@pytest.mark.parametrize("state,branch", [
+    # The tile must have a BRANCH for each state the dashboard can be in. It
+    # used to be enough to look for the state's name in the source, but the
+    # pre-scan text is now "first scan…" -- the cold-start case, since an aged
+    # scan is served complete rather than replaced by a spinner -- and the word
+    # "scanning" is gone from the markup while the state itself is unchanged.
+    ("error",    'state === "error"'),
+    ("scanning", 'state !== "ready"'),
+    ("ready",    'state === "ready"'),
+])
+def test_every_state_is_represented(card, state, branch):
+    assert branch in card, f"the tile has no branch for the {state} state"
+
+
+def test_the_pre_scan_state_says_it_has_nothing_yet(card):
+    """Whatever the wording, the no-data state must not render a number: a
+    blank or a zero there reads as 'nothing to patch'."""
+    # NOT the first occurrence: the tooltip chain above the markup branches on
+    # the same condition, and slicing from it reads the title text instead.
+    val = card.index('<div className="value"')
+    pre = card[card.index('state !== "ready"', val):]
+    pre = pre[:pre.index(") : (")]
+    assert "spin" in pre, "the pre-scan state shows no activity at all"
+    assert "{withUpd}" not in pre, "it prints a count it does not have yet"
 
 
 def test_a_clear_fleet_reads_as_clear_not_as_absent(card):

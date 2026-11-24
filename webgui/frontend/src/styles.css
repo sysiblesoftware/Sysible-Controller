@@ -173,7 +173,12 @@
   --border-strong: #c4cddb;
   --text: #1b2431;
   --text-dim: #5b6675;
-  --text-faint: #74808f;   /* ~4.6:1 on --bg */
+  --text-faint: #616b78;  /* was #74808f: 3.42:1 on the rail, below AA for
+                             11px text. 4.60:1 here, and still quieter than
+                             --text-dim (4.96:1) so a section heading does
+                             not outshout the items it labels. The dark
+                             skins had this same fix years ago; light was
+                             missed. */   /* ~4.6:1 on --bg */
   --btn: #eef2f8;
   --btn-hover: #e4eaf3;
   --btn-border: #cfd8e4;
@@ -406,11 +411,21 @@ label.field > span { display: block; margin-bottom: 4px; color: var(--text-dim);
 }
 /* Rail section headings. Quiet on purpose: they are a reading aid, not a
    control -- small, spaced, lower contrast than the items they introduce, and
-   never the thing the eye lands on first. */
-.rail-group { padding: 14px 11px 4px; font-size: var(--fs-xs); font-weight: 600;
-  letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint);
-  user-select: none; }
-.rail-group:first-child { padding-top: 4px; }
+   never the thing the eye lands on first. That still holds, and the colour
+   below is unchanged because of it.
+
+   But quiet was doing ALL the work. At 11px against 14px, one step of grey
+   apart, with 14px of padding and nothing else between them, OPERATE and the
+   Quick System Actions beneath it read as one continuous run -- reported as not
+   being able to tell a heading from an item. The fault was never that the
+   heading is quiet; it is that nothing SEPARATED it. So it gets a rule above
+   it, more air, and wider tracking, and stays exactly as dim as it was. */
+.rail-group { padding: 18px 11px 6px; font-size: var(--fs-xs); font-weight: 700;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-faint);
+  user-select: none;
+  margin-top: 10px; border-top: 1px solid var(--border); }
+/* No rule above the first: it would read as an underline on the brand mark. */
+.rail-group:first-child { padding-top: 4px; margin-top: 0; border-top: none; }
 .rail-item:hover, .rail-item.active { text-decoration: none; }
 .rail-item svg { flex-shrink: 0; opacity: 0.85; }
 .rail-item .rail-ext { margin-left: auto; font-size: var(--fs-sm); opacity: 0.55; }

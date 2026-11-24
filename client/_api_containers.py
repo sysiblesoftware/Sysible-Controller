@@ -128,12 +128,30 @@ def cmd_vm_action(action: str, name: str) -> str:
             f'done; echo "{action}: requested on all VMs."; exit "$rc"; }}'
         )
     targets = _split_targets(name)
-    if len(targets) == 1:
-        return _VIRSH + f'virsh {action} {shlex.quote(targets[0])} 2>&1 && echo "{action}: requested."'
     quoted = " ".join(shlex.quote(t) for t in targets)
+    # ONE COMMAND GOES TO EVERY SELECTED HOST, and the named VMs are spread
+    # across them. Acting blind made each host fail for every VM it does not
+    # own: pick three VMs off two hypervisors and both hosts report failures
+    # for the other's, so a run that did exactly what was asked comes back red.
+    #
+    # So each host acts on the names IT has and says plainly which it skipped.
+    # The list is read once per host rather than per VM -- `virsh dominfo` in
+    # the loop is a process per name, and these lists run to hundreds.
+    #
+    # grep -Fxq: fixed string, whole line, so `web` never matches `web-1`.
+    # `--` so a domain whose name begins with a dash is not read as a flag.
     return _VIRSH + (
-        f'rc=0; for vm in {quoted}; do echo "== {action} $vm =="; virsh {action} "$vm" 2>&1 || rc=1; done; '
-        f'echo "{action}: requested on {len(targets)} VM(s)."; exit "$rc"'
+        f'have=$(virsh list --all --name 2>/dev/null); rc=0; n=0; '
+        f'for vm in {quoted}; do '
+        f'if printf "%s\\n" "$have" | grep -Fxq -- "$vm"; then '
+        f'n=$((n+1)); echo "== {action} $vm =="; virsh {action} "$vm" 2>&1 || rc=1; '
+        f'else echo "-- not on this host: $vm"; fi; '
+        f'done; '
+        # Nothing matched is a failure, not a quiet success: the operator asked
+        # for something and this host did none of it.
+        f'[ "$n" -gt 0 ] || rc=1; '
+        f'echo "{action}: requested on $n of {len(targets)} VM(s) on this host."; '
+        f'exit "$rc"'
     )
 
 

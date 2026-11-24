@@ -39,121 +39,178 @@ export default function ParamField({ p, value, onChange, targets = [] }) {
   );
 }
 
-// A dropdown whose options are fetched live from ONE selected host by running a
-// hidden helper action (p.source) and splitting its stdout into lines. Used for
-// the VM-name picker: check a host, and its recognized VMs appear as a menu.
-// Falls back to a free-text input when the list can't be used — no host / many
-// hosts checked, the fetch failed, nothing was returned, or the operator wants
-// to type a value the list doesn't contain (e.g. several names, or 'all').
+// The VM picker. It lists the VMs that are actually on the hosts checked on the
+// left, grouped by host, each one a checkbox.
+//
+// It used to be a dropdown fed from ONE host — the single selected one — and a
+// free-text box the rest of the time. Two complaints, one cause:
+//
+//   "How do I select all VMs except 1?"   You could not. The field held one
+//   name, or several typed by hand, or the word "all". Excluding a single VM
+//   meant typing the names of every other one.
+//
+//   "The field box doesn't correlate to the host list on the left in any way."
+//   It did not. With two or more hosts checked it stopped fetching anything and
+//   became a text box, so the thing it was asking for (a VM) had no visible
+//   relationship to the things that have VMs (the hosts).
+//
+// runTool already took a LIST of hosts and returned a row per host; this asked
+// it for one and read results[0]. So the inventory was one argument away the
+// whole time. Checking every VM and unchecking one is now the obvious gesture,
+// and it produces the explicit list of the rest.
 function RemoteSelect({ p, value, onChange, targets }) {
-  const single = targets.length === 1 ? targets[0] : null;
-  const [options, setOptions] = useState([]);
+  const [byHost, setByHost] = useState({});     // host label -> VM names
+  const [failed, setFailed] = useState({});     // host label -> why not
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
   const [manual, setManual] = useState(false);
   const loadedFor = useRef(null);
+  const key = targets.join(",");
 
-  async function load(host) {
-    setLoading(true); setError("");
+  async function load() {
+    setLoading(true);
     try {
-      const r = await api.runTool(p.source, [host], {});
-      const row = (r.results || [])[0] || {};
-      const lines = String(row.stdout || "")
-        .split("\n").map((s) => s.trim()).filter(Boolean);
-      // A failed run (agent offline, virsh missing) yields an error, not a list.
-      if (!row.ok && !lines.length) setError(row.stderr || row.error || "Could not list VMs.");
-      setOptions(lines);
+      const r = await api.runTool(p.source, targets, {});
+      const ok = {}, bad = {};
+      for (const row of r.results || []) {
+        const lines = String(row.stdout || "")
+          .split("\n").map((x) => x.trim()).filter(Boolean);
+        // A host that answered with nothing has no VMs; one that could not be
+        // asked is a different thing and says so rather than reading as empty.
+        if (lines.length) ok[row.host] = lines;
+        else if (!row.ok) bad[row.host] = row.error || row.stderr || "could not list VMs";
+        else ok[row.host] = [];
+      }
+      setByHost(ok); setFailed(bad);
     } catch (e) {
-      setError(e.message || "Could not list VMs."); setOptions([]);
+      setByHost({}); setFailed({ "": e.message || "could not list VMs" });
     } finally { setLoading(false); }
   }
 
-  // (Re)load whenever the single selected host changes; clear when the target
-  // set is no longer a single host.
   useEffect(() => {
-    if (single && loadedFor.current !== single) { loadedFor.current = single; load(single); }
-    if (!single) { loadedFor.current = null; setOptions([]); setError(""); }
+    if (!targets.length) { setByHost({}); setFailed({}); loadedFor.current = null; return; }
+    if (loadedFor.current === key) return;
+    loadedFor.current = key;
+    load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [single]);
+  }, [key]);
 
+  const hosts = Object.keys(byHost).sort();
+  const every = [];
+  for (const h of hosts) for (const v of byHost[h]) if (!every.includes(v)) every.push(v);
   const cur = value ?? "";
-  // Force manual entry when we can't offer a usable list, or the current value
-  // isn't one of the fetched names (typed name / multiple / 'all').
-  const listUsable = Boolean(single) && options.length > 0;
-  const valueInList = cur === "" || options.includes(cur);
-  const useManual = manual || !listUsable || !valueInList;
+  const isAll = cur.trim().toLowerCase() === "all";
+  const chosen = new Set(isAll ? every : cur.split(/[\s,]+/).filter(Boolean));
 
-  if (useManual) {
-    // Explain WHY this is a text box (not a menu) so the picker is discoverable
-    // rather than looking like a plain field. The menu needs exactly one host.
-    let hint = "";
-    if (targets.length === 0) hint = "Check one host on the left to pick from its VMs.";
-    else if (targets.length > 1) hint = `Pick a VM per host isn't possible for ${targets.length} hosts — type a name, or 'all'.`;
-    else if (loading) hint = "Loading VMs on the selected host…";
-    else if (error) hint = `Couldn't list VMs (${error}). Type a name instead.`;
-    else if (single && options.length === 0) hint = "No VMs found on the selected host — type a name if you know it.";
+  // Everything known -> the word, not a list of 240 names: it is the shorter
+  // command, and it still covers a host whose VMs could not be listed.
+  function commit(next) {
+    const arr = Array.from(next);
+    if (every.length && arr.length === every.length && every.every((v) => next.has(v))) {
+      onChange(p.name, "all");
+    } else {
+      onChange(p.name, arr.join(" "));
+    }
+  }
+  // vm_info takes exactly ONE domain. Handing it "a b c" because the picker let
+  // you tick three would quote the lot as a single name, so a field that cannot
+  // hold a list does not offer one.
+  const multi = p.multi === true;
+  const toggle = (v) => {
+    if (!multi) { onChange(p.name, chosen.has(v) ? "" : v); return; }
+    const n = new Set(chosen);
+    if (n.has(v)) n.delete(v); else n.add(v);
+    commit(n);
+  };
+
+  // ---- nothing checked on the left: say that, and do not offer "all" --------
+  if (!targets.length) {
     return (
       <>
-        <div className="row" style={{ gap: 6, alignItems: "center" }}>
-          <input
-            type="text" value={cur} style={{ flex: 1 }}
-            placeholder={p.placeholder || p.help || ""}
-            onChange={(e) => onChange(p.name, e.target.value)}
-          />
-          {loading && <span className="spin" />}
-          {/* The same capability where the menu cannot be offered. Across 16
-              hosts there is no one list to choose from, so this is the ONLY
-              route to "every VM" — and it was a word buried in 11px grey text
-              under the field. */}
-          {cur !== "all" && (
-            <button type="button" className="btn ghost sm"
-                    title="Act on every VM on each selected host"
-                    onClick={() => onChange(p.name, "all")}>
-              All VMs
-            </button>
-          )}
-          {listUsable && (
-            <button type="button" className="btn ghost sm"
-                    title="Choose from the VMs on the selected host"
-                    onClick={() => { setManual(false); if (!valueInList) onChange(p.name, ""); }}>
-              ▾ list
-            </button>
-          )}
+        <input type="text" value={cur} placeholder={p.placeholder || p.help || ""}
+               onChange={(e) => onChange(p.name, e.target.value)} />
+        <div className="faint" style={{ fontSize: 11, marginTop: 3 }}>
+          Check one or more hosts on the left to choose from their VMs.
         </div>
-        {cur === "all" && (
-          <div className="faint" style={{ fontSize: 11, marginTop: 3 }}>
-            Every VM on {targets.length === 1 ? "the selected host"
-              : `all ${targets.length} selected hosts`}.
-          </div>
-        )}
-        {hint && cur !== "all" && <div className="faint" style={{ fontSize: 11, marginTop: 3 }}>{hint}</div>}
       </>
     );
   }
 
+  // ---- typing, or nothing to list -----------------------------------------
+  if (manual || (!loading && !every.length)) {
+    const why = loading ? "Reading the VMs on the selected host(s)…"
+      : Object.keys(failed).length ? `Could not list VMs on ${Object.keys(failed).join(", ")}. Type a name instead.`
+        : every.length ? "" : "No VMs found on the selected host(s) — type a name if you know it.";
+    return (
+      <>
+        <div className="row" style={{ gap: 6, alignItems: "center" }}>
+          <input type="text" value={cur} style={{ flex: 1 }}
+                 placeholder={p.placeholder || p.help || ""}
+                 onChange={(e) => onChange(p.name, e.target.value)} />
+          {loading && <span className="spin" />}
+          {p.multi === true && !isAll && (
+            <button type="button" className="btn ghost sm"
+                    title="Act on every VM on each selected host"
+                    onClick={() => onChange(p.name, "all")}>All VMs</button>
+          )}
+          {every.length > 0 && (
+            <button type="button" className="btn ghost sm" title="Choose from the VMs on the checked hosts"
+                    onClick={() => setManual(false)}>▾ list</button>
+          )}
+        </div>
+        {isAll
+          ? <div className="faint" style={{ fontSize: 11, marginTop: 3 }}>
+              Every VM on {targets.length === 1 ? "the selected host" : `all ${targets.length} selected hosts`}.
+            </div>
+          : why ? <div className="faint" style={{ fontSize: 11, marginTop: 3 }}>{why}</div> : null}
+      </>
+    );
+  }
+
+  // ---- the list ------------------------------------------------------------
+  const n = chosen.size;
   return (
-    <div className="row" style={{ gap: 6, alignItems: "center" }}>
-      <select value={cur} style={{ flex: 1 }}
-              onChange={(e) => onChange(p.name, e.target.value)} disabled={loading}>
-        <option value="">{loading ? "Loading VMs…" : "— choose a VM —"}</option>
-        {/* EVERY VM, as something you can pick. The backend has taken "all"
-            since this field was written (cmd_vm_action branches on it and
-            loops over `virsh list --all --name`), but the only way to reach it
-            was to know the magic word and type it — in a field whose whole
-            visible affordance is a menu of individual names. Reported as
-            "there is no way to shutdown all the vms from the single field",
-            which was true of the interface and never true of the API. */}
-        {!loading && options.length > 1 && (
-          <option value="all">All VMs on this host ({options.length})</option>
+    <>
+      <div className="row" style={{ gap: 6, alignItems: "center", marginBottom: 4 }}>
+        <span className="faint" style={{ fontSize: 11.5 }}>
+          {n === 0 ? (multi ? "No VMs selected" : "No VM selected")
+            : isAll ? `All ${every.length} VM(s)`
+              : multi ? `${n} of ${every.length} VM(s)` : Array.from(chosen)[0]}
+          {hosts.length > 1 ? ` on ${hosts.length} hosts` : ""}
+        </span>
+        <div className="spacer" style={{ flex: 1 }} />
+        {multi && (
+          <button type="button" className="btn ghost sm" onClick={() => onChange(p.name, "all")}
+                  title="Every VM on every checked host">All</button>
         )}
-        {options.map((o) => <option key={o} value={o}>{o}</option>)}
-      </select>
-      <button type="button" className="btn ghost sm" title="Refresh the VM list"
-              onClick={() => single && load(single)} disabled={loading}>⟳</button>
-      <button type="button" className="btn ghost sm"
-              title="Type a name instead (e.g. several names, or 'all')"
-              onClick={() => setManual(true)}>✎</button>
-      {error && <span className="faint" title={error} style={{ fontSize: 11 }}>⚠</span>}
-    </div>
+        <button type="button" className="btn ghost sm" onClick={() => onChange(p.name, "")}
+                title="Clear the selection">None</button>
+        <button type="button" className="btn ghost sm" onClick={() => setManual(true)}
+                title="Type a name instead">✎</button>
+      </div>
+      <div className="vm-pick" style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--border)",
+                                        borderRadius: 6, padding: "4px 2px" }}>
+        {hosts.map((h) => (
+          <div key={h}>
+            {hosts.length > 1 && (
+              <div className="faint" style={{ fontSize: 11, padding: "4px 8px 2px" }}>
+                {h}{byHost[h].length ? "" : " — no VMs"}
+              </div>
+            )}
+            {byHost[h].map((v) => (
+              <label key={h + "/" + v} className="checkrow" style={{ padding: "2px 8px" }}>
+                <input type={multi ? "checkbox" : "radio"} name={multi ? undefined : "vmpick_" + p.name}
+                       checked={chosen.has(v)} onChange={() => toggle(v)} />
+                <span className="mono" style={{ fontSize: 12.5 }}>{v}</span>
+              </label>
+            ))}
+          </div>
+        ))}
+        {Object.entries(failed).map(([h, why]) => (
+          <div key={"f" + h} className="faint" style={{ fontSize: 11, padding: "4px 8px" }}>
+            {h || "a host"} — {why}
+          </div>
+        ))}
+      </div>
+    </>
   );
 }

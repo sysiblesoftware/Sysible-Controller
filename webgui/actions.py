@@ -40,6 +40,11 @@ class Param:
     # For type == "select-remote": the (hidden) action whose per-host stdout —
     # one value per line — populates the dropdown for the single selected host.
     source: str = ""
+    # For type == "select-remote": may this field hold MORE THAN ONE value?
+    # vm_action takes a list (and 'all'); vm_info takes exactly one domain and
+    # would be handed "a b c" as a single name if the picker let you check
+    # three. The answer belongs on the param, not inferred from its help text.
+    multi: bool = False
     help: str = ""
     # Greyed-out example shown in an empty field (HTML placeholder). Always an
     # EXAMPLE of what to type, e.g. "e.g. nginx" — never a value that gets
@@ -1486,8 +1491,8 @@ _register(Action(name="vm_names", tool="Containers & VMs", label="List VM names"
 _register(Action(name="vm_action", tool="Containers & VMs", label="Run action",
     params=[Param("action", "Action", type="select",
                   options=["start", "shutdown", "destroy", "reboot", "suspend", "resume"], default="start"),
-            Param("name", "VM name", type="select-remote", source="vm_names",
-                  help="pick a VM on the selected host, or type one or more names / 'all'")],
+            Param("name", "VM name", type="select-remote", source="vm_names", multi=True,
+                  help="pick VMs on the checked hosts, or type names / 'all'")],
     build=lambda p: api.cmd_vm_action(_s(p, "action", "start"), _s(p, "name"))))
 _register(Action(name="vm_info", tool="Containers & VMs", label="VM info",
     params=[Param("name", "VM name", type="select-remote", source="vm_names",
@@ -1950,7 +1955,8 @@ def catalog():
                 {
                     "name": pr.name, "label": pr.label, "type": pr.type,
                     "default": pr.default, "required": pr.required,
-                    "options": pr.options, "source": pr.source, "help": pr.help,
+                    "options": pr.options, "source": pr.source, "multi": pr.multi,
+                    "help": pr.help,
                     "placeholder": _placeholder_for(pr),
                 }
                 for pr in a.params

@@ -383,9 +383,15 @@ def test_pro_only_ua_present_runs(tmp_path):
     (bindir / "ua").write_text("#!/bin/sh\necho UA_RAN: \"$@\"\n")
     (bindir / "ua").chmod(0o755)
     cmd = Sub.cmd_pro_status()
-    sim = f'export PATH="{bindir}:$PATH"; ' + cmd
-    r = subprocess.run(["bash", "-c", sim], capture_output=True, text=True)
-    assert "UA_RAN: status --all" in r.stdout
+    # The sandbox is the WHOLE PATH. _PRO_MISSING resolves
+    # `command -v pro || command -v ua`, so pro WINS where it exists -- and a
+    # GitHub runner has a real /usr/bin/pro. Appending $PATH meant the real
+    # client answered for a host this test defines as having only the legacy
+    # `ua`, and the assertion failed against genuine `pro status` output. No
+    # coreutils are needed here: command -v and echo are shell builtins.
+    sim = f'export PATH="{bindir}"; ' + cmd
+    r = subprocess.run(["/bin/bash", "-c", sim], capture_output=True, text=True)
+    assert "UA_RAN: status --all" in r.stdout, r.stdout + r.stderr
 
 
 # --- XFS quotas use mount options, not quotacheck/quotaon ---------------------

@@ -84,7 +84,14 @@ _p_volume_declared() { case "$1" in
   #
   # updater-data holds the automatic-update schedule and the record of the last
   # run. Small, and genuinely lost if it is skipped.
-  slop)          echo "slop-idp-data slop-caddy-data slop-caddy-config flashback-data baseline-data controller-data slep-data connect-data updater-data" ;;
+  #
+  # slop-tls is the operator-supplied certificate and key for the front door.
+  # It was missing here while the compose file declared it, so a fallback
+  # backup -- the one taken when compose cannot be reached, i.e. when things
+  # are already going wrong -- skipped the certificate the operator installed
+  # by hand and reported success. It is deliberately NOT part of
+  # slop-caddy-data: that volume holds the certificates Caddy issues itself.
+  slop)          echo "slop-idp-data slop-caddy-data slop-caddy-config slop-tls flashback-data baseline-data controller-data slep-data connect-data updater-data" ;;
 esac; }
 
 # The project name compose uses for $CFG. With no -p (and _compose passes none),

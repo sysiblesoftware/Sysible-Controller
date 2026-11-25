@@ -31,6 +31,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import link_stock_tools
+
 REPO = Path(__file__).resolve().parents[1]
 CTL = REPO / "deploy" / "sysiblectl"
 
@@ -87,7 +89,12 @@ def sandbox(tmp_path):
 
 def run(sandbox, snippet, keep_ip=True, **env):
     script = f'. "{sandbox["lib"]}"\n' + textwrap.dedent(snippet)
-    path = sandbox["bin"] + ":" + os.environ.get("PATH", "/usr/bin:/bin")
+    # The sandbox IS the PATH. Inheriting the runner's defeated keep_ip=False
+    # below: removing the fake `ip` is how "this host has no iproute2" is
+    # expressed, and the inherited PATH handed back the real /usr/sbin/ip, so
+    # the host could still look. Ordinary tools are linked in instead.
+    link_stock_tools(sandbox["bin"])
+    path = sandbox["bin"]
     if not keep_ip:
         # A box with no iproute2 at all. The fakes live in their own directory,
         # so dropping it is how "the command is missing" is expressed.
@@ -95,7 +102,7 @@ def run(sandbox, snippet, keep_ip=True, **env):
     e = {"PATH": path, "FAKE_LOG": sandbox["log"],
          "HOME": os.environ.get("HOME", "/root")}
     e.update({k: str(v) for k, v in env.items()})
-    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+    r = subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True,
                        env=e, timeout=120)
     return r.returncode, r.stdout + r.stderr
 

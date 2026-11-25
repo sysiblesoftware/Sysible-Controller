@@ -31,6 +31,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import link_stock_tools
+
 REPO = Path(__file__).resolve().parents[1]
 CTL = REPO / "deploy" / "sysiblectl"
 
@@ -64,10 +66,19 @@ def run(sandbox, snippet, drop=(), **env):
     for name in drop:
         os.remove(os.path.join(sandbox, "bin", name))
     script = f'. "{sandbox / "ctl.lib.sh"}"\n' + textwrap.dedent(snippet)
-    e = {"PATH": str(sandbox / "bin") + ":" + os.environ.get("PATH", "/usr/bin:/bin"),
+    # The sandbox IS the host's PATH. Inheriting the runner's broke the one
+    # thing these tests exist to check: drop=("ip",) is how a host with no
+    # iproute2 is simulated, and the inherited PATH handed back the runner's
+    # real /usr/sbin/ip, so "cannot look" could still look and rc=2 never
+    # happened. It passed on a container with no iproute2 installed.
+    #
+    # The ordinary tools the script pipes through are linked IN rather than
+    # inherited, so dropping a tool actually drops it.
+    link_stock_tools(sandbox / "bin")
+    e = {"PATH": str(sandbox / "bin"),
          "HOME": os.environ.get("HOME", "/root")}
     e.update({k: str(v) for k, v in env.items()})
-    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+    r = subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True,
                        env=e, timeout=60)
     return r.returncode, r.stdout + r.stderr
 

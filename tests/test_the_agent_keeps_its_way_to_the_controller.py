@@ -21,7 +21,7 @@ import pytest
 
 from client import api  # noqa: F401 - import FIRST; see test_power_actions_report_back
 from client import _api_firewall as fw
-from client._api_dispatch import _with_sbin_path
+from conftest import host_command, link_stock_tools
 
 CONTROLLER = "https://192.168.8.139:9000"
 
@@ -58,8 +58,14 @@ def box(tmp_path):
                 "'1: eth0    inet %s/24 scope global eth0'" % a for a in local_addrs))
 
         def run(self, command):
+            # The sandbox is the host's WHOLE PATH (see conftest.host_command),
+            # so the ordinary tools this command pipes through have to be in it.
+            # Linked rather than inherited from /usr/bin, because that directory
+            # also contains firewall-cmd and would put a real firewall back on a
+            # host the test is simulating as having none.
+            link_stock_tools(bindir)
             command = command.replace("/opt/sysible-agent/sysible_agent.env", self._env)
-            return subprocess.run(["/bin/bash", "-c", _with_sbin_path(command)],
+            return subprocess.run(["/bin/bash", "-c", host_command(command, bindir)],
                                   capture_output=True, text=True,
                                   env={"PATH": f"{bindir}:/usr/bin:/bin"}, timeout=30)
 

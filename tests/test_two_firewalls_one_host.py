@@ -37,6 +37,8 @@ import sys
 
 import pytest
 
+from conftest import link_stock_tools
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from client import _api_firewall as api            # noqa: E402
 
@@ -98,10 +100,14 @@ def sh(tmp_path):
         if ufw:
             (binp / "ufw").write_text(UFW)
             (binp / "ufw").chmod(0o755)
-        env = {"PATH": f"{binp}:/usr/bin:/bin", "FD_RUNNING": "0", "UFW_RUNNING": "0",
+        # Not /usr/bin: firewall-cmd lives there on Debian/Ubuntu, so a host
+        # simulated as having NO firewall found the runner's real one and never
+        # said so. The ordinary tools are linked into the sandbox instead.
+        link_stock_tools(binp)
+        env = {"PATH": str(binp), "FD_RUNNING": "0", "UFW_RUNNING": "0",
                "FD_ENABLED": "0", "UFW_ENABLED": "0", "UFW_NEEDS_ROOT": "0"}
         env.update({k: str(v) for k, v in state.items()})
-        r = subprocess.run(["sh", "-c", snippet], capture_output=True, text=True,
+        r = subprocess.run(["/bin/sh", "-c", snippet], capture_output=True, text=True,
                            env=env, timeout=60)
         return (r.stdout + r.stderr).strip()
 

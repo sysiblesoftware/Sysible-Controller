@@ -27,7 +27,7 @@ import pytest
 
 from client import api  # noqa: F401 - import FIRST; see test_power_actions_report_back
 from client import _api_firewall as fw
-from client._api_dispatch import _with_sbin_path
+from conftest import host_command, link_stock_tools
 
 
 def _listener(port, proc=None):
@@ -85,7 +85,13 @@ esac
 exit 0""")
 
         def run(self, command):
-            return subprocess.run(["/bin/bash", "-c", _with_sbin_path(command)],
+            # The sandbox is the host's WHOLE PATH (see conftest.host_command),
+            # so the ordinary tools this command pipes through have to be in it.
+            # Linked rather than inherited from /usr/bin, because that directory
+            # also contains firewall-cmd and would put a real firewall back on a
+            # host the test is simulating as having none.
+            link_stock_tools(bindir)
+            return subprocess.run(["/bin/bash", "-c", host_command(command, bindir)],
                                   capture_output=True, text=True,
                                   # coreutils too: the discovery pipeline uses
                                   # awk/sed/grep/sort, which every real host has.

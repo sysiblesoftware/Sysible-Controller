@@ -185,3 +185,91 @@ UNICODE_PAYLOADS = [
     "emoji-🚀-host",
     "zero​width",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Running a product command against a SIMULATED host
+# ---------------------------------------------------------------------------
+#
+# These suites build a directory of fake tools and run the real shell the
+# product would send, so the fakes define what the host "has". That works only
+# if the fakes are the ONLY ufw/firewall-cmd/ip on PATH.
+#
+# They were not. client/_api_dispatch._with_sbin_path prepends
+#
+#     export PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH";
+#
+# to every command bound for a host -- correct on a real host, where admin
+# binaries live in sbin and a minimal systemd or runuser PATH omits it. In a
+# test it puts the RUNNER'S OWN /usr/sbin/ufw ahead of the fake, so:
+#
+#   * a host simulated as having ufw drove the runner's real ufw, which
+#     answered "Skipping adding existing rule" and exited 0 where the test
+#     expected a refusal;
+#   * a host simulated as having NO firewall found the runner's real one and
+#     never said "No firewall is installed".
+#
+# It passed on a developer container because that image ships no ufw, no
+# firewall-cmd and no ip -- the fakes won by default. 32 tests in this suite
+# depended on that accident, and nothing noticed until the suite ran on a
+# machine that had the tools.
+#
+# host_command() keeps the product's export (so what is sent is unchanged, and
+# anything asserting on the command string still sees it) and re-pins PATH
+# immediately after it, so the simulated host is the only host.
+# Nothing by default. Putting /usr/bin on a simulated host's PATH is how
+# firewall-cmd leaked back in after /usr/sbin was excluded -- it lives in
+# /usr/bin on Debian/Ubuntu. A sandbox that means "this host has no firewall"
+# cannot also expose a directory containing one. Tests whose command genuinely
+# needs coreutils call link_stock_tools() instead, which puts the named tools
+# in the sandbox WITHOUT bringing their whole directory along.
+def host_command(command, bindir, extra_dirs=()):
+    """The product's command, with the sandbox made authoritative over PATH."""
+    from client._api_dispatch import _SBIN_PATH_EXPORT, _with_sbin_path
+
+    prepared = _with_sbin_path(command)
+    pin = 'export PATH="%s"; ' % ":".join([str(bindir), *extra_dirs])
+    if prepared.startswith(_SBIN_PATH_EXPORT):
+        # Straight after the product's own export, so ours has the last word.
+        return _SBIN_PATH_EXPORT + pin + prepared[len(_SBIN_PATH_EXPORT):]
+    return pin + prepared
+
+
+# The tools a real host has and a test has no reason to fake. Symlinked INTO the
+# sandbox one by one rather than by exposing /usr/bin, so adding a coreutil
+# never silently adds a firewall backend beside it.
+STOCK_TOOLS = (
+    "awk", "basename", "cat", "chmod", "chown", "comm", "cp", "cut", "date",
+    "diff", "dirname", "du", "env", "expr", "find", "grep", "head", "id",
+    "ln", "ls", "mkdir", "mktemp", "mv", "printf", "readlink", "sed", "seq",
+    "sleep", "sort", "stat", "tail", "tee", "test", "touch", "tr", "true",
+    "uname", "uniq", "wc", "xargs",
+)
+# `rm` is deliberately NOT here. In a hosted session it resolves to a guard
+# stub rather than coreutils, and a sandbox that quietly linked the real one
+# would be reaching around that. No test in this suite has needed it; one that
+# does should say so rather than inherit it by default.
+
+
+def link_stock_tools(bindir, names=STOCK_TOOLS):
+    """Symlink the ordinary host tools into a sandbox bin dir.
+
+    Skips any the runner does not have and any the test has already faked --
+    a fake must always win over the real tool of the same name.
+    """
+    import os
+    import shutil
+    from pathlib import Path
+
+    bindir = Path(bindir)
+    linked = []
+    for name in names:
+        dest = bindir / name
+        if dest.exists() or dest.is_symlink():
+            continue  # the test faked it; leave the fake alone
+        real = shutil.which(name, path="/usr/bin:/bin:/usr/local/bin")
+        if not real:
+            continue
+        os.symlink(real, dest)
+        linked.append(name)
+    return linked

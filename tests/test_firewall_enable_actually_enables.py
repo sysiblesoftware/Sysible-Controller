@@ -31,7 +31,7 @@ import pytest
 
 from client import api  # noqa: F401 - import FIRST; see test_power_actions_report_back
 from client import _api_firewall as fw
-from client._api_dispatch import _with_sbin_path
+from conftest import host_command
 from host_agent.agent import _PRIV_ERROR_HINTS, _looks_like_privilege_error
 
 
@@ -49,7 +49,7 @@ def host(tmp_path):
             f.chmod(0o755)
 
         def run(self, command):
-            return subprocess.run(["/bin/bash", "-c", _with_sbin_path(command)],
+            return subprocess.run(["/bin/bash", "-c", host_command(command, bindir)],
                                   capture_output=True, text=True,
                                   env={"PATH": str(bindir)}, timeout=30)
 

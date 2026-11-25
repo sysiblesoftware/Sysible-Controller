@@ -8,12 +8,12 @@
 # install time — non-reproducible and hard to attest for change control).
 
 # Backend
-fastapi==0.139.0
-uvicorn[standard]==0.50.2
-pydantic==2.13.4
+fastapi==0.165.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.4
 psutil==7.2.2
-paramiko==5.0.0
-python-multipart==0.0.32   # multipart/form-data (file upload endpoints)
+paramiko==5.1.0
+python-multipart==0.0.34   # multipart/form-data (file upload endpoints)
 itsdangerous==2.2.0        # Starlette SessionMiddleware (web console login cookie)
 cryptography==50.0.2     # 49.0.0 carries PYSEC-2026-3552 (Bleichenbacher oracle in
                          # pkcs7_decrypt_*; fixed in 50.0.0). This repo never calls those
@@ -21,7 +21,7 @@ cryptography==50.0.2     # 49.0.0 carries PYSEC-2026-3552 (Bleichenbacher oracle
                          # audited, and pip-audit --strict was failing every scheduled
                          # security-scan run on main while push runs on the dependabot
                          # branch passed, which is why it read as a flaky job.
-tzdata==2026.3             # IANA tz database for zoneinfo — schedule times fire in the
+tzdata==2026.6             # IANA tz database for zoneinfo — schedule times fire in the
                            # operator's timezone even on a slim container with no system tzdb
 
 # Agent

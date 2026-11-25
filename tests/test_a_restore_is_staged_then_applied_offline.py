@@ -30,7 +30,19 @@ sys.path.insert(0, os.path.join(HERE, "host_agent"))
 import flashback_restore as fr  # noqa: E402
 
 
-def _entry(path, body=None, kind="f", mode=0o644, target=""):
+def _entry(path, body=None, kind="f", mode=None, target=""):
+    # A DIRECTORY IS NOT 0644. The default used to be 0o644 whatever the kind,
+    # so a staged directory was created with no execute bit -- which root
+    # ignores and an ordinary user does not. stage() applies a directory's mode
+    # before writing its children, so under the unprivileged user CI runs as,
+    # the very next write into it was:
+    #
+    #   PermissionError: [Errno 13] Permission denied: '.../stage/7/tree/etc/f0.part'
+    #
+    # Real backups record real directory modes, so this was test data rather
+    # than a product fault -- but it is only ever invisible to root.
+    if mode is None:
+        mode = 0o755 if kind == "d" else 0o644
     e = {"path": path, "kind": kind, "mode": mode, "uid": 0, "gid": 0}
     if kind == "f":
         e["sha256"] = hashlib.sha256(body).hexdigest()

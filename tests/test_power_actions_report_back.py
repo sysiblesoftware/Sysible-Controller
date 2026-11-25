@@ -122,7 +122,13 @@ class TestWithoutSystemdRun:
         sandbox.real("sh")
         sandbox.real("sleep")
         sandbox.real("setsid")
-        sandbox.real("id")
+        # The ROOT branch is the one under test. `real("id")` made that
+        # depend on who runs pytest: root here, the unprivileged `runner`
+        # in CI, where the product correctly answered "requires root
+        # privileges" and the test read it as a failure. The agent runs as
+        # root on a real host, and the sibling case below already fakes
+        # `id` to pick the other branch deliberately -- this does the same.
+        sandbox.fake("id", 'echo 0')
 
         p, elapsed = sandbox.run(build())
 
@@ -172,7 +178,13 @@ class TestThroughTheConsole:
         sandbox.real("sh")
         sandbox.real("sleep")
         sandbox.real("setsid")
-        sandbox.real("id")
+        # The ROOT branch is the one under test. `real("id")` made that
+        # depend on who runs pytest: root here, the unprivileged `runner`
+        # in CI, where the product correctly answered "requires root
+        # privileges" and the test read it as a failure. The agent runs as
+        # root on a real host, and the sibling case below already fakes
+        # `id` to pick the other branch deliberately -- this does the same.
+        sandbox.fake("id", 'echo 0')
 
         results = {}
 

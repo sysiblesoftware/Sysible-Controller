@@ -1757,7 +1757,7 @@ p_all() {
           exec sh "$slop/install.sh"
         fi
         _warn "Nothing is built yet, and no SLOP checkout was found to bootstrap from."
-        _warn "Run the whole-stack installer from the SLOP repo:  sudo ./install.sh"
+        _warn "Install the whole platform:  sudo $(basename "$0") first-run"
         _warn "(or set SYSIBLE_SLOP_DIR=/path/to/sysible-linux-operations-platform and retry)."
         return 0
         ;;
@@ -1802,6 +1802,63 @@ cmd_install() {
     *) _warn "$bindir is not on your PATH. Add it:  echo 'export PATH=\"$bindir:\$PATH\"' >> ~/.bashrc && source ~/.bashrc" ;;
   esac
 }
+# A FRESH HOST, one command. This is what a new box runs, and the only verb here
+# that installs PRODUCTS rather than managing them.
+#
+# `install` puts this CLI on your PATH and nothing else. That is a fine thing to
+# want and a terrible first command: an operator who has just booted a Sysible
+# host and typed the obvious word got a symlink and no platform. `first-run`
+# installs everything, in the one-checkout layout a fresh host should have
+# (SLOP's docs/INTEGRATED.md, "A fresh host").
+#
+# It does not reimplement any of that. It finds the thing that already knows how
+# and hands over to it, so there is exactly one installer to keep correct.
+cmd_first_run() {
+  local slop
+  # _find_slop_dir is the established lookup (SYSIBLE_SLOP_DIR, $PWD, /opt/..., ~).
+  if ! slop="$(_find_slop_dir)"; then
+    # No checkout yet: install-sysible fetches SLOP and installs it. This is the
+    # path a Sysible Server/Workstation host takes, where this CLI is
+    # preinstalled and nothing has been cloned.
+    if command -v install-sysible >/dev/null 2>&1; then
+      _ok "Fetching and installing the whole platform"
+      exec install-sysible -y slop "$@"
+    fi
+    _err "No SLOP checkout found, and install-sysible is not here either."
+    _err "  Get the platform:  git clone https://github.com/sysiblesoftware/sysible-linux-operations-platform"
+    _err "  Then, inside it:   sudo ./deploy/sysiblectl first-run"
+    _err "  Or name a checkout: SYSIBLE_SLOP_DIR=/path $CLI_NAME first-run"
+    exit 1
+  fi
+
+  # THE REFUSAL. A host already running the three apps the old way has their
+  # container names and ports taken. install.sh's own comment: switching it by
+  # surprise "is how a fleet's Controller database goes missing". The migration
+  # moves the data first, so send them there rather than guessing.
+  if ! grep -qs '^SYSIBLE_INTEGRATED=1' "$slop/.env"; then
+    local found
+    found="$(docker ps -a --format '{{.Names}}' 2>/dev/null \
+             | grep -xE 'sysible-controller|sysible-slep|sysible-connect' | head -3 || true)"
+    if [[ -n "$found" ]]; then
+      _err "This host already runs the apps the old way:"
+      printf '    %s\n' $found >&2
+      _err "Those names and ports are taken, so the one-checkout stack would collide."
+      _err "Migrating moves the DATA first — do that instead:"
+      _err "    sudo $slop/tools/migrate-to-integrated --dry-run   # says what it would do"
+      _err "    sudo $slop/tools/migrate-to-integrated"
+      _err "See $slop/docs/INTEGRATED.md. If this box really should start clean,"
+      _err "remove those containers first, then run first-run again."
+      exit 1
+    fi
+  fi
+
+  _ok "Installing the whole platform from $slop"
+  if [[ $EUID -ne 0 ]] && command -v sudo >/dev/null 2>&1; then
+    exec sudo -- sh "$slop/install.sh" all --integrated "$@"
+  fi
+  exec sh "$slop/install.sh" all --integrated "$@"
+}
+
 # NAME WARNING. This removes the CLI SYMLINKS and nothing else — every
 # container, data volume and checkout stays exactly where it is. An operator who
 # types "uninstall" means the opposite of that, and is then left without the
@@ -1963,7 +2020,8 @@ ${BOLD}NOTES${RESET}
   • 'up' and 'build' are accepted as 'rebuild' for old scripts, and say so.
   • Docker socket denied? The tool re-runs itself under sudo automatically. To
     skip sudo: sudo usermod -aG docker \$USER  then log out/in (or: newgrp docker).
-  • First time on a box: ${BOLD}sudo ./deploy/sysiblectl install${RESET}, then run '$me …' anywhere.
+  • First time on a box: ${BOLD}sudo $me first-run${RESET} — installs the WHOLE platform
+    (apps + gateway + IdP, one checkout). ${BOLD}install${RESET} only puts this CLI on your PATH.
 EOF
 }
 
@@ -2030,6 +2088,11 @@ main() {
   case "$a1" in
     ""|help|-h|--help) usage; return 0 ;;
     uninstall)         cmd_uninstall; return 0 ;;
+    first-run|firstrun|first_run)
+      # Everything after the verb is passed through to the installer (e.g. --integrated
+      # is already implied; --help belongs to install.sh from here on).
+      shift || true
+      cmd_first_run "$@"; return 0 ;;
     install)
       # `install` means ONE thing now: put this CLI on your PATH. It used to mean
       # that with no argument and "build this product from source" with one —

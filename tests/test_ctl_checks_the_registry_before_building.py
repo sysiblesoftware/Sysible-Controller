@@ -118,13 +118,17 @@ def test_the_check_runs_before_the_build_not_after():
     fn = re.search(r"^p_rebuild\(\) \{.*?^\}", SRC, re.S | re.M)
     assert fn, "p_rebuild is not in the CLI"
     body = fn.group(0)
-    build = body.find("up -d --build")
-    assert build != -1, "p_rebuild no longer builds — this test needs updating"
+    build = body.find("up -d")
+    assert build != -1, "p_rebuild no longer brings anything up — this test needs updating"
     # The BLOCKING form, not merely a mention. `_registry_ready || true` keeps
     # the call, keeps the position, and lets the build proceed anyway -- which a
     # search for the bare name cannot tell apart from the real thing.
     m = re.search(r"_registry_ready\s*\|\|\s*return\s+1", body)
     assert m, ("p_rebuild does not REFUSE the build on an unreachable registry "
                "(expected `_registry_ready || return 1`)")
+    # It is gated on actually needing to build: a host carrying every image needs
+    # no registry, and refusing it there would break the airgapped case.
+    assert re.search(r"if ! _images_all_present[^\n]*\n\s*_registry_ready", body), \
+        "the registry check is not gated on a build being necessary"
     assert m.start() < build, \
         "the registry check runs AFTER the build it was meant to prevent"

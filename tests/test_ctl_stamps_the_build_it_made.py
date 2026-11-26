@@ -162,8 +162,16 @@ def test_every_build_site_stamps():
     # line-based scan reads its second half on its own and calls a stamped site
     # unstamped — which is exactly what this test did on its first run.
     joined = re.sub(r"\\\n\s*", " ", src)
+    # Match any `up -d` that CAN build, by either spelling. p_rebuild's build
+    # is conditional now -- it starts from the images the ISO ships when they
+    # are all present, and only builds what is missing -- so its flag arrives
+    # through an array ("${_bld[@]...}") rather than a literal --build. The rule
+    # being enforced is unchanged: a site that can build must stamp the commit.
+    # The `up -d` at the environment-change site deliberately never builds and
+    # is correctly not matched here.
     sites = [ln.strip() for ln in joined.splitlines()
-             if "up -d --build" in ln and not ln.strip().startswith("#")]
+             if "up -d" in ln and ("--build" in ln or "_bld" in ln)
+             and not ln.strip().startswith("#")]
     assert len(sites) >= 2, f"expected both build sites, found {sites}"
     for ln in sites:
         assert "SYSIBLE_SLOP_REV=" in ln, f"this build site does not stamp: {ln}"

@@ -220,6 +220,27 @@ _die()  { _err "$@"; exit 1; }
 # unauthenticated /token with 401, and a 401 from Docker Hub is a reachable
 # Docker Hub. Skippable for a host with a registry mirror or the base images
 # already pulled -- same switch install-sysible honours.
+# Is every image this compose project needs already in the local image store?
+#
+# The ISO ships the platform's images, built in CI, and loads them at boot. An
+# airgapped host therefore HAS them and CANNOT build them: every service's
+# Dockerfile fetches from PyPI, npm, Debian or Alpine, so `up --build` there
+# fails on the first `pip install` with the images sitting right there unused.
+#
+# Only the FIRST bring-up consults this. `update` has its own `up -d --build`
+# and keeps it: an update whose whole purpose is new code must rebuild.
+_images_all_present() {
+  local cfg="$1" img list
+  list="$( cd "$(dirname "$cfg")" 2>/dev/null || exit 1
+           "${DC[@]}" -f "$cfg" config --images 2>/dev/null )" || return 1
+  [[ -n "${list//[[:space:]]/}" ]] || return 1
+  while read -r img; do
+    [[ -n "$img" ]] || continue
+    docker image inspect "$img" >/dev/null 2>&1 || return 1
+  done <<< "$list"
+  return 0
+}
+
 _registry_ready() {
   case "${SYSIBLE_SKIP_REGISTRY_CHECK:-}" in 1|true|yes|on) return 0 ;; esac
   command -v curl >/dev/null 2>&1 || return 0   # nothing to probe with; let the build speak
@@ -842,7 +863,21 @@ p_update() {
         _err "  This host could not REACH github.com. That is a network/DNS fault, not a"
         _err "  problem with the checkout — nothing here needs fixing."
         _warn "  Check: getent hosts github.com ; cat /etc/resolv.conf ; ping -c1 1.1.1.1"
+        _warn "  (If that file keeps reverting, it is generated — DHCP or systemd-resolved"
+        _warn "   rewrites it. Set the resolver where it is configured, not in the file.)"
         _warn "  Every 'docker build' below will fail the same way, for the same reason."
+        # Say the airgapped case out loud rather than leaving it as a failed pull.
+        # The platform INSTALLS without a network -- the ISO carries its images and
+        # its source -- so reaching this message on a deliberately isolated host is
+        # not a fault to debug, and nothing here is broken.
+        if [ -s /usr/share/sysible/app-images/sysible-images.tar ]; then
+          _warn ""
+          _warn "  If this host is airgapped ON PURPOSE: that is fine, and nothing is wrong."
+          _warn "  It INSTALLED without a network because the ISO carries the platform's"
+          _warn "  images and source. It cannot UPDATE that way: an update is new source,"
+          _warn "  rebuilt, and both the source and the build inputs live on the internet."
+          _warn "  To move an airgapped host to a newer version, install a newer ISO."
+        fi
       else
         _warn "Nothing new can be built until that checkout can fast-forward. Usual causes:"
         _warn "  * no upstream for this branch: git -C $gr status -sb"
@@ -1602,7 +1637,12 @@ p_rebuild() {
   # Before minutes of buildkit, not after: a build cannot succeed if the base
   # images cannot be fetched, and the operator should be told which fact is
   # wrong rather than handed a solver trace.
-  _registry_ready || return 1
+  # Only when something actually has to be built. A host carrying every image
+  # needs no registry, and refusing it there would break the airgapped case this
+  # exists to support.
+  if ! _images_all_present "$cfg"; then
+    _registry_ready || return 1
+  fi
 
   local envargs=() addr=""
   # The controller must advertise a routable address to agents (not the
@@ -1651,8 +1691,18 @@ p_rebuild() {
   # gateway as up. That is how a dead front door gets announced as a success.
   local rev; rev="$(_p_rev "$dir")"
   local _ia=(); mapfile -t _ia < <(_integrated_args "$cfg")
+  # Build only what is not already here. On a host that carries the shipped
+  # images this turns a ten-minute build that needs PyPI, npm, Debian and Alpine
+  # into a start that needs nothing at all -- which is the difference between
+  # working and not working on an airgapped network.
+  local _bld=(--build)
+  if _images_all_present "$cfg"; then
+    _bld=()
+    _ok "  every image is already in the local store — starting without a rebuild."
+    _warn "  (to rebuild from source anyway: $ME $p update)"
+  fi
   if ! ( cd "$(dirname "$cfg")"; SYSIBLE_SLOP_REV="$rev" \
-         "${DC[@]}" -f "$cfg" "${_ia[@]}" "${envargs[@]}" up -d --build ); then
+         "${DC[@]}" -f "$cfg" "${_ia[@]}" "${envargs[@]}" up -d "${_bld[@]+"${_bld[@]}"}" ); then
     _err "$(_p_pretty "$p"): compose failed to build or start it (see the output above)."
     return 1
   fi

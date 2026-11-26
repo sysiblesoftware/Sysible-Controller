@@ -1699,7 +1699,7 @@ p_rebuild() {
   if _images_all_present "$cfg"; then
     _bld=()
     _ok "  every image is already in the local store — starting without a rebuild."
-    _warn "  (to rebuild from source anyway: $ME $p update)"
+    _warn "  (to rebuild from source anyway: ${0##*/} $p update)"
   fi
   if ! ( cd "$(dirname "$cfg")"; SYSIBLE_SLOP_REV="$rev" \
          "${DC[@]}" -f "$cfg" "${_ia[@]}" "${envargs[@]}" up -d "${_bld[@]+"${_bld[@]}"}" ); then

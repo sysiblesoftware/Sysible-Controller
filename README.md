@@ -305,4 +305,6 @@ version.py      Single source of truth for the installed version
 
 ## License & version
 
+Sysible Controller is released under the **MIT License** — see [LICENSE](LICENSE).
+
 Sysible Controller is part of the Sysible Enterprise Software suite. The installed version is read from a single project-root `version.py`, so the web console's **Settings → License & Version** section is always accurate.

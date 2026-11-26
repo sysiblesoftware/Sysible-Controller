@@ -197,6 +197,46 @@ _warn() { printf '%s\n' "${YELLOW}$*${RESET}" >&2; }
 _err()  { printf '%s\n' "${RED}ERROR: $*${RESET}" >&2; }
 _die()  { _err "$@"; exit 1; }
 
+# Can this host reach the registry a build pulls its base images from?
+#
+# Reported from a fresh Sysible Server: `sysiblectl start slop` sat in buildkit
+# and then printed
+#
+#     failed to fetch anonymous token: ... lookup auth.docker.io on
+#     172.16.100.2:53: no such host
+#   ERROR: Sysible SLOP gateway: compose failed to build or start it
+#
+# under a wall of solver output. The host had no working DNS. install-sysible
+# has checked exactly this before it starts anything and says so in a sentence;
+# the build path never did, so the SAME fault produced a clear diagnosis from
+# one command in this suite and a stack trace from another.
+#
+# This file already does the right thing for the git half of the problem (see
+# the pull failure above: "That is a network/DNS fault, not a problem with the
+# checkout ... Every 'docker build' below will fail the same way"). This is that
+# sentence, moved to where the build happens.
+#
+# ANY http answer means DNS, TCP and TLS all worked: the registry answers an
+# unauthenticated /token with 401, and a 401 from Docker Hub is a reachable
+# Docker Hub. Skippable for a host with a registry mirror or the base images
+# already pulled -- same switch install-sysible honours.
+_registry_ready() {
+  case "${SYSIBLE_SKIP_REGISTRY_CHECK:-}" in 1|true|yes|on) return 0 ;; esac
+  command -v curl >/dev/null 2>&1 || return 0   # nothing to probe with; let the build speak
+  curl -sS --max-time 10 -o /dev/null \
+      "https://auth.docker.io/token?service=registry.docker.io" >/dev/null 2>&1 && return 0
+  _err "This host cannot reach Docker Hub (auth.docker.io)."
+  _err "  That is a network or DNS fault, not a problem with the checkout or the compose file."
+  _err "  A build pulls its base images from there, so it would fail minutes from now."
+  _warn "  Check:  getent hosts auth.docker.io ; cat /etc/resolv.conf ; ping -c1 1.1.1.1"
+  _warn "  Docker can resolve differently from the host behind a NAT gateway. If the host"
+  _warn "  resolves it but a build still cannot:  sudo systemctl restart docker"
+  _warn "  Registry mirror, or base images already pulled? Skip this check:"
+  _warn "      sudo SYSIBLE_SKIP_REGISTRY_CHECK=1 ${0##*/} ..."
+  return 1
+}
+
+
 # Resolve through symlinks to the REAL script in the checkout — `install` puts a
 # `sysible_ctl` symlink on PATH, and first-run `up` must find the Controller
 # repo (this script lives at <controller-checkout>/deploy/sysible_ctl).
@@ -1558,6 +1598,11 @@ p_rebuild() {
   fi
   cfg="$(_compose_file_in "$dir")" || _die "$(_p_pretty "$p"): no docker-compose.yml under $dir (or $dir/deploy)."
   _detect_compose
+
+  # Before minutes of buildkit, not after: a build cannot succeed if the base
+  # images cannot be fetched, and the operator should be told which fact is
+  # wrong rather than handed a solver trace.
+  _registry_ready || return 1
 
   local envargs=() addr=""
   # The controller must advertise a routable address to agents (not the

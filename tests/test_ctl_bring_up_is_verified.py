@@ -30,7 +30,23 @@ printf '%s\n' "$*" >> "$FAKE_LOG"
 case "$1" in
   inspect)
     [ "${FAKE_NO_CONTAINER:-0}" = 1 ] && exit 1
-    case "$*" in *StartedAt*) printf '%s' "${FAKE_STARTED:-2000-01-01T00:00:00Z}" ;; esac
+    case "$*" in
+      *NetworkSettings.Ports*)
+        # PUBLISHED by default. Every test in this file is about a port that
+        # SHOULD answer and does not, which only means anything when the port is
+        # published. The stub said nothing here because nothing used to ask; once
+        # the probe learned to tell a published port from an unpublished one, the
+        # silence read as "nothing is published" and two failure-path tests
+        # started exercising the integrated branch instead of the one they are
+        # about. FAKE_UNPUBLISHED=1 models the integrated layout on purpose.
+        if [ "${FAKE_UNPUBLISHED:-0}" = 1 ]; then
+          printf '{"8800/tcp":null,"8810/tcp":null,"8700/tcp":null}'
+        else
+          printf '{"8800/tcp":[{"HostPort":"8800"}],"8810/tcp":[{"HostPort":"8810"}],"8700/tcp":[{"HostPort":"8700"}],"443/tcp":[{"HostPort":"443"}]}'
+        fi ;;
+      *State.Health*) printf '%s' "${FAKE_HEALTH_STATE:-none}" ;;
+      *StartedAt*)    printf '%s' "${FAKE_STARTED:-2000-01-01T00:00:00Z}" ;;
+    esac
     exit 0 ;;
   ps)      echo "    sysible-slop-gateway  Exited (1) 3 seconds ago"; exit 0 ;;
   logs)    echo "run: adapting config using caddyfile: Caddyfile:12 - unrecognized directive"; exit 0 ;;

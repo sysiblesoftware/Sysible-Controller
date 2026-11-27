@@ -443,6 +443,36 @@ _warn_half_recreated() {
   return 0
 }
 
+# Is this product's console port actually PUBLISHED on the host?
+#
+# In the integrated (SLOP) layout it deliberately is not. docker-compose.yml
+# publishes the gateway's 80/443 and the Controller's agent API and nothing else;
+# the controller service says so in a comment -- "NOT the console (8800). The
+# gateway reaches it at controller:8800 on this network; publishing it would put a
+# door beside the front door" -- and slep and connect carry `expose:` alone.
+#
+# So probing https://127.0.0.1:8800 there is knocking on a door this layout is
+# built never to open. The probe waited its full 60s and then called a healthy app
+# dead: reported with a screenshot showing 9/9 containers Running, the apps
+# serving 200s on their own health paths, docker itself saying (healthy), and this
+# CLI announcing that two of them were NOT answering.
+_published_on_host() {
+  local c port
+  c="$(_p_container "$1")"; port="$(_p_port "$1")"
+  docker inspect -f '{{json .NetworkSettings.Ports}}' "$c" 2>/dev/null \
+    | grep -q "\"${port}/tcp\":\[{"
+}
+
+# Docker's own verdict, for a container whose port we cannot reach from here.
+# compose gives each app a healthcheck, so this is the same signal `docker ps`
+# shows -- and in the report it already read "healthy" while this CLI was calling
+# the app dead. Prints: healthy | unhealthy | starting | none | (empty if no such
+# container, which the caller already has a message for).
+_container_health() {
+  docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+    "$(_p_container "$1")" 2>/dev/null || true
+}
+
 # The HTTP status a product answers its health path with — or nothing at all.
 #
 # PROBE BY IP, NEVER BY NAME. The SLOP gateway has no domain: it mints ONE
@@ -488,6 +518,20 @@ _health_verdict() {
 # a minute and does the reporting, so a line per attempt would bury the result.
 _health() {
   local p="$1" out code url
+  # Not published here? Then there is nothing on 127.0.0.1:<port> to ask, by
+  # design, and docker's healthcheck is the signal that means what this function
+  # is for. Only "none"/unknown falls through to the HTTP probe, so a product
+  # without a healthcheck behaves exactly as before.
+  if ! _published_on_host "$p"; then
+    local _hs; _hs="$(_container_health "$p")"
+    case "$_hs" in
+      healthy)
+        _ok "  health: OK  ($(_p_container "$p") reports healthy; its console is behind the gateway, not on :$(_p_port "$p"))"
+        return 0 ;;
+      starting|unhealthy)
+        return 1 ;;
+    esac
+  fi
   out="$(_health_probe "$p")" || return 1
   code="${out%% *}"; url="${out#* }"
   _health_verdict "$p" "$code" || return 1
@@ -560,6 +604,21 @@ _health_wait() {
   # "Not answering" and "answering with a status I refuse" are different faults
   # and need different advice; saying the first when it was the second is how an
   # operator ends up restarting a service that was never the problem.
+  # Say the RIGHT thing about an unpublished port. "NOT answering on 8800" is a
+  # lie when nothing was ever meant to answer there, and it sends the operator to
+  # restart a service that was fine.
+  # Only when the container EXISTS. A missing container is a different fault with
+  # a different message ("the stack did not start"), and calling that "the port is
+  # not published" would bury it -- caught by the existing bring-up suite.
+  if docker inspect "$c" >/dev/null 2>&1 && ! _published_on_host "$p"; then
+    _err "$(_p_pretty "$p") did not become healthy after ${secs}s."
+    _warn "  Port ${port} is NOT published in this layout — the gateway is the only"
+    _warn "  front door, so there is nothing to reach on 127.0.0.1:${port} and none"
+    _warn "  was expected. Docker's healthcheck says: $(_container_health "$p")"
+    _warn "  what each service is doing: $(basename "$0") $p status"
+    _warn "  the service's own words:    $(basename "$0") $p logs"
+    return 1
+  fi
   local last; last="$(_health_probe "$p" || true)"
   if [[ -n "$last" ]]; then
     _err "$(_p_pretty "$p") answered ${last%% *} on port ${port} after ${secs}s — not a healthy status."

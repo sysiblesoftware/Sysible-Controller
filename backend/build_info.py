@@ -17,6 +17,10 @@ import os
 import subprocess
 from pathlib import Path
 
+# Baked in at image build time (see the Dockerfile), the same way idp, flashback,
+# baseline, visualizer and updater do it. Empty means nobody set it.
+REV = (os.getenv("SYSIBLE_REV") or "").strip()
+
 
 def running_dir() -> Path:
     """The repo/install root the live backend package is imported from — the
@@ -77,6 +81,11 @@ def info() -> dict:
         # Released version string (v-prefixed in the console) so an admin sees the build
         # number, not just the commit -- mirrors the Enterprise "Current build" line.
         "version": _version(),
+        # Baked in at image build time. In a CONTAINER there is no git checkout, so
+        # every git-derived field below is None and this is the only thing that can
+        # say which build is running -- which is exactly the case an operator hits
+        # when a fix "isn't there" after an update.
+        "rev": REV or None,
         "running_dir": str(rd),
         "commit": current,
         "commit_short": current[:12] if current else None,

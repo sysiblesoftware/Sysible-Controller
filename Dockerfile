@@ -150,3 +150,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/sysible-entrypoint"]
 CMD ["supervisord", "-n", "-c", "/etc/supervisor/supervisord.conf"]
+
+# Last in the file deliberately — changing it rebuilds one ENV layer rather
+# than invalidating the COPY above and reinstalling every dependency. Matches
+# idp/flashback/baseline/visualizer/updater, which already do this.
+ARG SYSIBLE_REV=""
+ENV SYSIBLE_REV=$SYSIBLE_REV

@@ -377,6 +377,29 @@ _compose_file_in() {
   done
   return 1
 }
+# Every network git call goes through this. git writes its credential prompt to
+# /dev/tty, which `$( ... 2>&1 )` does NOT capture: an operator running
+# `sysiblectl update all` in a terminal sees "Pulling latest code (git) in ..."
+# and then a bare
+#     Username for 'https://github.com':
+# and the command sits there forever. Reported from a real Server.
+#
+# It happened on a PUBLIC repo because the ISO shipped actions/checkout's
+# Authorization header inside .git/config (now stripped at build time, and
+# strippable on an installed host). Once an Authorization header is configured
+# git never falls back to anonymous: it sends the dead token, GitHub answers 401,
+# and git stops to ask. GIT_TERMINAL_PROMPT=0 makes it FAIL there instead, which
+# the caller already classifies and reports. The empty askpass vars stop a desktop
+# session popping a GUI dialog in its place -- the same hang with a window around
+# it -- and BatchMode does the same for an ssh remote. A credential helper the
+# operator configured themselves is left alone, so a host with real access still
+# fetches.
+_git() {
+  GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= \
+  GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new}" \
+  git "$@"
+}
+
 
 # Walk up from $1 to find the enclosing git checkout root, or fail.
 _git_root() {
@@ -843,7 +866,7 @@ p_update() {
     # Captured, not streamed, so the failure can be CLASSIFIED and not just shown.
     # Printed either way, unchanged.
     local pull_out pull_rc=0
-    pull_out="$(git -C "$gr" pull --ff-only 2>&1)" || pull_rc=$?
+    pull_out="$(_git -C "$gr" pull --ff-only 2>&1)" || pull_rc=$?
     printf '%s\n' "$pull_out"
     if [[ $pull_rc -eq 0 ]]; then
       after="$(git -C "$gr" rev-parse --short HEAD 2>/dev/null || true)"

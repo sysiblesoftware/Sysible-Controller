@@ -2005,6 +2005,81 @@ cmd_uninstall() {
 }
 
 # One line, on stderr, the first time someone reaches for the old name.
+# --------------------------------------------------------- first run on a host
+# "when sysible apps are chosen on install it should install the base images but
+# also ask if you want to update the software the first time that sysiblectl is
+# run on the machine."
+#
+# The base images already arrive with the ISO and load at first boot, so what is
+# left is the question. Asked ONCE per machine, and only where there is a person
+# to answer it. Every condition below is a way a prompt has gone wrong before: on
+# a first-boot unit it blocks the boot, in CI it hangs the job, and one that is
+# not remembered asks again on every single run forever.
+# SYSIBLE_STATE_DIR moves the machine-wide marker for hosts that keep state
+# somewhere other than /var/lib (and lets this be exercised without writing to
+# the machine running the tests). The per-user fallback is for an operator who
+# cannot write the machine-wide one — without it they would be asked forever.
+_FIRST_RUN_STATE_DIRS=("${SYSIBLE_STATE_DIR:-/var/lib/sysible}" "${XDG_STATE_HOME:-$HOME/.local/state}/sysible")
+_FIRST_RUN_FILE=update-prompt-answered
+
+_first_run_already_asked() {
+  local d
+  for d in "${_FIRST_RUN_STATE_DIRS[@]}"; do
+    [[ -e "$d/$_FIRST_RUN_FILE" ]] && return 0
+  done
+  return 1
+}
+
+# Record it in the first place that will have us. Root writes /var/lib/sysible so
+# the answer holds for every user on the box; an unprivileged operator falls back
+# to their own state dir rather than being asked on every invocation.
+_first_run_remember() {
+  local d
+  for d in "${_FIRST_RUN_STATE_DIRS[@]}"; do
+    if mkdir -p "$d" 2>/dev/null && printf '%s\n' "asked $(date -u +%FT%TZ)" > "$d/$_FIRST_RUN_FILE" 2>/dev/null; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+_maybe_offer_first_update() {
+  # An explicit opt-out for automation that DOES have a tty (a packer build, an
+  # expect script, someone's Ansible with a pty allocated).
+  [[ "${SYSIBLE_NO_UPDATE_PROMPT:-}" == "1" ]] && return 0
+  _first_run_already_asked && return 0
+  # Somebody has to be able to both see the question and answer it.
+  [[ -t 0 && -t 1 ]] || return 0
+  # A tty is not proof of a person: systemd units, first-boot services and CI
+  # runners inherit one often enough to hang on a read.
+  [[ -n "${INVOCATION_ID:-}${SYSTEMD_EXEC_PID:-}${CI:-}" ]] && return 0
+  [[ "${DEBIAN_FRONTEND:-}" == "noninteractive" ]] && return 0
+  # Nothing to update FROM. An airgapped ISO install has images and no checkout;
+  # offering an update it cannot perform is worse than staying quiet.
+  command -v git >/dev/null 2>&1 || return 0
+  _git_root "$(dirname "$SELF")" >/dev/null 2>&1 || return 0
+  # Remember BEFORE acting. An update that fails, or that the operator interrupts
+  # with ^C, must not come back as the same question on the next run — and if the
+  # answer cannot be recorded at all, do not start asking something we would ask
+  # again forever.
+  _first_run_remember || return 0
+  echo
+  _hdr "First run of ${CLI_NAME} on this machine"
+  echo "  The platform is at whatever version this host was installed with."
+  echo "  Updating pulls the latest source and rebuilds the apps. It takes a few"
+  echo "  minutes and restarts them; nothing is lost."
+  echo
+  local ans=''
+  read -r -p "  Update Sysible to the latest now? [y/N] " ans || ans=''
+  echo
+  case "$ans" in
+    [Yy]*) _dispatch update all ;;
+    *) _warn "Not updating. Run '$(basename "$0") all update' whenever you want to."
+       _warn "  This is asked once per machine; it will not ask again." ;;
+  esac
+  echo
+}
+
 _warn_legacy_name() {
   [[ "$(basename "$0")" == "$CLI_LEGACY_NAME" ]] || return 0
   _warn "'$CLI_LEGACY_NAME' is now '$CLI_NAME'. Both work; the underscore is going away."
@@ -2226,6 +2301,8 @@ main() {
       _err "  put me on PATH:    $(basename "$0") install"
       exit 1 ;;
   esac
+
+  _maybe_offer_first_update
 
   local cmd="" target=""
   if _is_target "$a1"; then

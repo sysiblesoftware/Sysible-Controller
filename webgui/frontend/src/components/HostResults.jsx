@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import CopyButton from "./CopyButton.jsx";
 
 // Shared per-host results renderer used by every multi-host result panel
 // (ToolPage, ResultsPane, UserGroupPage). Turns a list of per-host
@@ -36,7 +37,14 @@ function HostRow({ r, single }) {
           style={{ marginLeft: 6, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summary}</span>}
       </div>
       {open && r.error && <div className="error-box" style={{ margin: "6px 0 0" }}>{r.error}</div>}
-      {open && body && <pre>{body}</pre>}
+      {open && body && (
+        <>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+            <CopyButton text={() => body} title={`Copy ${r.host}'s output`} />
+          </div>
+          <pre>{body}</pre>
+        </>
+      )}
     </div>
   );
 }

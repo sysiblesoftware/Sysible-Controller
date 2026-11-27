@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { confirmDialog } from "../confirmDialog.js";
+import CopyButton from "../components/CopyButton.jsx";
 
 // Host Enrollment — agent bundle (download + curl), enrolled hosts grouped by
 // environment with multi-select, environment assignment, sudo policy, AND the
@@ -46,8 +47,6 @@ export default function HostEnrollment() {
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState("");   // in-progress label for host actions
-  const [copied, setCopied] = useState(false);
-  const [copiedAnsible, setCopiedAnsible] = useState(false);
   const [curlUseIp, setCurlUseIp] = useState(false);   // curl one-liner: address by IP (no DNS) vs hostname
   // Push enrollment: the Controller reaches OUT to the host. Everything the
   // backend needs is here — name, address, an account and its password, used
@@ -68,7 +67,6 @@ export default function HostEnrollment() {
   // so a long one can be watched rather than waited out.
   const [runLog, setRunLog] = useState([]);
   const [otherWaysOpen, setOtherWaysOpen] = useState(false);
-  const [copiedLog, setCopiedLog] = useState(false);
   const [serverHosts, setServerHosts] = useState(null);
   // The names this Controller can turn into addresses by itself.
   const [namesText, setNamesText] = useState("");
@@ -1031,17 +1029,11 @@ export default function HostEnrollment() {
                   {runLog.filter((e) => e.state === "ok").length} enrolled,{" "}
                   {runLog.filter((e) => e.state === "fail").length} failed
                 </span>
-                <button className="btn sm ghost" type="button" style={{ marginLeft: "auto" }}
-                        title="Copy every line, to paste into a ticket or a message"
-                        onClick={() => {
-                          const text = runLog.map((e) =>
-                            `${e.state}\t${e.name}\t${e.target}\t${e.detail}`).join("\n");
-                          navigator.clipboard?.writeText(text);
-                          setCopiedLog(true);
-                          setTimeout(() => setCopiedLog(false), 1500);
-                        }}>
-                  {copiedLog ? "Copied" : "Copy"}
-                </button>
+                <span style={{ marginLeft: "auto" }}>
+                  <CopyButton title="Copy every line, to paste into a ticket or a message"
+                    text={() => runLog.map((e) =>
+                      `${e.state}\t${e.name}\t${e.target}\t${e.detail}`).join("\n")} />
+                </span>
                 <button className="btn sm ghost" type="button"
                         onClick={() => setRunLog([])}>Clear</button>
               </div>
@@ -1292,10 +1284,9 @@ export default function HostEnrollment() {
             </label>
           )}
           <div className="cmd-preview" style={{ whiteSpace: "pre-wrap" }}>{curlCmd}</div>
-          <button className="btn sm ghost" style={{ marginTop: 8 }}
-                  onClick={() => navigator.clipboard?.writeText(curlCmd).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })}>
-            {copied ? "Copied ✓" : "Copy to Clipboard"}
-          </button>
+          <div style={{ marginTop: 8 }}>
+            <CopyButton text={() => curlCmd} label="Copy to Clipboard" />
+          </div>
           <p className="faint" style={{ marginTop: 10 }}>
             The curl download needs the Webserver Portal {portal.running
               ? <>running (it is) with a login set.</>
@@ -1311,10 +1302,9 @@ export default function HostEnrollment() {
             escalation (so no <code>sudo</code> in the command); each host pulls its own fresh one-time enrollment token.
           </p>
           <div className="cmd-preview" style={{ whiteSpace: "pre-wrap" }}>{ansibleCmd}</div>
-          <button className="btn sm ghost" style={{ marginTop: 8 }}
-                  onClick={() => navigator.clipboard?.writeText(ansibleCmd).then(() => { setCopiedAnsible(true); setTimeout(() => setCopiedAnsible(false), 1500); })}>
-            {copiedAnsible ? "Copied ✓" : "Copy to Clipboard"}
-          </button>
+          <div style={{ marginTop: 8 }}>
+            <CopyButton text={() => ansibleCmd} label="Copy to Clipboard" />
+          </div>
           <p className="faint" style={{ marginTop: 10 }}>
             Needs Ansible on the control node with SSH reach to the group, plus the Webserver Portal {portal.running
               ? <>running (it is) with a login set.</>
@@ -1619,6 +1609,10 @@ function RelayConfig() {
             This controller's relay public key — add it to the relay account's
             authorized_keys on the bastion:
           </span>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
+            <CopyButton text={() => pubkey || ""} label="Copy key"
+                        title="Copy this controller's relay public key" />
+          </div>
           <pre className="mono" style={{ whiteSpace: "pre-wrap", wordBreak: "break-all",
                                          marginTop: 6 }}>
             {pubkey || "(no key yet — save a relay host and it is created for you)"}

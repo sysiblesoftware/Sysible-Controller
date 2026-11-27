@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api.js";
+import CopyButton from "../components/CopyButton.jsx";
 
 // Live Activity & Logs: attributed activity feed across the fleet, plus the
 // controller's own log. Auto-refreshes while open.
@@ -113,7 +114,6 @@ export default function LiveActivity({ role }) {
   const [err, setErr] = useState("");
   const [auto, setAuto] = useState(true);
   const [detail, setDetail] = useState(null);
-  const [copied, setCopied] = useState(false);
   // Whether the FIRST fetch has come back. Without it an empty log and a
   // log still arriving render the same words -- "No activity recorded
   // yet" -- and the one that is about to fill reads as the one that never
@@ -246,9 +246,14 @@ export default function LiveActivity({ role }) {
           </div>
         )
       ) : (
-        <pre className="card mono" style={{ whiteSpace: "pre-wrap", maxHeight: "70vh", overflowY: "auto", fontSize: 12.5 }}>
-          {!loaded ? "Loading\u2026" : (log || "(empty)")}
-        </pre>
+        <>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
+            <CopyButton text={() => log || ""} label="Copy log" title="Copy the whole activity log" />
+          </div>
+          <pre className="card mono" style={{ whiteSpace: "pre-wrap", maxHeight: "70vh", overflowY: "auto", fontSize: 12.5 }}>
+            {!loaded ? "Loading\u2026" : (log || "(empty)")}
+          </pre>
+        </>
       )}
 
       {detail && (
@@ -265,10 +270,8 @@ export default function LiveActivity({ role }) {
               ? <pre className="cmd-preview" style={{ whiteSpace: "pre-wrap", maxHeight: "40vh", overflowY: "auto" }}>{detail.command}</pre>
               : <div className="faint">No command recorded for this entry.</div>}
             <div className="spread" style={{ marginTop: 16 }}>
-              <button className="btn ghost sm" disabled={!detail.command}
-                      onClick={() => navigator.clipboard?.writeText(detail.command || "").then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })}>
-                {copied ? "Copied ✓" : "Copy command"}
-              </button>
+              <CopyButton text={() => detail.command || ""} label="Copy command"
+                          title="Copy the command this entry ran" />
               <button className="btn sm" onClick={() => setDetail(null)}>Close</button>
             </div>
           </div>

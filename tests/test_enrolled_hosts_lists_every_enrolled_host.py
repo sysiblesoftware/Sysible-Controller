@@ -121,6 +121,11 @@ def _build(tmp, agents, hosts):
     src = tmp / "src"
     (src / "views").mkdir(parents=True)
     shutil.copy2(VIEW, src / "views" / "HostEnrollment.jsx")
+    # The view imports the real CopyButton. Stage it rather than stubbing it: it
+    # needs nothing but React, so the bundle exercises the actual Copy control.
+    (src / "components").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(FRONTEND / "src" / "components" / "CopyButton.jsx",
+                 src / "components" / "CopyButton.jsx")
     (src / "api.js").write_text(
         _STUB_API.replace("__AGENTS__", json.dumps(agents))
                  .replace("__HOSTS__", json.dumps(hosts)), encoding="utf-8")

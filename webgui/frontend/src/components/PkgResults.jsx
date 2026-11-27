@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import HostResults from "./HostResults.jsx";
+import CopyButton from "./CopyButton.jsx";
 
 // Package-aware result view for Host Software Management. The install / update /
 // remove / check commands emit machine-readable lines:
@@ -54,7 +55,14 @@ function PkgHostRow({ r }) {
           {pkgs.length === 0 && !r.ok && <span style={{ color: "#e06c6c", fontSize: 12 }}>failed</span>}
         </span>
       </div>
-      {open && raw && <pre>{raw}</pre>}
+      {open && raw && (
+        <>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+            <CopyButton text={() => raw} title="Copy this host's package output" />
+          </div>
+          <pre>{raw}</pre>
+        </>
+      )}
     </div>
   );
 }

@@ -136,6 +136,12 @@ def page_dir(tmp_path_factory):
     src = d / "src"
     (src / "views").mkdir(parents=True)
     shutil.copy2(VIEW, src / "views" / "HostEnrollment.jsx")
+    # The view imports the real CopyButton. Stage it rather than stubbing it: it
+    # needs nothing but React, and staging it means this bundle exercises the
+    # actual Copy control instead of a stand-in that cannot be wrong.
+    (src / "components").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(FRONTEND / "src" / "components" / "CopyButton.jsx",
+                 src / "components" / "CopyButton.jsx")
     (src / "api.js").write_text(
         _STUB_API.replace("__PREVIEW__", json.dumps(_PREVIEW)), encoding="utf-8")
     (src / "confirmDialog.js").write_text(_STUB_CONFIRM, encoding="utf-8")

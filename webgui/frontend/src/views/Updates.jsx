@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api.js";
 import { hasUpdates, hostsWithUpdates, isUnknown } from "../updates.js";
 import HostResults from "../components/HostResults.jsx";
+import CopyButton from "../components/CopyButton.jsx";
 
 const C = { sec: "#e06c6c", upd: "#e0a83a", ok: "#4ec07a", reboot: "#e0a83a", faint: "#7a7a7a" };
 
@@ -56,6 +57,11 @@ function InstallHostRow({ h }) {
           {h.status}{h.code != null ? ` · exit ${h.code}` : ""}
         </span>
       </div>
+      {open && hasOut && (
+        <div style={{ display: "flex", justifyContent: "flex-end", padding: "4px 8px 0" }}>
+          <CopyButton text={() => h.output} title="Copy this host's update output" />
+        </div>
+      )}
       {open && hasOut && (
         <pre style={{ margin: 0, maxHeight: 260, overflow: "auto", background: "#0d1117", color: "#c9d1d9",
                       borderTop: "1px solid var(--border)", padding: "8px 10px",

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api, noteRawStatus } from "../api.js";
+import CopyButton from "../components/CopyButton.jsx";
 
 // Sysible Controller Settings: administrators, password policy, controller
 // address/port, license, and the admin audit log.
@@ -207,7 +208,6 @@ function AdminModal({ mode, username: fixedUser, onClose, onDone }) {
   const [pw, setPw] = useState("");
   const [confirm, setConfirm] = useState("");
   const [show, setShow] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -217,7 +217,6 @@ function AdminModal({ mode, username: fixedUser, onClose, onDone }) {
     const p = generatePassword(policy);
     setPw(p); setConfirm(p); setShow(true); setErr("");
   }
-  function copy() { navigator.clipboard?.writeText(pw).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }
 
   async function submit() {
     if (isAdd && !username.trim()) { setErr("Username is required."); return; }
@@ -253,7 +252,7 @@ function AdminModal({ mode, username: fixedUser, onClose, onDone }) {
             <input style={{ flex: 1 }} type={show ? "text" : "password"} value={pw}
                    onChange={(e) => setPw(e.target.value)} placeholder="Type or generate" />
             <button type="button" className="btn ghost sm" onClick={() => setShow((s) => !s)} title={show ? "Hide" : "Show"}>{show ? "Hide" : "Show"}</button>
-            <button type="button" className="btn ghost sm" onClick={copy} disabled={!pw} title="Copy">{copied ? "Copied ✓" : "Copy"}</button>
+            <CopyButton text={() => pw} title="Copy this password" />
           </div>
         </label>
         <label className="field"><span>Confirm password</span>
@@ -843,7 +842,10 @@ function SoftwareUpdate() {
         <div style={{ marginTop: 8 }}>
           <div className="spread" style={{ marginBottom: 4 }}>
             <span className="faint" style={{ fontSize: 11 }}>Update output (run/last_update.log)</span>
-            <button className="btn ghost sm" onClick={downloadLog}>Download log</button>
+            <span style={{ display: "flex", gap: 6 }}>
+              <CopyButton text={() => ctrlLog || ""} label="Copy log" title="Copy the update output" />
+              <button className="btn ghost sm" onClick={downloadLog}>Download log</button>
+            </span>
           </div>
           <pre ref={logRef} style={{ margin: 0, maxHeight: 240, overflow: "auto", background: "#0d1117",
                  color: "#c9d1d9", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px",

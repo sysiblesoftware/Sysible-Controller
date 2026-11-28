@@ -1640,19 +1640,51 @@ _stack_has_containers() {
 p_stop()    { _hdr "Stopping $(_p_pretty "$1")";   if _discover "$1"; then _compose stop;    else docker stop    "$(_p_container "$1")" >/dev/null; fi && _ok "stopped (data volumes preserved)"; }
 
 p_backup() {
-  local p="$1" stamp file vol
+  local p="$1" stamp file vol wrote=0
   stamp="$(date +%Y%m%d-%H%M%S)"
   # One tarball per named volume (a product may keep state in several).
   for vol in $(_p_volume "$p"); do
     file="${vol}-backup-${stamp}.tgz"
     if docker volume inspect "$vol" >/dev/null 2>&1; then
       _hdr "Backing up volume '$vol' -> $PWD/$file"
-      docker run --rm -v "${vol}:/data:ro" -v "$PWD:/backup" alpine tar czf "/backup/${file}" -C /data .
-      _ok "  wrote $PWD/$file"
+      # The archive is created 0600, not fixed up afterwards.
+      #
+      # These volumes hold key material: slep-data carries vault.key — the master
+      # key for every secret in SLEP's vault, sitting beside the database it
+      # encrypts — and the console's TLS key; slop-caddy-data carries the front
+      # door's internal CA key; slop-tls the operator's certificate and key;
+      # sysible-data the install API key and the per-host SSH keys; slop-idp-data
+      # the user database.
+      #
+      # Every one of those files is 0600 in the volume, and tar preserves those
+      # modes INSIDE the archive — which is the trap, because it makes extraction
+      # look safe. The archive ITSELF was 0644, so any local user could read the
+      # vault master key straight out of it with `tar xzf` and never touch the
+      # volume. `umask 077` in the container means it is never even briefly
+      # readable; the chmod covers a target that somehow already existed.
+      #
+      # The Controller's own tools/backup_lib.py opens its archive 0600 and spells
+      # out why in its header. This is that same conclusion, applied to the command
+      # an operator actually runs.
+      #
+      # $file is passed as an ARGUMENT rather than interpolated into the script
+      # text, so a volume name can never be read as shell.
+      docker run --rm -v "${vol}:/data:ro" -v "$PWD:/backup" alpine \
+        sh -c 'umask 077; exec tar czf "/backup/$1" -C /data .' sh "$file"
+      chmod 600 "$PWD/$file" 2>/dev/null || true
+      wrote=$((wrote + 1))
+      _ok "  wrote $PWD/$file (0600)"
     else
       _warn "  volume '$vol' not found — skipping (is $(_p_pretty "$p") deployed here?)"
     fi
   done
+  if (( wrote > 0 )); then
+    _warn ""
+    _warn "  These archives hold key material — SLEP's vault master key, the front"
+    _warn "  door's CA and TLS keys, the install API key, the per-host SSH keys. Each"
+    _warn "  is as sensitive as this host itself. They are 0600; keep them that way,"
+    _warn "  move them somewhere encrypted, and do not leave them in a checkout."
+  fi
 }
 
 p_destroy() {

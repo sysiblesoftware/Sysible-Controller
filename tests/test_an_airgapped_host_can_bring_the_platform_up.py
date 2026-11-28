@@ -100,11 +100,32 @@ def test_updating_still_rebuilds():
         "update must not skip a build just because older images are present"
 
 
-@pytest.mark.parametrize("phrase", [
-    "airgapped ON PURPOSE",
-    "install a newer ISO",
+@pytest.mark.parametrize("fact,why", [
+    ("IMAGES",
+     "it does not say the ISO carries the container images, which is what makes "
+     "a first install skip Docker Hub and skip building"),
+    ("github.com",
+     "it does not say where the source came from, so an operator cannot tell "
+     "what they are being asked to reach"),
+    ("newer ISO",
+     "it does not say how to move an isolated host forward"),
 ])
-def test_update_says_what_airgapped_means(phrase):
-    """A failed `git pull` is not an explanation. On a deliberately isolated
-    host nothing is broken, and the message should say so."""
-    assert phrase in SRC, f"the update path never says {phrase!r}"
+def test_update_says_what_an_isolated_host_can_and_cannot_do(fact, why):
+    """A failed `git pull` is not an explanation.
+
+    REVISED with the ISO change. This used to assert "airgapped ON PURPOSE" and
+    say nothing was wrong — true when the ISO shipped the platform's SOURCE as
+    well as its images, so a host with no route out could install and run and
+    only updates were out of reach.
+
+    The ISO no longer ships a checkout: one carried a live CI token in v1.0.10
+    and was stale the moment it was built, so install-sysible clones the source
+    instead. A fully isolated host therefore cannot install at all now, and
+    telling one that "nothing is wrong" would be false comfort. What IS still
+    true is the valuable half — the images ship, so a first install pulls
+    nothing from Docker Hub and builds nothing.
+
+    So the message has to carry three facts rather than one reassurance, and
+    the test asserts the facts, not the sentence they came in.
+    """
+    assert fact in SRC, why

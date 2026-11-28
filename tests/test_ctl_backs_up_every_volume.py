@@ -248,5 +248,17 @@ def test_backup_mounts_the_resolved_volume(lib, tmp_path):
         p_backup slep
     """)
     assert rc == 0, err
-    assert "WARN" not in out, out
+    # "did not SKIP", which is this file's subject — not "said nothing on the
+    # warning channel". p_backup now also prints a security notice there (the
+    # archive holds the vault master key and the gateway's CA key), and a blanket
+    # `"WARN" not in out` turned that into a failure of a test about skipped
+    # stores. Match the skip message itself.
+    assert "not found — skipping" not in out, out
     assert "deploy_slep-data:/data:ro" in out, out
+    # The archive is created 0600 by umask INSIDE the container, never 0644 for
+    # even an instant. Pinned here as well as in the SLOP tree's own test because
+    # this is the assertion that sees the real argv p_backup builds.
+    assert "umask 077" in out, out
+    assert "These archives hold key material" in out, (
+        "the security notice is not printed — an operator is left holding a "
+        "tarball of the platform's private keys without being told: %s" % out)

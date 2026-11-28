@@ -999,17 +999,22 @@ p_update() {
         _warn "  (If that file keeps reverting, it is generated — DHCP or systemd-resolved"
         _warn "   rewrites it. Set the resolver where it is configured, not in the file.)"
         _warn "  Every 'docker build' below will fail the same way, for the same reason."
-        # Say the airgapped case out loud rather than leaving it as a failed pull.
-        # The platform INSTALLS without a network -- the ISO carries its images and
-        # its source -- so reaching this message on a deliberately isolated host is
-        # not a fault to debug, and nothing here is broken.
+        # Say the isolated case out loud rather than leaving it as a failed pull.
+        #
+        # The ISO carries the platform's IMAGES, so a first install does not pull
+        # from Docker Hub and does not build anything. It does NOT carry the
+        # source any more: a git checkout baked into an image shipped a live CI
+        # token in v1.0.10 and was stale the moment it was built, so
+        # install-sysible clones it instead. That means this host DID need
+        # github.com once, and needs it again for every update.
         if [ -s /usr/share/sysible/app-images/sysible-images.tar ]; then
           _warn ""
-          _warn "  If this host is airgapped ON PURPOSE: that is fine, and nothing is wrong."
-          _warn "  It INSTALLED without a network because the ISO carries the platform's"
-          _warn "  images and source. It cannot UPDATE that way: an update is new source,"
-          _warn "  rebuilt, and both the source and the build inputs live on the internet."
-          _warn "  To move an airgapped host to a newer version, install a newer ISO."
+          _warn "  This host was installed from a Sysible ISO, which carries the platform's"
+          _warn "  container IMAGES -- so its first install never touched Docker Hub and"
+          _warn "  never built anything. The SOURCE is not in the ISO: it was cloned from"
+          _warn "  github.com, and an update is new source, so it has to be reachable."
+          _warn "  A host with no route out cannot update from source at all; move it to a"
+          _warn "  newer version by installing a newer ISO."
         fi
       else
         _warn "Nothing new can be built until that checkout can fast-forward. Usual causes:"

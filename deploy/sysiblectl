@@ -384,20 +384,67 @@ _compose_file_in() {
 #     Username for 'https://github.com':
 # and the command sits there forever. Reported from a real Server.
 #
-# It happened on a PUBLIC repo because the ISO shipped actions/checkout's
-# Authorization header inside .git/config (now stripped at build time, and
-# strippable on an installed host). Once an Authorization header is configured
-# git never falls back to anonymous: it sends the dead token, GitHub answers 401,
-# and git stops to ask. GIT_TERMINAL_PROMPT=0 makes it FAIL there instead, which
-# the caller already classifies and reports. The empty askpass vars stop a desktop
-# session popping a GUI dialog in its place -- the same hang with a window around
-# it -- and BatchMode does the same for an ssh remote. A credential helper the
-# operator configured themselves is left alone, so a host with real access still
-# fetches.
+# It happens on a PUBLIC repo because the ISO ships actions/checkout's
+# Authorization header inside .git/config. Once an Authorization header is
+# configured git never falls back to anonymous: it sends the dead token, GitHub
+# answers 401, and git stops to ask. GIT_TERMINAL_PROMPT=0 makes it FAIL there
+# instead. The empty askpass vars stop a desktop session popping a GUI dialog in
+# its place -- the same hang with a window around it -- and BatchMode does the
+# same for an ssh remote. A credential helper the operator configured themselves
+# is left alone, so a host with real access still fetches.
+#
+# This comment used to say the header was "now stripped at build time, and
+# strippable on an installed host". Neither was true: nothing in this tree
+# stripped it, and there was no repair verb. The symptom was reported again from
+# a real Server -- `sysiblectl update all`, then a bare
+#     Username for 'https://github.com':
+# sitting there forever. Failing instead of hanging is better, but it is still a
+# dead end: nothing tells the operator the checkout is carrying a credential at
+# all, and on a PUBLIC repo there is nothing to authenticate with in the first
+# place. So _strip_ci_credentials below removes it, and says so.
 _git() {
   GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= \
   GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new}" \
   git "$@"
+}
+
+
+# Remove a build-time credential from a checkout before pulling through it.
+#
+# A tree cut by actions/checkout carries the CI job's token in .git/config:
+#
+#     [http "https://github.com/"]
+#         extraheader = AUTHORIZATION: basic <base64>
+#
+# That token died with the job that made the ISO. git will not fall back to
+# anonymous while one is configured, so every pull on every host built from that
+# image authenticates with a dead credential against a PUBLIC repository and is
+# refused -- then asks for a username that does not exist.
+#
+# Only an AUTHORIZATION extraheader is touched. That exact shape is CI residue;
+# an operator does not hand-write one. A credential HELPER, a token in a remote
+# URL, a different extraheader, and anything under --global or --system are all
+# left exactly as they are, so a host with real credentials keeps them.
+_strip_ci_credentials() {
+  local gr="$1" k found=0
+  command -v git >/dev/null 2>&1 || return 0
+  while IFS= read -r k; do
+    [[ -n "$k" ]] || continue
+    # Match on the VALUE, not the key: the key only says "a header is set here".
+    if git -C "$gr" config --local --get-all "$k" 2>/dev/null \
+         | grep -qiE '^[[:space:]]*AUTHORIZATION:'; then
+      git -C "$gr" config --local --unset-all "$k" 2>/dev/null || true
+      found=1
+      _warn "  Removed a build-time credential ($k) from $gr/.git/config."
+    fi
+  done < <(git -C "$gr" config --local --name-only --get-regexp \
+             '^http\..*\.extraheader$' 2>/dev/null || true)
+  if [[ $found -eq 1 ]]; then
+    _warn "  It was baked in when this host's image was built and expired with that"
+    _warn "  build. git does not fall back to anonymous while one is configured, so"
+    _warn "  every pull sent a dead token and was asked for a password that does not"
+    _warn "  exist. These repositories are public: pulling anonymously from here."
+  fi
 }
 
 
@@ -924,6 +971,10 @@ p_update() {
     _hdr "Pulling latest code (git) in $gr"
     # Captured, not streamed, so the failure can be CLASSIFIED and not just shown.
     # Printed either way, unchanged.
+    # Before the pull, not after a failure: a dead build-time credential makes
+    # the pull fail (or, on an older build, hang) and there is nothing to learn
+    # from letting that happen first.
+    _strip_ci_credentials "$gr"
     local pull_out pull_rc=0
     pull_out="$(_git -C "$gr" pull --ff-only 2>&1)" || pull_rc=$?
     printf '%s\n' "$pull_out"
@@ -962,6 +1013,10 @@ p_update() {
         fi
       else
         _warn "Nothing new can be built until that checkout can fast-forward. Usual causes:"
+        _warn "  * a credential the host does not have: these repositories are PUBLIC, so"
+        _warn "      a pull should need none. If git asked for a username, something is"
+        _warn "      configured to authenticate: git -C $gr config --local --list | grep -i auth"
+        _warn "      (a build-time AUTHORIZATION header is removed automatically above)"
         _warn "  * no upstream for this branch: git -C $gr status -sb"
         _warn "      fix: git -C $gr branch --set-upstream-to=origin/\$(git -C $gr branch --show-current)"
         _warn "  * local edits block the fast-forward: git -C $gr status --short"

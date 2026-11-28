@@ -222,9 +222,13 @@ _die()  { _err "$@"; exit 1; }
 # already pulled -- same switch install-sysible honours.
 # Is every image this compose project needs already in the local image store?
 #
-# The ISO ships the platform's images, built in CI, and loads them at boot. An
-# airgapped host therefore HAS them and CANNOT build them: every service's
-# Dockerfile fetches from PyPI, npm, Debian or Alpine, so `up --build` there
+# ISOs up to and including v1.0.11 shipped the platform's images, built in CI,
+# and loaded them at boot. NEWER ONES DO NOT: the ISO now ships only the
+# DEPENDENCIES (Docker, compose, the toolchain) and install-sysible fetches the
+# platform from github.com. This check still matters for both kinds of host --
+# one installed from an older ISO, and one where an operator loaded images by
+# hand -- because on a host that HAS them, building is hopeless anyway: every
+# service's Dockerfile fetches from PyPI, npm, Debian or Alpine, so `up --build`
 # fails on the first `pip install` with the images sitting right there unused.
 #
 # Only the FIRST bring-up consults this. `update` has its own `up -d --build`
@@ -1001,17 +1005,19 @@ p_update() {
         _warn "  Every 'docker build' below will fail the same way, for the same reason."
         # Say the isolated case out loud rather than leaving it as a failed pull.
         #
-        # The ISO carries the platform's IMAGES, so a first install does not pull
-        # from Docker Hub and does not build anything. It does NOT carry the
-        # source any more: a git checkout baked into an image shipped a live CI
-        # token in v1.0.10 and was stale the moment it was built, so
-        # install-sysible clones it instead. That means this host DID need
-        # github.com once, and needs it again for every update.
+        # Guarded on the images being THERE, which is the only honest test now.
+        # An older ISO carried them, so a host installed from one never pulled
+        # from Docker Hub; the current ISO carries neither images nor source, so
+        # on such a host this branch does not fire and the generic advice above
+        # is the right advice. Neither kind ever carried the source: a checkout
+        # baked into an image shipped a live CI token in v1.0.10 and was stale
+        # the moment it was built, so install-sysible clones it. Either way this
+        # host needed github.com once and needs it for every update.
         if [ -s /usr/share/sysible/app-images/sysible-images.tar ]; then
           _warn ""
-          _warn "  This host was installed from a Sysible ISO, which carries the platform's"
-          _warn "  container IMAGES -- so its first install never touched Docker Hub and"
-          _warn "  never built anything. The SOURCE is not in the ISO: it was cloned from"
+          _warn "  This host has the platform's container IMAGES on disk (an older Sysible"
+          _warn "  ISO shipped them), so its first install never touched Docker Hub and"
+          _warn "  never built anything. The SOURCE was never in the ISO: it was cloned from"
           _warn "  github.com, and an update is new source, so it has to be reachable."
           _warn "  A host with no route out cannot update from source at all; move it to a"
           _warn "  newer version by installing a newer ISO."
@@ -2102,8 +2108,9 @@ cmd_uninstall() {
 # also ask if you want to update the software the first time that sysiblectl is
 # run on the machine."
 #
-# The base images already arrive with the ISO and load at first boot, so what is
-# left is the question. Asked ONCE per machine, and only where there is a person
+# The question is all that is left here: whatever put the platform on this host
+# -- an older ISO's image archive, or install-sysible fetching it -- has already
+# finished by the time this runs. Asked ONCE per machine, and only where there is a person
 # to answer it. Every condition below is a way a prompt has gone wrong before: on
 # a first-boot unit it blocks the boot, in CI it hangs the job, and one that is
 # not remembered asks again on every single run forever.
@@ -2146,8 +2153,9 @@ _maybe_offer_first_update() {
   # runners inherit one often enough to hang on a read.
   [[ -n "${INVOCATION_ID:-}${SYSTEMD_EXEC_PID:-}${CI:-}" ]] && return 0
   [[ "${DEBIAN_FRONTEND:-}" == "noninteractive" ]] && return 0
-  # Nothing to update FROM. An airgapped ISO install has images and no checkout;
-  # offering an update it cannot perform is worse than staying quiet.
+  # Nothing to update FROM. A host whose platform came from an older ISO's image
+  # archive has images and no checkout; offering an update it cannot perform is
+  # worse than staying quiet.
   command -v git >/dev/null 2>&1 || return 0
   _git_root "$(dirname "$SELF")" >/dev/null 2>&1 || return 0
   # Remember BEFORE acting. An update that fails, or that the operator interrupts
